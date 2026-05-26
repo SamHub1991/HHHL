@@ -1,0 +1,101 @@
+package cc.hhhl.client.navigation
+
+import cc.hhhl.client.model.InstanceCapabilities
+import cc.hhhl.client.model.UserSocialKind
+
+enum class RootRoute(val label: String, val icon: String) {
+    Timeline("时间线", "⌂"),
+    Discover("发现", "⌕"),
+    Chat("聊天", "◇"),
+    Notifications("通知", "◌"),
+    Profile("我的", "●"),
+}
+
+fun primaryRootRoutes(): List<RootRoute> = listOf(
+    RootRoute.Timeline,
+    RootRoute.Discover,
+    RootRoute.Chat,
+    RootRoute.Notifications,
+    RootRoute.Profile,
+)
+
+fun visibleRootRoutes(chatAvailable: Boolean): List<RootRoute> {
+    return primaryRootRoutes().filter { route ->
+        route != RootRoute.Chat || chatAvailable
+    }
+}
+
+fun supportedRouteOrFallback(
+    route: AppRoute,
+    capabilities: InstanceCapabilities,
+): AppRoute {
+    return when (route) {
+        AppRoute.Chat -> if (capabilities.chatAvailable) route else AppRoute.Timeline
+        AppRoute.UserLists -> if (capabilities.canUseUserLists) route else AppRoute.Profile
+        AppRoute.Antennas -> if (capabilities.canUseAntennas) route else AppRoute.Profile
+        AppRoute.Clips -> if (capabilities.canUseClips) route else AppRoute.Profile
+        else -> route
+    }
+}
+
+fun rootRouteFor(route: AppRoute): RootRoute {
+    return when (route) {
+        AppRoute.Timeline,
+        is AppRoute.NoteDetail,
+        is AppRoute.Compose,
+            -> RootRoute.Timeline
+        AppRoute.Discover,
+        AppRoute.Channels,
+        AppRoute.Pages,
+        AppRoute.Gallery,
+        AppRoute.Flash,
+        AppRoute.Announcements,
+            -> RootRoute.Discover
+        AppRoute.Chat -> RootRoute.Chat
+        AppRoute.Notifications -> RootRoute.Notifications
+        AppRoute.Profile,
+        AppRoute.Settings,
+        AppRoute.Drive,
+        AppRoute.FavoriteNotes,
+        AppRoute.UserLists,
+        AppRoute.FollowRequests,
+        AppRoute.RelationshipManagement,
+        AppRoute.Antennas,
+        AppRoute.Clips,
+        is AppRoute.UserProfile,
+        is AppRoute.UserSocial,
+            -> RootRoute.Profile
+    }
+}
+
+sealed interface AppRoute {
+    data object Timeline : AppRoute
+    data object Discover : AppRoute
+    data object Chat : AppRoute
+    data object Notifications : AppRoute
+    data object Profile : AppRoute
+    data object Settings : AppRoute
+    data object Drive : AppRoute
+    data object FavoriteNotes : AppRoute
+    data object UserLists : AppRoute
+    data object FollowRequests : AppRoute
+    data object RelationshipManagement : AppRoute
+    data object Antennas : AppRoute
+    data object Clips : AppRoute
+    data object Channels : AppRoute
+    data object Pages : AppRoute
+    data object Gallery : AppRoute
+    data object Flash : AppRoute
+    data object Announcements : AppRoute
+    data class UserProfile(val userId: String) : AppRoute
+    data class UserSocial(
+        val userId: String,
+        val kind: UserSocialKind,
+        val displayName: String?,
+    ) : AppRoute
+    data class NoteDetail(val noteId: String) : AppRoute
+    data class Compose(
+        val replyToId: String? = null,
+        val renoteId: String? = null,
+    ) : AppRoute
+}

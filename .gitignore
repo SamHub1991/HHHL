@@ -1,0 +1,33 @@
+# Local machine configuration
+local.properties
+
+# Gradle / Kotlin build output
+.gradle/
+.kotlin/
+build/
+**/build/
+
+# IDE files
+.idea/
+*.iml
+
+# Android generated output
+*.apk
+*.aab
+*.ap_
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# Local secrets
+keys/
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# Local verification artifacts
+artifacts/
