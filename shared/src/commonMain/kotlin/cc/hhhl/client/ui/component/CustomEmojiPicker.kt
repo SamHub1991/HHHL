@@ -60,6 +60,7 @@ private data class EmojiPickerTab(
 
 private const val CustomEmojiTabKey = "custom"
 private const val SearchEmojiTabKey = "search"
+private const val SearchUnicodeEmojiMaxPerCategory = 96
 
 private data class CustomEmojiPickerIndex(
     val emojis: List<CustomEmoji>,
@@ -148,7 +149,7 @@ private fun CustomEmojiPickerIndex.sections(
 fun unicodeEmojiPickerSections(
     query: String = "",
     categories: List<EmojiCategory> = commonEmojiCategories,
-    maxPerCategory: Int = 96,
+    maxPerCategory: Int = Int.MAX_VALUE,
 ): List<UnicodeEmojiPickerSection> {
     val cleanQuery = query.trim()
     val maxItems = maxPerCategory.coerceAtLeast(1)
@@ -210,7 +211,7 @@ fun CustomEmojiPicker(
         unicodeEmojiPickerSections(
             query = query,
             categories = categories,
-            maxPerCategory = if (query.isBlank()) 96 else 64,
+            maxPerCategory = if (query.isBlank()) Int.MAX_VALUE else SearchUnicodeEmojiMaxPerCategory,
         )
     }
     val tabs = remember(unicodeSections, sections, query) {

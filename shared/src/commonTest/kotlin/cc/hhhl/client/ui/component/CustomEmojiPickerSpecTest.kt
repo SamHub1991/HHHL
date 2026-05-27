@@ -96,6 +96,28 @@ class CustomEmojiPickerSpecTest {
         )
     }
 
+    @Test
+    fun unicodePickerDoesNotCapAndroidCategoriesByDefault() {
+        val emojis = (1..140).map { "emoji$it" }
+        val sections = unicodeEmojiPickerSections(
+            categories = listOf(EmojiCategory(key = "all", label = "全部", emojis = emojis)),
+        )
+
+        assertEquals(emojis, sections.single().emojis)
+    }
+
+    @Test
+    fun unicodePickerStillAllowsSearchResultCaps() {
+        val emojis = (1..140).map { "face$it" }
+        val sections = unicodeEmojiPickerSections(
+            query = "全部",
+            categories = listOf(EmojiCategory(key = "all", label = "全部", emojis = emojis)),
+            maxPerCategory = 96,
+        )
+
+        assertEquals(96, sections.single().emojis.size)
+    }
+
     private fun customEmoji(
         name: String,
         category: String? = null,

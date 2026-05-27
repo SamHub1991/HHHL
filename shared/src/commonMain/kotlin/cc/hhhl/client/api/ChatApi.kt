@@ -6,6 +6,7 @@ import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageReference
 import cc.hhhl.client.model.ChatMessageReaction
 import cc.hhhl.client.model.User
+import cc.hhhl.client.model.AvatarDecoration
 import cc.hhhl.client.model.DriveFile
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -45,6 +46,11 @@ interface ChatApi {
         limit: Int,
         untilId: String? = null,
     ): ChatRoomMemberLoadResult
+
+    suspend fun showRoom(
+        token: String,
+        roomId: String,
+    ): ChatRoomMutationResult
 
     suspend fun loadUserHistory(
         token: String,
@@ -120,6 +126,11 @@ interface ChatApi {
         token: String,
         roomId: String,
         userId: String,
+    ): ChatRoomActionResult
+
+    suspend fun joinRoom(
+        token: String,
+        roomId: String,
     ): ChatRoomActionResult
 
     suspend fun leaveRoom(
@@ -621,6 +632,41 @@ class SharkeyChatApi(
         }
     }
 
+    override suspend fun showRoom(
+        token: String,
+        roomId: String,
+    ): ChatRoomMutationResult {
+        val cleanToken = token.trim()
+        val cleanRoomId = roomId.trim()
+        if (cleanToken.isEmpty()) return ChatRoomMutationResult.Unauthorized
+        if (cleanRoomId.isEmpty()) {
+            return ChatRoomMutationResult.ServerError(400, "请选择聊天室")
+        }
+
+        return try {
+            val response = client.post(apiUrl("chat", "rooms", "show")) {
+                contentType(ContentType.Application.Json)
+                setBody(ChatRoomIdRequest(i = cleanToken, roomId = cleanRoomId))
+            }
+
+            if (response.isSharkeyUnauthorized()) return ChatRoomMutationResult.Unauthorized
+            when (response.status) {
+                HttpStatusCode.OK -> ChatRoomMutationResult.Success(
+                    response.body<ChatRoomDto>().toDomainRoom(),
+                )
+                HttpStatusCode.Unauthorized -> ChatRoomMutationResult.Unauthorized
+                else -> ChatRoomMutationResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            ChatRoomMutationResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
     override suspend fun loadRoomMembers(
         token: String,
         roomId: String,
@@ -792,6 +838,17 @@ class SharkeyChatApi(
                     else -> null
                 }
             },
+        )
+    }
+
+    override suspend fun joinRoom(
+        token: String,
+        roomId: String,
+    ): ChatRoomActionResult {
+        return sendRoomAction(
+            endpoint = listOf("chat", "rooms", "join"),
+            request = ChatRoomIdRequest(i = token.trim(), roomId = roomId.trim()),
+            validate = { validateRoomIdAction(token, roomId) },
         )
     }
 
@@ -1372,6 +1429,7 @@ private data class ChatUserDto(
     val username: String,
     val name: String? = null,
     val avatarUrl: String? = null,
+    val avatarDecorations: List<ChatAvatarDecorationDto> = emptyList(),
 ) {
     fun toDomainUser(): User {
         val displayName = name?.takeIf { it.isNotBlank() } ?: username
@@ -1381,6 +1439,27 @@ private data class ChatUserDto(
             username = username,
             avatarInitial = displayName.avatarInitial(),
             avatarUrl = avatarUrl?.takeIf { it.isNotBlank() },
+            avatarDecorations = avatarDecorations.mapNotNull { it.toDomainDecoration() },
+        )
+    }
+}
+
+@Serializable
+private data class ChatAvatarDecorationDto(
+    val url: String? = null,
+    val angle: Float = 0f,
+    val flipH: Boolean = false,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f,
+) {
+    fun toDomainDecoration(): AvatarDecoration? {
+        val cleanUrl = url?.takeIf { it.isNotBlank() } ?: return null
+        return AvatarDecoration(
+            url = cleanUrl,
+            angle = angle,
+            flipH = flipH,
+            offsetX = offsetX,
+            offsetY = offsetY,
         )
     }
 }

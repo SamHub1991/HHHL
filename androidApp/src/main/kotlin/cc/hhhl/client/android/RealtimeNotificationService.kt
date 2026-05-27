@@ -5,12 +5,16 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import cc.hhhl.client.api.MainStreamingEvent
+import cc.hhhl.client.model.NotificationItem
+import cc.hhhl.client.model.NotificationType
 import cc.hhhl.client.repository.MainStreamingRepository
+import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,6 +25,7 @@ import kotlinx.coroutines.launch
 
 class RealtimeNotificationService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var lastTimelineSyncAt: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -65,9 +70,9 @@ class RealtimeNotificationService : Service() {
                         MainStreamingEvent.UnreadNotification,
                         MainStreamingEvent.NewChatMessage,
                         -> BackgroundNotificationSyncer(applicationContext).sync()
+                        is MainStreamingEvent.TimelineNote -> syncTimelineEvent(event)
                         MainStreamingEvent.Unauthorized -> unauthorized = true
                         MainStreamingEvent.ReadAllNotifications,
-                        is MainStreamingEvent.TimelineNote,
                         MainStreamingEvent.Connected,
                         MainStreamingEvent.Connecting,
                         MainStreamingEvent.Closed,
@@ -85,6 +90,71 @@ class RealtimeNotificationService : Service() {
         stopSelf()
     }
 
+    private suspend fun syncTimelineEvent(event: MainStreamingEvent.TimelineNote) {
+        if (publishSpecialCareTimelineNote(event)) return
+        val now = System.currentTimeMillis()
+        if (now - lastTimelineSyncAt < TIMELINE_SYNC_DEBOUNCE_MS) return
+        lastTimelineSyncAt = now
+        BackgroundNotificationSyncer(applicationContext).sync()
+    }
+
+    private suspend fun publishSpecialCareTimelineNote(event: MainStreamingEvent.TimelineNote): Boolean {
+        val note = event.note ?: return false
+        val session = AndroidAuthTokenStore(applicationContext)
+            .readAccountSessions()
+            .firstOrNull { it.current }
+            ?: return false
+        val settings = AndroidBackgroundNotificationStore(applicationContext)
+        if (!settings.isSpecialCareEnabled()) return true
+
+        val specialCareUserIds = AndroidSpecialCareStore(applicationContext).loadSpecialCareUserIds(session.id)
+        if (note.author.id !in specialCareUserIds) return true
+
+        val eventId = "special-note:${note.id}"
+        val seenIds = settings.loadSeenIds()
+        if (eventId in seenIds) return true
+
+        val createdAtEpochMillis = note.createdAt.toEpochMillisOrNull()
+            ?: System.currentTimeMillis()
+        val notification = NotificationItem(
+            id = "special-care-note-${note.id}",
+            type = NotificationType.Note,
+            actor = note.author,
+            text = "发布了新帖子",
+            createdAtLabel = note.createdAtLabel.ifBlank { "刚刚" },
+            createdAtEpochMillis = createdAtEpochMillis,
+            noteId = note.id,
+            notePreviewText = note.text.takeIf { it.isNotBlank() } ?: note.cw,
+            isSpecialCare = true,
+        )
+        BackgroundNotificationPublisher(applicationContext).publish(
+            listOf(
+                BackgroundNotificationEvent(
+                    id = eventId,
+                    title = "特别关心 · ${note.author.displayName}",
+                    text = note.text.ifBlank { "发布了新帖子" },
+                    specialCare = true,
+                    avatarMode = NotificationAvatarMode.UserAvatar(
+                        note.author.avatarUrl,
+                        note.author.avatarInitial,
+                    ),
+                    createdAtEpochMillis = createdAtEpochMillis,
+                    cacheNotification = notification,
+                ),
+            ),
+        )
+        applicationContext.cacheSpecialCareNotifications(
+            accountId = session.id,
+            notifications = listOf(notification),
+        )
+        settings.saveSeenIds((listOf(eventId) + seenIds).take(MAX_REALTIME_SEEN_IDS).toSet())
+        return true
+    }
+
+    private fun String.toEpochMillisOrNull(): Long? {
+        return runCatching { Instant.parse(this).toEpochMilli() }.getOrNull()
+    }
+
     private fun startRealtimeForeground() {
         val notification = realtimeNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -100,7 +170,8 @@ class RealtimeNotificationService : Service() {
 
     private fun realtimeNotification(): Notification {
         return NotificationCompat.Builder(applicationContext, REALTIME_SERVICE_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.dc_icon)
+            .setLargeIcon(BitmapFactory.decodeResource(resources, R.drawable.dc_icon))
             .setContentTitle("HHHL 实时同步中")
             .setContentText("正在实时接收消息和特别关心提醒")
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -113,6 +184,8 @@ class RealtimeNotificationService : Service() {
     companion object {
         private const val SERVICE_NOTIFICATION_ID = 1001
         private const val RECONNECT_DELAY_MS = 3_000L
+        private const val TIMELINE_SYNC_DEBOUNCE_MS = 2_000L
+        private const val MAX_REALTIME_SEEN_IDS = 200
 
         fun start(context: Context) {
             val intent = Intent(context.applicationContext, RealtimeNotificationService::class.java)

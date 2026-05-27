@@ -59,7 +59,7 @@ class NotificationStateHolder(
         cachedSnapshot.specialCareNotifications.withLocalReadState(restoredReadNotificationIds)
     private val mutableState = MutableStateFlow(
         NotificationUiState(
-            notifications = cachedRemoteNotifications,
+            notifications = cachedRemoteNotifications.withLocalSpecialCareNotifications(cachedSpecialCareNotifications),
             unreadCount = cachedRemoteNotifications.countUnread() + cachedSpecialCareNotifications.countUnread(),
             specialCareNotificationCount = cachedSpecialCareNotifications.size,
             specialCareUnreadCount = cachedSpecialCareNotifications.countUnread(),
@@ -287,6 +287,8 @@ class NotificationStateHolder(
         mutableState.update {
             val visibleNotifications = if (it.selectedFilter == NotificationFilter.SpecialCare) {
                 result.notifications
+            } else if (it.selectedFilter == NotificationFilter.All) {
+                remoteNotifications.withLocalSpecialCareNotifications(result.notifications)
             } else {
                 it.notifications
             }
@@ -343,7 +345,7 @@ class NotificationStateHolder(
                 val totalUnreadCount = totalUnreadCount()
                 it.copy(
                     notifications = when (it.selectedFilter) {
-                        NotificationFilter.All -> remoteNotifications
+                        NotificationFilter.All -> remoteNotifications.withLocalSpecialCareNotifications(specialCareNotifications)
                         NotificationFilter.SpecialCare -> specialCareNotifications
                         else -> loadedNotifications
                     },
@@ -386,7 +388,7 @@ class NotificationStateHolder(
                 persistNotificationCache()
                 val visibleNotifications = when (it.selectedFilter) {
                     NotificationFilter.SpecialCare -> specialCareNotifications
-                    NotificationFilter.All -> remoteNotifications
+                    NotificationFilter.All -> remoteNotifications.withLocalSpecialCareNotifications(specialCareNotifications)
                     else -> it.notifications
                 }
                 it.copy(
@@ -432,6 +434,8 @@ class NotificationStateHolder(
             it.copy(
                 notifications = if (it.selectedFilter == NotificationFilter.SpecialCare) {
                     specialCareNotifications
+                } else if (it.selectedFilter == NotificationFilter.All) {
+                    remoteNotifications.withLocalSpecialCareNotifications(specialCareNotifications)
                 } else {
                     it.notifications
                 },
@@ -490,7 +494,7 @@ class NotificationStateHolder(
 
     private fun notificationsForFilter(filter: NotificationFilter): List<NotificationItem> {
         return when (filter) {
-            NotificationFilter.All -> remoteNotifications
+            NotificationFilter.All -> remoteNotifications.withLocalSpecialCareNotifications(specialCareNotifications)
             NotificationFilter.SpecialCare -> specialCareNotifications
             else -> remoteNotifications.filter { notification -> notification.type in filter.includedTypes }
         }
@@ -560,6 +564,15 @@ private fun List<NotificationItem>.mergeNotificationRefresh(
     return loadedNotifications + filterNot { it.id in loadedIds }
 }
 
+private fun List<NotificationItem>.withLocalSpecialCareNotifications(
+    specialCareNotifications: List<NotificationItem>,
+): List<NotificationItem> {
+    if (specialCareNotifications.isEmpty()) return this
+    val remoteIds = mapTo(LinkedHashSet(size)) { it.id }
+    return (specialCareNotifications.filterNot { it.id in remoteIds } + this)
+        .distinctBy { it.id }
+}
+
 internal data class SpecialCareNotificationInsertResult(
     val notifications: List<NotificationItem>,
     val inserted: Boolean,
@@ -574,6 +587,7 @@ internal fun insertSpecialCareNotification(
         return SpecialCareNotificationInsertResult(current, inserted = false)
     }
     val next = (listOf(notification.copy(isSpecialCare = true)) + current)
+        .sortedByDescending { it.createdAtEpochMillis }
         .take(limit)
     return SpecialCareNotificationInsertResult(next, inserted = true)
 }
@@ -602,6 +616,7 @@ internal fun mergeRemoteSpecialCareNotifications(
     val remoteSpecialCareIds = remoteSpecialCare.mapTo(LinkedHashSet(remoteSpecialCare.size)) { it.id }
     val next = (remoteSpecialCare + current.filterNot { it.id in remoteSpecialCareIds })
         .distinctBy { it.id }
+        .sortedByDescending { it.createdAtEpochMillis }
         .take(limit)
     return if (next == current) current else next
 }

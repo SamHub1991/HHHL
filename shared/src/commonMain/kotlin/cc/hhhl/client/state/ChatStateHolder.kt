@@ -13,6 +13,7 @@ import cc.hhhl.client.model.ChatRoom
 import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.ChatUserConversation
 import cc.hhhl.client.model.DriveFile
+import cc.hhhl.client.model.User
 import cc.hhhl.client.model.commonReactionOptions
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRoomMemberRepositoryResult
@@ -25,12 +26,14 @@ import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.DriveFileRepositoryResult
 import cc.hhhl.client.repository.UserRelationshipRepository
 import cc.hhhl.client.repository.UserRelationshipRepositoryResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class ChatUiState(
     val rooms: List<ChatRoom> = emptyList(),
@@ -40,6 +43,7 @@ data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val messageSearchResults: List<ChatMessage> = emptyList(),
     val messageSearchQuery: String = "",
+    val messageSearchServerUntilId: String? = null,
     val members: List<ChatRoomMember> = emptyList(),
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
@@ -104,6 +108,7 @@ data class SpecialCareChatToast(
     val displayName: String,
     val previewText: String,
     val createdAtLabel: String = "",
+    val avatarUrl: String? = null,
 )
 
 class ChatStateHolder(
@@ -361,6 +366,7 @@ class ChatStateHolder(
                 messages = emptyList(),
                 messageSearchResults = emptyList(),
                 messageSearchQuery = "",
+                messageSearchServerUntilId = null,
                 members = emptyList(),
                 selectedRoomUnreadCount = room.unreadCount.coerceAtLeast(0),
                 selectedUserUnreadCount = 0,
@@ -485,6 +491,7 @@ class ChatStateHolder(
                 messages = emptyList(),
                 messageSearchResults = emptyList(),
                 messageSearchQuery = "",
+                messageSearchServerUntilId = null,
                 members = emptyList(),
                 selectedRoomUnreadCount = 0,
                 selectedUserUnreadCount = conversation.unreadCount.coerceAtLeast(0),
@@ -530,6 +537,102 @@ class ChatStateHolder(
         selectUserConversation(existing ?: ChatUserConversation(user = user))
         jumpMessageId?.trim()?.takeIf { it.isNotEmpty() }?.let { messageId ->
             mutableState.update { it.copy(specialCareJumpMessageId = messageId) }
+        }
+    }
+
+    fun openRoomById(roomId: String) {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isEmpty()) return
+        if (!state.value.chatAvailable) {
+            mutableState.update {
+                it.copy(errorMessage = "实例未启用聊天", messageErrorMessage = "实例未启用聊天")
+            }
+            return
+        }
+
+        state.value.rooms.firstOrNull { it.id == cleanRoomId }?.let { room ->
+            selectRoom(room)
+            return
+        }
+        if (state.value.isManagingRoom) return
+
+        mutableState.update {
+            it.copy(
+                isManagingRoom = true,
+                roomManagementMessage = "正在加入聊天室",
+                errorMessage = null,
+                messageErrorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+
+        scope.launch {
+            val shownRoom = when (val showResult = repository.showRoom(cleanRoomId)) {
+                is ChatRoomMutationRepositoryResult.RoomSaved -> showResult.room
+                ChatRoomMutationRepositoryResult.Unauthorized -> {
+                    completeOpenRoomByIdWithError("登录已失效，请重新登录", requiresRelogin = true)
+                    return@launch
+                }
+                is ChatRoomMutationRepositoryResult.ValidationError -> {
+                    completeOpenRoomByIdWithError(showResult.message)
+                    return@launch
+                }
+                is ChatRoomMutationRepositoryResult.Error -> {
+                    completeOpenRoomByIdWithError(showResult.message)
+                    return@launch
+                }
+                else -> placeholderRoom(cleanRoomId)
+            }
+
+            val canOpen = when (val joinResult = repository.joinRoom(cleanRoomId)) {
+                is ChatRoomMutationRepositoryResult.ActionCompleted,
+                is ChatRoomMutationRepositoryResult.RoomSaved -> true
+                ChatRoomMutationRepositoryResult.Unauthorized -> {
+                    completeOpenRoomByIdWithError("登录已失效，请重新登录", requiresRelogin = true)
+                    false
+                }
+                is ChatRoomMutationRepositoryResult.ValidationError -> {
+                    completeOpenRoomByIdWithError(joinResult.message)
+                    false
+                }
+                is ChatRoomMutationRepositoryResult.Error -> {
+                    if (joinResult.message.isAlreadyJoinedRoomMessage()) {
+                        true
+                    } else {
+                        completeOpenRoomByIdWithError(joinResult.message)
+                        false
+                    }
+                }
+                else -> true
+            }
+            if (!canOpen) return@launch
+
+            val refreshedRoom = when (val refreshResult = repository.refresh()) {
+                is ChatRepositoryResult.Success -> {
+                    applyResult(refreshResult, loadingMore = false)
+                    refreshResult.rooms.firstOrNull { it.id == cleanRoomId }
+                }
+                else -> null
+            }
+            mutableState.update {
+                it.copy(isManagingRoom = false, roomManagementMessage = "已加入聊天室", requiresRelogin = false)
+            }
+            selectRoom(refreshedRoom ?: shownRoom.withStableMembershipId())
+        }
+    }
+
+    private fun completeOpenRoomByIdWithError(
+        message: String,
+        requiresRelogin: Boolean = false,
+    ) {
+        mutableState.update {
+            it.copy(
+                isManagingRoom = false,
+                roomManagementMessage = message,
+                errorMessage = message,
+                messageErrorMessage = message,
+                requiresRelogin = requiresRelogin,
+            )
         }
     }
 
@@ -754,6 +857,7 @@ class ChatStateHolder(
             mutableState.update {
                 it.copy(
                     messageSearchQuery = "",
+                    messageSearchServerUntilId = null,
                     messageSearchResults = emptyList(),
                     messageSearchEndReached = true,
                     isSearchingMessages = false,
@@ -772,6 +876,7 @@ class ChatStateHolder(
         mutableState.update {
             it.copy(
                 messageSearchQuery = cleanQuery,
+                messageSearchServerUntilId = null,
                 messageSearchResults = emptyList(),
                 messageSearchEndReached = false,
                 isSearchingMessages = true,
@@ -782,18 +887,32 @@ class ChatStateHolder(
         }
 
         scope.launch {
-            applyMessageSearchResult(
-                query = cleanQuery,
-                roomId = roomId,
-                userId = userId,
-                result = repository.searchMessages(
+            try {
+                applyMessageSearchResult(
                     query = cleanQuery,
                     roomId = roomId,
                     userId = userId,
-                    currentConversationMessages = current.messages,
-                ),
-                loadingMore = false,
-            )
+                    result = withTimeoutOrNull(CHAT_MESSAGE_SEARCH_TIMEOUT_MS) {
+                        repository.searchMessages(
+                            query = cleanQuery,
+                            roomId = roomId,
+                            userId = userId,
+                            currentConversationMessages = current.messages,
+                        )
+                    } ?: ChatMessageRepositoryResult.Error("搜索消息超时，请稍后重试"),
+                    loadingMore = false,
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                applyMessageSearchResult(
+                    query = cleanQuery,
+                    roomId = roomId,
+                    userId = userId,
+                    result = ChatMessageRepositoryResult.Error(error.toChatSearchErrorMessage()),
+                    loadingMore = false,
+                )
+            }
         }
     }
 
@@ -822,19 +941,34 @@ class ChatStateHolder(
         }
 
         scope.launch {
-            applyMessageSearchResult(
-                query = cleanQuery,
-                roomId = roomId,
-                userId = userId,
-                result = repository.searchMessages(
+            try {
+                applyMessageSearchResult(
                     query = cleanQuery,
                     roomId = roomId,
                     userId = userId,
-                    currentResults = current.messageSearchResults,
-                    currentConversationMessages = current.messages,
-                ),
-                loadingMore = true,
-            )
+                    result = withTimeoutOrNull(CHAT_MESSAGE_SEARCH_TIMEOUT_MS) {
+                        repository.searchMessages(
+                            query = cleanQuery,
+                            roomId = roomId,
+                            userId = userId,
+                            serverUntilId = current.messageSearchServerUntilId,
+                            currentResults = current.messageSearchResults,
+                            currentConversationMessages = current.messages,
+                        )
+                    } ?: ChatMessageRepositoryResult.Error("搜索消息超时，请稍后重试"),
+                    loadingMore = true,
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                applyMessageSearchResult(
+                    query = cleanQuery,
+                    roomId = roomId,
+                    userId = userId,
+                    result = ChatMessageRepositoryResult.Error(error.toChatSearchErrorMessage()),
+                    loadingMore = true,
+                )
+            }
         }
     }
 
@@ -1816,6 +1950,7 @@ class ChatStateHolder(
                 if (!sameConversation || current.messageSearchQuery != query) return@update current
                 current.copy(
                     messageSearchResults = result.messages.ensureChronologicalMessages(),
+                    messageSearchServerUntilId = result.nextUntilId,
                     messageSearchEndReached = result.endReached,
                     isSearchingMessages = false,
                     isLoadingMoreMessageSearch = false,
@@ -1835,6 +1970,7 @@ class ChatStateHolder(
                 it.copy(
                     isSearchingMessages = if (loadingMore) it.isSearchingMessages else false,
                     isLoadingMoreMessageSearch = false,
+                    messageSearchServerUntilId = if (loadingMore) it.messageSearchServerUntilId else null,
                     messageSearchErrorMessage = result.message,
                     requiresRelogin = false,
                 )
@@ -2559,6 +2695,7 @@ private fun ChatMessage.toSpecialCareToastIfNeeded(
         displayName = fromUser.displayName.ifBlank { fromUser.username },
         previewText = chatMessageQuotePreviewText(this),
         createdAtLabel = createdAtLabel.ifBlank { "刚刚" },
+        avatarUrl = fromUser.avatarUrl,
     )
 }
 
@@ -2731,8 +2868,45 @@ private fun ChatMessage.chatMessageSortKey(): String {
     return apiDateSortKey(createdAt, createdAtLabel)
 }
 
+private const val CHAT_MESSAGE_SEARCH_TIMEOUT_MS = 20_000L
+
+private fun Throwable.toChatSearchErrorMessage(): String {
+    return message?.takeIf { it.isNotBlank() } ?: "搜索消息失败，请稍后重试"
+}
+
 private fun ChatMessage.isSameOrAfter(other: ChatMessage): Boolean {
     val currentKey = chatMessageSortKey()
     val otherKey = other.chatMessageSortKey()
     return currentKey > otherKey || (currentKey == otherKey && id >= other.id)
+}
+
+private fun placeholderRoom(roomId: String): ChatRoom {
+    return ChatRoom(
+        id = roomId,
+        membershipId = roomId,
+        name = "聊天室",
+        description = "",
+        joinMode = "open",
+        memberCount = 0,
+        isMuted = false,
+        owner = User(
+            id = "system",
+            displayName = "聊天室",
+            username = "system",
+            avatarInitial = "聊",
+        ),
+    )
+}
+
+private fun ChatRoom.withStableMembershipId(): ChatRoom {
+    return if (membershipId.isNotBlank()) this else copy(membershipId = id)
+}
+
+private fun String.isAlreadyJoinedRoomMessage(): Boolean {
+    val normalized = lowercase()
+    return "already" in normalized ||
+        "joined" in normalized ||
+        "加入" in this ||
+        "已在" in this ||
+        "成员" in this
 }

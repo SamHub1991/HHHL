@@ -9,6 +9,7 @@ data class NotificationItem(
     val actor: User,
     val text: String,
     val createdAtLabel: String,
+    val createdAtEpochMillis: Long = 0L,
     val noteId: String? = null,
     val notePreviewText: String? = null,
     val isSpecialCare: Boolean = false,

@@ -99,6 +99,28 @@ class SharkeyClipApiTest {
     }
 
     @Test
+    fun loadNoteClipsPostsJsonToNotesClipsEndpoint() = runTest {
+        var capturedRequest: HttpRequestData? = null
+        val api = SharkeyClipApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                capturedRequest = request
+                respondClips()
+            },
+        )
+
+        val result = api.loadNoteClips(token = "token-123", noteId = "note-1")
+
+        assertIs<ClipLoadResult.Success>(result)
+        val request = checkNotNull(capturedRequest)
+        assertEquals("https://dc.hhhl.cc/api/notes/clips", request.url.toString())
+        val body = (request.body as TextContent).text
+        assertTrue(body.contains(""""i":"token-123""""))
+        assertTrue(body.contains(""""noteId":"note-1""""))
+        assertEquals("clip-1", result.clips.single().id)
+    }
+
+    @Test
     fun createClipPostsJsonToCreateEndpointAndMapsClip() = runTest {
         var capturedRequest: HttpRequestData? = null
         val api = SharkeyClipApi(
@@ -254,6 +276,7 @@ class SharkeyClipApiTest {
         assertIs<ClipNotesLoadResult.Unauthorized>(
             api.loadClipNotes("expired", clipId = "clip-1", limit = 20),
         )
+        assertIs<ClipLoadResult.Unauthorized>(api.loadNoteClips("expired", noteId = "note-1"))
     }
 
     @Test
@@ -273,10 +296,12 @@ class SharkeyClipApiTest {
         )
         val deleteResult = api.deleteClip("token-123", clipId = " ")
         val addResult = api.addNoteToClip("token-123", clipId = "clip-1", noteId = " ")
+        val noteClipsResult = api.loadNoteClips("token-123", noteId = " ")
 
         assertIs<ClipUpdateResult.ServerError>(updateResult)
         assertIs<ClipActionResult.ServerError>(deleteResult)
         assertIs<ClipActionResult.ServerError>(addResult)
+        assertIs<ClipLoadResult.ServerError>(noteClipsResult)
     }
 
     private fun MockRequestHandleScope.respondClips(): HttpResponseData {

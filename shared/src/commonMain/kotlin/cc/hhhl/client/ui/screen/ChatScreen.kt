@@ -798,6 +798,7 @@ private fun ChatUserConversationRow(
                 Avatar(
                     initial = conversation.user.avatarInitial,
                     avatarUrl = conversation.user.avatarUrl,
+                    avatarDecorations = conversation.user.avatarDecorations,
                 )
                 if (hasUnread) {
                     ChatAvatarUnreadBadge(
@@ -1061,6 +1062,7 @@ private fun ChatRoomAvatar(
         Avatar(
             initial = room.owner.avatarInitial,
             avatarUrl = room.owner.avatarUrl,
+            avatarDecorations = room.owner.avatarDecorations,
         )
         if (unreadCount > 0) {
             ChatAvatarUnreadBadge(
@@ -1355,6 +1357,7 @@ private fun ChatDetailScreen(
             val messageListState = rememberLazyListState()
             val coroutineScope = rememberCoroutineScope()
             var previousLatestMessageId by remember(conversationKey) { mutableStateOf<String?>(null) }
+            var scrollToLatestAfterSend by remember(conversationKey) { mutableStateOf(false) }
             var lastOlderLoadAnchorId by remember(conversationKey) { mutableStateOf<String?>(null) }
             var pendingOlderLoadAnchor by remember(conversationKey) { mutableStateOf<ChatOlderLoadAnchor?>(null) }
             val olderLoaderItems = if (!state.messagesEndReached) 1 else 0
@@ -1368,14 +1371,31 @@ private fun ChatDetailScreen(
                 }
             }
             val latestMessageId = state.messages.lastOrNull()?.id
-            LaunchedEffect(latestMessageId, state.isLoadingMessages) {
+            LaunchedEffect(state.isSendingMessage) {
+                if (state.isSendingMessage) {
+                    scrollToLatestAfterSend = true
+                }
+            }
+            LaunchedEffect(state.messageErrorMessage, state.isSendingMessage) {
+                if (!state.isSendingMessage && state.messageErrorMessage != null) {
+                    scrollToLatestAfterSend = false
+                }
+            }
+            LaunchedEffect(latestMessageId, state.isLoadingMessages, state.isSendingMessage) {
                 val targetMessageId = latestMessageId ?: return@LaunchedEffect
-                if (state.isLoadingMessages || state.unreadJumpMessageId != null) return@LaunchedEffect
+                val shouldForceScrollAfterSend = scrollToLatestAfterSend && !state.isSendingMessage
+                if (
+                    state.isLoadingMessages ||
+                    (!shouldForceScrollAfterSend && state.unreadJumpMessageId != null)
+                ) {
+                    return@LaunchedEffect
+                }
 
                 val targetIndex = olderLoaderItems + state.messages.lastIndex
                 if (targetIndex < 0) return@LaunchedEffect
 
-                val shouldAutoScroll = previousLatestMessageId == null ||
+                val shouldAutoScroll = shouldForceScrollAfterSend ||
+                    previousLatestMessageId == null ||
                     previousLatestMessageId
                         ?.let { messageIndexById[it] }
                         ?.let { previousIndexInMessages ->
@@ -1386,6 +1406,7 @@ private fun ChatDetailScreen(
 
                 if (shouldAutoScroll) {
                     messageListState.scrollToItem(targetIndex)
+                    scrollToLatestAfterSend = false
                 }
 
                 previousLatestMessageId = targetMessageId
@@ -1394,7 +1415,10 @@ private fun ChatDetailScreen(
                 val targetMessageId = state.unreadJumpMessageId ?: return@LaunchedEffect
                 val targetIndexInMessages = messageIndexById[targetMessageId]
                 if (targetIndexInMessages != null) {
-                    messageListState.animateScrollToItem(olderLoaderItems + targetIndexInMessages)
+                    messageListState.animateScrollToItem(
+                        index = olderLoaderItems + targetIndexInMessages,
+                        scrollOffset = messageListState.centeredChatJumpOffset(),
+                    )
                     onUnreadJumpHandled()
                 }
             }
@@ -1402,7 +1426,10 @@ private fun ChatDetailScreen(
                 val targetMessageId = pendingMessageJumpId ?: return@LaunchedEffect
                 val targetIndexInMessages = messageIndexById[targetMessageId]
                 if (targetIndexInMessages != null) {
-                    messageListState.animateScrollToItem(olderLoaderItems + targetIndexInMessages)
+                    messageListState.animateScrollToItem(
+                        index = olderLoaderItems + targetIndexInMessages,
+                        scrollOffset = messageListState.centeredChatJumpOffset(),
+                    )
                     pendingMessageJumpId = null
                 } else if (!state.messagesEndReached && !state.isLoadingOlderMessages && !state.isLoadingMessages) {
                     pendingOlderLoadAnchor = messageListState.currentOlderLoadAnchor(
@@ -1457,11 +1484,24 @@ private fun ChatDetailScreen(
                 )
                 pendingOlderLoadAnchor = null
             }
-            LaunchedEffect(state.specialCareJumpMessageId, state.messages.size) {
+            LaunchedEffect(
+                state.specialCareJumpMessageId,
+                state.messages.size,
+                state.messagesEndReached,
+                state.isLoadingMessages,
+                state.isLoadingOlderMessages,
+            ) {
                 val targetMessageId = state.specialCareJumpMessageId ?: return@LaunchedEffect
                 val targetIndexInMessages = messageIndexById[targetMessageId]
                 if (targetIndexInMessages != null) {
-                    messageListState.animateScrollToItem(olderLoaderItems + targetIndexInMessages)
+                    messageListState.animateScrollToItem(
+                        index = olderLoaderItems + targetIndexInMessages,
+                        scrollOffset = messageListState.centeredChatJumpOffset(),
+                    )
+                    onSpecialCareJumpHandled()
+                } else if (!state.messagesEndReached && !state.isLoadingOlderMessages && !state.isLoadingMessages) {
+                    onLoadOlderMessages()
+                } else if (state.messagesEndReached && !state.isLoadingOlderMessages && !state.isLoadingMessages) {
                     onSpecialCareJumpHandled()
                 }
             }
@@ -1472,7 +1512,10 @@ private fun ChatDetailScreen(
                     ?.let { messageIndexById[it] }
                     ?: state.messages.indexOfReferencedQuote(quote)
                 if (targetIndexInMessages >= 0) {
-                    messageListState.animateScrollToItem(olderLoaderItems + targetIndexInMessages)
+                    messageListState.animateScrollToItem(
+                        index = olderLoaderItems + targetIndexInMessages,
+                        scrollOffset = messageListState.centeredChatJumpOffset(),
+                    )
                     pendingQuoteJump = null
                 } else if (!state.messagesEndReached && !state.isLoadingOlderMessages && !state.isLoadingMessages) {
                     onLoadOlderMessages()
@@ -1565,6 +1608,9 @@ private fun ChatDetailScreen(
                             onOpenMention = onOpenMention,
                             onOpenHashtag = onOpenHashtag,
                             onOpenQuote = { quote -> pendingQuoteJump = quote },
+                            onMentionUser = { mention ->
+                                onMessageDraftChanged(state.messageDraft.withAppendedChatMention(mention))
+                            },
                         )
                     }
                 }
@@ -2160,6 +2206,7 @@ private fun ChatMessageSearchScreen(
         itemCount = results.size,
         isLoadingMore = isLoadingOlderMessages ||
             !canLoadOlderMessages ||
+            cleanQuery.isNotBlank() ||
             messages.isEmpty(),
         onLoadMore = {
             if (messages.size != lastOlderSearchAutoLoadCount) {
@@ -2422,6 +2469,7 @@ private fun ChatMessageSearchResultRow(
         Avatar(
             initial = message.fromUser.avatarInitial,
             avatarUrl = message.fromUser.avatarUrl,
+            avatarDecorations = message.fromUser.avatarDecorations,
             size = 38.dp,
         )
         Column(
@@ -2628,6 +2676,7 @@ private fun ChatRoomMemberRow(member: ChatRoomMember) {
         Avatar(
             initial = member.user.avatarInitial,
             avatarUrl = member.user.avatarUrl,
+            avatarDecorations = member.user.avatarDecorations,
         )
         Column(
             modifier = Modifier.weight(1f),
@@ -2813,6 +2862,7 @@ private fun ChatMessageRow(
     onOpenMention: (String) -> Unit,
     onOpenHashtag: (String) -> Unit,
     onOpenQuote: (ChatRenderedQuote) -> Unit,
+    onMentionUser: (cc.hhhl.client.model.User) -> Unit,
 ) {
     val presslessInteractionSource = rememberChatPresslessInteractionSource()
     val menuReactionOptions = remember(reactionOptions) { reactionOptions.chatMessageMenuReactionOptions() }
@@ -2861,32 +2911,24 @@ private fun ChatMessageRow(
     val primaryColor = MaterialTheme.colorScheme.primary
     val surfaceColor = MaterialTheme.colorScheme.surface
     val inputBackgroundColor = LocalHhhlColors.current.inputBackground
-    val cardBackgroundColor = LocalHhhlColors.current.cardBackground
     val isDarkSurface = MaterialTheme.colorScheme.background.luminance() < 0.18f
     val darkIncomingBubbleColor = chatDarkMessageBubbleColor(isOutgoing = false)
-    val darkOutgoingBubbleColor = chatDarkMessageBubbleColor(isOutgoing = true)
     val bubbleBrush = remember(
         isOutgoing,
         primaryColor,
         surfaceColor,
         inputBackgroundColor,
-        cardBackgroundColor,
         isDarkSurface,
         darkIncomingBubbleColor,
-        darkOutgoingBubbleColor,
     ) {
         if (isOutgoing) {
-            if (isDarkSurface) {
-                SolidColor(darkOutgoingBubbleColor)
-            } else {
-                Brush.verticalGradient(
-                    listOf(
-                        primaryColor.copy(alpha = 0.96f),
-                        primaryColor.copy(alpha = 0.88f),
-                        primaryColor.copy(alpha = 0.82f),
-                    ),
+            Brush.verticalGradient(
+                listOf(
+                    primaryColor.copy(alpha = if (isDarkSurface) 0.98f else 0.96f),
+                    primaryColor.copy(alpha = if (isDarkSurface) 0.92f else 0.88f),
+                    primaryColor.copy(alpha = if (isDarkSurface) 0.86f else 0.82f),
                 )
-            }
+            )
         } else if (isDarkSurface) {
             SolidColor(darkIncomingBubbleColor)
         } else {
@@ -2900,23 +2942,19 @@ private fun ChatMessageRow(
         }
     }
     val bubbleBorderColor = if (isOutgoing) {
-        if (isDarkSurface) {
-            Color.White.copy(alpha = 0.07f)
-        } else {
-            MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.16f)
-        }
+        MaterialTheme.colorScheme.onPrimary.copy(alpha = if (isDarkSurface) 0.20f else 0.16f)
     } else if (isDarkSurface) {
         Color.White.copy(alpha = 0.06f)
     } else {
         MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.66f)
     }
     val bubbleContentColor = if (isOutgoing) {
-        if (isDarkSurface) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onPrimary
+        MaterialTheme.colorScheme.onPrimary
     } else {
         MaterialTheme.colorScheme.onBackground
     }
     val bubbleMetaColor = if (isOutgoing) {
-        if (isDarkSurface) LocalHhhlColors.current.subtleText else MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.72f)
+        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.72f)
     } else {
         LocalHhhlColors.current.subtleText
     }
@@ -2932,14 +2970,20 @@ private fun ChatMessageRow(
         verticalAlignment = Alignment.Top,
     ) {
         if (!isOutgoing) {
-            Avatar(
-                initial = message.fromUser.avatarInitial,
-                avatarUrl = message.fromUser.avatarUrl,
-                modifier = Modifier.clickable(
+            Box(
+                modifier = Modifier.combinedClickable(
                     interactionSource = presslessInteractionSource,
                     indication = null,
-                ) { onOpenUser(message.fromUser.id) },
-            )
+                    onClick = { onOpenUser(message.fromUser.id) },
+                    onLongClick = { onMentionUser(message.fromUser) },
+                ),
+            ) {
+                Avatar(
+                    initial = message.fromUser.avatarInitial,
+                    avatarUrl = message.fromUser.avatarUrl,
+                    avatarDecorations = message.fromUser.avatarDecorations,
+                )
+            }
         }
         Column(
             modifier = Modifier
@@ -3011,20 +3055,12 @@ private fun ChatMessageRow(
                                 actions = overflowActions,
                                 label = "消息操作",
                                 buttonContainerColor = if (isOutgoing) {
-                                    if (isDarkSurface) {
-                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
-                                    } else {
-                                        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f)
-                                    }
+                                    MaterialTheme.colorScheme.onPrimary.copy(alpha = if (isDarkSurface) 0.16f else 0.12f)
                                 } else {
                                     null
                                 },
                                 iconTint = if (isOutgoing) {
-                                    if (isDarkSurface) {
-                                        MaterialTheme.colorScheme.onBackground.copy(alpha = 0.82f)
-                                    } else {
-                                        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.86f)
-                                    }
+                                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.86f)
                                 } else {
                                     null
                                 },
@@ -3059,6 +3095,7 @@ private fun ChatMessageRow(
                             label = "回复",
                             reference = reference,
                             isOutgoing = isOutgoing,
+                            onClick = { onOpenQuote(reference.toRenderedQuote()) },
                         )
                     } ?: if (message.replyUnavailable) {
                         ChatMessageMissingReferenceBlock(label = "回复", isOutgoing = isOutgoing)
@@ -3070,6 +3107,7 @@ private fun ChatMessageRow(
                             label = "引用",
                             reference = reference,
                             isOutgoing = isOutgoing,
+                            onClick = { onOpenQuote(reference.toRenderedQuote()) },
                         )
                     } ?: if (message.quoteUnavailable) {
                         ChatMessageMissingReferenceBlock(label = "引用", isOutgoing = isOutgoing)
@@ -3152,6 +3190,7 @@ private fun ChatMessageRow(
             Avatar(
                 initial = message.fromUser.avatarInitial,
                 avatarUrl = message.fromUser.avatarUrl,
+                avatarDecorations = message.fromUser.avatarDecorations,
                 modifier = Modifier.clickable(
                     interactionSource = presslessInteractionSource,
                     indication = null,
@@ -3338,11 +3377,13 @@ private fun ChatMessageReferenceBlock(
     label: String,
     reference: cc.hhhl.client.model.ChatMessageReference,
     isOutgoing: Boolean,
+    onClick: () -> Unit,
 ) {
     ChatMessageReferenceShell(
         label = label,
         preview = reference.toReferencePreviewText(),
         isOutgoing = isOutgoing,
+        onClick = onClick,
     )
 }
 
@@ -3363,6 +3404,7 @@ private fun ChatMessageReferenceShell(
     label: String,
     preview: String,
     isOutgoing: Boolean,
+    onClick: (() -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(10.dp)
     val isDarkSurface = MaterialTheme.colorScheme.background.luminance() < 0.18f
@@ -3394,13 +3436,20 @@ private fun ChatMessageReferenceShell(
                 },
                 shape = shape,
             )
+            .let { modifier ->
+                if (onClick != null) {
+                    modifier.clickable(onClick = onClick)
+                } else {
+                    modifier
+                }
+            }
             .padding(horizontal = 8.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = label,
-            color = if (isOutgoing && !isDarkSurface) {
+            color = if (isOutgoing) {
                 MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.76f)
             } else {
                 MaterialTheme.colorScheme.primary
@@ -3410,7 +3459,7 @@ private fun ChatMessageReferenceShell(
         )
         Text(
             text = preview,
-            color = if (isOutgoing && !isDarkSurface) {
+            color = if (isOutgoing) {
                 MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f)
             } else {
                 LocalHhhlColors.current.subtleText
@@ -3600,12 +3649,12 @@ private fun ChatMessageQuoteBlock(
 ) {
     val shape = RoundedCornerShape(10.dp)
     val isDarkSurface = MaterialTheme.colorScheme.background.luminance() < 0.18f
-    val contentColor = if (isOutgoing && !isDarkSurface) {
+    val contentColor = if (isOutgoing) {
         MaterialTheme.colorScheme.onPrimary
     } else {
         MaterialTheme.colorScheme.onBackground
     }
-    val supportingColor = if (isOutgoing && !isDarkSurface) {
+    val supportingColor = if (isOutgoing) {
         MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.72f)
     } else {
         LocalHhhlColors.current.subtleText
@@ -4022,6 +4071,11 @@ private fun androidx.compose.foundation.lazy.LazyListState.currentOlderLoadAncho
     )
 }
 
+private fun androidx.compose.foundation.lazy.LazyListState.centeredChatJumpOffset(): Int {
+    val viewportHeight = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
+    return -(viewportHeight * 0.34f).toInt()
+}
+
 fun chatComposerAttachmentActionLabel(
     isUploadingMedia: Boolean,
     hasAttachment: Boolean,
@@ -4131,6 +4185,13 @@ fun chatMessageCopyText(message: ChatMessage): String {
         ?: "附件消息"
 }
 
+fun String.withAppendedChatMention(user: cc.hhhl.client.model.User): String {
+    val name = user.displayName.trim().ifBlank { user.username.trim() }.ifBlank { return this }
+    val mention = "@$name "
+    if (isBlank()) return mention
+    return trimEnd() + " " + mention
+}
+
 private fun cc.hhhl.client.model.ChatMessageReaction.reactionSummaryLabel(): String {
     val names = users
         .map { user -> user.displayName.ifBlank { user.username } }
@@ -4156,6 +4217,20 @@ private fun cc.hhhl.client.model.ChatMessageReference.toReferencePreviewText(): 
         ?: file?.name?.takeIf { it.isNotBlank() }
         ?: "附件"
     return if (author.isNullOrBlank()) body else "$author: $body"
+}
+
+private fun cc.hhhl.client.model.ChatMessageReference.toRenderedQuote(): ChatRenderedQuote {
+    val author = fromUser?.displayName?.takeIf { it.isNotBlank() }
+        ?: fromUser?.username?.takeIf { it.isNotBlank() }
+        ?: "引用"
+    val preview = text.trim().takeIf { it.isNotBlank() }
+        ?: file?.name?.takeIf { it.isNotBlank() }
+        ?: "附件"
+    return ChatRenderedQuote(
+        messageId = id.takeIf { it.isNotBlank() },
+        author = author,
+        preview = preview,
+    )
 }
 
 enum class ChatMessageAlignment {

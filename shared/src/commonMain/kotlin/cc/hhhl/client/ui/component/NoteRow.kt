@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -60,6 +62,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import cc.hhhl.client.model.AvatarDecoration
 import cc.hhhl.client.model.CustomEmoji
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NoteMedia
@@ -903,6 +906,7 @@ private fun ReactionChip(
 fun Avatar(
     initial: String,
     avatarUrl: String? = null,
+    avatarDecorations: List<AvatarDecoration> = emptyList(),
     size: Dp = 42.dp,
     modifier: Modifier = Modifier,
 ) {
@@ -910,23 +914,48 @@ fun Avatar(
 
     Box(
         modifier = modifier
-            .size(size)
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF08090B)),
+            .size(size),
         contentAlignment = Alignment.Center,
     ) {
-        AsyncImage(
-            model = spec.fallbackUrl,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
-        spec.remoteUrl?.let { remoteUrl ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (spec.remoteUrl == null) Color(0xFF08090B) else Color.Transparent),
+            contentAlignment = Alignment.Center,
+        ) {
+            spec.fallbackUrl?.let { fallbackUrl ->
+                AsyncImage(
+                    model = fallbackUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            spec.remoteUrl?.let { remoteUrl ->
+                AsyncImage(
+                    model = remoteUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        avatarDecorations.forEach { decoration ->
             AsyncImage(
-                model = remoteUrl,
+                model = decoration.url,
                 contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .size(size * 1.32f)
+                    .offset(
+                        x = size * decoration.offsetX,
+                        y = size * decoration.offsetY,
+                    )
+                    .graphicsLayer {
+                        rotationZ = decoration.angle
+                        scaleX = if (decoration.flipH) -1f else 1f
+                    },
             )
         }
     }

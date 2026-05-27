@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.api.TimelineKind
 import cc.hhhl.client.api.MainStreamingEvent
+import cc.hhhl.client.api.toApiInstantOrNull
 import cc.hhhl.client.auth.AccountSession
 import cc.hhhl.client.auth.AuthenticatedUser
 import cc.hhhl.client.auth.AuthTokenStore
@@ -345,6 +346,21 @@ internal fun loadedNotesForActions(
         addAll(clipState.notes)
         addAll(channelState.notes)
     }
+}
+
+private fun Note.toSpecialCareNotification(fallbackEpochMillis: Long): NotificationItem {
+    return NotificationItem(
+        id = "special-care-note-$id",
+        type = NotificationType.Note,
+        actor = author,
+        text = "发布了新帖子",
+        createdAtLabel = createdAtLabel.ifBlank { "刚刚" },
+        createdAtEpochMillis = createdAt.toApiInstantOrNull()?.toEpochMilliseconds()
+            ?: fallbackEpochMillis,
+        noteId = id,
+        notePreviewText = text.takeIf { it.isNotBlank() } ?: cw,
+        isSpecialCare = true,
+    )
 }
 
 private fun TimelineDensity.toNoteRowDensity(): NoteRowDensity {
@@ -829,6 +845,7 @@ private fun MainShell(
     val latestRoute by rememberUpdatedState(route)
     val latestTimelineTrendSelected by rememberUpdatedState(timelineTrendSelected)
     val latestTimelineState by rememberUpdatedState(timelineState)
+    val latestSpecialCareUserIds by rememberUpdatedState(specialCareState.userIds)
     val instanceMetaStateHolder = remember {
         InstanceMetaStateHolder(
             repository = InstanceMetaRepository(),
@@ -1279,13 +1296,36 @@ private fun MainShell(
                     MainStreamingEvent.ReadAllNotifications -> notificationStateHolder.syncAllReadFromStreaming()
                     is MainStreamingEvent.TimelineNote -> {
                         val currentTimelineState = latestTimelineState
+                        val streamingNote = event.note
+                        val now = Clock.System.now().toEpochMilliseconds()
+                        if (
+                            streamingNote != null &&
+                            streamingNote.author.id in latestSpecialCareUserIds &&
+                            streamingNote.id !in notifiedSpecialCareNoteIds
+                        ) {
+                            notificationStateHolder.addSpecialCareNotification(
+                                streamingNote.toSpecialCareNotification(
+                                    fallbackEpochMillis = now,
+                                ),
+                            )
+                            notifiedSpecialCareNoteIds += streamingNote.id
+                        }
                         if (
                             latestRoute == AppRoute.Timeline &&
                             !latestTimelineTrendSelected &&
                             !currentTimelineState.requiresRelogin &&
                             event.kind == currentTimelineState.selectedKind
                         ) {
-                            val now = Clock.System.now().toEpochMilliseconds()
+                            val previousRefreshAt = lastStreamingTimelineRefreshAt[event.kind] ?: 0L
+                            if (now - previousRefreshAt >= STREAMING_TIMELINE_REFRESH_DEBOUNCE_MS) {
+                                lastStreamingTimelineRefreshAt = lastStreamingTimelineRefreshAt + (event.kind to now)
+                                timelineStateHolder.refreshQuietly(event.kind)
+                            }
+                        } else if (
+                            event.kind == TimelineKind.Home &&
+                            latestSpecialCareUserIds.isNotEmpty() &&
+                            !currentTimelineState.requiresRelogin
+                        ) {
                             val previousRefreshAt = lastStreamingTimelineRefreshAt[event.kind] ?: 0L
                             if (now - previousRefreshAt >= STREAMING_TIMELINE_REFRESH_DEBOUNCE_MS) {
                                 lastStreamingTimelineRefreshAt = lastStreamingTimelineRefreshAt + (event.kind to now)
@@ -1375,9 +1415,11 @@ private fun MainShell(
                         displayName = toast.displayName,
                         username = toast.displayName,
                         avatarInitial = toast.displayName.trim().firstOrNull()?.toString()?.uppercase() ?: "特",
+                        avatarUrl = toast.avatarUrl,
                     ),
                     text = "在聊天中发来了新消息",
                     createdAtLabel = toast.createdAtLabel.ifBlank { "刚刚" },
+                    createdAtEpochMillis = Clock.System.now().toEpochMilliseconds(),
                     notePreviewText = toast.previewText,
                     isSpecialCare = true,
                     chatRoomId = toast.roomId.takeIf { it.isNotBlank() },
@@ -1398,15 +1440,8 @@ private fun MainShell(
             .filter { it.id !in notifiedSpecialCareNoteIds }
         newSpecialCareNotes.forEach { note ->
             notificationStateHolder.addSpecialCareNotification(
-                NotificationItem(
-                    id = "special-care-note-${note.id}",
-                    type = NotificationType.Note,
-                    actor = note.author,
-                    text = "发布了新帖子",
-                    createdAtLabel = note.createdAtLabel.ifBlank { "刚刚" },
-                    noteId = note.id,
-                    notePreviewText = note.text.takeIf { it.isNotBlank() } ?: note.cw,
-                    isSpecialCare = true,
+                note.toSpecialCareNotification(
+                    fallbackEpochMillis = Clock.System.now().toEpochMilliseconds(),
                 ),
             )
         }
@@ -1739,8 +1774,7 @@ private fun MainShell(
             SiteLinkNavigationTarget.Chat -> navigateTo(AppRoute.Chat)
             is SiteLinkNavigationTarget.ChatRoom -> {
                 navigateTo(AppRoute.Chat)
-                chatState.rooms.firstOrNull { it.id == target.roomId }?.let(chatStateHolder::selectRoom)
-                    ?: chatStateHolder.refresh()
+                chatStateHolder.openRoomById(target.roomId)
             }
             is SiteLinkNavigationTarget.ChatUser -> {
                 navigateTo(AppRoute.Chat)

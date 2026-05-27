@@ -102,6 +102,14 @@ class SiteLinkNavigationTest {
     }
 
     @Test
+    fun localChatRoomUrlIgnoresAdjacentCjkText() {
+        assertEquals(
+            SiteLinkNavigationTarget.ChatRoom("amrhafqz37"),
+            siteLinkNavigationTarget("https://dc.hhhl.cc/chat/room/amrhafqz37帮我看下"),
+        )
+    }
+
+    @Test
     fun localClipUrlNavigatesToClipDetail() {
         assertEquals(
             SiteLinkNavigationTarget.ClipDetail("clip-123"),

@@ -459,6 +459,13 @@ class ClipStateHolderTest {
                     return cc.hhhl.client.api.ClipNotesLoadResult.Success(emptyList())
                 }
 
+                override suspend fun loadNoteClips(
+                    token: String,
+                    noteId: String,
+                ): cc.hhhl.client.api.ClipLoadResult {
+                    return cc.hhhl.client.api.ClipLoadResult.Success(emptyList())
+                }
+
                 override suspend fun createClip(
                     token: String,
                     name: String,

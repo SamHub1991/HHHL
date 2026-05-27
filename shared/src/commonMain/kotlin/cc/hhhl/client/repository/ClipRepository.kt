@@ -48,6 +48,22 @@ open class ClipRepository(
         )
     }
 
+    open suspend fun loadNoteClips(noteId: String): ClipsRepositoryResult {
+        val cleanNoteId = noteId.trim()
+        if (cleanNoteId.isEmpty()) {
+            return ClipsRepositoryResult.Error("无法读取动态")
+        }
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return ClipsRepositoryResult.Unauthorized
+
+        return when (val result = api.loadNoteClips(token, cleanNoteId)) {
+            is ClipLoadResult.Success -> ClipsRepositoryResult.Success(result.clips)
+            ClipLoadResult.Unauthorized -> ClipsRepositoryResult.Unauthorized
+            is ClipLoadResult.NetworkError -> ClipsRepositoryResult.Error("无法连接服务器：${result.message}")
+            is ClipLoadResult.ServerError -> ClipsRepositoryResult.Error(result.message)
+        }
+    }
+
     open suspend fun favoriteClip(clipId: String): ClipActionRepositoryResult {
         return performClipAction(clipId) { token, cleanClipId ->
             api.favoriteClip(token, cleanClipId)

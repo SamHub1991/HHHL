@@ -3,6 +3,7 @@ package cc.hhhl.client.ui.screen
 import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageQuote
+import cc.hhhl.client.model.ChatMessageReference
 import cc.hhhl.client.state.ChatUiState
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -190,6 +191,30 @@ class ChatPresentationTest {
 
         assertEquals(null, presentation.quote)
         assertEquals("> 普通 Markdown 引用\n\n正文", presentation.body)
+    }
+
+    @Test
+    fun messageReferenceConvertsToJumpableQuote() {
+        val reference = ChatMessageReference(
+            id = "message-source",
+            fromUser = FakeData.lin,
+            text = "原消息正文",
+        )
+
+        val rendered = reference.toRenderedQuote()
+
+        assertEquals("message-source", rendered.messageId)
+        assertEquals(FakeData.lin.displayName, rendered.author)
+        assertEquals("原消息正文", rendered.preview)
+    }
+
+    @Test
+    fun appendedChatMentionUsesDisplayNameAndKeepsDraftText() {
+        assertEquals("@${FakeData.lin.displayName} ", "".withAppendedChatMention(FakeData.lin))
+        assertEquals(
+            "你好 @${FakeData.lin.displayName} ",
+            "你好 ".withAppendedChatMention(FakeData.lin),
+        )
     }
 
     private fun chatMessage(

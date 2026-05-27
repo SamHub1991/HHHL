@@ -2,7 +2,7 @@ package cc.hhhl.client.ui.component
 
 data class AvatarImageSpec(
     val remoteUrl: String?,
-    val fallbackUrl: String,
+    val fallbackUrl: String?,
 )
 
 @Suppress("UNUSED_PARAMETER")
@@ -10,9 +10,10 @@ fun avatarImageSpec(
     initial: String,
     avatarUrl: String?,
 ): AvatarImageSpec {
+    val remoteUrl = avatarUrl?.trim()?.takeIf { it.isNotBlank() }
     return AvatarImageSpec(
-        remoteUrl = avatarUrl?.trim()?.takeIf { it.isNotBlank() },
-        fallbackUrl = HHHL_BRAND_AVATAR_URL,
+        remoteUrl = remoteUrl,
+        fallbackUrl = if (remoteUrl == null) HHHL_BRAND_AVATAR_URL else null,
     )
 }
 

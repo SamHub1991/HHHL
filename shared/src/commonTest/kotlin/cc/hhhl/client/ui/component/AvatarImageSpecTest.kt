@@ -6,14 +6,14 @@ import kotlin.test.assertNull
 
 class AvatarImageSpecTest {
     @Test
-    fun usesTrimmedRemoteAvatarUrlWhenPresent() {
+    fun usesTransparentFallbackWhenRemoteAvatarUrlIsPresent() {
         val spec = avatarImageSpec(
             initial = "Alice",
             avatarUrl = "  https://dc.hhhl.cc/avatar.webp  ",
         )
 
         assertEquals("https://dc.hhhl.cc/avatar.webp", spec.remoteUrl)
-        assertEquals(HHHL_BRAND_AVATAR_URL, spec.fallbackUrl)
+        assertNull(spec.fallbackUrl)
     }
 
     @Test

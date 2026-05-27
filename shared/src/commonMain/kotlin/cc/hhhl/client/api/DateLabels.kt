@@ -16,7 +16,7 @@ internal fun String.toLocalCompactDateLabel(
     return this
 }
 
-internal fun String.toApiInstantOrNull(): Instant? {
+fun String.toApiInstantOrNull(): Instant? {
     return runCatching { Instant.parse(this) }.getOrNull()
         ?: parseUtcIsoWithoutZone()
 }

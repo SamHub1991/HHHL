@@ -22,6 +22,7 @@ import cc.hhhl.client.model.User
 import cc.hhhl.client.model.commonReactionOptions
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRoomMemberRepositoryResult
+import cc.hhhl.client.repository.ChatRoomMutationRepositoryResult
 import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ChatRepositoryResult
 import cc.hhhl.client.repository.ChatStreamingRepository
@@ -190,6 +191,86 @@ class ChatStateHolderTest {
 
         assertFalse(holder.state.value.isLoadingMessages)
         assertEquals(listOf(message), holder.state.value.messages)
+    }
+
+    @Test
+    fun openRoomByIdJoinsUnlistedRoomAndSelectsIt() = runTest {
+        val linkedRoom = sampleRoom(id = "room-link")
+        val message = sampleMessage("message-1", roomId = linkedRoom.id)
+        val shownRoom = linkedRoom.copy(name = "链接聊天室", membershipId = linkedRoom.id)
+        val joinedRoom = linkedRoom.copy(membershipId = "membership-link")
+        val joinedRoomIds = mutableListOf<String>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(joinedRoom)),
+                showRoomResult = ChatRoomMutationRepositoryResult.RoomSaved(shownRoom),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+                onJoinRoom = joinedRoomIds::add,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.openRoomById(linkedRoom.id)
+        advanceUntilIdle()
+
+        assertEquals(listOf(linkedRoom.id), joinedRoomIds)
+        assertEquals(joinedRoom, holder.state.value.selectedRoom)
+        assertEquals(listOf(joinedRoom), holder.state.value.rooms)
+        assertEquals(listOf(message), holder.state.value.messages)
+    }
+
+    @Test
+    fun searchMessagesExceptionStopsSearchingAndShowsError() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                throwOnSearchMessages = true,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.searchMessages("关键字")
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isSearchingMessages)
+        assertEquals("聊天搜索异常", holder.state.value.messageSearchErrorMessage)
+    }
+
+    @Test
+    fun loadMoreMessageSearchExceptionStopsLoadingAndKeepsResults() = runTest {
+        val room = sampleRoom()
+        val first = sampleMessage("message-1")
+        var searchCalls = 0
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                searchMessagesResultProvider = {
+                    if (searchCalls++ == 0) {
+                        ChatMessageRepositoryResult.Success(listOf(first))
+                    } else {
+                        throw IllegalStateException("聊天搜索异常")
+                    }
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.searchMessages("关键字")
+        advanceUntilIdle()
+        holder.loadMoreMessageSearch()
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isLoadingMoreMessageSearch)
+        assertEquals(listOf(first), holder.state.value.messageSearchResults)
+        assertEquals("聊天搜索异常", holder.state.value.messageSearchErrorMessage)
     }
 
     @Test
@@ -1123,10 +1204,17 @@ class ChatStateHolderTest {
         cachedUserMessagesResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Success(emptyList()),
         onCacheRoomMessage: (String, ChatMessage) -> Unit = { _, _ -> },
         onCacheUserMessage: (String, ChatMessage) -> Unit = { _, _ -> },
+        searchMessagesResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Success(emptyList()),
         refreshResultProvider: (() -> ChatRepositoryResult)? = null,
         refreshMessagesResultProvider: (() -> ChatMessageRepositoryResult)? = null,
         refreshMembersResultProvider: (() -> ChatRoomMemberRepositoryResult)? = null,
         userConversationResultProvider: (() -> ChatUserConversationRepositoryResult)? = null,
+        searchMessagesResultProvider: (() -> ChatMessageRepositoryResult)? = null,
+        showRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomSaved(sampleRoom()),
+        joinRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.ActionCompleted("已加入聊天室"),
+        onShowRoom: (String) -> Unit = {},
+        onJoinRoom: (String) -> Unit = {},
+        throwOnSearchMessages: Boolean = false,
     ): ChatRepository {
         return object : ChatRepository(
             tokenProvider = { "token-123" },
@@ -1159,6 +1247,11 @@ class ChatStateHolderTest {
                     name: String,
                     description: String,
                 ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom())
+
+                override suspend fun showRoom(
+                    token: String,
+                    roomId: String,
+                ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom(roomId))
 
                 override suspend fun loadUserHistory(
                     token: String,
@@ -1225,6 +1318,11 @@ class ChatStateHolderTest {
                     token: String,
                     roomId: String,
                     userId: String,
+                ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+                override suspend fun joinRoom(
+                    token: String,
+                    roomId: String,
                 ): ChatRoomActionResult = ChatRoomActionResult.Success
 
                 override suspend fun leaveRoom(
@@ -1295,6 +1393,28 @@ class ChatStateHolderTest {
                 currentMessages: List<ChatMessage>,
             ): ChatMessageRepositoryResult {
                 return refreshUserMessagesResult
+            }
+
+            override suspend fun searchMessages(
+                query: String,
+                roomId: String?,
+                userId: String?,
+                serverUntilId: String?,
+                currentResults: List<ChatMessage>,
+                currentConversationMessages: List<ChatMessage>,
+            ): ChatMessageRepositoryResult {
+                if (throwOnSearchMessages) throw IllegalStateException("聊天搜索异常")
+                return searchMessagesResultProvider?.invoke() ?: searchMessagesResult
+            }
+
+            override suspend fun showRoom(roomId: String): ChatRoomMutationRepositoryResult {
+                onShowRoom(roomId)
+                return showRoomResult
+            }
+
+            override suspend fun joinRoom(roomId: String): ChatRoomMutationRepositoryResult {
+                onJoinRoom(roomId)
+                return joinRoomResult
             }
 
             override suspend fun sendMessage(

@@ -97,10 +97,10 @@ fun siteLinkNavigationTarget(url: String): SiteLinkNavigationTarget {
             ?.let { SiteLinkNavigationTarget.AnnouncementDetail(it) }
             ?: SiteLinkNavigationTarget.Announcements
         path == "chat" -> SiteLinkNavigationTarget.Chat
-        path.startsWith("chat/room/") -> path.localPathIdAfter("chat/room")
+        path.startsWith("chat/room/") -> path.localChatIdAfter("chat/room")
             ?.let { SiteLinkNavigationTarget.ChatRoom(it) }
             ?: SiteLinkNavigationTarget.Chat
-        path.startsWith("chat/user/") -> path.localPathIdAfter("chat/user")
+        path.startsWith("chat/user/") -> path.localChatIdAfter("chat/user")
             ?.let { SiteLinkNavigationTarget.ChatUser(it) }
             ?: SiteLinkNavigationTarget.Chat
         path.startsWith("chat/messages/") -> SiteLinkNavigationTarget.Chat
@@ -163,6 +163,15 @@ private fun String.localPathIdAfter(prefix: String): String? {
     return removePrefix(prefix)
         .trim('/')
         .substringBefore('/')
+        .trim()
+        .takeIf { it.isNotBlank() }
+}
+
+private fun String.localChatIdAfter(prefix: String): String? {
+    return removePrefix(prefix)
+        .trim('/')
+        .substringBefore('/')
+        .takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
         .trim()
         .takeIf { it.isNotBlank() }
 }

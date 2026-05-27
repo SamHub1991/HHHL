@@ -78,6 +78,25 @@ class ClipRepositoryTest {
     }
 
     @Test
+    fun loadNoteClipsUsesTokenAndNoteId() = runTest {
+        val clips = listOf(sampleClip("clip-1"))
+        val calls = mutableListOf<NoteClipsCall>()
+        val repository = ClipRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                noteClipsCalls = calls,
+                noteClipsResult = ClipLoadResult.Success(clips),
+            ),
+        )
+
+        val result = repository.loadNoteClips(" note-1 ")
+
+        assertIs<ClipsRepositoryResult.Success>(result)
+        assertEquals(listOf(NoteClipsCall("token-123", "note-1")), calls)
+        assertEquals(clips, result.clips)
+    }
+
+    @Test
     fun missingTokenReturnsUnauthorizedWithoutCallingApi() = runTest {
         var calls = 0
         val repository = ClipRepository(
@@ -87,6 +106,7 @@ class ClipRepositoryTest {
 
         assertIs<ClipsRepositoryResult.Unauthorized>(repository.refreshClips(ClipListKind.Owned))
         assertIs<ClipNotesRepositoryResult.Unauthorized>(repository.refreshNotes("clip-1"))
+        assertIs<ClipsRepositoryResult.Unauthorized>(repository.loadNoteClips("note-1"))
         assertEquals(0, calls)
     }
 
@@ -205,11 +225,13 @@ class ClipRepositoryTest {
     private fun fakeApi(
         clipCalls: MutableList<ClipCall> = mutableListOf(),
         notesCalls: MutableList<NotesCall> = mutableListOf(),
+        noteClipsCalls: MutableList<NoteClipsCall> = mutableListOf(),
         actionCalls: MutableList<ActionCall> = mutableListOf(),
         createCalls: MutableList<CreateCall> = mutableListOf(),
         updateCalls: MutableList<UpdateCall> = mutableListOf(),
         clipResult: ClipLoadResult = ClipLoadResult.Success(emptyList()),
         notesResult: ClipNotesLoadResult = ClipNotesLoadResult.Success(emptyList()),
+        noteClipsResult: ClipLoadResult = ClipLoadResult.Success(emptyList()),
         actionResult: ClipActionResult = ClipActionResult.Success,
         createResult: ClipCreateResult = ClipCreateResult.Success(sampleClip("clip-created")),
         updateResult: ClipUpdateResult = ClipUpdateResult.Success(sampleClip("clip-updated")),
@@ -234,6 +256,15 @@ class ClipRepositoryTest {
                 onCall()
                 notesCalls.add(NotesCall(token, clipId, untilId))
                 return notesResult
+            }
+
+            override suspend fun loadNoteClips(
+                token: String,
+                noteId: String,
+            ): ClipLoadResult {
+                onCall()
+                noteClipsCalls.add(NoteClipsCall(token, noteId))
+                return noteClipsResult
             }
 
             override suspend fun createClip(
@@ -326,6 +357,11 @@ class ClipRepositoryTest {
         val token: String,
         val clipId: String,
         val untilId: String?,
+    )
+
+    private data class NoteClipsCall(
+        val token: String,
+        val noteId: String,
     )
 
     private data class ActionCall(

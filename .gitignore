@@ -22,6 +22,7 @@ build/
 *.temp
 
 # Local secrets
+keystore.properties
 keys/
 *.jks
 *.keystore
@@ -31,3 +32,5 @@ keys/
 
 # Local verification artifacts
 artifacts/
+dist/
+tmp_api.json

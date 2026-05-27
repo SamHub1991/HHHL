@@ -1,5 +1,6 @@
 package cc.hhhl.client.api
 
+import cc.hhhl.client.model.Note
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
@@ -20,6 +21,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -41,7 +43,10 @@ sealed interface MainStreamingEvent {
 
     data object NewChatMessage : MainStreamingEvent
 
-    data class TimelineNote(val kind: TimelineKind) : MainStreamingEvent
+    data class TimelineNote(
+        val kind: TimelineKind,
+        val note: Note? = null,
+    ) : MainStreamingEvent
 
     data class Error(val message: String) : MainStreamingEvent
 
@@ -150,7 +155,14 @@ internal fun parseSharkeyMainStreamingEvent(
     val channelId = body.string("id").orEmpty()
     val eventType = body.string("type")
     channelId.toTimelineKindOrNull()?.let { kind ->
-        return if (eventType == "note") MainStreamingEvent.TimelineNote(kind) else null
+        return if (eventType == "note") {
+            MainStreamingEvent.TimelineNote(
+                kind = kind,
+                note = body.obj("body")?.toStreamingNoteOrNull(json),
+            )
+        } else {
+            null
+        }
     }
     if (channelId.isNotBlank() && channelId != MAIN_STREAM_ID) return null
     return when (eventType) {
@@ -167,6 +179,11 @@ private fun JsonObject.obj(key: String): JsonObject? {
 
 private fun JsonObject.string(key: String): String? {
     return this[key]?.jsonPrimitive?.contentOrNull
+}
+
+private fun JsonObject.toStreamingNoteOrNull(json: Json): Note? {
+    return runCatching { json.decodeFromJsonElement<SharkeyNoteDto>(this).toDomainNote() }
+        .getOrNull()
 }
 
 private fun defaultMainStreamingClient(): HttpClient {

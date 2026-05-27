@@ -1,6 +1,7 @@
 package cc.hhhl.client.cache
 
 import cc.hhhl.client.api.toLocalCompactDateLabel
+import cc.hhhl.client.model.AvatarDecoration
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageReaction
 import cc.hhhl.client.model.ChatMessageReference
@@ -217,7 +218,17 @@ private data class CachedChatUser(
     val isFollowing: Boolean = false,
     val host: String? = null,
     val avatarUrl: String? = null,
+    val avatarDecorations: List<CachedAvatarDecoration> = emptyList(),
     val bannerUrl: String? = null,
+)
+
+@Serializable
+private data class CachedAvatarDecoration(
+    val url: String,
+    val angle: Float = 0f,
+    val flipH: Boolean = false,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f,
 )
 
 @Serializable
@@ -325,6 +336,7 @@ private fun User.toCachedUser(): CachedChatUser {
         isFollowing = isFollowing,
         host = host,
         avatarUrl = avatarUrl,
+        avatarDecorations = avatarDecorations.map { it.toCachedDecoration() },
         bannerUrl = bannerUrl,
     )
 }
@@ -342,7 +354,28 @@ private fun CachedChatUser.toDomainUser(): User {
         isFollowing = isFollowing,
         host = host,
         avatarUrl = avatarUrl,
+        avatarDecorations = avatarDecorations.map { it.toDomainDecoration() },
         bannerUrl = bannerUrl,
+    )
+}
+
+private fun AvatarDecoration.toCachedDecoration(): CachedAvatarDecoration {
+    return CachedAvatarDecoration(
+        url = url,
+        angle = angle,
+        flipH = flipH,
+        offsetX = offsetX,
+        offsetY = offsetY,
+    )
+}
+
+private fun CachedAvatarDecoration.toDomainDecoration(): AvatarDecoration {
+    return AvatarDecoration(
+        url = url,
+        angle = angle,
+        flipH = flipH,
+        offsetX = offsetX,
+        offsetY = offsetY,
     )
 }
 

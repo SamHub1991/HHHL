@@ -5,6 +5,7 @@ import cc.hhhl.client.model.ChatMessageReference
 import cc.hhhl.client.model.ChatMessageReaction
 import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
+import cc.hhhl.client.model.AvatarDecoration
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
@@ -347,6 +348,7 @@ private data class StreamingChatUserDto(
     val username: String,
     val name: String? = null,
     val avatarUrl: String? = null,
+    val avatarDecorations: List<StreamingAvatarDecorationDto> = emptyList(),
 ) {
     fun toDomainUser(): User {
         val displayName = name?.takeIf { it.isNotBlank() } ?: username
@@ -356,6 +358,27 @@ private data class StreamingChatUserDto(
             username = username,
             avatarInitial = displayName.avatarInitial(),
             avatarUrl = avatarUrl?.takeIf { it.isNotBlank() },
+            avatarDecorations = avatarDecorations.mapNotNull { it.toDomainDecoration() },
+        )
+    }
+}
+
+@Serializable
+private data class StreamingAvatarDecorationDto(
+    val url: String? = null,
+    val angle: Float = 0f,
+    val flipH: Boolean = false,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f,
+) {
+    fun toDomainDecoration(): AvatarDecoration? {
+        val cleanUrl = url?.takeIf { it.isNotBlank() } ?: return null
+        return AvatarDecoration(
+            url = cleanUrl,
+            angle = angle,
+            flipH = flipH,
+            offsetX = offsetX,
+            offsetY = offsetY,
         )
     }
 }

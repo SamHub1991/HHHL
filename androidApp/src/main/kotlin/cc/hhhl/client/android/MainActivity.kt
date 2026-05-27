@@ -95,7 +95,17 @@ class MainActivity : ComponentActivity() {
                 contract = ActivityResultContracts.RequestPermission(),
             ) { granted ->
                 if (granted && backgroundNotificationsEnabled) {
+                    BackgroundNotificationScheduler.apply(applicationContext, enabled = true)
                     BackgroundNotificationScheduler.syncNow(applicationContext)
+                } else if (!granted && backgroundNotificationsEnabled) {
+                    backgroundNotificationsEnabled = false
+                    backgroundNotificationStore.setBackgroundSyncEnabled(false)
+                    BackgroundNotificationScheduler.apply(applicationContext, enabled = false)
+                }
+            }
+            LaunchedEffect(backgroundNotificationsEnabled, specialCareBackgroundNotificationsEnabled) {
+                if (backgroundNotificationsEnabled && shouldRequestNotificationPermission()) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
             LaunchedEffect(backgroundNotificationsEnabled) {
@@ -128,9 +138,10 @@ class MainActivity : ComponentActivity() {
                 onBackgroundNotificationsChanged = { enabled ->
                     backgroundNotificationsEnabled = enabled
                     backgroundNotificationStore.setBackgroundSyncEnabled(enabled)
-                    BackgroundNotificationScheduler.apply(applicationContext, enabled)
                     if (enabled && shouldRequestNotificationPermission()) {
                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        BackgroundNotificationScheduler.apply(applicationContext, enabled)
                     }
                 },
                 onSpecialCareBackgroundNotificationsChanged = { enabled ->

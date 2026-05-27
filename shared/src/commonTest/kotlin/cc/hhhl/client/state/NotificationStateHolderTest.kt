@@ -428,6 +428,38 @@ class NotificationStateHolderTest {
     }
 
     @Test
+    fun specialCareNotificationsAreSortedByNewestTimestamp() {
+        val specialCareUser = FakeData.notifications[0].actor
+        val olderLocal = FakeData.notifications[0].copy(
+            id = "special-older-local",
+            actor = specialCareUser,
+            createdAtEpochMillis = 1_000L,
+        )
+        val newestRemote = FakeData.notifications[1].copy(
+            id = "special-newest-remote",
+            actor = specialCareUser,
+            createdAtEpochMillis = 3_000L,
+        )
+        val middleRemote = FakeData.notifications[2].copy(
+            id = "special-middle-remote",
+            actor = specialCareUser,
+            createdAtEpochMillis = 2_000L,
+        )
+
+        val merged = mergeRemoteSpecialCareNotifications(
+            current = listOf(olderLocal.copy(isSpecialCare = true)),
+            remote = listOf(middleRemote, newestRemote),
+            specialCareUserIds = setOf(specialCareUser.id),
+            limit = 10,
+        )
+
+        assertEquals(
+            listOf("special-newest-remote", "special-middle-remote", "special-older-local"),
+            merged.map { it.id },
+        )
+    }
+
+    @Test
     fun refreshAllKeepsLocalSpecialCareUnreadInTotalUnreadCount() = runTest {
         val remote = FakeData.notifications[0].copy(id = "remote-1")
         val specialCare = FakeData.notifications[1].copy(id = "special-local-0")
@@ -440,7 +472,7 @@ class NotificationStateHolderTest {
         holder.refresh()
         advanceUntilIdle()
 
-        assertEquals(listOf("remote-1"), holder.state.value.notifications.map { it.id })
+        assertEquals(listOf("special-local-0", "remote-1"), holder.state.value.notifications.map { it.id })
         assertEquals(2, holder.state.value.unreadCount)
         assertEquals(1, holder.state.value.specialCareUnreadCount)
     }

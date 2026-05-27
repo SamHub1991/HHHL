@@ -32,6 +32,11 @@ interface ClipApi {
         untilId: String? = null,
     ): ClipNotesLoadResult
 
+    suspend fun loadNoteClips(
+        token: String,
+        noteId: String,
+    ): ClipLoadResult
+
     suspend fun createClip(
         token: String,
         name: String,
@@ -218,6 +223,45 @@ class SharkeyClipApi(
             throw error
         } catch (error: Throwable) {
             ClipNotesLoadResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun loadNoteClips(
+        token: String,
+        noteId: String,
+    ): ClipLoadResult {
+        val cleanToken = token.trim()
+        val cleanNoteId = noteId.trim()
+        if (cleanToken.isEmpty()) return ClipLoadResult.Unauthorized
+        if (cleanNoteId.isEmpty()) {
+            return ClipLoadResult.ServerError(
+                statusCode = HttpStatusCode.BadRequest.value,
+                message = "请选择帖子",
+            )
+        }
+
+        return try {
+            val response = client.post(apiUrl("notes", "clips")) {
+                contentType(ContentType.Application.Json)
+                setBody(NoteClipsRequest(i = cleanToken, noteId = cleanNoteId))
+            }
+
+            if (response.isSharkeyUnauthorized()) return ClipLoadResult.Unauthorized
+
+            when (response.status) {
+                HttpStatusCode.OK -> ClipLoadResult.Success(
+                    response.body<List<ClipDto>>().map { it.toDomainClip() },
+                )
+                HttpStatusCode.Unauthorized -> ClipLoadResult.Unauthorized
+                else -> ClipLoadResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            ClipLoadResult.NetworkError(error.message ?: "网络请求失败")
         }
     }
 
@@ -459,6 +503,12 @@ private data class ClipNotesRequest(
     val clipId: String,
     val limit: Int,
     val untilId: String? = null,
+)
+
+@Serializable
+private data class NoteClipsRequest(
+    val i: String,
+    val noteId: String,
 )
 
 @Serializable

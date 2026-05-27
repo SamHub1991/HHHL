@@ -62,6 +62,38 @@ class MainStreamingApiTest {
     }
 
     @Test
+    fun parsesTimelineNoteBody() {
+        val event = parseSharkeyMainStreamingEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "timeline-home",
+                "type": "note",
+                "body": {
+                  "id": "note-1",
+                  "createdAt": "2026-05-27T10:00:00.000Z",
+                  "text": "hello",
+                  "user": {
+                    "id": "user-1",
+                    "username": "alice",
+                    "name": "Alice",
+                    "avatarUrl": "https://example.com/avatar.png"
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val timelineEvent = event as MainStreamingEvent.TimelineNote
+        assertEquals(TimelineKind.Home, timelineEvent.kind)
+        assertEquals("note-1", timelineEvent.note?.id)
+        assertEquals("user-1", timelineEvent.note?.author?.id)
+        assertEquals("hello", timelineEvent.note?.text)
+    }
+
+    @Test
     fun ignoresNonNoteTimelineEvents() {
         val event = parseSharkeyMainStreamingEvent(
             """

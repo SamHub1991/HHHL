@@ -188,6 +188,7 @@ private data class NotificationDto(
                 ?: systemUser,
             text = toMessage(notificationType),
             createdAtLabel = createdAt.toLocalCompactDateLabel(),
+            createdAtEpochMillis = createdAt.toApiInstantOrNull()?.toEpochMilliseconds() ?: 0L,
             noteId = note?.id,
             notePreviewText = note?.text?.takeIf { it.isNotBlank() },
             isRead = isRead ?: read ?: false,

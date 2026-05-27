@@ -184,6 +184,24 @@ open class ChatRepository(
         }
     }
 
+    open suspend fun showRoom(roomId: String): ChatRoomMutationRepositoryResult {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isBlank()) {
+            return ChatRoomMutationRepositoryResult.ValidationError("请选择聊天室")
+        }
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return ChatRoomMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.showRoom(token, cleanRoomId)) {
+            is ChatRoomMutationResult.Success -> ChatRoomMutationRepositoryResult.RoomSaved(result.room)
+            ChatRoomMutationResult.Unauthorized -> ChatRoomMutationRepositoryResult.Unauthorized
+            is ChatRoomMutationResult.NetworkError -> {
+                ChatRoomMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is ChatRoomMutationResult.ServerError -> result.toMutationRepositoryResult()
+        }
+    }
+
     open suspend fun updateRoom(
         roomId: String,
         name: String,
@@ -223,6 +241,15 @@ open class ChatRepository(
 
         return api.inviteRoomMember(token, cleanRoomId, cleanUserId).toMutationRepositoryResult(
             success = ChatRoomMutationRepositoryResult.ActionCompleted("已发送邀请"),
+        )
+    }
+
+    open suspend fun joinRoom(roomId: String): ChatRoomMutationRepositoryResult {
+        val cleanRoomId = roomId.trim()
+        return roomIdAction(
+            roomId = cleanRoomId,
+            success = ChatRoomMutationRepositoryResult.ActionCompleted("已加入聊天室"),
+            action = { token, cleanRoomId -> api.joinRoom(token, cleanRoomId) },
         )
     }
 
@@ -585,6 +612,7 @@ open class ChatRepository(
         query: String,
         roomId: String? = null,
         userId: String? = null,
+        serverUntilId: String? = null,
         currentResults: List<ChatMessage> = emptyList(),
         currentConversationMessages: List<ChatMessage> = emptyList(),
     ): ChatMessageRepositoryResult {
@@ -603,18 +631,7 @@ open class ChatRepository(
             ChatMessageCacheConversationType.User
         }
         val conversationId = cleanRoomId ?: cleanUserId.orEmpty()
-        when (
-            val indexResult = ensureCachedMessageHistory(
-                token = token,
-                type = type,
-                conversationId = conversationId,
-                currentMessages = currentConversationMessages,
-            )
-        ) {
-            ChatMessageRepositoryResult.Unauthorized -> return ChatMessageRepositoryResult.Unauthorized
-            is ChatMessageRepositoryResult.Error -> return indexResult
-            else -> Unit
-        }
+        seedSearchCache(type, conversationId, currentConversationMessages)
         val cachedResults = searchCachedMessages(
             query = cleanQuery,
             roomId = cleanRoomId,
@@ -627,7 +644,7 @@ open class ChatRepository(
                 token = token,
                 query = cleanQuery,
                 limit = DEFAULT_MESSAGE_SEARCH_PAGE_SIZE,
-                untilId = currentResults.firstOrNull()?.id,
+                untilId = serverUntilId,
                 roomId = cleanRoomId,
                 userId = cleanUserId,
             )
@@ -639,6 +656,8 @@ open class ChatRepository(
                 ChatMessageRepositoryResult.Success(
                     messages = mergedMessages,
                     endReached = cachedResults.isEmpty() && result.messages.isEmpty(),
+                    nextUntilId = result.messages.minWithOrNull(chatMessageChronologicalComparator)?.id
+                        ?: serverUntilId,
                 )
             }
             ChatMessageLoadResult.Unauthorized -> ChatMessageRepositoryResult.Unauthorized
@@ -647,6 +666,7 @@ open class ChatRepository(
                     ChatMessageRepositoryResult.Success(
                         messages = currentResults.mergeChronologicalMessages(cachedResults),
                         endReached = cachedResults.size < DEFAULT_MESSAGE_SEARCH_PAGE_SIZE,
+                        nextUntilId = serverUntilId,
                     )
                 } else {
                     ChatMessageRepositoryResult.Error("无法连接服务器：${result.message}")
@@ -830,6 +850,22 @@ open class ChatRepository(
         }
     }
 
+    private suspend fun seedSearchCache(
+        type: ChatMessageCacheConversationType,
+        conversationId: String,
+        currentMessages: List<ChatMessage>,
+    ) {
+        if (currentMessages.isEmpty()) return
+        val key = cacheKey(type, conversationId) ?: return
+        messageCacheMutex.withLock {
+            val cachedMessages = messageCache.read(key)
+            val seedMessages = cachedMessages.mergeChronologicalMessages(currentMessages)
+            if (seedMessages != cachedMessages) {
+                messageCache.write(key, seedMessages)
+            }
+        }
+    }
+
     private suspend fun removeCachedMessage(
         type: ChatMessageCacheConversationType,
         conversationId: String?,
@@ -876,20 +912,23 @@ open class ChatRepository(
         }
         if (cachedMessages.isEmpty()) return emptyList()
 
-        val currentIds = currentResults.mapTo(HashSet<String>()) { it.id }
+        val currentIds = currentResults.mapTo(HashSet<String>(currentResults.size)) { it.id }
         val oldestLoadedMessage = currentResults.firstOrNull()
-        val matchingMessages = cachedMessages
-            .asSequence()
-            .filterNot { it.id in currentIds }
-            .filter { message ->
-                oldestLoadedMessage == null ||
-                    chatMessageChronologicalComparator.compare(message, oldestLoadedMessage) < 0
+        val seenIds = HashSet<String>(DEFAULT_MESSAGE_SEARCH_PAGE_SIZE + currentIds.size)
+        val matchingMessages = ArrayList<ChatMessage>(DEFAULT_MESSAGE_SEARCH_PAGE_SIZE)
+        for (message in cachedMessages.asReversed()) {
+            if (message.id in currentIds || !seenIds.add(message.id)) continue
+            if (
+                oldestLoadedMessage != null &&
+                chatMessageChronologicalComparator.compare(message, oldestLoadedMessage) >= 0
+            ) {
+                continue
             }
-            .filter { it.matchesSearchQuery(query) }
-            .distinctBy { it.id }
-            .sortedWith(chatMessageChronologicalComparator)
-            .toList()
-        return matchingMessages.takeLast(DEFAULT_MESSAGE_SEARCH_PAGE_SIZE)
+            if (!message.matchesSearchQuery(query)) continue
+            matchingMessages += message
+            if (matchingMessages.size >= DEFAULT_MESSAGE_SEARCH_PAGE_SIZE) break
+        }
+        return matchingMessages.asReversed()
     }
 
     private fun cacheKey(
@@ -1141,6 +1180,7 @@ sealed interface ChatMessageRepositoryResult {
     data class Success(
         val messages: List<ChatMessage>,
         val endReached: Boolean = false,
+        val nextUntilId: String? = null,
     ) : ChatMessageRepositoryResult
 
     data class Created(val message: ChatMessage) : ChatMessageRepositoryResult

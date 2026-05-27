@@ -176,6 +176,24 @@ class MarkdownRichTextPresentationTest {
     }
 
     @Test
+    fun stripsUnsupportedVisualMfmDecorators() {
+        val spans = parseInlineMarkdown("""$[sparkle aaa] $[spin bbb] ${'$'}{spin 斑} $[unknown ccc]""")
+
+        assertEquals(
+            listOf(
+                InlineMarkdownSpan.Text("aaa"),
+                InlineMarkdownSpan.Text(" "),
+                InlineMarkdownSpan.Text("bbb"),
+                InlineMarkdownSpan.Text(" "),
+                InlineMarkdownSpan.Text("斑"),
+                InlineMarkdownSpan.Text(" "),
+                InlineMarkdownSpan.Text("ccc"),
+            ),
+            spans,
+        )
+    }
+
+    @Test
     fun parsesCenteredHtmlBlock() {
         val blocks = parseMarkdownBlocks("<center>hello</center>")
 

@@ -308,12 +308,20 @@ class ChatRepositoryTest {
     }
 
     @Test
-    fun searchMessagesIndexesFullRoomHistoryBeforeSearchingCache() = runTest {
+    fun searchMessagesUsesLoadedAndCachedMessagesWithoutFullHistoryIndex() = runTest {
         val latest = sampleMessage("message-latest", text = "latest", createdAt = "2026-05-25T03:00:00.000Z")
-        val middle = sampleMessage("message-middle", text = "middle", createdAt = "2026-05-25T02:00:00.000Z")
+        val cached = sampleMessage("message-cached", text = "needle cached", createdAt = "2026-05-25T02:00:00.000Z")
         val oldest = sampleMessage("message-oldest", text = "needle oldest", createdAt = "2026-05-25T01:00:00.000Z")
         val calls = mutableListOf<MessageCall>()
         val cache = InMemoryChatMessageCache()
+        cache.write(
+            cc.hhhl.client.cache.ChatMessageCacheKey(
+                accountId = "account-1",
+                type = cc.hhhl.client.cache.ChatMessageCacheConversationType.Room,
+                conversationId = "room-1",
+            ),
+            listOf(cached),
+        )
         val repository = ChatRepository(
             tokenProvider = { "token-123" },
             currentUserIdProvider = { "account-1" },
@@ -323,12 +331,11 @@ class ChatRepositoryTest {
                 messageCalls = calls,
                 messageResultProvider = { untilId ->
                     when (untilId) {
-                        "message-latest" -> ChatMessageLoadResult.Success(listOf(middle, oldest))
-                        "message-oldest" -> ChatMessageLoadResult.Success(emptyList())
+                        "message-latest" -> ChatMessageLoadResult.Success(listOf(oldest))
                         else -> ChatMessageLoadResult.Success(emptyList())
                     }
                 },
-                searchResult = ChatMessageLoadResult.Success(emptyList()),
+                searchResult = ChatMessageLoadResult.Success(listOf(oldest)),
                 result = ChatRoomLoadResult.Success(emptyList()),
             ),
         )
@@ -340,17 +347,61 @@ class ChatRepositoryTest {
         )
 
         assertIs<ChatMessageRepositoryResult.Success>(result)
-        assertEquals(listOf("message-oldest"), result.messages.map { it.id })
-        assertEquals(
-            listOf(
-                MessageCall("token-123", "room-1", "message-latest"),
-                MessageCall("token-123", "room-1", "message-oldest"),
+        assertEquals(listOf("message-oldest", "message-cached"), result.messages.map { it.id })
+        assertEquals(emptyList(), calls)
+        val restored = repository.restoreCachedMessages("room-1")
+        assertIs<ChatMessageRepositoryResult.Success>(restored)
+        assertEquals(listOf("message-cached", "message-latest"), restored.messages.map { it.id })
+    }
+
+    @Test
+    fun loadMoreSearchUsesServerCursorInsteadOfCachedOldestResult() = runTest {
+        val serverFirst = sampleMessage("message-server-1", text = "needle server 1", createdAt = "2026-05-25T03:00:00.000Z")
+        val cachedOlder = sampleMessage("message-cached-old", text = "needle cached", createdAt = "2026-05-25T01:00:00.000Z")
+        val serverSecond = sampleMessage("message-server-2", text = "needle server 2", createdAt = "2026-05-25T02:00:00.000Z")
+        val searchCalls = mutableListOf<SearchCall>()
+        val cache = InMemoryChatMessageCache()
+        cache.write(
+            cc.hhhl.client.cache.ChatMessageCacheKey(
+                accountId = "account-1",
+                type = cc.hhhl.client.cache.ChatMessageCacheConversationType.Room,
+                conversationId = "room-1",
             ),
-            calls,
+            listOf(cachedOlder),
         )
-        val cached = repository.restoreCachedMessages("room-1")
-        assertIs<ChatMessageRepositoryResult.Success>(cached)
-        assertEquals(listOf("message-oldest", "message-middle", "message-latest"), cached.messages.map { it.id })
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { "account-1" },
+            cacheAccountIdProvider = { "account-1" },
+            messageCache = cache,
+            api = fakeApi(
+                searchCalls = searchCalls,
+                searchResultProvider = { untilId ->
+                    when (untilId) {
+                        null -> ChatMessageLoadResult.Success(listOf(serverFirst))
+                        "message-server-1" -> ChatMessageLoadResult.Success(listOf(serverSecond))
+                        else -> ChatMessageLoadResult.Success(emptyList())
+                    }
+                },
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val firstPage = repository.searchMessages(query = "needle", roomId = "room-1")
+        assertIs<ChatMessageRepositoryResult.Success>(firstPage)
+        val secondPage = repository.searchMessages(
+            query = "needle",
+            roomId = "room-1",
+            serverUntilId = firstPage.nextUntilId,
+            currentResults = firstPage.messages,
+        )
+
+        assertIs<ChatMessageRepositoryResult.Success>(secondPage)
+        assertEquals(listOf(null, "message-server-1"), searchCalls.map { it.untilId })
+        assertEquals(
+            listOf("message-cached-old", "message-server-2", "message-server-1"),
+            secondPage.messages.map { it.id },
+        )
     }
 
     @Test
@@ -558,12 +609,14 @@ class ChatRepositoryTest {
         createCalls: MutableList<CreateCall> = mutableListOf(),
         reactionCalls: MutableList<ReactionCall> = mutableListOf(),
         memberCalls: MutableList<MemberCall> = mutableListOf(),
+        searchCalls: MutableList<SearchCall> = mutableListOf(),
         result: ChatRoomLoadResult,
         messageResult: ChatMessageLoadResult = ChatMessageLoadResult.Success(emptyList()),
         messageResultProvider: ((String?) -> ChatMessageLoadResult)? = null,
         userMessageResult: ChatMessageLoadResult = messageResult,
         userHistoryResult: ChatUserHistoryLoadResult = ChatUserHistoryLoadResult.Success(emptyList()),
         searchResult: ChatMessageLoadResult = messageResult,
+        searchResultProvider: ((String?) -> ChatMessageLoadResult)? = null,
         createResult: ChatMessageCreateResult = ChatMessageCreateResult.Success(sampleMessage("created")),
         reactionResult: ChatMessageReactionResult = ChatMessageReactionResult.Success,
         memberResult: ChatRoomMemberLoadResult = ChatRoomMemberLoadResult.Success(emptyList()),
@@ -616,7 +669,10 @@ class ChatRepositoryTest {
                 untilId: String?,
                 roomId: String?,
                 userId: String?,
-            ): ChatMessageLoadResult = searchResult
+            ): ChatMessageLoadResult {
+                searchCalls.add(SearchCall(token, query, untilId, roomId, userId))
+                return searchResultProvider?.invoke(untilId) ?: searchResult
+            }
 
             override suspend fun createRoomMessage(
                 token: String,
@@ -651,6 +707,11 @@ class ChatRepositoryTest {
                 description: String,
             ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom("room-created", "membership-created"))
 
+            override suspend fun showRoom(
+                token: String,
+                roomId: String,
+            ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom(roomId, roomId))
+
             override suspend fun reactToMessage(
                 token: String,
                 messageId: String,
@@ -680,6 +741,11 @@ class ChatRepositoryTest {
                 token: String,
                 roomId: String,
                 userId: String,
+            ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+            override suspend fun joinRoom(
+                token: String,
+                roomId: String,
             ): ChatRoomActionResult = ChatRoomActionResult.Success
 
             override suspend fun leaveRoom(
@@ -777,6 +843,14 @@ class ChatRepositoryTest {
     private data class UserHistoryCall(
         val token: String,
         val limit: Int,
+    )
+
+    private data class SearchCall(
+        val token: String,
+        val query: String,
+        val untilId: String?,
+        val roomId: String?,
+        val userId: String?,
     )
 
     private data class CreateCall(

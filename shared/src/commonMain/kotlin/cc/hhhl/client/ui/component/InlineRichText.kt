@@ -630,7 +630,8 @@ private fun nextMarkdownSpecial(text: String, start: Int): Int {
             text[index] == '*' ||
             text[index] == '_' ||
             text[index] == '<' ||
-            text.startsWith("$[", index)
+            text.startsWith("$[", index) ||
+                text.startsWith("\${", index)
         ) {
             return index
         }
@@ -745,11 +746,8 @@ private fun parseMfmSpan(text: String, start: Int): ParsedStyledSpan? {
         "scale" -> parseMfmScaleStyle(rawName)
         "blur", "blurry" -> InlineMarkdownStyle.Blurry
         "rainbow" -> InlineMarkdownStyle.Rainbow
-        "font", "fg", "bg", "jelly", "tada", "jump", "bounce", "spin", "shake", "twitch" -> {
-            InlineMarkdownStyle.Plain
-        }
         "plain" -> InlineMarkdownStyle.Plain
-        else -> return null
+        else -> InlineMarkdownStyle.Plain
     }
     return ParsedStyledSpan(
         span = InlineMarkdownSpan.Text(
@@ -768,11 +766,20 @@ private data class MfmFunction(
     val end: Int,
 )
 
+private data class MfmSyntax(
+    val openToken: String,
+    val closeChar: Char,
+)
+
 private fun parseMfmFunction(text: String, start: Int): MfmFunction? {
-    if (!text.startsWith("$[", start)) return null
-    val closeIndex = findMfmCloseIndex(text, start)
+    val syntax = when {
+        text.startsWith("$[", start) -> MfmSyntax(openToken = "$[", closeChar = ']')
+        text.startsWith("\${", start) -> MfmSyntax(openToken = "\${", closeChar = '}')
+        else -> return null
+    }
+    val closeIndex = findMfmCloseIndex(text, start, syntax)
     if (closeIndex <= start + 3) return null
-    val body = text.substring(start + 2, closeIndex)
+    val body = text.substring(start + syntax.openToken.length, closeIndex)
     val separatorIndex = body.indexOfFirst { it.isWhitespace() }
     if (separatorIndex <= 0 || separatorIndex == body.lastIndex) return null
     val rawName = body.substring(0, separatorIndex).lowercase()
@@ -787,16 +794,16 @@ private fun parseMfmFunction(text: String, start: Int): MfmFunction? {
     )
 }
 
-private fun findMfmCloseIndex(text: String, start: Int): Int {
+private fun findMfmCloseIndex(text: String, start: Int, syntax: MfmSyntax): Int {
     var depth = 1
-    var index = start + 2
+    var index = start + syntax.openToken.length
     while (index < text.length) {
-        if (text.startsWith("$[", index)) {
+        if (text.startsWith(syntax.openToken, index)) {
             depth += 1
-            index += 2
+            index += syntax.openToken.length
             continue
         }
-        if (text[index] == ']') {
+        if (text[index] == syntax.closeChar) {
             depth -= 1
             if (depth == 0) return index
         }
@@ -807,7 +814,7 @@ private fun findMfmCloseIndex(text: String, start: Int): Int {
 
 private fun String.unwrapSingleMfmFunctions(): String {
     var value = trim()
-    while (value.startsWith("$[")) {
+    while (value.startsWith("$[") || value.startsWith("\${")) {
         val function = parseMfmFunction(value, 0) ?: break
         if (function.end != value.length) break
         value = function.value.trim()
@@ -1006,7 +1013,7 @@ private fun canRenderPlainRichTextFastPath(
         when (char) {
             '`', '[', '*', '_', '<', '@', '#' -> return false
             ':' -> if (emojiUrls.isNotEmpty()) return false
-            '$' -> if (text.startsWith("$[", index)) return false
+            '$' -> if (text.startsWith("$[", index) || text.startsWith("\${", index)) return false
             '>' -> if (lineCanStartBlock) return false
         }
         lineCanStartBlock = char == '\n' || (lineCanStartBlock && (char == ' ' || char == '\t'))

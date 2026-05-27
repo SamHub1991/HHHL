@@ -98,9 +98,9 @@ object FakeData {
     )
 
     val notifications = listOf(
-        NotificationItem("noti1", NotificationType.Reaction, lin, "对你的帖子做出了反应", "刚刚", "n1"),
-        NotificationItem("noti2", NotificationType.Reply, qing, "回复了你的帖子", "12 分钟", "n2"),
+        NotificationItem("noti1", NotificationType.Reaction, lin, "对你的帖子做出了反应", "刚刚", noteId = "n1"),
+        NotificationItem("noti2", NotificationType.Reply, qing, "回复了你的帖子", "12 分钟", noteId = "n2"),
         NotificationItem("noti3", NotificationType.Follow, xia, "关注了你", "1 小时"),
-        NotificationItem("noti4", NotificationType.Renote, lin, "转发了你的帖子", "昨天", "n3"),
+        NotificationItem("noti4", NotificationType.Renote, lin, "转发了你的帖子", "昨天", noteId = "n3"),
     )
 }
