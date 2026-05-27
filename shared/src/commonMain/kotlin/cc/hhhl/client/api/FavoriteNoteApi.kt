@@ -62,6 +62,8 @@ class SharkeyFavoriteNoteApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return FavoriteNoteLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> FavoriteNoteLoadResult.Success(
                     response.body<List<FavoriteNoteDto>>().map { it.toDomainFavorite() },

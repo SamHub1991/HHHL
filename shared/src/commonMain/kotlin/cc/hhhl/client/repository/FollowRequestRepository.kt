@@ -38,7 +38,7 @@ open class FollowRequestRepository(
 
         return when (val result = api.loadReceived(token = token, limit = PAGE_SIZE, untilId = untilId)) {
             is FollowRequestLoadResult.Success -> FollowRequestsRepositoryResult.Success(
-                requests = (currentRequests + result.requests).distinctBy { it.id },
+                requests = currentRequests.appendDistinctBy(result.requests) { it.id },
             )
             FollowRequestLoadResult.Unauthorized -> FollowRequestsRepositoryResult.Unauthorized
             is FollowRequestLoadResult.NetworkError -> {

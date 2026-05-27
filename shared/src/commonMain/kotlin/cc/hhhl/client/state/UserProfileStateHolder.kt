@@ -1,8 +1,11 @@
 package cc.hhhl.client.state
 
+import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.UserRelationship
+import cc.hhhl.client.repository.DriveFileRepository
+import cc.hhhl.client.repository.DriveFileRepositoryResult
 import cc.hhhl.client.repository.UserNotesRepository
 import cc.hhhl.client.repository.UserNotesRepositoryResult
 import cc.hhhl.client.repository.UserProfileRepository
@@ -36,6 +39,7 @@ class UserProfileStateHolder(
     private val repository: UserProfileRepository,
     private val notesRepository: UserNotesRepository? = null,
     private val relationshipRepository: UserRelationshipRepository? = null,
+    private val driveFileRepository: DriveFileRepository? = null,
     private val scope: CoroutineScope,
 ) {
     private val mutableState = MutableStateFlow(UserProfileUiState())
@@ -174,6 +178,67 @@ class UserProfileStateHolder(
 
         scope.launch {
             applyProfileUpdateResult(repository.updateProfile(cleanName, cleanDescription))
+        }
+    }
+
+    fun updateBanner(upload: DriveFileUpload) {
+        val driveRepository = driveFileRepository ?: return
+        val currentUser = state.value.user ?: return
+        if (state.value.isProfileSaving) return
+
+        mutableState.update {
+            it.copy(
+                isProfileSaving = true,
+                profileEditErrorMessage = null,
+                errorMessage = null,
+                message = null,
+                requiresRelogin = false,
+            )
+        }
+
+        scope.launch {
+            when (val uploadResult = driveRepository.upload(upload)) {
+                is DriveFileRepositoryResult.Success -> {
+                    applyProfileUpdateResult(
+                        repository.updateBanner(
+                            name = currentUser.displayName,
+                            description = currentUser.bio,
+                            bannerId = uploadResult.file.id,
+                        ),
+                    )
+                }
+                DriveFileRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(
+                        isProfileSaving = false,
+                        profileEditErrorMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is DriveFileRepositoryResult.ValidationError -> mutableState.update {
+                    it.copy(
+                        isProfileSaving = false,
+                        profileEditErrorMessage = uploadResult.message,
+                        requiresRelogin = false,
+                    )
+                }
+                is DriveFileRepositoryResult.Error -> mutableState.update {
+                    it.copy(
+                        isProfileSaving = false,
+                        profileEditErrorMessage = uploadResult.message,
+                        requiresRelogin = false,
+                    )
+                }
+            }
+        }
+    }
+
+    fun showProfileEditError(message: String) {
+        mutableState.update {
+            it.copy(
+                profileEditErrorMessage = message,
+                message = null,
+                requiresRelogin = false,
+            )
         }
     }
 

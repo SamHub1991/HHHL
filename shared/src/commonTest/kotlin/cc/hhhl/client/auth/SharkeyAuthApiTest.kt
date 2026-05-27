@@ -152,10 +152,26 @@ class SharkeyAuthApiTest {
         assertEquals(
             AuthResult.ServerError(
                 statusCode = HttpStatusCode.Forbidden.value,
-                message = "Access denied",
+                message = "当前账号没有执行此操作的权限",
             ),
             result,
         )
+    }
+
+    @Test
+    fun verifyTokenTreatsAuthenticationFailed403AsInvalidToken() = runTest {
+        val api = SharkeyAuthApi(
+            baseUrl = "https://dc.hhhl.cc",
+            client = testClient {
+                respond(
+                    content = """{"error":{"message":"Authentication failed. Please ensure your token is correct.","code":"AUTHENTICATION_FAILED"}}""",
+                    status = HttpStatusCode.Forbidden,
+                    headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                )
+            },
+        )
+
+        assertIs<AuthResult.InvalidToken>(api.verifyToken("token-123"))
     }
 
     @Test
@@ -196,6 +212,137 @@ class SharkeyAuthApiTest {
                 ),
             ),
             result,
+        )
+    }
+
+    @Test
+    fun signInWithPasswordUsesSigninFlowAndVerifiesReturnedToken() = runTest {
+        val requestedUrls = mutableListOf<String>()
+        val api = SharkeyAuthApi(
+            baseUrl = "https://dc.hhhl.cc",
+            client = testClient { request ->
+                requestedUrls.add(request.url.toString())
+                when (request.url.toString()) {
+                    "https://dc.hhhl.cc/api/users/show" -> {
+                        assertTrue((request.body as TextContent).text.contains("\"username\":\"alice\""))
+                        respond(
+                            content = """
+                                {
+                                  "id": "9s8x",
+                                  "username": "alice",
+                                  "name": "Alice",
+                                  "avatarUrl": "https://dc.hhhl.cc/avatar.webp"
+                                }
+                            """.trimIndent(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                        )
+                    }
+                    "https://dc.hhhl.cc/api/signin-flow" -> {
+                        val body = (request.body as TextContent).text
+                        assertTrue(body.contains("\"username\":\"alice\""))
+                        assertTrue(body.contains("\"password\":\"secret\""))
+                        respond(
+                            content = """{"finished":true,"id":"9s8x","i":"token-123"}""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                        )
+                    }
+                    "https://dc.hhhl.cc/api/i" -> {
+                        assertTrue((request.body as TextContent).text.contains("\"i\":\"token-123\""))
+                        respond(
+                            content = """
+                                {
+                                  "id": "9s8x",
+                                  "username": "alice",
+                                  "name": "Alice",
+                                  "avatarUrl": "https://dc.hhhl.cc/avatar.webp"
+                                }
+                            """.trimIndent(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                        )
+                    }
+                    else -> error("Unexpected request ${request.url}")
+                }
+            },
+        )
+
+        val result = api.signInWithPassword("@alice", "secret")
+
+        assertEquals(
+            PasswordLoginResult.Success(
+                token = "token-123",
+                user = AuthenticatedUser(
+                    id = "9s8x",
+                    username = "alice",
+                    displayName = "Alice",
+                    avatarUrl = "https://dc.hhhl.cc/avatar.webp",
+                ),
+            ),
+            result,
+        )
+        assertEquals(
+            listOf(
+                "https://dc.hhhl.cc/api/users/show",
+                "https://dc.hhhl.cc/api/signin-flow",
+                "https://dc.hhhl.cc/api/i",
+            ),
+            requestedUrls,
+        )
+    }
+
+    @Test
+    fun signInWithPasswordCanReturnTotpRequirement() = runTest {
+        val api = SharkeyAuthApi(
+            baseUrl = "https://dc.hhhl.cc",
+            client = testClient { request ->
+                when (request.url.toString()) {
+                    "https://dc.hhhl.cc/api/users/show" -> respond(
+                        content = """{"id":"9s8x","username":"alice","name":"Alice"}""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                    "https://dc.hhhl.cc/api/signin-flow" -> respond(
+                        content = """{"finished":false,"next":"totp"}""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                    else -> error("Unexpected request ${request.url}")
+                }
+            },
+        )
+
+        assertIs<PasswordLoginResult.NeedsTotp>(api.signInWithPassword("alice", "secret"))
+    }
+
+    @Test
+    fun signInWithPasswordMapsTurnstileCaptchaRequirementToClearMessage() = runTest {
+        val api = SharkeyAuthApi(
+            baseUrl = "https://dc.hhhl.cc",
+            client = testClient { request ->
+                when (request.url.toString()) {
+                    "https://dc.hhhl.cc/api/users/show" -> respond(
+                        content = """{"id":"9s8x","username":"alice","name":"Alice"}""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                    "https://dc.hhhl.cc/api/signin-flow" -> respond(
+                        content = """{"statusCode":400,"error":"Bad Request","message":"CaptchaError: turnstile-failed: no response provided"}""",
+                        status = HttpStatusCode.BadRequest,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                    else -> error("Unexpected request ${request.url}")
+                }
+            },
+        )
+
+        assertEquals(
+            PasswordLoginResult.ServerError(
+                statusCode = HttpStatusCode.BadRequest.value,
+                message = "当前实例要求验证码验证，App 暂不支持此密码登录流程，请使用浏览器授权登录",
+            ),
+            api.signInWithPassword("alice", "secret"),
         )
     }
 

@@ -94,6 +94,50 @@ class SharkeyNotificationApiTest {
     }
 
     @Test
+    fun mapsReadStateFromNotificationJson() = runTest {
+        val api = SharkeyNotificationApi(
+            client = testClient {
+                respond(
+                    content = """
+                        [
+                          {
+                            "id": "notification-read",
+                            "createdAt": "2026-05-25T00:12:34.000Z",
+                            "type": "follow",
+                            "isRead": true,
+                            "user": {
+                              "id": "user-1",
+                              "username": "alice",
+                              "name": "Alice"
+                            }
+                          },
+                          {
+                            "id": "notification-legacy-read",
+                            "createdAt": "2026-05-25T00:13:34.000Z",
+                            "type": "follow",
+                            "read": true,
+                            "user": {
+                              "id": "user-2",
+                              "username": "bob",
+                              "name": "Bob"
+                            }
+                          }
+                        ]
+                    """.trimIndent(),
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = api.loadNotifications("token-123", 20)
+
+        assertIs<NotificationLoadResult.Success>(result)
+        assertTrue(result.notifications[0].isRead)
+        assertTrue(result.notifications[1].isRead)
+    }
+
+    @Test
     fun mapsAdditionalSharkeyNotificationTypes() = runTest {
         val api = SharkeyNotificationApi(client = testClient { respondRichNotificationArray() })
 

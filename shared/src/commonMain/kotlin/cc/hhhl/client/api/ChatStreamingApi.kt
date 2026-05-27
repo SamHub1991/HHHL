@@ -1,6 +1,7 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.ChatMessage
+import cc.hhhl.client.model.ChatMessageReference
 import cc.hhhl.client.model.ChatMessageReaction
 import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
@@ -35,6 +36,11 @@ interface ChatStreamingApi {
     fun streamRoomMessages(
         token: String,
         roomId: String,
+    ): Flow<ChatStreamingEvent>
+
+    fun streamUserMessages(
+        token: String,
+        userId: String,
     ): Flow<ChatStreamingEvent>
 }
 
@@ -83,7 +89,7 @@ class SharkeyChatStreamingApi(
             throw error
         } catch (error: Throwable) {
             val message = error.message ?: "实时连接失败"
-            emit(if (message.isUnauthorizedStreamingError()) ChatStreamingEvent.Unauthorized else ChatStreamingEvent.Error(message))
+            emit(if (message.isUnauthorizedStreamingTransportError()) ChatStreamingEvent.Unauthorized else ChatStreamingEvent.Error(message))
             emit(ChatStreamingEvent.Closed)
             return@flow
         }
@@ -101,7 +107,58 @@ class SharkeyChatStreamingApi(
             throw error
         } catch (error: Throwable) {
             val message = error.message ?: "实时连接中断"
-            emit(if (message.isUnauthorizedStreamingError()) ChatStreamingEvent.Unauthorized else ChatStreamingEvent.Error(message))
+            emit(if (message.isUnauthorizedStreamingTransportError()) ChatStreamingEvent.Unauthorized else ChatStreamingEvent.Error(message))
+            emit(ChatStreamingEvent.Closed)
+        } finally {
+            runCatching { session.close() }
+        }
+    }
+
+    override fun streamUserMessages(
+        token: String,
+        userId: String,
+    ): Flow<ChatStreamingEvent> = flow {
+        val cleanToken = token.trim()
+        val cleanUserId = userId.trim()
+        if (cleanToken.isEmpty()) {
+            emit(ChatStreamingEvent.Unauthorized)
+            emit(ChatStreamingEvent.Closed)
+            return@flow
+        }
+        if (cleanUserId.isEmpty()) {
+            emit(ChatStreamingEvent.Error("请选择用户"))
+            emit(ChatStreamingEvent.Closed)
+            return@flow
+        }
+
+        emit(ChatStreamingEvent.Connecting)
+        val session = try {
+            client.webSocketSession {
+                url(streamingUrl(cleanToken))
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            val message = error.message ?: "实时连接失败"
+            emit(if (message.isUnauthorizedStreamingTransportError()) ChatStreamingEvent.Unauthorized else ChatStreamingEvent.Error(message))
+            emit(ChatStreamingEvent.Closed)
+            return@flow
+        }
+
+        try {
+            emit(ChatStreamingEvent.Connected)
+            session.send(Frame.Text(userConnectPayload(cleanUserId)))
+            for (frame in session.incoming) {
+                if (frame is Frame.Text) {
+                    parseSharkeyStreamingChatEvent(frame.readText(), json)?.let { emit(it) }
+                }
+            }
+            emit(ChatStreamingEvent.Closed)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            val message = error.message ?: "实时连接中断"
+            emit(if (message.isUnauthorizedStreamingTransportError()) ChatStreamingEvent.Unauthorized else ChatStreamingEvent.Error(message))
             emit(ChatStreamingEvent.Closed)
         } finally {
             runCatching { session.close() }
@@ -130,10 +187,34 @@ class SharkeyChatStreamingApi(
                     buildJsonObject {
                         put("channel", "chatRoom")
                         put("id", "chat-room-$roomId")
+                        put("pong", true)
                         put(
                             "params",
                             buildJsonObject {
                                 put("roomId", roomId)
+                            },
+                        )
+                    },
+                )
+            },
+        )
+    }
+
+    private fun userConnectPayload(userId: String): String {
+        return json.encodeToString(
+            JsonObject.serializer(),
+            buildJsonObject {
+                put("type", "connect")
+                put(
+                    "body",
+                    buildJsonObject {
+                        put("channel", "chatUser")
+                        put("id", "chat-user-$userId")
+                        put("pong", true)
+                        put(
+                            "params",
+                            buildJsonObject {
+                                put("otherId", userId)
                             },
                         )
                     },
@@ -162,26 +243,69 @@ internal fun parseSharkeyStreamingChatEvent(
 private data class StreamingChatMessageDto(
     val id: String,
     val createdAt: String,
-    val fromUser: StreamingChatUserDto,
-    val toRoomId: String,
+    val fromUser: StreamingChatUserDto? = null,
+    val fromUserId: String = "",
+    val toUser: StreamingChatUserDto? = null,
+    val toUserId: String? = null,
+    val toRoomId: String? = null,
     val text: String? = null,
     val file: StreamingChatDriveFileDto? = null,
     val reactions: List<StreamingChatMessageReactionDto> = emptyList(),
+    val replyId: String? = null,
+    val reply: StreamingChatMessageReferenceDto? = null,
+    val quoteId: String? = null,
+    val quote: StreamingChatMessageReferenceDto? = null,
+    val isRead: Boolean = true,
 ) {
     fun toDomainMessage(): ChatMessage {
+        val user = fromUser?.toDomainUser() ?: User(
+            id = fromUserId.ifBlank { "unknown" },
+            displayName = fromUserId.ifBlank { "成员" },
+            username = fromUserId.ifBlank { "unknown" },
+            avatarInitial = fromUserId.ifBlank { "成" }.avatarInitial(),
+        )
         return ChatMessage(
             id = id,
-            roomId = toRoomId,
-            fromUser = fromUser.toDomainUser(),
+            roomId = toRoomId.orEmpty(),
+            fromUser = user,
             text = text.orEmpty(),
             createdAtLabel = createdAt.toLocalCompactDateLabel(),
             createdAt = createdAt,
+            toUserId = toUserId,
+            toUser = toUser?.toDomainUser(),
+            isRead = isRead,
             file = file?.toDomainFile(),
             reactions = reactions
-                .groupingBy { it.reaction }
-                .eachCount()
-                .map { (reaction, count) -> ChatMessageReaction(reaction, count) }
+                .groupBy { it.reaction }
+                .map { (reaction, items) ->
+                    ChatMessageReaction(
+                        reaction = reaction,
+                        count = items.size,
+                        users = items.mapNotNull { it.user?.toDomainUser() },
+                    )
+                }
                 .sortedByDescending { it.count },
+            reply = reply?.toDomainReference(),
+            quote = quote?.toDomainReference(),
+            replyUnavailable = replyId != null && reply == null,
+            quoteUnavailable = quoteId != null && quote == null,
+        )
+    }
+}
+
+@Serializable
+private data class StreamingChatMessageReferenceDto(
+    val id: String,
+    val fromUser: StreamingChatUserDto? = null,
+    val text: String? = null,
+    val file: StreamingChatDriveFileDto? = null,
+) {
+    fun toDomainReference(): ChatMessageReference {
+        return ChatMessageReference(
+            id = id,
+            fromUser = fromUser?.toDomainUser(),
+            text = text.orEmpty(),
+            file = file?.toDomainFile(),
         )
     }
 }
@@ -248,11 +372,12 @@ private fun String.avatarInitial(): String {
     return trim().firstOrNull()?.toString()?.uppercase() ?: "?"
 }
 
-private fun String.isUnauthorizedStreamingError(): Boolean {
-    return contains("401") ||
-        contains("Unauthorized", ignoreCase = true) ||
-        contains("Invalid token", ignoreCase = true) ||
-        contains("authentication", ignoreCase = true)
+internal fun String.isUnauthorizedStreamingTransportError(): Boolean {
+    val cleanMessage = trim()
+    if (cleanMessage.isBlank()) return false
+    return unauthorizedStreamingStatusPattern.containsMatchIn(cleanMessage) ||
+        cleanMessage.equals("Unauthorized", ignoreCase = true) ||
+        cleanMessage.contains("Invalid token", ignoreCase = true)
 }
 
 private fun defaultChatStreamingClient(): HttpClient {
@@ -269,3 +394,5 @@ private val defaultChatStreamingJson = Json {
     ignoreUnknownKeys = true
     explicitNulls = false
 }
+
+private val unauthorizedStreamingStatusPattern = Regex("""(?<!\d)401(?!\d)""")

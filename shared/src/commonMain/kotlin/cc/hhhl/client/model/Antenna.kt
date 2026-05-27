@@ -1,5 +1,8 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class Antenna(
     val id: String,
     val name: String,
@@ -27,6 +30,7 @@ data class Antenna(
             .ifBlank { "未设置关键词" }
 }
 
+@Immutable
 data class AntennaDraft(
     val name: String,
     val source: String = "all",

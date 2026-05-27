@@ -126,6 +126,8 @@ class SharkeyUserListApi(
                 setBody(UserListsRequest(i = cleanToken))
             }
 
+            if (response.isSharkeyUnauthorized()) return UserListLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> UserListLoadResult.Success(
                     response.body<List<UserListDto>>().map { it.toDomainList() },
@@ -175,6 +177,8 @@ class SharkeyUserListApi(
                     ),
                 )
             }
+
+            if (response.isSharkeyUnauthorized()) return UserListTimelineLoadResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> UserListTimelineLoadResult.Success(
@@ -283,7 +287,7 @@ class SharkeyUserListApi(
 
             when {
                 response.status.value in 200..299 -> UserListActionResult.Success
-                response.status == HttpStatusCode.Unauthorized -> UserListActionResult.Unauthorized
+                response.isSharkeyUnauthorized() -> UserListActionResult.Unauthorized
                 else -> UserListActionResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -324,6 +328,8 @@ class SharkeyUserListApi(
                     ),
                 )
             }
+
+            if (response.isSharkeyUnauthorized()) return UserListMutationResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> UserListMutationResult.Success(

@@ -1,5 +1,8 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class ChatRoom(
     val id: String,
     val membershipId: String,
@@ -10,8 +13,11 @@ data class ChatRoom(
     val isMuted: Boolean,
     val owner: User,
     val unreadCount: Int = 0,
+    val latestMessageAtLabel: String = "",
+    val latestMessageMarker: String = "",
 )
 
+@Immutable
 data class ChatRoomMember(
     val membershipId: String,
     val roomId: String,

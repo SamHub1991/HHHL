@@ -6,6 +6,8 @@ import cc.hhhl.client.repository.NoteRepliesRepository
 import cc.hhhl.client.repository.NoteRepliesRepositoryResult
 import cc.hhhl.client.repository.TimelineRepository
 import cc.hhhl.client.repository.TimelineRepositoryResult
+import cc.hhhl.client.repository.appendDistinctBy
+import cc.hhhl.client.repository.prependDistinctBy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +37,7 @@ class TimelineStateHolder(
 ) {
     private val mutableState = MutableStateFlow(TimelineUiState())
     val state: StateFlow<TimelineUiState> = mutableState
+    private var quietRefreshingKinds: Set<TimelineKind> = emptySet()
 
     fun select(kind: TimelineKind) {
         mutableState.update { it.copy(selectedKind = kind, requiresRelogin = false) }
@@ -66,6 +69,23 @@ class TimelineStateHolder(
                 loadingMore = false,
                 result = repository.refresh(kind),
             )
+        }
+    }
+
+    fun refreshQuietly(kind: TimelineKind = state.value.selectedKind) {
+        val tab = state.value.tabs.getValue(kind)
+        if (tab.isLoading || tab.isLoadingMore || kind in quietRefreshingKinds) return
+        quietRefreshingKinds = quietRefreshingKinds + kind
+
+        scope.launch {
+            try {
+                applyQuietRefreshResult(
+                    kind = kind,
+                    result = repository.refresh(kind),
+                )
+            } finally {
+                quietRefreshingKinds = quietRefreshingKinds - kind
+            }
         }
     }
 
@@ -174,13 +194,46 @@ class TimelineStateHolder(
             current.copy(
                 requiresRelogin = false,
                 tabs = current.tabs + (kind to current.tabs.getValue(kind).copy(
-                    notes = notes.distinctBy { it.id },
+                    notes = notes,
                     isLoading = false,
                     isLoadingMore = false,
                     endReached = endReached,
                     errorMessage = null,
                 )),
             )
+        }
+    }
+
+    private fun applyQuietRefreshResult(
+        kind: TimelineKind,
+        result: TimelineRepositoryResult,
+    ) {
+        when (result) {
+            is TimelineRepositoryResult.Success -> mutableState.update { current ->
+                val tab = current.tabs.getValue(kind)
+                val mergedNotes = tab.notes.prependDistinctBy(
+                    incoming = result.notes,
+                    keySelector = { it.id },
+                )
+                if (mergedNotes === tab.notes && tab.errorMessage == null) return@update current
+                current.copy(
+                    requiresRelogin = false,
+                    tabs = current.tabs + (kind to tab.copy(
+                        notes = mergedNotes,
+                        endReached = if (tab.notes.isEmpty()) result.endReached else tab.endReached,
+                        errorMessage = null,
+                    )),
+                )
+            }
+            TimelineRepositoryResult.Unauthorized -> mutableState.update { current ->
+                current.copy(
+                    requiresRelogin = true,
+                    tabs = current.tabs + (kind to current.tabs.getValue(kind).copy(
+                        errorMessage = "登录已失效，请重新登录",
+                    )),
+                )
+            }
+            is TimelineRepositoryResult.Error -> Unit
         }
     }
 
@@ -210,7 +263,7 @@ class TimelineStateHolder(
                 val tab = current.tabs.getValue(kind)
                 current.copy(
                     tabs = current.tabs + (kind to tab.copy(
-                        notes = (tab.notes + replies).distinctBy { it.id },
+                        notes = tab.notes.appendDistinctBy(replies) { it.id },
                     )),
                 )
             }

@@ -42,7 +42,7 @@ open class NoteRepliesRepository(
             )
         ) {
             is NoteRepliesLoadResult.Success -> NoteRepliesRepositoryResult.Success(
-                replies = (currentChildren + result.replies).distinctBy { it.id },
+                replies = currentChildren.appendDistinctBy(result.replies) { it.id },
             )
             NoteRepliesLoadResult.Unauthorized -> NoteRepliesRepositoryResult.Unauthorized
             is NoteRepliesLoadResult.NetworkError -> {
@@ -64,7 +64,7 @@ open class NoteRepliesRepository(
 
         return when (val result = api.loadReplies(token, cleanNoteId, DEFAULT_PAGE_SIZE, untilId)) {
             is NoteRepliesLoadResult.Success -> NoteRepliesRepositoryResult.Success(
-                replies = (currentReplies + result.replies).distinctBy { it.id },
+                replies = currentReplies.appendDistinctBy(result.replies) { it.id },
             )
             NoteRepliesLoadResult.Unauthorized -> NoteRepliesRepositoryResult.Unauthorized
             is NoteRepliesLoadResult.NetworkError -> {

@@ -7,6 +7,8 @@ import cc.hhhl.client.api.TimelineLoadResult
 import cc.hhhl.client.cache.NoopTimelineCache
 import cc.hhhl.client.cache.TimelineCache
 import cc.hhhl.client.model.Note
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 open class TimelineRepository(
     private val tokenProvider: () -> String?,
@@ -14,7 +16,9 @@ open class TimelineRepository(
     private val cache: TimelineCache = NoopTimelineCache,
 ) {
     open suspend fun restore(kind: TimelineKind): TimelineRepositoryResult {
-        return TimelineRepositoryResult.Success(cache.read(kind))
+        return TimelineRepositoryResult.Success(
+            withContext(Dispatchers.Default) { cache.read(kind) },
+        )
     }
 
     open suspend fun refresh(kind: TimelineKind): TimelineRepositoryResult {
@@ -42,8 +46,14 @@ open class TimelineRepository(
 
         return when (val result = api.loadTimeline(kind, token, DEFAULT_PAGE_SIZE, untilId)) {
             is TimelineLoadResult.Success -> {
-                val notes = (currentNotes + result.notes).distinctBy { it.id }
-                runCatching { cache.write(kind, notes) }
+                val notes = currentNotes.appendDistinctBy(result.notes) { it.id }
+                if (untilId == null || notes !== currentNotes) {
+                    runCatching {
+                        withContext(Dispatchers.Default) {
+                            cache.write(kind, notes)
+                        }
+                    }
+                }
                 TimelineRepositoryResult.Success(
                     notes = notes,
                     endReached = result.notes.isEmpty(),

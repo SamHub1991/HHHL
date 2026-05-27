@@ -1,6 +1,9 @@
+@file:OptIn(ExperimentalLayoutApi::class)
+
 package cc.hhhl.client.ui.screen
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -9,21 +12,25 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.Page
 import cc.hhhl.client.model.PageBlock
+import cc.hhhl.client.model.PageDraft
 import cc.hhhl.client.model.PageListKind
+import cc.hhhl.client.model.PageVisibility
 import cc.hhhl.client.model.User
 import cc.hhhl.client.state.PageUiState
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
@@ -31,8 +38,11 @@ import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlStatusRow
+import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
+import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
 
 @Composable
@@ -44,12 +54,33 @@ fun PageScreen(
     onOpenPage: (String) -> Unit = {},
     onCloseDetail: () -> Unit = {},
     onToggleLikePage: () -> Unit = {},
+    onStartCreatingPage: () -> Unit = {},
+    onStartEditingPage: () -> Unit = {},
+    onCancelEditingPage: () -> Unit = {},
+    onDraftChanged: (PageDraft) -> Unit = {},
+    onSavePage: () -> Unit = {},
+    onDeletePage: () -> Unit = {},
     onLoadMore: () -> Unit = {},
     onOpenUser: (String) -> Unit = {},
+    currentUserId: String? = null,
 ) {
-    val pages = state?.pages ?: fakePages()
+    val pages = state?.pages.orEmpty()
     val selectedPage = state?.selectedPage
-    val listState = rememberLazyListState()
+    val selectedKind = state?.selectedKind ?: PageListKind.Featured
+    val listState = remember(selectedKind) { LazyListState() }
+
+    state?.editingDraft?.let { draft ->
+        PageEditView(
+            draft = draft,
+            isSaving = state.isSavingPage,
+            errorMessage = state.detailErrorMessage,
+            title = if (state.editingPageId == null) "新建页面" else "编辑页面",
+            onBack = onCancelEditingPage,
+            onDraftChanged = onDraftChanged,
+            onSave = onSavePage,
+        )
+        return
+    }
 
     AutoLoadMoreEffect(
         listState = listState,
@@ -66,19 +97,23 @@ fun PageScreen(
             errorMessage = state.detailErrorMessage,
             onBack = onCloseDetail,
             onToggleLikePage = onToggleLikePage,
+            onStartEditingPage = onStartEditingPage,
+            onDeletePage = onDeletePage,
             onOpenUser = onOpenUser,
+            canEdit = selectedPage.userId == currentUserId,
+            isDeleting = state.isDeletingPage,
         )
         return
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
         val overflowActions = pageMenuActions(
-            selectedKind = state?.selectedKind ?: PageListKind.Featured,
+            selectedKind = selectedKind,
             onKindSelected = onKindSelected,
         )
         HhhlTopBar(
             title = "页面",
-            supportingText = (state?.selectedKind ?: PageListKind.Featured).label,
+            supportingText = selectedKind.label,
             navigation = { HhhlBackButton(onClick = onBack) },
             action = if (overflowActions.isNotEmpty()) {
                 {
@@ -90,14 +125,15 @@ fun PageScreen(
         )
         HhhlDivider()
         PageSummaryRow(
-            selectedKind = state?.selectedKind ?: PageListKind.Featured,
+            selectedKind = selectedKind,
             pageCount = pages.size,
             isLoading = state?.isLoadingPages == true,
             onRefreshPages = onRefreshPages,
+            onStartCreatingPage = onStartCreatingPage,
         )
         HhhlDivider()
         PageKindFilterRow(
-            selectedKind = state?.selectedKind ?: PageListKind.Featured,
+            selectedKind = selectedKind,
             onKindSelected = onKindSelected,
         )
         HhhlDivider()
@@ -106,7 +142,7 @@ fun PageScreen(
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item {
+                item(contentType = "page-status") {
                     PageStatusRow(
                         text = message,
                         actionText = "重试",
@@ -115,24 +151,29 @@ fun PageScreen(
                 }
             }
             if (state?.isLoadingPages == true && pages.isEmpty()) {
-                item { PageStatusRow(text = "正在加载页面...", loading = true) }
+                item(contentType = "page-status") {
+                    PageStatusRow(text = "正在加载页面...", loading = true)
+                }
             }
             if (state != null && !state.isLoadingPages && pages.isEmpty() && state.errorMessage == null) {
-                item { PageStatusRow(text = "还没有页面") }
+                item(contentType = "page-status") { PageStatusRow(text = "还没有页面") }
             }
-            items(pages, key = { it.id }) { page ->
+            items(
+                items = pages,
+                key = { it.id },
+                contentType = { "page-row" },
+            ) { page ->
                 PageRow(
                     page = page,
                     onOpenPage = onOpenPage,
                     onOpenUser = onOpenUser,
                 )
             }
-            if (state != null && pages.isNotEmpty() && !state.endReached) {
-                item {
+            if (state != null && pages.isNotEmpty() && state.isLoadingMore) {
+                item(contentType = "page-status") {
                     PageStatusRow(
-                        text = if (state.isLoadingMore) "正在加载更多..." else "加载更多",
+                        text = "正在加载更多...",
                         loading = state.isLoadingMore,
-                        onAction = if (state.isLoadingMore) null else onLoadMore,
                     )
                 }
             }
@@ -146,6 +187,7 @@ private fun PageSummaryRow(
     pageCount: Int,
     isLoading: Boolean,
     onRefreshPages: () -> Unit,
+    onStartCreatingPage: () -> Unit,
 ) {
     val stateText = if (isLoading) "加载中" else "${pageCount} 项"
     Row(
@@ -168,11 +210,17 @@ private fun PageSummaryRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            HhhlActionChip(
-                label = if (isLoading) "同步页面中" else "刷新页面",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (isLoading) "同步页面中" else "刷新页面",
                 emphasized = true,
                 enabled = !isLoading,
                 onClick = onRefreshPages,
+            )
+            HhhlIconActionButton(
+                icon = Icons.Filled.Add,
+                contentDescription = "新建页面",
+                onClick = onStartCreatingPage,
             )
         }
     }
@@ -254,23 +302,50 @@ private fun PageDetailView(
     errorMessage: String?,
     onBack: () -> Unit,
     onToggleLikePage: () -> Unit,
+    onStartEditingPage: () -> Unit,
+    onDeletePage: () -> Unit,
     onOpenUser: (String) -> Unit,
+    canEdit: Boolean,
+    isDeleting: Boolean,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
+        val actions = if (canEdit) {
+            listOf(
+                HhhlOverflowMenuAction(
+                    label = "编辑",
+                    enabled = !isDeleting,
+                    onClick = onStartEditingPage,
+                ),
+                HhhlOverflowMenuAction(
+                    label = if (isDeleting) "删除中" else "删除",
+                    enabled = !isDeleting,
+                    onClick = onDeletePage,
+                ),
+            )
+        } else {
+            emptyList()
+        }
         HhhlTopBar(
             title = "页面",
             supportingText = page.author.displayName,
             navigation = { HhhlBackButton(onClick = onBack) },
+            action = if (actions.isNotEmpty()) {
+                { HhhlOverflowMenu(actions = actions) }
+            } else {
+                null
+            },
         )
         HhhlDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             if (isLoading) {
-                item { PageStatusRow(text = "正在加载页面...", loading = true) }
+                item(contentType = "page-detail-status") {
+                    PageStatusRow(text = "正在加载页面...", loading = true)
+                }
             }
             errorMessage?.let { message ->
-                item { PageStatusRow(text = message) }
+                item(contentType = "page-detail-status") { PageStatusRow(text = message) }
             }
-            item {
+            item(contentType = "page-detail-header") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -334,8 +409,126 @@ private fun PageDetailView(
                 }
                 HhhlDivider()
             }
-            items(page.blocks, key = { it.id }) { block ->
+            items(
+                items = page.blocks,
+                key = { it.id },
+                contentType = { "page-block" },
+            ) { block ->
                 PageBlockRow(block = block)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PageEditView(
+    draft: PageDraft,
+    isSaving: Boolean,
+    errorMessage: String?,
+    title: String,
+    onBack: () -> Unit,
+    onDraftChanged: (PageDraft) -> Unit,
+    onSave: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        HhhlTopBar(
+            title = title,
+            supportingText = draft.name.ifBlank { "草稿" },
+            navigation = { HhhlBackButton(onClick = onBack) },
+        )
+        HhhlDivider()
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            errorMessage?.let { message ->
+                item(contentType = "page-edit-status") { PageStatusRow(text = message) }
+            }
+            item(contentType = "page-edit-form") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    HhhlTextInput(
+                        value = draft.title,
+                        onValueChange = { onDraftChanged(draft.copy(title = it)) },
+                        placeholder = "标题",
+                        label = "标题",
+                        enabled = !isSaving,
+                        singleLine = true,
+                    )
+                    HhhlTextInput(
+                        value = draft.name,
+                        onValueChange = { onDraftChanged(draft.copy(name = it)) },
+                        placeholder = "page-name",
+                        label = "路径名",
+                        enabled = !isSaving,
+                        singleLine = true,
+                    )
+                    HhhlTextInput(
+                        value = draft.summary,
+                        onValueChange = { onDraftChanged(draft.copy(summary = it)) },
+                        placeholder = "摘要",
+                        label = "摘要",
+                        enabled = !isSaving,
+                        minLines = 2,
+                        maxLines = 3,
+                    )
+                    HhhlTextInput(
+                        value = draft.content,
+                        onValueChange = { onDraftChanged(draft.copy(content = it)) },
+                        placeholder = "正文",
+                        label = "正文",
+                        enabled = !isSaving,
+                        minLines = 6,
+                    )
+                    HhhlTextInput(
+                        value = draft.fileIds.joinToString(", "),
+                        onValueChange = { value ->
+                            onDraftChanged(
+                                draft.copy(
+                                    fileIds = value
+                                        .split(',', '\n')
+                                        .map { it.trim() }
+                                        .filter { it.isNotBlank() },
+                                ),
+                            )
+                        },
+                        placeholder = "fileId-1, fileId-2",
+                        label = "文件 ID",
+                        enabled = !isSaving,
+                        singleLine = true,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        PageVisibility.entries.forEach { visibility ->
+                            HhhlActionChip(
+                                label = visibility.label,
+                                emphasized = draft.visibility == visibility,
+                                enabled = !isSaving,
+                                onClick = { onDraftChanged(draft.copy(visibility = visibility)) },
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        HhhlActionChip(
+                            label = if (isSaving) "保存中" else "保存",
+                            emphasized = true,
+                            enabled = !isSaving && draft.canSubmit,
+                            onClick = onSave,
+                        )
+                        HhhlActionChip(
+                            label = "取消",
+                            enabled = !isSaving,
+                            onClick = onBack,
+                        )
+                    }
+                }
             }
         }
     }
@@ -399,49 +592,10 @@ private fun PageStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
-}
-
-private fun fakePages(): List<Page> {
-    return listOf(
-        Page(
-            id = "page-guide",
-            title = "HHHL 指南",
-            name = "guide",
-            summary = "站内使用说明",
-            author = User("me", "HHHL", "me", "H"),
-            userId = "me",
-            blocks = listOf(PageBlock("block-1", "text", "欢迎来到 HHHL")),
-            likedCount = 4,
-            isLiked = false,
-        ),
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
     )
 }

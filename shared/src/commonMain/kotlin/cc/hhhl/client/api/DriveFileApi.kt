@@ -1,6 +1,7 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.DriveFile
+import cc.hhhl.client.model.DriveFileDetails
 import cc.hhhl.client.model.DriveFolder
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -22,6 +23,9 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 data class DriveFileUpload(
     val bytes: ByteArray,
@@ -90,6 +94,16 @@ interface DriveFileApi {
         isSensitive: Boolean? = null,
     ): DriveFileMutationResult
 
+    suspend fun moveFile(
+        token: String,
+        fileId: String,
+        folderId: String?,
+    ): DriveFileMutationResult = updateFile(
+        token = token,
+        fileId = fileId,
+        folderId = folderId,
+    )
+
     suspend fun deleteFile(
         token: String,
         fileId: String,
@@ -112,6 +126,11 @@ interface DriveFileApi {
         token: String,
         folderId: String,
     ): DriveFolderMutationResult
+
+    suspend fun loadFileDetails(
+        token: String,
+        fileId: String,
+    ): DriveFileDetailsResult
 }
 
 enum class DriveFileSort(
@@ -195,10 +214,81 @@ sealed interface DriveFolderMutationResult {
     data class NetworkError(val message: String) : DriveFolderMutationResult
 }
 
+sealed interface DriveFileDetailsResult {
+    data class Success(val details: DriveFileDetails) : DriveFileDetailsResult
+
+    data object Unauthorized : DriveFileDetailsResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : DriveFileDetailsResult
+
+    data class NetworkError(val message: String) : DriveFileDetailsResult
+}
+
 class SharkeyDriveFileApi(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val client: HttpClient = defaultDriveFileClient(),
 ) : DriveFileApi {
+    override suspend fun loadFileDetails(
+        token: String,
+        fileId: String,
+    ): DriveFileDetailsResult {
+        val cleanToken = token.trim()
+        val cleanFileId = fileId.trim()
+        if (cleanToken.isEmpty()) return DriveFileDetailsResult.Unauthorized
+        if (cleanFileId.isEmpty()) {
+            return DriveFileDetailsResult.ServerError(
+                statusCode = HttpStatusCode.BadRequest.value,
+                message = "请选择文件",
+            )
+        }
+
+        return try {
+            val fileResponse = client.post(apiUrl("drive", "files", "show")) {
+                contentType(ContentType.Application.Json)
+                setBody(DriveFileShowRequest(i = cleanToken, fileId = cleanFileId))
+            }
+            if (fileResponse.isSharkeyUnauthorized()) return DriveFileDetailsResult.Unauthorized
+            if (fileResponse.status != HttpStatusCode.OK) {
+                return DriveFileDetailsResult.ServerError(
+                    statusCode = fileResponse.status.value,
+                    message = fileResponse.apiErrorMessage() ?: "服务器返回 ${fileResponse.status.value}",
+                )
+            }
+
+            val attachedNotesResponse = client.post(apiUrl("drive", "files", "attached-notes")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    DriveFileAttachedNotesRequest(
+                        i = cleanToken,
+                        fileId = cleanFileId,
+                        limit = 20,
+                    ),
+                )
+            }
+            if (attachedNotesResponse.isSharkeyUnauthorized()) return DriveFileDetailsResult.Unauthorized
+            if (attachedNotesResponse.status != HttpStatusCode.OK) {
+                return DriveFileDetailsResult.ServerError(
+                    statusCode = attachedNotesResponse.status.value,
+                    message = attachedNotesResponse.apiErrorMessage() ?: "服务器返回 ${attachedNotesResponse.status.value}",
+                )
+            }
+
+            DriveFileDetailsResult.Success(
+                DriveFileDetails(
+                    file = fileResponse.body<DriveFileDto>().toDomainFile(),
+                    attachedNotes = attachedNotesResponse.body<List<SharkeyNoteDto>>().map { it.toDomainNote() },
+                ),
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            DriveFileDetailsResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
     override suspend fun loadFiles(
         token: String,
         folderId: String?,
@@ -227,11 +317,11 @@ class SharkeyDriveFileApi(
                 )
             }
 
-            when (response.status) {
-                HttpStatusCode.OK -> DriveFileListResult.Success(
+            when {
+                response.status == HttpStatusCode.OK -> DriveFileListResult.Success(
                     response.body<List<DriveFileDto>>().map { it.toDomainFile() },
                 )
-                HttpStatusCode.Unauthorized -> DriveFileListResult.Unauthorized
+                response.isSharkeyUnauthorized() -> DriveFileListResult.Unauthorized
                 else -> DriveFileListResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -268,11 +358,11 @@ class SharkeyDriveFileApi(
                 )
             }
 
-            when (response.status) {
-                HttpStatusCode.OK -> DriveFolderListResult.Success(
+            when {
+                response.status == HttpStatusCode.OK -> DriveFolderListResult.Success(
                     response.body<List<DriveFolderDto>>().map { it.toDomainFolder() },
                 )
-                HttpStatusCode.Unauthorized -> DriveFolderListResult.Unauthorized
+                response.isSharkeyUnauthorized() -> DriveFolderListResult.Unauthorized
                 else -> DriveFolderListResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -297,11 +387,11 @@ class SharkeyDriveFileApi(
                 setBody(upload.toMultipart(cleanToken))
             }
 
-            when (response.status) {
-                HttpStatusCode.OK -> DriveFileUploadResult.Success(
+            when {
+                response.status == HttpStatusCode.OK -> DriveFileUploadResult.Success(
                     response.body<DriveFileDto>().toDomainFile(),
                 )
-                HttpStatusCode.Unauthorized -> DriveFileUploadResult.Unauthorized
+                response.isSharkeyUnauthorized() -> DriveFileUploadResult.Unauthorized
                 else -> DriveFileUploadResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -347,11 +437,56 @@ class SharkeyDriveFileApi(
                 )
             }
 
-            when (response.status) {
-                HttpStatusCode.OK -> DriveFileMutationResult.Success(
+            when {
+                response.status == HttpStatusCode.OK -> DriveFileMutationResult.Success(
                     response.body<DriveFileDto>().toDomainFile(),
                 )
-                HttpStatusCode.Unauthorized -> DriveFileMutationResult.Unauthorized
+                response.isSharkeyUnauthorized() -> DriveFileMutationResult.Unauthorized
+                else -> DriveFileMutationResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            DriveFileMutationResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun moveFile(
+        token: String,
+        fileId: String,
+        folderId: String?,
+    ): DriveFileMutationResult {
+        val cleanToken = token.trim()
+        val cleanFileId = fileId.trim()
+        val cleanFolderId = folderId?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanToken.isEmpty()) return DriveFileMutationResult.Unauthorized
+        if (cleanFileId.isEmpty()) {
+            return DriveFileMutationResult.ServerError(
+                statusCode = HttpStatusCode.BadRequest.value,
+                message = "请选择文件",
+            )
+        }
+
+        return try {
+            val response = client.post(apiUrl("drive", "files", "update")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    buildJsonObject {
+                        put("i", JsonPrimitive(cleanToken))
+                        put("fileId", JsonPrimitive(cleanFileId))
+                        put("folderId", cleanFolderId?.let { JsonPrimitive(it) } ?: JsonNull)
+                    },
+                )
+            }
+
+            when {
+                response.status == HttpStatusCode.OK -> DriveFileMutationResult.Success(
+                    response.body<DriveFileDto>().toDomainFile(),
+                )
+                response.isSharkeyUnauthorized() -> DriveFileMutationResult.Unauthorized
                 else -> DriveFileMutationResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -389,9 +524,9 @@ class SharkeyDriveFileApi(
                 )
             }
 
-            when (response.status) {
-                HttpStatusCode.OK, HttpStatusCode.NoContent -> DriveFileMutationResult.Deleted
-                HttpStatusCode.Unauthorized -> DriveFileMutationResult.Unauthorized
+            when {
+                response.status == HttpStatusCode.OK || response.status == HttpStatusCode.NoContent -> DriveFileMutationResult.Deleted
+                response.isSharkeyUnauthorized() -> DriveFileMutationResult.Unauthorized
                 else -> DriveFileMutationResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -424,11 +559,11 @@ class SharkeyDriveFileApi(
                 )
             }
 
-            when (response.status) {
-                HttpStatusCode.OK -> DriveFolderMutationResult.Success(
+            when {
+                response.status == HttpStatusCode.OK -> DriveFolderMutationResult.Success(
                     response.body<DriveFolderDto>().toDomainFolder(),
                 )
-                HttpStatusCode.Unauthorized -> DriveFolderMutationResult.Unauthorized
+                response.isSharkeyUnauthorized() -> DriveFolderMutationResult.Unauthorized
                 else -> DriveFolderMutationResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -470,11 +605,11 @@ class SharkeyDriveFileApi(
                 )
             }
 
-            when (response.status) {
-                HttpStatusCode.OK -> DriveFolderMutationResult.Success(
+            when {
+                response.status == HttpStatusCode.OK -> DriveFolderMutationResult.Success(
                     response.body<DriveFolderDto>().toDomainFolder(),
                 )
-                HttpStatusCode.Unauthorized -> DriveFolderMutationResult.Unauthorized
+                response.isSharkeyUnauthorized() -> DriveFolderMutationResult.Unauthorized
                 else -> DriveFolderMutationResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -512,9 +647,9 @@ class SharkeyDriveFileApi(
                 )
             }
 
-            when (response.status) {
-                HttpStatusCode.OK, HttpStatusCode.NoContent -> DriveFolderMutationResult.Deleted
-                HttpStatusCode.Unauthorized -> DriveFolderMutationResult.Unauthorized
+            when {
+                response.status == HttpStatusCode.OK || response.status == HttpStatusCode.NoContent -> DriveFolderMutationResult.Deleted
+                response.isSharkeyUnauthorized() -> DriveFolderMutationResult.Unauthorized
                 else -> DriveFolderMutationResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -574,6 +709,19 @@ private data class DriveFilesRequest(
     val sort: String,
     val searchQuery: String = "",
     val showAll: Boolean,
+)
+
+@Serializable
+private data class DriveFileShowRequest(
+    val i: String,
+    val fileId: String,
+)
+
+@Serializable
+private data class DriveFileAttachedNotesRequest(
+    val i: String,
+    val fileId: String,
+    val limit: Int,
 )
 
 @Serializable

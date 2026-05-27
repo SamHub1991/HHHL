@@ -3,9 +3,11 @@ package cc.hhhl.client.repository
 import cc.hhhl.client.api.PageApi
 import cc.hhhl.client.api.PageActionResult
 import cc.hhhl.client.api.PageLoadResult
+import cc.hhhl.client.api.PageMutationResult
 import cc.hhhl.client.api.PageShowResult
 import cc.hhhl.client.model.Page
 import cc.hhhl.client.model.PageBlock
+import cc.hhhl.client.model.PageDraft
 import cc.hhhl.client.model.PageListKind
 import cc.hhhl.client.model.User
 import kotlin.test.Test
@@ -73,6 +75,25 @@ class PageRepositoryTest {
     }
 
     @Test
+    fun showPageByPathUsesTokenUsernameAndName() = runTest {
+        val calls = mutableListOf<ShowPathCall>()
+        val page = samplePage("page-1")
+        val repository = PageRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                showPathCalls = calls,
+                showResult = PageShowResult.Success(page),
+            ),
+        )
+
+        val result = repository.showPageByPath("@alice", "guide")
+
+        assertIs<PageRepositoryResult.Success>(result)
+        assertEquals(listOf(ShowPathCall("token-123", "alice", "guide")), calls)
+        assertEquals(page, result.page)
+    }
+
+    @Test
     fun missingTokenReturnsUnauthorizedWithoutCallingApi() = runTest {
         var calls = 0
         val repository = PageRepository(
@@ -107,13 +128,42 @@ class PageRepositoryTest {
         )
     }
 
+    @Test
+    fun createUpdateAndDeleteUseTokenAndDraft() = runTest {
+        val calls = mutableListOf<ActionCall>()
+        val draft = PageDraft(title = "Title", name = "title", content = "body")
+        val page = samplePage("page-1")
+        val repository = PageRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                actionCalls = calls,
+                mutationResult = PageMutationResult.Success(page),
+                actionResult = PageActionResult.Success,
+            ),
+        )
+
+        assertIs<PageRepositoryResult.Success>(repository.createPage(draft))
+        assertIs<PageRepositoryResult.Success>(repository.updatePage("page-1", draft))
+        assertEquals(PageActionRepositoryResult.Success, repository.deletePage("page-1"))
+        assertEquals(
+            listOf(
+                ActionCall("create", "token-123", ""),
+                ActionCall("update", "token-123", "page-1"),
+                ActionCall("delete", "token-123", "page-1"),
+            ),
+            calls,
+        )
+    }
+
     private fun fakeApi(
         pageCalls: MutableList<PageCall> = mutableListOf(),
         showCalls: MutableList<ShowCall> = mutableListOf(),
+        showPathCalls: MutableList<ShowPathCall> = mutableListOf(),
         actionCalls: MutableList<ActionCall> = mutableListOf(),
         pageResult: PageLoadResult = PageLoadResult.Success(emptyList()),
         showResult: PageShowResult = PageShowResult.Success(samplePage("page-1")),
         actionResult: PageActionResult = PageActionResult.Success,
+        mutationResult: PageMutationResult = PageMutationResult.Success(samplePage("page-1")),
         onCall: () -> Unit = {},
     ): PageApi {
         return object : PageApi {
@@ -137,6 +187,16 @@ class PageRepositoryTest {
                 return showResult
             }
 
+            override suspend fun showPageByPath(
+                token: String,
+                username: String,
+                name: String,
+            ): PageShowResult {
+                onCall()
+                showPathCalls.add(ShowPathCall(token, username, name))
+                return showResult
+            }
+
             override suspend fun likePage(
                 token: String,
                 pageId: String,
@@ -154,6 +214,34 @@ class PageRepositoryTest {
                 actionCalls.add(ActionCall("unlike", token, pageId))
                 return actionResult
             }
+
+            override suspend fun createPage(
+                token: String,
+                draft: PageDraft,
+            ): PageMutationResult {
+                onCall()
+                actionCalls.add(ActionCall("create", token, ""))
+                return mutationResult
+            }
+
+            override suspend fun updatePage(
+                token: String,
+                pageId: String,
+                draft: PageDraft,
+            ): PageMutationResult {
+                onCall()
+                actionCalls.add(ActionCall("update", token, pageId))
+                return mutationResult
+            }
+
+            override suspend fun deletePage(
+                token: String,
+                pageId: String,
+            ): PageActionResult {
+                onCall()
+                actionCalls.add(ActionCall("delete", token, pageId))
+                return actionResult
+            }
         }
     }
 
@@ -166,6 +254,12 @@ class PageRepositoryTest {
     private data class ShowCall(
         val token: String,
         val pageId: String,
+    )
+
+    private data class ShowPathCall(
+        val token: String,
+        val username: String,
+        val name: String,
     )
 
     private data class ActionCall(

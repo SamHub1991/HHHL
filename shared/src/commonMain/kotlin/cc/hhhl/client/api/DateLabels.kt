@@ -5,7 +5,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 
 internal fun String.toLocalCompactDateLabel(
-    timeZone: TimeZone = TimeZone.currentSystemDefault(),
+    timeZone: TimeZone = hhhlDisplayTimeZone(),
 ): String {
     val instant = toApiInstantOrNull()
     if (instant != null) return instant.toLocalCompactDateTimeLabel(timeZone)
@@ -29,10 +29,9 @@ internal fun apiDateSortKey(raw: String, fallbackLabel: String = ""): String {
 
 private fun String.parseUtcIsoWithoutZone(): Instant? {
     if (getOrNull(10) != 'T') return null
-    val timePart = drop(10)
     val hasZone = endsWith("Z") ||
-        timePart.contains("+") ||
-        Regex("-\\d{2}:?\\d{2}$").containsMatchIn(timePart)
+        indexOf('+', startIndex = 11) >= 0 ||
+        apiNegativeZoneSuffixPattern.containsMatchIn(this)
     if (hasZone) return null
     return runCatching { Instant.parse("${trimEnd()}Z") }.getOrNull()
 }
@@ -43,4 +42,8 @@ private fun Instant.toLocalCompactDateTimeLabel(timeZone: TimeZone): String {
         "${local.hour.twoDigits()}:${local.minute.twoDigits()}"
 }
 
+private fun hhhlDisplayTimeZone(): TimeZone = TimeZone.currentSystemDefault()
+
 private fun Int.twoDigits(): String = if (this < 10) "0$this" else toString()
+
+private val apiNegativeZoneSuffixPattern = Regex("""T.*-\d{2}:?\d{2}$""")

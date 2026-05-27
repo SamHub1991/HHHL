@@ -184,6 +184,65 @@ class TimelineStateHolderTest {
         )
     }
 
+    @Test
+    fun refreshQuietlyPrependsNewNotesWithoutResettingCurrentTimeline() = runTest {
+        val oldNote = FakeData.timeline[0].copy(id = "old-note")
+        val newNote = FakeData.timeline[1].copy(id = "new-note")
+        val holder = TimelineStateHolder(
+            repository = sequenceRepository(
+                TimelineRepositoryResult.Success(listOf(oldNote)),
+                TimelineRepositoryResult.Success(listOf(newNote)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh(TimelineKind.Home)
+        advanceUntilIdle()
+        holder.refreshQuietly(TimelineKind.Home)
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf("new-note", "old-note"),
+            holder.state.value.tabs.getValue(TimelineKind.Home).notes.map { it.id },
+        )
+        assertFalse(holder.state.value.tabs.getValue(TimelineKind.Home).isLoading)
+    }
+
+    @Test
+    fun refreshQuietlyIgnoresParallelRefreshForSameTimeline() = runTest {
+        var refreshCalls = 0
+        val holder = TimelineStateHolder(
+            repository = object : TimelineRepository(
+                tokenProvider = { "token-123" },
+                api = object : cc.hhhl.client.api.TimelineApi {
+                    override suspend fun loadTimeline(
+                        kind: TimelineKind,
+                        token: String,
+                        limit: Int,
+                        untilId: String?,
+                    ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
+                },
+            ) {
+                override suspend fun restore(kind: TimelineKind): TimelineRepositoryResult {
+                    return TimelineRepositoryResult.Success(emptyList())
+                }
+
+                override suspend fun refresh(kind: TimelineKind): TimelineRepositoryResult {
+                    refreshCalls += 1
+                    delay(1_000)
+                    return TimelineRepositoryResult.Success(emptyList())
+                }
+            },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshQuietly(TimelineKind.Local)
+        holder.refreshQuietly(TimelineKind.Local)
+        advanceUntilIdle()
+
+        assertEquals(1, refreshCalls)
+    }
+
     private fun fakeRepository(
         refreshResult: TimelineRepositoryResult,
         restoreResult: TimelineRepositoryResult = TimelineRepositoryResult.Success(emptyList()),

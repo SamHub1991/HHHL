@@ -2,7 +2,9 @@ package cc.hhhl.client.api
 
 import cc.hhhl.client.model.Page
 import cc.hhhl.client.model.PageBlock
+import cc.hhhl.client.model.PageDraft
 import cc.hhhl.client.model.PageListKind
+import cc.hhhl.client.model.PageVisibility
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -32,12 +34,34 @@ interface PageApi {
         pageId: String,
     ): PageShowResult
 
+    suspend fun showPageByPath(
+        token: String,
+        username: String,
+        name: String,
+    ): PageShowResult
+
     suspend fun likePage(
         token: String,
         pageId: String,
     ): PageActionResult
 
     suspend fun unlikePage(
+        token: String,
+        pageId: String,
+    ): PageActionResult
+
+    suspend fun createPage(
+        token: String,
+        draft: PageDraft,
+    ): PageMutationResult
+
+    suspend fun updatePage(
+        token: String,
+        pageId: String,
+        draft: PageDraft,
+    ): PageMutationResult
+
+    suspend fun deletePage(
         token: String,
         pageId: String,
     ): PageActionResult
@@ -82,6 +106,19 @@ sealed interface PageActionResult {
     data class NetworkError(val message: String) : PageActionResult
 }
 
+sealed interface PageMutationResult {
+    data class Success(val page: Page) : PageMutationResult
+
+    data object Unauthorized : PageMutationResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : PageMutationResult
+
+    data class NetworkError(val message: String) : PageMutationResult
+}
+
 class SharkeyPageApi(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val client: HttpClient = defaultPageClient(),
@@ -111,6 +148,8 @@ class SharkeyPageApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return PageLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> PageLoadResult.Success(
                     response.body<List<PageDto>>().map { it.toDomainPage() },
@@ -132,19 +171,44 @@ class SharkeyPageApi(
         token: String,
         pageId: String,
     ): PageShowResult {
+        return postPageShow(
+            token = token,
+            request = PageShowRequest(
+                i = token.trim(),
+                pageId = pageId.trim(),
+            ),
+        )
+    }
+
+    override suspend fun showPageByPath(
+        token: String,
+        username: String,
+        name: String,
+    ): PageShowResult {
+        return postPageShow(
+            token = token,
+            request = PageShowRequest(
+                i = token.trim(),
+                username = username.trim().removePrefix("@"),
+                name = name.trim(),
+            ),
+        )
+    }
+
+    private suspend fun postPageShow(
+        token: String,
+        request: PageShowRequest,
+    ): PageShowResult {
         val cleanToken = token.trim()
         if (cleanToken.isEmpty()) return PageShowResult.Unauthorized
 
         return try {
             val response = client.post(apiUrl("pages", "show")) {
                 contentType(ContentType.Application.Json)
-                setBody(
-                    PageShowRequest(
-                        i = cleanToken,
-                        pageId = pageId.trim(),
-                    ),
-                )
+                setBody(request.copy(i = cleanToken))
             }
+
+            if (response.isSharkeyUnauthorized()) return PageShowResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> PageShowResult.Success(response.body<PageDto>().toDomainPage())
@@ -175,6 +239,101 @@ class SharkeyPageApi(
         return postPageAction(token, pageId, "unlike")
     }
 
+    override suspend fun createPage(
+        token: String,
+        draft: PageDraft,
+    ): PageMutationResult {
+        val cleanToken = token.trim()
+        if (cleanToken.isEmpty()) return PageMutationResult.Unauthorized
+        val cleanDraft = draft.cleaned()
+        if (!cleanDraft.canSubmit) {
+            return PageMutationResult.ServerError(
+                statusCode = HttpStatusCode.BadRequest.value,
+                message = "请填写标题和路径名",
+            )
+        }
+
+        return try {
+            val response = client.post(apiUrl("pages", "create")) {
+                contentType(ContentType.Application.Json)
+                setBody(PageMutationRequest.fromDraft(i = cleanToken, draft = cleanDraft))
+            }
+
+            when {
+                response.status.value in 200..299 -> {
+                    PageMutationResult.Success(response.body<PageDto>().toDomainPage())
+                }
+                response.isSharkeyUnauthorized() -> PageMutationResult.Unauthorized
+                else -> PageMutationResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            PageMutationResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun updatePage(
+        token: String,
+        pageId: String,
+        draft: PageDraft,
+    ): PageMutationResult {
+        val cleanToken = token.trim()
+        val cleanPageId = pageId.trim()
+        if (cleanToken.isEmpty()) return PageMutationResult.Unauthorized
+        if (cleanPageId.isEmpty()) {
+            return PageMutationResult.ServerError(
+                statusCode = HttpStatusCode.BadRequest.value,
+                message = "请选择页面",
+            )
+        }
+        val cleanDraft = draft.cleaned()
+        if (!cleanDraft.canSubmit) {
+            return PageMutationResult.ServerError(
+                statusCode = HttpStatusCode.BadRequest.value,
+                message = "请填写标题和路径名",
+            )
+        }
+
+        return try {
+            val response = client.post(apiUrl("pages", "update")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    PageMutationRequest.fromDraft(
+                        i = cleanToken,
+                        draft = cleanDraft,
+                        pageId = cleanPageId,
+                    ),
+                )
+            }
+
+            when {
+                response.status.value in 200..299 -> {
+                    PageMutationResult.Success(response.body<PageDto>().toDomainPage())
+                }
+                response.isSharkeyUnauthorized() -> PageMutationResult.Unauthorized
+                else -> PageMutationResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            PageMutationResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun deletePage(
+        token: String,
+        pageId: String,
+    ): PageActionResult {
+        return postPageAction(token, pageId, "delete")
+    }
+
     private suspend fun postPageAction(
         token: String,
         pageId: String,
@@ -198,7 +357,7 @@ class SharkeyPageApi(
 
             when {
                 response.status.value in 200..299 -> PageActionResult.Success
-                response.status == HttpStatusCode.Unauthorized -> PageActionResult.Unauthorized
+                response.isSharkeyUnauthorized() -> PageActionResult.Unauthorized
                 else -> PageActionResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -232,13 +391,84 @@ private data class PageListRequest(
 @Serializable
 private data class PageShowRequest(
     val i: String,
-    val pageId: String,
+    val pageId: String? = null,
+    val username: String? = null,
+    val name: String? = null,
 )
 
 @Serializable
 private data class PageActionRequest(
     val i: String,
     val pageId: String,
+)
+
+@Serializable
+private data class PageMutationRequest(
+    val i: String,
+    val pageId: String? = null,
+    val title: String,
+    val name: String,
+    val summary: String? = null,
+    val content: List<PageMutationBlockDto>,
+    val visibility: String,
+    val fileIds: List<String> = emptyList(),
+    val variables: List<String> = emptyList(),
+    val script: String = "",
+    val alignCenter: Boolean = false,
+    val hideTitleWhenPinned: Boolean = false,
+) {
+    companion object {
+        fun fromDraft(
+            i: String,
+            draft: PageDraft,
+            pageId: String? = null,
+        ): PageMutationRequest {
+            val blocks = buildList {
+                draft.content
+                    .splitToSequence("\n\n")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .forEachIndexed { index, text ->
+                        add(
+                            PageMutationBlockDto(
+                                id = "text-$index",
+                                type = "text",
+                                text = text,
+                            ),
+                        )
+                    }
+                draft.fileIds
+                    .filter { it.isNotBlank() }
+                    .forEachIndexed { index, fileId ->
+                        add(
+                            PageMutationBlockDto(
+                                id = "image-$index",
+                                type = "image",
+                                fileId = fileId.trim(),
+                            ),
+                        )
+                    }
+            }
+            return PageMutationRequest(
+                i = i,
+                pageId = pageId,
+                title = draft.title.trim(),
+                name = draft.name.trim(),
+                summary = draft.summary.trim().takeIf { it.isNotBlank() },
+                content = blocks,
+                visibility = draft.visibility.apiValue,
+                fileIds = draft.fileIds.map { it.trim() }.filter { it.isNotBlank() },
+            )
+        }
+    }
+}
+
+@Serializable
+private data class PageMutationBlockDto(
+    val id: String,
+    val type: String,
+    val text: String? = null,
+    val fileId: String? = null,
 )
 
 @Serializable
@@ -308,6 +538,17 @@ private data class PageErrorDto(
 
 private suspend fun HttpResponse.apiErrorMessage(): String? {
     return runCatching { sharkeyApiErrorMessage() }.getOrNull()
+}
+
+private fun PageDraft.cleaned(): PageDraft {
+    return copy(
+        title = title.trim(),
+        name = name.trim(),
+        summary = summary.trim(),
+        content = content.trim(),
+        fileIds = fileIds.map { it.trim() }.filter { it.isNotBlank() },
+        visibility = PageVisibility.entries.firstOrNull { it == visibility } ?: PageVisibility.Public,
+    )
 }
 
 

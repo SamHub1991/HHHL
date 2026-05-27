@@ -1,9 +1,19 @@
 package cc.hhhl.client.ui.component
 
+import cc.hhhl.client.model.CustomEmoji
+import androidx.compose.ui.unit.dp
+import cc.hhhl.client.model.commonReactionOptions
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class ReactionPickerSpecTest {
+    @Test
+    fun reactionPickerGridUsesCompactSquareItems() {
+        assertEquals(260.dp, HhhlReactionPickerMenuWidth)
+        assertEquals(42.dp, HhhlReactionPickerItemSize)
+        assertEquals(6.dp, HhhlReactionPickerGridSpacing)
+    }
+
     @Test
     fun groupsDefaultCommonAndCustomReactionsForPicker() {
         val sections = reactionPickerSections(
@@ -39,7 +49,10 @@ class ReactionPickerSpecTest {
     @Test
     fun emptyPickerOptionsFallbackToDefaultLike() {
         assertEquals(
-            listOf(ReactionPickerSection("默认", listOf("❤️"))),
+            listOf(
+                ReactionPickerSection("默认", listOf(commonReactionOptions.first())),
+                ReactionPickerSection("常用", commonReactionOptions.drop(1)),
+            ),
             reactionPickerSections(reactionOptions = emptyList()),
         )
     }
@@ -117,5 +130,37 @@ class ReactionPickerSpecTest {
             ),
             sections,
         )
+    }
+
+    @Test
+    fun customEmojiPickerSourceMergesLoadedEmojiAndGlobalUrls() {
+        val emojis = customEmojisForReactionPicker(
+            reactionOptions = listOf(":party:", ":remote@.:"),
+            customEmojis = listOf(
+                CustomEmoji(
+                    name = "party",
+                    category = "reaction",
+                    url = "https://dc.hhhl.cc/emoji/party.webp",
+                    aliases = emptyList(),
+                    localOnly = true,
+                    isSensitive = false,
+                ),
+                CustomEmoji(
+                    name = "hidden",
+                    category = "bad",
+                    url = "https://dc.hhhl.cc/emoji/hidden.webp",
+                    aliases = emptyList(),
+                    localOnly = true,
+                    isSensitive = true,
+                ),
+            ),
+            customEmojiUrls = mapOf(
+                ":remote@.:" to "https://dc.hhhl.cc/emoji/remote.webp",
+                ":extra:" to "https://dc.hhhl.cc/emoji/extra.webp",
+            ),
+        )
+
+        assertEquals(listOf("party", "extra", "remote"), emojis.map { it.name })
+        assertEquals(listOf("reaction", "实例", "实例"), emojis.map { it.category })
     }
 }

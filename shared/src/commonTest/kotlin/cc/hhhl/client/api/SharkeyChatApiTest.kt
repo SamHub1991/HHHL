@@ -28,14 +28,19 @@ class SharkeyChatApiTest {
         val api = SharkeyChatApi(
             baseUrl = "https://dc.hhhl.cc/",
             client = testClient { request ->
-                assertEquals("https://dc.hhhl.cc/api/chat/rooms/joining", request.url.toString())
-                assertEquals(HttpMethod.Post, request.method)
-                assertEquals(ContentType.Application.Json, request.body.contentType)
-                val body = (request.body as TextContent).text
-                assertTrue(body.contains(""""i":"token-123""""))
-                assertTrue(body.contains(""""limit":30"""))
-                assertTrue(body.contains(""""untilId":"membership-old""""))
-                respondJoiningRooms()
+                when (request.url.toString()) {
+                    "https://dc.hhhl.cc/api/chat/rooms/joining" -> {
+                        assertEquals(HttpMethod.Post, request.method)
+                        assertEquals(ContentType.Application.Json, request.body.contentType)
+                        val body = (request.body as TextContent).text
+                        assertTrue(body.contains(""""i":"token-123""""))
+                        assertTrue(body.contains(""""limit":30"""))
+                        assertTrue(body.contains(""""untilId":"membership-old""""))
+                        respondJoiningRooms()
+                    }
+                    "https://dc.hhhl.cc/api/chat/history" -> respondUnreadChatHistory()
+                    else -> error("Unexpected request ${request.url}")
+                }
             },
         )
 
@@ -53,6 +58,35 @@ class SharkeyChatApiTest {
         assertEquals("open", room.joinMode)
         assertEquals(12, room.memberCount)
         assertEquals("Alice", room.owner.displayName)
+        assertEquals(5, room.unreadCount)
+        assertEquals("2026-05-25 10:24", room.latestMessageAtLabel)
+    }
+
+    @Test
+    fun fallsBackToChatHistoryUnreadStateWhenJoiningRoomsHaveNoCount() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                when (request.url.toString()) {
+                    "https://dc.hhhl.cc/api/chat/rooms/joining" -> respondJoiningRoomsWithoutUnreadCount()
+                    "https://dc.hhhl.cc/api/chat/history" -> {
+                        assertEquals(HttpMethod.Post, request.method)
+                        assertEquals(ContentType.Application.Json, request.body.contentType)
+                        val body = (request.body as TextContent).text
+                        assertTrue(body.contains(""""i":"token-123""""))
+                        assertTrue(body.contains(""""limit":100"""))
+                        assertTrue(body.contains(""""room":true"""))
+                        respondUnreadChatHistory()
+                    }
+                    else -> error("Unexpected request ${request.url}")
+                }
+            },
+        )
+
+        val result = api.loadJoiningRooms(token = "token-123", limit = 30)
+
+        assertIs<ChatRoomLoadResult.Success>(result)
+        assertEquals(3, result.rooms.single().unreadCount)
     }
 
     @Test
@@ -104,6 +138,13 @@ class SharkeyChatApiTest {
         assertEquals("你好，HHHL", message.text)
         assertEquals("2026-05-25 09:23", message.createdAtLabel)
         assertEquals(1, message.reactionCount)
+        assertEquals("Bob", message.reactions.single().users.single().displayName)
+        assertEquals("reply-1", message.reply?.id)
+        assertEquals("Carol: 上一条", message.reply?.let { reference ->
+            val author = reference.fromUser?.displayName ?: ""
+            "$author: ${reference.text}"
+        })
+        assertEquals("quote-1", message.quote?.id)
         assertEquals("file-1", message.file?.id)
         assertEquals("image.png", message.file?.name)
     }
@@ -155,6 +196,59 @@ class SharkeyChatApiTest {
             roomId = "room-1",
             text = "配图",
             fileId = "file-1",
+        )
+
+        assertIs<ChatMessageCreateResult.Success>(result)
+    }
+
+    @Test
+    fun createsRoomMessageWithFileIds() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/messages/create-to-room", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""toRoomId":"room-1""""))
+                assertTrue(body.contains(""""text":"多图""""))
+                assertTrue(body.contains(""""fileId":"file-1""""))
+                assertTrue(body.contains(""""fileIds":["file-1","file-2"]"""))
+                respondCreatedRoomMessage()
+            },
+        )
+
+        val result = api.createRoomMessage(
+            token = "token-123",
+            roomId = "room-1",
+            text = "多图",
+            fileIds = listOf("file-1", " file-2 ", "file-1"),
+        )
+
+        assertIs<ChatMessageCreateResult.Success>(result)
+    }
+
+    @Test
+    fun createsRoomMessageWithReplyAndQuoteIds() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/messages/create-to-room", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""toRoomId":"room-1""""))
+                assertTrue(body.contains(""""text":"接一下""""))
+                assertTrue(body.contains(""""replyId":"reply-1""""))
+                assertTrue(body.contains(""""quoteId":"quote-1""""))
+                respondCreatedRoomMessage()
+            },
+        )
+
+        val result = api.createRoomMessage(
+            token = "token-123",
+            roomId = "room-1",
+            text = "接一下",
+            replyId = " reply-1 ",
+            quoteId = " quote-1 ",
         )
 
         assertIs<ChatMessageCreateResult.Success>(result)
@@ -251,6 +345,7 @@ class SharkeyChatApiTest {
                     "createdAt": "2026-05-25T00:00:00.000Z",
                     "userId": "user-me",
                     "roomId": "room-1",
+                    "unreadCount": 2,
                     "room": {
                       "id": "room-1",
                       "createdAt": "2026-05-25T00:00:00.000Z",
@@ -266,8 +361,79 @@ class SharkeyChatApiTest {
                       "memberLimit": 100,
                       "memberCount": 12,
                       "isJoined": true,
+                      "isMuted": false,
+                      "unreadMessagesCount": 5,
+                      "lastMessage": {
+                        "id": "message-latest",
+                        "createdAt": "2026-05-25T02:24:00.000Z"
+                      }
+                    }
+                  }
+                ]
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
+    private fun MockRequestHandleScope.respondJoiningRoomsWithoutUnreadCount(): HttpResponseData {
+        return respond(
+            content = """
+                [
+                  {
+                    "id": "membership-1",
+                    "createdAt": "2026-05-25T00:00:00.000Z",
+                    "userId": "user-me",
+                    "roomId": "room-1",
+                    "room": {
+                      "id": "room-1",
+                      "owner": {
+                        "id": "user-1",
+                        "username": "alice",
+                        "name": "Alice"
+                      },
+                      "name": "AGI 讨论",
+                      "description": "聊 AGI 和 Sharkey",
+                      "joinMode": "open",
+                      "memberCount": 12,
                       "isMuted": false
                     }
+                  }
+                ]
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
+    private fun MockRequestHandleScope.respondUnreadChatHistory(): HttpResponseData {
+        return respond(
+            content = """
+                [
+                  {
+                    "id": "message-1",
+                    "toRoomId": "room-1",
+                    "isRead": false
+                  },
+                  {
+                    "id": "message-2",
+                    "toRoomId": "room-1",
+                    "isRead": false
+                  },
+                  {
+                    "id": "message-3",
+                    "toRoomId": "room-1",
+                    "isRead": false
+                  },
+                  {
+                    "id": "message-read",
+                    "toRoomId": "room-1",
+                    "isRead": true
+                  },
+                  {
+                    "id": "message-other",
+                    "toRoomId": "room-2",
+                    "isRead": false
                   }
                 ]
             """.trimIndent(),
@@ -291,6 +457,28 @@ class SharkeyChatApiTest {
                     },
                     "toRoomId": "room-1",
                     "text": "你好，HHHL",
+                    "replyId": "reply-1",
+                    "reply": {
+                      "id": "reply-1",
+                      "fromUser": {
+                        "id": "user-3",
+                        "username": "carol",
+                        "name": "Carol"
+                      },
+                      "text": "上一条",
+                      "file": null
+                    },
+                    "quoteId": "quote-1",
+                    "quote": {
+                      "id": "quote-1",
+                      "fromUser": {
+                        "id": "user-4",
+                        "username": "dave",
+                        "name": "Dave"
+                      },
+                      "text": "引用内容",
+                      "file": null
+                    },
                     "fileId": "file-1",
                     "file": {
                       "id": "file-1",

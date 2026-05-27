@@ -1,5 +1,8 @@
 package cc.hhhl.client.state
 
+import cc.hhhl.client.repository.AnnouncementDeleteRepositoryResult
+import cc.hhhl.client.repository.AnnouncementDraft
+import cc.hhhl.client.repository.AnnouncementMutationRepositoryResult
 import cc.hhhl.client.repository.AnnouncementReadRepositoryResult
 import cc.hhhl.client.repository.AnnouncementRepository
 import cc.hhhl.client.repository.AnnouncementRepositoryResult
@@ -145,10 +148,52 @@ class AnnouncementStateHolderTest {
         assertEquals(null, holder.state.value.selectedAnnouncement)
     }
 
+    @Test
+    fun managementCreateUpdateAndDeleteMutateAnnouncementList() = runTest {
+        val first = sampleAnnouncement("ann-1")
+        val created = sampleAnnouncement("ann-2").copy(title = "新公告")
+        val updated = first.copy(title = "更新公告")
+        val holder = AnnouncementStateHolder(
+            repository = fakeRepository(
+                listResult = AnnouncementsRepositoryResult.Success(listOf(first)),
+                adminListResult = AnnouncementsRepositoryResult.Success(listOf(first)),
+                createResult = AnnouncementMutationRepositoryResult.Success(created),
+                updateResult = AnnouncementMutationRepositoryResult.Success(updated),
+                deleteResult = AnnouncementDeleteRepositoryResult.Success,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.enterManagement()
+        advanceUntilIdle()
+        assertTrue(holder.state.value.isManaging)
+        assertEquals(listOf(first), holder.state.value.announcements)
+
+        holder.createAnnouncement(AnnouncementDraft("新公告", "内容"))
+        advanceUntilIdle()
+        assertEquals("新公告", holder.state.value.announcements.first().title)
+
+        holder.updateAnnouncement("ann-1", AnnouncementDraft("更新公告", "内容"))
+        advanceUntilIdle()
+        assertEquals("更新公告", holder.state.value.announcements.first { it.id == "ann-1" }.title)
+
+        holder.deleteAnnouncement("ann-1")
+        advanceUntilIdle()
+        assertEquals(listOf("ann-2"), holder.state.value.announcements.map { it.id })
+    }
+
     private fun fakeRepository(
         listResult: AnnouncementsRepositoryResult,
+        adminListResult: AnnouncementsRepositoryResult = listResult,
         showResult: AnnouncementRepositoryResult = AnnouncementRepositoryResult.Success(sampleAnnouncement("ann-1")),
         readResult: AnnouncementReadRepositoryResult = AnnouncementReadRepositoryResult.Success,
+        createResult: AnnouncementMutationRepositoryResult = AnnouncementMutationRepositoryResult.Success(
+            sampleAnnouncement("ann-2"),
+        ),
+        updateResult: AnnouncementMutationRepositoryResult = AnnouncementMutationRepositoryResult.Success(
+            sampleAnnouncement("ann-1"),
+        ),
+        deleteResult: AnnouncementDeleteRepositoryResult = AnnouncementDeleteRepositoryResult.Success,
         onShow: (String) -> Unit = {},
     ): AnnouncementRepository {
         return object : AnnouncementRepository(
@@ -175,9 +220,46 @@ class AnnouncementStateHolderTest {
                 ): cc.hhhl.client.api.AnnouncementReadResult {
                     return cc.hhhl.client.api.AnnouncementReadResult.Success
                 }
+
+                override suspend fun loadAdminAnnouncements(
+                    token: String,
+                    limit: Int,
+                ): cc.hhhl.client.api.AnnouncementAdminLoadResult {
+                    return cc.hhhl.client.api.AnnouncementAdminLoadResult.Success(emptyList())
+                }
+
+                override suspend fun createAnnouncement(
+                    token: String,
+                    title: String,
+                    text: String,
+                    icon: String,
+                    display: String,
+                ): cc.hhhl.client.api.AnnouncementMutationResult {
+                    return cc.hhhl.client.api.AnnouncementMutationResult.Success(sampleAnnouncement("ann-2"))
+                }
+
+                override suspend fun updateAnnouncement(
+                    token: String,
+                    announcementId: String,
+                    title: String,
+                    text: String,
+                    icon: String,
+                    display: String,
+                ): cc.hhhl.client.api.AnnouncementMutationResult {
+                    return cc.hhhl.client.api.AnnouncementMutationResult.Success(sampleAnnouncement("ann-1"))
+                }
+
+                override suspend fun deleteAnnouncement(
+                    token: String,
+                    announcementId: String,
+                ): cc.hhhl.client.api.AnnouncementDeleteResult {
+                    return cc.hhhl.client.api.AnnouncementDeleteResult.Success
+                }
             },
         ) {
             override suspend fun refresh(): AnnouncementsRepositoryResult = listResult
+
+            override suspend fun refreshAdmin(): AnnouncementsRepositoryResult = adminListResult
 
             override suspend fun show(announcementId: String): AnnouncementRepositoryResult {
                 onShow(announcementId)
@@ -185,6 +267,21 @@ class AnnouncementStateHolderTest {
             }
 
             override suspend fun markRead(announcementId: String): AnnouncementReadRepositoryResult = readResult
+
+            override suspend fun createAnnouncement(draft: AnnouncementDraft): AnnouncementMutationRepositoryResult {
+                return createResult
+            }
+
+            override suspend fun updateAnnouncement(
+                announcementId: String,
+                draft: AnnouncementDraft,
+            ): AnnouncementMutationRepositoryResult {
+                return updateResult
+            }
+
+            override suspend fun deleteAnnouncement(announcementId: String): AnnouncementDeleteRepositoryResult {
+                return deleteResult
+            }
         }
     }
 
@@ -215,6 +312,41 @@ class AnnouncementStateHolderTest {
                     announcementId: String,
                 ): cc.hhhl.client.api.AnnouncementReadResult {
                     return cc.hhhl.client.api.AnnouncementReadResult.Success
+                }
+
+                override suspend fun loadAdminAnnouncements(
+                    token: String,
+                    limit: Int,
+                ): cc.hhhl.client.api.AnnouncementAdminLoadResult {
+                    return cc.hhhl.client.api.AnnouncementAdminLoadResult.Success(emptyList())
+                }
+
+                override suspend fun createAnnouncement(
+                    token: String,
+                    title: String,
+                    text: String,
+                    icon: String,
+                    display: String,
+                ): cc.hhhl.client.api.AnnouncementMutationResult {
+                    return cc.hhhl.client.api.AnnouncementMutationResult.Success(sampleAnnouncement("ann-2"))
+                }
+
+                override suspend fun updateAnnouncement(
+                    token: String,
+                    announcementId: String,
+                    title: String,
+                    text: String,
+                    icon: String,
+                    display: String,
+                ): cc.hhhl.client.api.AnnouncementMutationResult {
+                    return cc.hhhl.client.api.AnnouncementMutationResult.Success(sampleAnnouncement("ann-1"))
+                }
+
+                override suspend fun deleteAnnouncement(
+                    token: String,
+                    announcementId: String,
+                ): cc.hhhl.client.api.AnnouncementDeleteResult {
+                    return cc.hhhl.client.api.AnnouncementDeleteResult.Success
                 }
             },
         ) {

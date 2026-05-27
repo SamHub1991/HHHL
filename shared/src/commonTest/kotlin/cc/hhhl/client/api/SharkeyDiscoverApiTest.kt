@@ -53,6 +53,47 @@ class SharkeyDiscoverApiTest {
     }
 
     @Test
+    fun mapsAdvancedNoteSearchOptionsToRequestBody() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""query":"Sharkey from:@alice""""))
+                assertTrue(body.contains(""""origin":"remote""""))
+                assertTrue(body.contains(""""userId":"user-1""""))
+                assertTrue(body.contains(""""username":"alice""""))
+                assertTrue(body.contains(""""host":"example.social""""))
+                assertTrue(body.contains(""""channelId":"channel-1""""))
+                assertTrue(body.contains(""""sinceDate":"2026-05-01""""))
+                assertTrue(body.contains(""""untilDate":"2026-05-26""""))
+                assertTrue(body.contains(""""withFiles":true"""))
+                assertTrue(body.contains(""""includeReplies":false"""))
+
+                respondNoteArray()
+            },
+        )
+
+        val result = api.searchNotes(
+            token = "token-123",
+            query = "Sharkey from:@alice",
+            limit = 20,
+            options = DiscoverNoteSearchOptions(
+                origin = "remote",
+                username = "alice",
+                userId = "user-1",
+                host = "example.social",
+                channelId = "channel-1",
+                sinceDate = "2026-05-01",
+                untilDate = "2026-05-26",
+                withFiles = true,
+                includeReplies = false,
+            ),
+        )
+
+        assertIs<DiscoverSearchResult.Success>(result)
+    }
+
+    @Test
     fun mapsUnauthorizedSearchResponse() = runTest {
         val api = SharkeyDiscoverApi(
             client = testClient {
@@ -92,6 +133,57 @@ class SharkeyDiscoverApiTest {
 
         assertIs<DiscoverSearchResult.ServerError>(result)
         assertEquals("Search of notes unavailable.", result.message)
+    }
+
+    @Test
+    fun searchesNotesByTagFromTagSearchEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notes/search-by-tag", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""tag":"签到""""))
+                assertTrue(body.contains(""""limit":20"""))
+                assertTrue(body.contains(""""untilId":"note-old""""))
+
+                respondNoteArray()
+            },
+        )
+
+        val result = api.searchNotesByTag(
+            token = "token-123",
+            tag = "#签到",
+            limit = 20,
+            untilId = "note-old",
+        )
+
+        assertIs<DiscoverSearchResult.Success>(result)
+        assertEquals("note-1", result.notes.single().id)
+    }
+
+    @Test
+    fun tagSearchCanRunWithoutToken() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                val body = (request.body as TextContent).text
+                assertTrue(!body.contains(""""i":"""))
+                assertTrue(body.contains(""""tag":"签到""""))
+
+                respondNoteArray()
+            },
+        )
+
+        val result = api.searchNotesByTag(
+            token = null,
+            tag = "签到",
+            limit = 20,
+        )
+
+        assertIs<DiscoverSearchResult.Success>(result)
     }
 
     @Test
@@ -135,6 +227,8 @@ class SharkeyDiscoverApiTest {
             client = testClient { request ->
                 assertEquals("https://dc.hhhl.cc/api/hashtags/trend", request.url.toString())
                 assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                assertEquals("{}", (request.body as TextContent).text)
                 respondTrendArray()
             },
         )
@@ -175,6 +269,77 @@ class SharkeyDiscoverApiTest {
         assertEquals("sharkey", instance.softwareName)
         assertEquals(120, instance.usersCount)
         assertEquals(false, instance.isBlocked)
+    }
+
+    @Test
+    fun loadsFederationInstanceDetailsFromShowEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/federation/show-instance", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""host":"example.social""""))
+                respondFederationObject()
+            },
+        )
+
+        val result = api.loadFederationInstance("example.social")
+
+        assertIs<DiscoverFederationInstanceResult.Success>(result)
+        assertEquals("example.social", result.instance.host)
+        assertEquals("federated instance", result.instance.description)
+        assertEquals("2026-05-25 08:00", result.instance.infoUpdatedAtLabel)
+        assertEquals("2026-05-25 09:00", result.instance.latestRequestReceivedAtLabel)
+    }
+
+    @Test
+    fun updatesFederationInstanceFromAdminEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/admin/federation/update-instance", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""host":"example.social""""))
+                assertTrue(body.contains(""""isSilenced":true"""))
+                assertTrue(body.contains(""""isSuspended":false"""))
+                respond("", status = HttpStatusCode.NoContent)
+            },
+        )
+
+        assertIs<DiscoverFederationActionResult.Success>(
+            api.updateFederationInstance(
+                token = "token-123",
+                host = "example.social",
+                isSilenced = true,
+                isSuspended = false,
+            ),
+        )
+    }
+
+    @Test
+    fun permissionDeniedFederationUpdateMapsToServerErrorInsteadOfUnauthorized() = runTest {
+        val api = SharkeyDiscoverApi(
+            client = testClient {
+                respond(
+                    content = """{"error":{"message":"Your app does not have the necessary permissions to use this endpoint."}}""",
+                    status = HttpStatusCode.Forbidden,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = api.updateFederationInstance(
+            token = "token-123",
+            host = "example.social",
+            isSilenced = true,
+            isSuspended = false,
+        )
+
+        val error = assertIs<DiscoverFederationActionResult.ServerError>(result)
+        assertEquals("当前登录缺少此功能权限，请检查应用授权或账号权限", error.message)
     }
 
     private fun MockRequestHandleScope.respondNoteArray(): HttpResponseData {
@@ -279,11 +444,47 @@ class SharkeyDiscoverApiTest {
         )
     }
 
+    private fun MockRequestHandleScope.respondFederationObject(): HttpResponseData {
+        return respond(
+            content = """
+                {
+                  "id": "instance-1",
+                  "host": "example.social",
+                  "usersCount": 120,
+                  "notesCount": 900,
+                  "followingCount": 10,
+                  "followersCount": 11,
+                  "isNotResponding": false,
+                  "isSuspended": false,
+                  "isBlocked": false,
+                  "softwareName": "sharkey",
+                  "softwareVersion": "2025.5.2",
+                  "name": "Example",
+                  "description": "federated instance",
+                  "maintainerName": "Admin",
+                  "maintainerEmail": "admin@example.social",
+                  "isSilenced": false,
+                  "iconUrl": "https://example.social/icon.png",
+                  "faviconUrl": "https://example.social/favicon.ico",
+                  "infoUpdatedAt": "2026-05-25T00:00:00.000Z",
+                  "latestRequestReceivedAt": "2026-05-25T01:00:00.000Z"
+                }
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
     private fun testClient(handler: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData): HttpClient {
         return HttpClient(MockEngine { request -> handler(request) }) {
             expectSuccess = false
             install(ContentNegotiation) {
-                json(Json { ignoreUnknownKeys = true })
+                json(
+                    Json {
+                        ignoreUnknownKeys = true
+                        explicitNulls = false
+                    },
+                )
             }
         }
     }

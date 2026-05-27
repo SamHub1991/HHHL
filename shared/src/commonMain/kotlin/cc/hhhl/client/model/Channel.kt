@@ -1,5 +1,7 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
 enum class ChannelListKind(val label: String) {
     Featured("精选"),
     Followed("关注"),
@@ -7,6 +9,7 @@ enum class ChannelListKind(val label: String) {
     Owned("我的"),
 }
 
+@Immutable
 data class Channel(
     val id: String,
     val name: String,
@@ -36,6 +39,7 @@ data class Channel(
     }
 }
 
+@Immutable
 data class ChannelDraft(
     val name: String,
     val description: String = "",

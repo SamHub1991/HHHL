@@ -9,23 +9,14 @@ import cc.hhhl.client.ui.component.customEmojiUrlMap
 open class EmojiRepository(
     private val api: EmojiApi = SharkeyEmojiApi(),
 ) {
+    private val successfulResultsByLimit = mutableMapOf<Int, EmojiRepositoryResult.Success>()
+
     open suspend fun loadReactionOptions(limit: Int = DEFAULT_REACTION_OPTION_LIMIT): EmojiRepositoryResult {
+        val safeLimit = limit.coerceAtLeast(0)
+        successfulResultsByLimit[safeLimit]?.let { return it }
+
         return when (val result = api.loadEmojis()) {
-            is EmojiLoadResult.Success -> EmojiRepositoryResult.Success(
-                reactionOptions = result.emojis
-                    .asSequence()
-                    .filter { !it.isSensitive }
-                    .map { it.reactionCode }
-                    .filter { it.isNotBlank() }
-                    .distinct()
-                    .take(limit.coerceAtLeast(0))
-                    .toList(),
-                emojiUrls = customEmojiUrlMap(result.emojis),
-                customEmojis = result.emojis
-                    .filter { !it.isSensitive }
-                    .distinctBy { it.name }
-                    .sortedWith(compareBy<CustomEmoji> { it.category.orEmpty() }.thenBy { it.name }),
-            )
+            is EmojiLoadResult.Success -> buildSuccessResult(result.emojis, safeLimit)
             is EmojiLoadResult.NetworkError -> {
                 EmojiRepositoryResult.Error("无法连接服务器：${result.message}")
             }
@@ -33,8 +24,31 @@ open class EmojiRepository(
         }
     }
 
+    private fun buildSuccessResult(
+        emojis: List<CustomEmoji>,
+        limit: Int,
+    ): EmojiRepositoryResult.Success {
+        val success = EmojiRepositoryResult.Success(
+            reactionOptions = emojis
+                .asSequence()
+                .filter { !it.isSensitive }
+                .map { it.reactionCode }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .take(limit)
+                .toList(),
+            emojiUrls = customEmojiUrlMap(emojis),
+            customEmojis = emojis
+                .filter { !it.isSensitive }
+                .distinctBy { it.name }
+                .sortedWith(compareBy<CustomEmoji> { it.category.orEmpty() }.thenBy { it.name }),
+        )
+        successfulResultsByLimit[limit] = success
+        return success
+    }
+
     private companion object {
-        const val DEFAULT_REACTION_OPTION_LIMIT = 40
+        const val DEFAULT_REACTION_OPTION_LIMIT = 240
     }
 }
 

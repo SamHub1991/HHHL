@@ -106,7 +106,7 @@ open class UserRelationshipRepository(
 
         return when (val result = action(token, untilId)) {
             is UserRelationshipListResult.Success -> {
-                val merged = (currentEntries + result.entries).distinctBy { it.user.id }
+                val merged = currentEntries.appendDistinctBy(result.entries) { it.user.id }
                 UserRelationshipListRepositoryResult.Success(
                     entries = merged,
                     endReached = result.entries.isEmpty(),

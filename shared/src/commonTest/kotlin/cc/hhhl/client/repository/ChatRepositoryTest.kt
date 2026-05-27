@@ -2,11 +2,16 @@ package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.ChatApi
 import cc.hhhl.client.api.ChatMessageCreateResult
+import cc.hhhl.client.api.ChatMessageDeleteResult
 import cc.hhhl.client.api.ChatMessageLoadResult
 import cc.hhhl.client.api.ChatMessageReactionResult
+import cc.hhhl.client.api.ChatRoomActionResult
 import cc.hhhl.client.api.ChatRoomMemberLoadResult
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.api.ChatRoomLoadResult
+import cc.hhhl.client.api.ChatRoomMutationResult
+import cc.hhhl.client.api.ChatUserHistoryLoadResult
+import cc.hhhl.client.cache.InMemoryChatMessageCache
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageReaction
 import cc.hhhl.client.model.ChatRoomMember
@@ -96,7 +101,7 @@ class ChatRepositoryTest {
             api = fakeApi(
                 result = ChatRoomLoadResult.ServerError(
                     statusCode = 403,
-                    message = "当前登录缺少此功能权限，请重新登录一次后再试",
+                    message = "当前登录缺少此功能权限，请检查应用授权或账号权限",
                 ),
             ),
         )
@@ -104,7 +109,7 @@ class ChatRepositoryTest {
         val result = repository.refresh()
 
         assertIs<ChatRepositoryResult.Error>(result)
-        assertEquals("当前登录缺少此功能权限，请重新登录一次后再试", result.message)
+        assertEquals("当前登录缺少此功能权限，请检查应用授权或账号权限", result.message)
     }
 
     @Test
@@ -175,6 +180,180 @@ class ChatRepositoryTest {
     }
 
     @Test
+    fun refreshRoomMessagesWritesAndRestoresCache() = runTest {
+        val message = sampleMessage("message-cached")
+        val cache = InMemoryChatMessageCache()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { "account-1" },
+            messageCache = cache,
+            api = fakeApi(
+                messageResult = ChatMessageLoadResult.Success(listOf(message)),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        assertIs<ChatMessageRepositoryResult.Success>(repository.refreshMessages("room-1"))
+        val cached = repository.restoreCachedMessages("room-1")
+
+        assertIs<ChatMessageRepositoryResult.Success>(cached)
+        assertEquals(listOf(message), cached.messages)
+    }
+
+    @Test
+    fun refreshUserMessagesWritesAndRestoresCache() = runTest {
+        val message = sampleMessage("message-user", roomId = "")
+        val calls = mutableListOf<UserMessageCall>()
+        val cache = InMemoryChatMessageCache()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { "account-1" },
+            messageCache = cache,
+            api = fakeApi(
+                userMessageCalls = calls,
+                userMessageResult = ChatMessageLoadResult.Success(listOf(message)),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        assertIs<ChatMessageRepositoryResult.Success>(repository.refreshUserMessages("user-2"))
+        val cached = repository.restoreCachedUserMessages("user-2")
+
+        assertIs<ChatMessageRepositoryResult.Success>(cached)
+        assertEquals(listOf(UserMessageCall("token-123", "user-2", null)), calls)
+        assertEquals(listOf(message), cached.messages)
+    }
+
+    @Test
+    fun refreshUserConversationsWritesLatestMessagesToUserCache() = runTest {
+        val peer = User("user-2", "Bob", "bob", "B")
+        val message = sampleMessage("message-user-history", roomId = "").copy(
+            fromUser = User("account-user", "Alice", "alice", "A"),
+            toUserId = peer.id,
+            toUser = peer,
+        )
+        val cache = InMemoryChatMessageCache()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { "account-user" },
+            cacheAccountIdProvider = { "account-session" },
+            messageCache = cache,
+            api = fakeApi(
+                userHistoryResult = ChatUserHistoryLoadResult.Success(listOf(message)),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        assertIs<ChatUserConversationRepositoryResult.Success>(repository.refreshUserConversations())
+        val cached = repository.restoreCachedUserMessages(peer.id)
+
+        assertIs<ChatMessageRepositoryResult.Success>(cached)
+        assertEquals(listOf(message), cached.messages)
+    }
+
+    @Test
+    fun refreshUserConversationsCountsUnreadMessagesPerPeer() = runTest {
+        val currentUser = User("account-user", "Alice", "alice", "A")
+        val peer = User("user-2", "Bob", "bob", "B")
+        val latestUnread = sampleMessage(
+            id = "message-latest",
+            roomId = "",
+            createdAt = "2026-05-25T03:00:00.000Z",
+        ).copy(
+            fromUser = peer,
+            toUserId = currentUser.id,
+            toUser = currentUser,
+            isRead = false,
+        )
+        val olderUnread = sampleMessage(
+            id = "message-older",
+            roomId = "",
+            createdAt = "2026-05-25T02:00:00.000Z",
+        ).copy(
+            fromUser = peer,
+            toUserId = currentUser.id,
+            toUser = currentUser,
+            isRead = false,
+        )
+        val ownMessage = sampleMessage(
+            id = "message-own",
+            roomId = "",
+            createdAt = "2026-05-25T01:00:00.000Z",
+        ).copy(
+            fromUser = currentUser,
+            toUserId = peer.id,
+            toUser = peer,
+            isRead = false,
+        )
+        val userHistoryCalls = mutableListOf<UserHistoryCall>()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { currentUser.id },
+            api = fakeApi(
+                userHistoryCalls = userHistoryCalls,
+                userHistoryResult = ChatUserHistoryLoadResult.Success(
+                    listOf(ownMessage, olderUnread, latestUnread),
+                ),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.refreshUserConversations()
+
+        assertIs<ChatUserConversationRepositoryResult.Success>(result)
+        assertEquals(listOf(UserHistoryCall("token-123", 100)), userHistoryCalls)
+        assertEquals(1, result.conversations.size)
+        assertEquals(latestUnread.id, result.conversations.single().latestMessage?.id)
+        assertEquals(2, result.conversations.single().unreadCount)
+    }
+
+    @Test
+    fun searchMessagesIndexesFullRoomHistoryBeforeSearchingCache() = runTest {
+        val latest = sampleMessage("message-latest", text = "latest", createdAt = "2026-05-25T03:00:00.000Z")
+        val middle = sampleMessage("message-middle", text = "middle", createdAt = "2026-05-25T02:00:00.000Z")
+        val oldest = sampleMessage("message-oldest", text = "needle oldest", createdAt = "2026-05-25T01:00:00.000Z")
+        val calls = mutableListOf<MessageCall>()
+        val cache = InMemoryChatMessageCache()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { "account-1" },
+            cacheAccountIdProvider = { "account-1" },
+            messageCache = cache,
+            api = fakeApi(
+                messageCalls = calls,
+                messageResultProvider = { untilId ->
+                    when (untilId) {
+                        "message-latest" -> ChatMessageLoadResult.Success(listOf(middle, oldest))
+                        "message-oldest" -> ChatMessageLoadResult.Success(emptyList())
+                        else -> ChatMessageLoadResult.Success(emptyList())
+                    }
+                },
+                searchResult = ChatMessageLoadResult.Success(emptyList()),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.searchMessages(
+            query = "needle",
+            roomId = "room-1",
+            currentConversationMessages = listOf(latest),
+        )
+
+        assertIs<ChatMessageRepositoryResult.Success>(result)
+        assertEquals(listOf("message-oldest"), result.messages.map { it.id })
+        assertEquals(
+            listOf(
+                MessageCall("token-123", "room-1", "message-latest"),
+                MessageCall("token-123", "room-1", "message-oldest"),
+            ),
+            calls,
+        )
+        val cached = repository.restoreCachedMessages("room-1")
+        assertIs<ChatMessageRepositoryResult.Success>(cached)
+        assertEquals(listOf("message-oldest", "message-middle", "message-latest"), cached.messages.map { it.id })
+    }
+
+    @Test
     fun missingChatPermissionShowsErrorWithoutReloginForMessages() = runTest {
         val repository = ChatRepository(
             tokenProvider = { "token-123" },
@@ -209,7 +388,7 @@ class ChatRepositoryTest {
         val result = repository.sendMessage("room-1", "  你好  ")
 
         assertIs<ChatMessageRepositoryResult.Created>(result)
-        assertEquals(listOf(CreateCall("token-123", "room-1", "你好", null)), calls)
+        assertEquals(listOf(CreateCall("token-123", "room-1", "你好", null, emptyList())), calls)
         assertEquals(created, result.message)
     }
 
@@ -229,7 +408,33 @@ class ChatRepositoryTest {
         val result = repository.sendMessage("room-1", "配图", fileId = "file-1")
 
         assertIs<ChatMessageRepositoryResult.Created>(result)
-        assertEquals(listOf(CreateCall("token-123", "room-1", "配图", "file-1")), calls)
+        assertEquals(listOf(CreateCall("token-123", "room-1", "配图", "file-1", listOf("file-1"))), calls)
+    }
+
+    @Test
+    fun sendRoomMessagePassesMultipleFileIdsWhenProvided() = runTest {
+        val created = sampleMessage("message-created", text = "多图")
+        val calls = mutableListOf<CreateCall>()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                createCalls = calls,
+                createResult = ChatMessageCreateResult.Success(created),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.sendMessage(
+            roomId = "room-1",
+            text = "多图",
+            fileIds = listOf("file-1", " file-2 ", "file-1"),
+        )
+
+        assertIs<ChatMessageRepositoryResult.Created>(result)
+        assertEquals(
+            listOf(CreateCall("token-123", "room-1", "多图", "file-1", listOf("file-1", "file-2"))),
+            calls,
+        )
     }
 
     @Test
@@ -248,7 +453,7 @@ class ChatRepositoryTest {
         val result = repository.sendMessage("room-1", "   ", fileId = "file-1")
 
         assertIs<ChatMessageRepositoryResult.Created>(result)
-        assertEquals(listOf(CreateCall("token-123", "room-1", "", "file-1")), calls)
+        assertEquals(listOf(CreateCall("token-123", "room-1", "", "file-1", listOf("file-1"))), calls)
     }
 
     @Test
@@ -348,11 +553,17 @@ class ChatRepositoryTest {
     private fun fakeApi(
         calls: MutableList<ApiCall> = mutableListOf(),
         messageCalls: MutableList<MessageCall> = mutableListOf(),
+        userMessageCalls: MutableList<UserMessageCall> = mutableListOf(),
+        userHistoryCalls: MutableList<UserHistoryCall> = mutableListOf(),
         createCalls: MutableList<CreateCall> = mutableListOf(),
         reactionCalls: MutableList<ReactionCall> = mutableListOf(),
         memberCalls: MutableList<MemberCall> = mutableListOf(),
         result: ChatRoomLoadResult,
         messageResult: ChatMessageLoadResult = ChatMessageLoadResult.Success(emptyList()),
+        messageResultProvider: ((String?) -> ChatMessageLoadResult)? = null,
+        userMessageResult: ChatMessageLoadResult = messageResult,
+        userHistoryResult: ChatUserHistoryLoadResult = ChatUserHistoryLoadResult.Success(emptyList()),
+        searchResult: ChatMessageLoadResult = messageResult,
         createResult: ChatMessageCreateResult = ChatMessageCreateResult.Success(sampleMessage("created")),
         reactionResult: ChatMessageReactionResult = ChatMessageReactionResult.Success,
         memberResult: ChatRoomMemberLoadResult = ChatRoomMemberLoadResult.Success(emptyList()),
@@ -377,18 +588,68 @@ class ChatRepositoryTest {
                 untilId: String?,
             ): ChatMessageLoadResult {
                 messageCalls.add(MessageCall(token, roomId, untilId))
-                return messageResult
+                return messageResultProvider?.invoke(untilId) ?: messageResult
             }
+
+            override suspend fun loadUserMessages(
+                token: String,
+                userId: String,
+                limit: Int,
+                untilId: String?,
+            ): ChatMessageLoadResult {
+                userMessageCalls.add(UserMessageCall(token, userId, untilId))
+                return userMessageResult
+            }
+
+            override suspend fun loadUserHistory(
+                token: String,
+                limit: Int,
+            ): ChatUserHistoryLoadResult {
+                userHistoryCalls.add(UserHistoryCall(token, limit))
+                return userHistoryResult
+            }
+
+            override suspend fun searchMessages(
+                token: String,
+                query: String,
+                limit: Int,
+                untilId: String?,
+                roomId: String?,
+                userId: String?,
+            ): ChatMessageLoadResult = searchResult
 
             override suspend fun createRoomMessage(
                 token: String,
                 roomId: String,
                 text: String,
                 fileId: String?,
+                fileIds: List<String>,
+                replyId: String?,
+                quoteId: String?,
             ): ChatMessageCreateResult {
-                createCalls.add(CreateCall(token, roomId, text, fileId))
+                createCalls.add(CreateCall(token, roomId, text, fileId, fileIds))
                 return createResult
             }
+
+            override suspend fun createUserMessage(
+                token: String,
+                userId: String,
+                text: String,
+                fileId: String?,
+                replyId: String?,
+                quoteId: String?,
+            ): ChatMessageCreateResult = createResult
+
+            override suspend fun deleteMessage(
+                token: String,
+                messageId: String,
+            ): ChatMessageDeleteResult = ChatMessageDeleteResult.Success
+
+            override suspend fun createRoom(
+                token: String,
+                name: String,
+                description: String,
+            ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom("room-created", "membership-created"))
 
             override suspend fun reactToMessage(
                 token: String,
@@ -407,6 +668,35 @@ class ChatRepositoryTest {
                 reactionCalls.add(ReactionCall("unreact", token, messageId, reaction))
                 return reactionResult
             }
+
+            override suspend fun updateRoom(
+                token: String,
+                roomId: String,
+                name: String,
+                description: String,
+            ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom("room-updated", "membership-updated"))
+
+            override suspend fun inviteRoomMember(
+                token: String,
+                roomId: String,
+                userId: String,
+            ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+            override suspend fun leaveRoom(
+                token: String,
+                roomId: String,
+            ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+            override suspend fun deleteRoom(
+                token: String,
+                roomId: String,
+            ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+            override suspend fun muteRoom(
+                token: String,
+                roomId: String,
+                muted: Boolean,
+            ): ChatRoomActionResult = ChatRoomActionResult.Success
 
             override suspend fun loadRoomMembers(
                 token: String,
@@ -442,10 +732,11 @@ class ChatRepositoryTest {
         text: String = "message $id",
         createdAt: String = "",
         createdAtLabel: String = "2026-05-25 01:23",
+        roomId: String = "room-1",
     ): ChatMessage {
         return ChatMessage(
             id = id,
-            roomId = "room-1",
+            roomId = roomId,
             fromUser = User("user-1", "Alice", "alice", "A"),
             text = text,
             createdAtLabel = createdAtLabel,
@@ -477,11 +768,23 @@ class ChatRepositoryTest {
         val untilId: String?,
     )
 
+    private data class UserMessageCall(
+        val token: String,
+        val userId: String,
+        val untilId: String?,
+    )
+
+    private data class UserHistoryCall(
+        val token: String,
+        val limit: Int,
+    )
+
     private data class CreateCall(
         val token: String,
         val roomId: String,
         val text: String,
         val fileId: String?,
+        val fileIds: List<String>,
     )
 
     private data class ReactionCall(

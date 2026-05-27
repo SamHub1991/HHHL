@@ -1,6 +1,9 @@
 package cc.hhhl.client.ui.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,12 +14,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -29,6 +40,7 @@ fun MediaPreviewOverlay(
     onDismiss: () -> Unit,
     onSessionChanged: (MediaPreviewSession) -> Unit,
     onOpenExternal: (String) -> Unit,
+    onDownload: (MediaPreviewItem) -> Unit = {},
 ) {
     val item = session.current
 
@@ -45,7 +57,7 @@ fun MediaPreviewOverlay(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onDismiss) {
+                MediaPreviewTextButton(onClick = onDismiss) {
                     Text("关闭", color = Color.White)
                 }
                 Column(modifier = Modifier.weight(1f)) {
@@ -58,14 +70,17 @@ fun MediaPreviewOverlay(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = "${session.selectedIndex + 1}/${session.items.size} · ${item.type.ifBlank { "文件" }}",
+                        text = "${session.selectedIndex + 1}/${session.items.size} · ${item.typeLabel}",
                         color = Color(0xFF9AA0A6),
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                TextButton(onClick = { onOpenExternal(item.openUrl) }) {
+                MediaPreviewTextButton(onClick = { onDownload(item) }) {
+                    Text("下载", color = Color.White)
+                }
+                MediaPreviewTextButton(onClick = { onOpenExternal(item.openUrl) }) {
                     Text("外部打开", color = Color.White)
                 }
             }
@@ -77,11 +92,9 @@ fun MediaPreviewOverlay(
             ) {
                 val previewUrl = item.previewUrl
                 if (previewUrl != null && item.isImage) {
-                    AsyncImage(
-                        model = previewUrl,
-                        contentDescription = item.label,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize(),
+                    ZoomablePreviewImage(
+                        imageUrl = previewUrl,
+                        label = item.label,
                     )
                 } else {
                     MediaPreviewFallback(item = item)
@@ -94,13 +107,13 @@ fun MediaPreviewOverlay(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(
+                MediaPreviewTextButton(
                     onClick = { onSessionChanged(session.previous()) },
                     enabled = session.canGoPrevious,
                 ) {
                     Text("上一张")
                 }
-                TextButton(
+                MediaPreviewTextButton(
                     onClick = { onSessionChanged(session.next()) },
                     enabled = session.canGoNext,
                 ) {
@@ -109,6 +122,72 @@ fun MediaPreviewOverlay(
             }
         }
     }
+}
+
+@Composable
+private fun ZoomablePreviewImage(
+    imageUrl: String,
+    label: String,
+) {
+    var scale by remember(imageUrl) { mutableFloatStateOf(1f) }
+    var offset by remember(imageUrl) { mutableStateOf(Offset.Zero) }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        val nextScale = (scale * zoomChange).coerceIn(1f, 5f)
+        scale = nextScale
+        offset = if (nextScale <= 1.01f) {
+            Offset.Zero
+        } else {
+            offset + panChange
+        }
+    }
+
+    LaunchedEffect(imageUrl) {
+        scale = 1f
+        offset = Offset.Zero
+    }
+
+    AsyncImage(
+        model = imageUrl,
+        contentDescription = label,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(imageUrl, scale) {
+                detectTapGestures(
+                    onDoubleTap = {
+                        if (scale > 1.01f) {
+                            scale = 1f
+                            offset = Offset.Zero
+                        } else {
+                            scale = 2.4f
+                        }
+                    },
+                )
+            }
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationX = offset.x
+                translationY = offset.y
+            }
+            .transformable(transformState),
+    )
+}
+
+@Composable
+private fun MediaPreviewTextButton(
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+) {
+    HhhlTextButton(
+        onClick = onClick,
+        enabled = enabled,
+        containerColor = Color.White.copy(alpha = if (enabled) 0.12f else 0.06f),
+        borderColor = Color.White.copy(alpha = if (enabled) 0.16f else 0.08f),
+        contentColor = Color.White.copy(alpha = if (enabled) 1f else 0.42f),
+        content = content,
+    )
 }
 
 @Composable
@@ -127,7 +206,7 @@ private fun MediaPreviewFallback(item: MediaPreviewItem) {
             overflow = TextOverflow.Ellipsis,
         )
         Text(
-            text = if (item.previewUrl == null) "此文件不自动预览，可外部打开" else item.type.ifBlank { "文件" },
+            text = if (item.previewUrl == null) "此文件不自动预览，可外部打开" else item.typeLabel,
             color = Color(0xFF9AA0A6),
             style = MaterialTheme.typography.bodySmall,
             maxLines = 2,
@@ -140,7 +219,7 @@ private fun MediaPreviewFallback(item: MediaPreviewItem) {
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = item.type.substringBefore('/').ifBlank { "file" },
+                text = item.typeBadge,
                 color = Color.White,
                 style = MaterialTheme.typography.labelMedium,
             )

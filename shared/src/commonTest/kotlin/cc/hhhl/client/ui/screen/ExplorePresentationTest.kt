@@ -42,6 +42,13 @@ class ExplorePresentationTest {
     }
 
     @Test
+    fun flashWebPathTargetsPlayRoute() {
+        assertEquals("/play/flash-1", flashWebPath("flash-1"))
+        assertEquals("/play/flash-2", flashWebPath(" flash-2 "))
+        assertEquals("/play", flashWebPath(" "))
+    }
+
+    @Test
     fun pageKeepsPersonalKindsInOverflow() {
         assertEquals(
             listOf(

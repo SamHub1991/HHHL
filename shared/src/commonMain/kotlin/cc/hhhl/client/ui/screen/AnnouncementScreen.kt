@@ -11,22 +11,36 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import cc.hhhl.client.ui.component.HhhlTextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.model.Announcement
+import cc.hhhl.client.repository.AnnouncementDraft
 import cc.hhhl.client.state.AnnouncementUiState
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlStatusRow
+import cc.hhhl.client.ui.component.HhhlIconActionButton
+import cc.hhhl.client.ui.component.HhhlOverflowMenu
+import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
+import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
 
 @Composable
@@ -38,10 +52,18 @@ fun AnnouncementScreen(
     onCloseDetail: () -> Unit = {},
     onLoadMore: () -> Unit = {},
     onMarkRead: (String) -> Unit = {},
+    onEnterManagement: () -> Unit = {},
+    onExitManagement: () -> Unit = {},
+    onRefreshAdmin: () -> Unit = {},
+    onCreateAnnouncement: (AnnouncementDraft) -> Unit = {},
+    onUpdateAnnouncement: (String, AnnouncementDraft) -> Unit = { _, _ -> },
+    onDeleteAnnouncement: (String) -> Unit = {},
 ) {
-    val announcements = state?.announcements ?: fakeAnnouncements()
+    val announcements = state?.announcements.orEmpty()
     val selectedAnnouncement = state?.selectedAnnouncement
     val listState = rememberLazyListState()
+    var editorMode by remember { mutableStateOf<AnnouncementEditorMode?>(null) }
+    var deleteTarget by remember { mutableStateOf<Announcement?>(null) }
 
     AutoLoadMoreEffect(
         listState = listState,
@@ -50,17 +72,66 @@ fun AnnouncementScreen(
         onLoadMore = onLoadMore,
     )
 
-    if (selectedAnnouncement != null) {
-        AnnouncementDetailView(
-            announcement = selectedAnnouncement,
-            isLoading = state.isLoadingDetail,
-            errorMessage = state.detailErrorMessage,
-            actionErrorMessage = state.actionErrorMessage,
-            isPending = state.pendingAnnouncementIds.contains(selectedAnnouncement.id),
-            onBack = onCloseDetail,
-            onMarkRead = onMarkRead,
+    if (state?.isManaging == true) {
+        AnnouncementManagementView(
+            announcements = announcements,
+            state = state,
+            listState = listState,
+            onBack = onExitManagement,
+            onRefresh = onRefreshAdmin,
+            onCreate = { editorMode = AnnouncementEditorMode.Create },
+            onEdit = { editorMode = AnnouncementEditorMode.Edit(it) },
+            onDelete = { deleteTarget = it },
         )
+        when (val mode = editorMode) {
+            AnnouncementEditorMode.Create -> AnnouncementEditorDialog(
+                title = "新建公告",
+                isMutating = state.isMutatingAnnouncement,
+                onDismiss = { editorMode = null },
+                onSubmit = {
+                    onCreateAnnouncement(it)
+                    editorMode = null
+                },
+            )
+            is AnnouncementEditorMode.Edit -> AnnouncementEditorDialog(
+                title = "编辑公告",
+                initialAnnouncement = mode.announcement,
+                isMutating = state.isMutatingAnnouncement,
+                onDismiss = { editorMode = null },
+                onSubmit = {
+                    onUpdateAnnouncement(mode.announcement.id, it)
+                    editorMode = null
+                },
+            )
+            null -> Unit
+        }
+        deleteTarget?.let { announcement ->
+            DeleteAnnouncementDialog(
+                announcement = announcement,
+                isMutating = state.pendingAnnouncementIds.contains(announcement.id),
+                onDismiss = { deleteTarget = null },
+                onDelete = {
+                    onDeleteAnnouncement(announcement.id)
+                    deleteTarget = null
+                },
+            )
+        }
         return
+    }
+
+    state?.let { currentState ->
+        selectedAnnouncement?.let { announcement ->
+            AnnouncementDetailView(
+                announcement = announcement,
+                isLoading = currentState.isLoadingDetail,
+                errorMessage = currentState.detailErrorMessage,
+                actionErrorMessage = currentState.actionErrorMessage,
+                isPending = currentState.pendingAnnouncementIds.contains(announcement.id),
+                onBack = onCloseDetail,
+                onMarkRead = onMarkRead,
+            )
+            return
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -73,6 +144,13 @@ fun AnnouncementScreen(
                 else -> "${announcements.size} 条公告"
             },
             navigation = { HhhlBackButton(onClick = onBack) },
+            action = {
+                HhhlActionChip(
+                    label = "管理",
+                    enabled = state != null,
+                    onClick = onEnterManagement,
+                )
+            },
         )
         HhhlDivider()
         AnnouncementSummaryRow(
@@ -87,7 +165,7 @@ fun AnnouncementScreen(
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item {
+                item(contentType = "announcement-status") {
                     AnnouncementStatusRow(
                         text = message,
                         actionText = "重试",
@@ -96,23 +174,28 @@ fun AnnouncementScreen(
                 }
             }
             if (state?.isLoading == true && announcements.isEmpty()) {
-                item { AnnouncementStatusRow(text = "正在加载公告...", loading = true) }
+                item(contentType = "announcement-status") {
+                    AnnouncementStatusRow(text = "正在加载公告...", loading = true)
+                }
             }
             if (state != null && !state.isLoading && announcements.isEmpty() && state.errorMessage == null) {
-                item { AnnouncementStatusRow(text = "还没有公告") }
+                item(contentType = "announcement-status") { AnnouncementStatusRow(text = "还没有公告") }
             }
-            items(announcements, key = { it.id }) { announcement ->
+            items(
+                items = announcements,
+                key = { it.id },
+                contentType = { "announcement-row" },
+            ) { announcement ->
                 AnnouncementRow(
                     announcement = announcement,
                     onOpenAnnouncement = onOpenAnnouncement,
                 )
             }
-            if (state != null && announcements.isNotEmpty() && !state.endReached) {
-                item {
+            if (state != null && announcements.isNotEmpty() && state.isLoadingMore) {
+                item(contentType = "announcement-status") {
                     AnnouncementStatusRow(
-                        text = if (state.isLoadingMore) "正在加载更多..." else "加载更多",
+                        text = "正在加载更多...",
                         loading = state.isLoadingMore,
-                        onAction = if (state.isLoadingMore) null else onLoadMore,
                     )
                 }
             }
@@ -120,8 +203,169 @@ fun AnnouncementScreen(
     }
 }
 
+private sealed interface AnnouncementEditorMode {
+    data object Create : AnnouncementEditorMode
+    data class Edit(val announcement: Announcement) : AnnouncementEditorMode
+}
+
 @Composable
-private fun AnnouncementSummaryRow(
+private fun AnnouncementManagementView(
+    announcements: List<Announcement>,
+    state: AnnouncementUiState,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onCreate: () -> Unit,
+    onEdit: (Announcement) -> Unit,
+    onDelete: (Announcement) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        HhhlTopBar(
+            title = "公告管理",
+            supportingText = when {
+                state.isLoadingAdmin -> "同步中"
+                announcements.isEmpty() -> "创建和维护站点公告"
+                else -> "${announcements.size} 条公告"
+            },
+            navigation = { HhhlBackButton(onClick = onBack) },
+            action = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.Add,
+                        contentDescription = "新建公告",
+                        emphasized = true,
+                        enabled = !state.isMutatingAnnouncement,
+                        onClick = onCreate,
+                    )
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.Refresh,
+                        contentDescription = if (state.isLoadingAdmin) "同步中" else "刷新",
+                        enabled = !state.isLoadingAdmin,
+                        onClick = onRefresh,
+                    )
+                }
+            },
+        )
+        HhhlDivider()
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            state = listState,
+        ) {
+            state.adminActionMessage?.let { message ->
+                item(contentType = "announcement-admin-status") { AnnouncementStatusRow(text = message) }
+            }
+            state.adminErrorMessage?.let { message ->
+                item(contentType = "announcement-admin-status") {
+                    AnnouncementStatusRow(
+                        text = message,
+                        actionText = "重试",
+                        onAction = onRefresh,
+                    )
+                }
+            }
+            if (state.isLoadingAdmin && announcements.isEmpty()) {
+                item(contentType = "announcement-admin-status") {
+                    AnnouncementStatusRow(text = "正在加载公告管理列表...", loading = true)
+                }
+            }
+            if (!state.isLoadingAdmin && announcements.isEmpty() && state.adminErrorMessage == null) {
+                item(contentType = "announcement-admin-status") { AnnouncementStatusRow(text = "还没有公告") }
+            }
+            items(
+                items = announcements,
+                key = { "admin-announcement-${it.id}" },
+                contentType = { "announcement-admin-row" },
+            ) { announcement ->
+                AnnouncementManagementRow(
+                    announcement = announcement,
+                    isMutating = state.isMutatingAnnouncement || state.pendingAnnouncementIds.contains(announcement.id),
+                    onEdit = { onEdit(announcement) },
+                    onDelete = { onDelete(announcement) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnnouncementManagementRow(
+    announcement: Announcement,
+    isMutating: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = announcementIcon(announcement.icon),
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                text = announcement.title.ifBlank { "公告" },
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = announcement.text,
+                color = MaterialTheme.colorScheme.secondary,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${announcement.iconLabel} · ${announcement.displayLabel} · ${announcement.createdAtLabel}",
+                color = LocalHhhlColors.current.subtleText,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        HhhlActionChip(
+            label = if (isMutating) "处理中" else "编辑",
+            enabled = !isMutating,
+            onClick = onEdit,
+        )
+        HhhlOverflowMenu(
+            enabled = !isMutating,
+            actions = announcementManagementActions(
+                isMutating = isMutating,
+                onDelete = onDelete,
+            ),
+        )
+    }
+    HhhlDivider()
+}
+
+fun announcementManagementActions(
+    isMutating: Boolean,
+    onDelete: () -> Unit,
+): List<HhhlOverflowMenuAction> = listOf(
+    HhhlOverflowMenuAction(
+        label = "删除",
+        enabled = !isMutating,
+        destructive = true,
+        onClick = onDelete,
+    ),
+)
+
+@Composable
+internal fun AnnouncementSummaryRow(
     announcementCount: Int,
     unreadCount: Int,
     isLoading: Boolean,
@@ -153,8 +397,9 @@ private fun AnnouncementSummaryRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            HhhlActionChip(
-                label = if (isLoading) "同步中" else "刷新公告",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (isLoading) "同步中" else "刷新公告",
                 emphasized = true,
                 enabled = !isLoading,
                 onClick = onRefresh,
@@ -164,7 +409,7 @@ private fun AnnouncementSummaryRow(
 }
 
 @Composable
-private fun AnnouncementRow(
+internal fun AnnouncementRow(
     announcement: Announcement,
     onOpenAnnouncement: (String) -> Unit,
 ) {
@@ -226,7 +471,7 @@ private fun AnnouncementRow(
 }
 
 @Composable
-private fun AnnouncementDetailView(
+internal fun AnnouncementDetailView(
     announcement: Announcement,
     isLoading: Boolean,
     errorMessage: String?,
@@ -257,15 +502,17 @@ private fun AnnouncementDetailView(
         HhhlDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             if (isLoading) {
-                item { AnnouncementStatusRow(text = "正在加载公告...", loading = true) }
+                item(contentType = "announcement-detail-status") {
+                    AnnouncementStatusRow(text = "正在加载公告...", loading = true)
+                }
             }
             errorMessage?.let { message ->
-                item { AnnouncementStatusRow(text = message) }
+                item(contentType = "announcement-detail-status") { AnnouncementStatusRow(text = message) }
             }
             actionErrorMessage?.let { message ->
-                item { AnnouncementStatusRow(text = message) }
+                item(contentType = "announcement-detail-status") { AnnouncementStatusRow(text = message) }
             }
-            item {
+            item(contentType = "announcement-detail") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -305,41 +552,164 @@ private fun AnnouncementDetailView(
 }
 
 @Composable
+private fun AnnouncementEditorDialog(
+    title: String,
+    initialAnnouncement: Announcement? = null,
+    isMutating: Boolean,
+    onDismiss: () -> Unit,
+    onSubmit: (AnnouncementDraft) -> Unit,
+) {
+    var announcementTitle by remember(initialAnnouncement?.id) {
+        mutableStateOf(initialAnnouncement?.title.orEmpty())
+    }
+    var text by remember(initialAnnouncement?.id) {
+        mutableStateOf(initialAnnouncement?.text.orEmpty())
+    }
+    var icon by remember(initialAnnouncement?.id) {
+        mutableStateOf(initialAnnouncement?.icon ?: "info")
+    }
+    var display by remember(initialAnnouncement?.id) {
+        mutableStateOf(initialAnnouncement?.display ?: "normal")
+    }
+    val canSubmit = announcementTitle.isNotBlank() && text.isNotBlank() && !isMutating
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                HhhlTextInput(
+                    value = announcementTitle,
+                    onValueChange = { announcementTitle = it },
+                    label = "标题",
+                    placeholder = "公告标题",
+                    singleLine = true,
+                    enabled = !isMutating,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                HhhlTextInput(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = "内容",
+                    placeholder = "公告内容",
+                    enabled = !isMutating,
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                AnnouncementOptionChips(
+                    label = "图标",
+                    options = announcementIconOptions(),
+                    selected = icon,
+                    enabled = !isMutating,
+                    onSelected = { icon = it },
+                )
+                AnnouncementOptionChips(
+                    label = "显示",
+                    options = announcementDisplayOptions(),
+                    selected = display,
+                    enabled = !isMutating,
+                    onSelected = { display = it },
+                )
+            }
+        },
+        confirmButton = {
+            HhhlTextButton(
+                onClick = {
+                    onSubmit(
+                        AnnouncementDraft(
+                            title = announcementTitle,
+                            text = text,
+                            icon = icon,
+                            display = display,
+                        ),
+                    )
+                },
+                enabled = canSubmit,
+            ) {
+                Text(if (isMutating) "处理中" else "保存")
+            }
+        },
+        dismissButton = {
+            HhhlTextButton(onClick = onDismiss, enabled = !isMutating) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun AnnouncementOptionChips(
+    label: String,
+    options: List<AnnouncementOption>,
+    selected: String,
+    enabled: Boolean,
+    onSelected: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = label,
+            color = LocalHhhlColors.current.subtleText,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            options.forEach { option ->
+                HhhlActionChip(
+                    label = option.label,
+                    emphasized = option.value == selected,
+                    enabled = enabled && option.value != selected,
+                    onClick = { onSelected(option.value) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeleteAnnouncementDialog(
+    announcement: Announcement,
+    isMutating: Boolean,
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("删除公告") },
+        text = {
+            Text(
+                text = "删除「${announcement.title.ifBlank { "公告" }}」后，用户侧公告列表会同步移除。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        confirmButton = {
+            HhhlTextButton(onClick = onDelete, enabled = !isMutating, destructive = true) {
+                Text(if (isMutating) "删除中" else "删除")
+            }
+        },
+        dismissButton = {
+            HhhlTextButton(onClick = onDismiss, enabled = !isMutating) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
 private fun AnnouncementStatusRow(
     text: String,
     loading: Boolean = false,
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
+    )
 }
 
 private fun announcementIcon(icon: String): String {
@@ -351,20 +721,20 @@ private fun announcementIcon(icon: String): String {
     }
 }
 
-private fun fakeAnnouncements(): List<Announcement> {
-    return listOf(
-        Announcement(
-            id = "ann-featured",
-            title = "HHHL 公告",
-            text = "站内公告会显示在这里",
-            imageUrl = null,
-            icon = "info",
-            display = "normal",
-            needConfirmationToRead = false,
-            silence = false,
-            confetti = false,
-            forYou = true,
-            isRead = false,
-        ),
-    )
-}
+private data class AnnouncementOption(
+    val value: String,
+    val label: String,
+)
+
+private fun announcementIconOptions(): List<AnnouncementOption> = listOf(
+    AnnouncementOption("info", "信息"),
+    AnnouncementOption("warning", "警告"),
+    AnnouncementOption("success", "成功"),
+    AnnouncementOption("error", "错误"),
+)
+
+private fun announcementDisplayOptions(): List<AnnouncementOption> = listOf(
+    AnnouncementOption("normal", "普通"),
+    AnnouncementOption("banner", "横幅"),
+    AnnouncementOption("dialog", "弹窗"),
+)

@@ -1,5 +1,8 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class NotificationItem(
     val id: String,
     val type: NotificationType,
@@ -10,7 +13,9 @@ data class NotificationItem(
     val notePreviewText: String? = null,
     val isSpecialCare: Boolean = false,
     val chatRoomId: String? = null,
+    val chatUserId: String? = null,
     val chatMessageId: String? = null,
+    val isRead: Boolean = false,
 )
 
 enum class NotificationType {

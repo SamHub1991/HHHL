@@ -48,7 +48,7 @@ open class UserSocialRepository(
 
         return when (val result = api.loadUsers(token, cleanUserId, kind, DEFAULT_PAGE_SIZE, untilId)) {
             is UserSocialLoadResult.Success -> UserSocialRepositoryResult.Success(
-                items = (currentItems + result.items).distinctBy { it.id },
+                items = currentItems.appendDistinctBy(result.items) { it.id },
                 endReached = result.items.isEmpty(),
             )
             UserSocialLoadResult.Unauthorized -> UserSocialRepositoryResult.Unauthorized

@@ -1,6 +1,7 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.GalleryListKind
+import cc.hhhl.client.model.GalleryPostDraft
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -130,6 +131,68 @@ class SharkeyGalleryApiTest {
     }
 
     @Test
+    fun createsUpdatesAndDeletesGalleryPostsUsingExpectedEndpoints() = runTest {
+        val paths = mutableListOf<String>()
+        val api = SharkeyGalleryApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                paths.add(request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                when {
+                    request.url.toString().endsWith("/delete") -> {
+                        assertTrue(body.contains(""""postId":"gallery-1""""))
+                        respond(content = "", status = HttpStatusCode.NoContent)
+                    }
+                    else -> {
+                        assertTrue(body.contains(""""title":"第一张图""""))
+                        assertTrue(body.contains(""""fileIds":["file-1"]"""))
+                        assertTrue(body.contains(""""isSensitive":true"""))
+                        assertTrue(body.contains(""""isPublic":false"""))
+                        if (request.url.toString().endsWith("/update")) {
+                            assertTrue(body.contains(""""postId":"gallery-1""""))
+                        }
+                        respondPost()
+                    }
+                }
+            },
+        )
+        val draft = GalleryPostDraft(
+            title = "第一张图",
+            description = "来自图库",
+            fileIds = listOf("file-1"),
+            isSensitive = true,
+            isPublic = false,
+        )
+
+        assertIs<GalleryMutationResult.Success>(api.createPost("token-123", draft))
+        assertIs<GalleryMutationResult.Success>(api.updatePost("token-123", "gallery-1", draft))
+        assertIs<GalleryActionResult.Success>(api.deletePost("token-123", "gallery-1"))
+
+        assertEquals(
+            listOf(
+                "https://dc.hhhl.cc/api/gallery/posts/create",
+                "https://dc.hhhl.cc/api/gallery/posts/update",
+                "https://dc.hhhl.cc/api/gallery/posts/delete",
+            ),
+            paths,
+        )
+    }
+
+    @Test
+    fun blankDraftDoesNotCallNetwork() = runTest {
+        val api = SharkeyGalleryApi(
+            client = testClient {
+                error("network should not be called for invalid gallery draft")
+            },
+        )
+
+        assertIs<GalleryMutationResult.ServerError>(
+            api.createPost("token-123", GalleryPostDraft(title = " ", fileIds = emptyList())),
+        )
+    }
+
+    @Test
     fun mapsUnauthorizedToUnauthorizedResult() = runTest {
         val api = SharkeyGalleryApi(
             client = testClient {
@@ -211,6 +274,7 @@ class SharkeyGalleryApiTest {
               ],
               "tags": ["photo", "hhhl"],
               "isSensitive": false,
+              "isPublic": true,
               "likedCount": 2,
               "isLiked": true
             }

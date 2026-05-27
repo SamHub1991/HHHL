@@ -1,6 +1,7 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.FlashListKind
+import cc.hhhl.client.model.FlashDraft
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -139,6 +140,51 @@ class SharkeyFlashApiTest {
     }
 
     @Test
+    fun createUpdateAndDeleteUseFlashEndpoints() = runTest {
+        val paths = mutableListOf<String>()
+        val bodies = mutableListOf<String>()
+        val api = SharkeyFlashApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                paths.add(request.url.toString())
+                bodies.add((request.body as TextContent).text)
+                if (request.url.toString().endsWith("/flash/delete")) {
+                    respond(content = "", status = HttpStatusCode.NoContent)
+                } else {
+                    respondFlash()
+                }
+            },
+        )
+        val draft = FlashDraft(
+            title = "新 Play",
+            summary = "摘要",
+            script = "Ui:render([])",
+            visibility = "private",
+            permissions = listOf("read:account"),
+        )
+
+        assertIs<FlashMutationResult.Success>(api.createFlash("token-123", draft))
+        assertIs<FlashMutationResult.Success>(api.updateFlash("token-123", "flash-1", draft))
+        assertIs<FlashActionResult.Success>(api.deleteFlash("token-123", "flash-1"))
+
+        assertEquals(
+            listOf(
+                "https://dc.hhhl.cc/api/flash/create",
+                "https://dc.hhhl.cc/api/flash/update",
+                "https://dc.hhhl.cc/api/flash/delete",
+            ),
+            paths,
+        )
+        assertTrue(bodies[0].contains(""""title":"新 Play""""))
+        assertTrue(bodies[0].contains(""""summary":"摘要""""))
+        assertTrue(bodies[0].contains(""""script":"Ui:render([])""""))
+        assertTrue(bodies[0].contains(""""visibility":"private""""))
+        assertTrue(bodies[0].contains(""""permissions":["read:account"]"""))
+        assertTrue(bodies[1].contains(""""flashId":"flash-1""""))
+        assertTrue(bodies[2].contains(""""flashId":"flash-1""""))
+    }
+
+    @Test
     fun mapsUnauthorizedToUnauthorizedResult() = runTest {
         val api = SharkeyFlashApi(
             client = testClient {
@@ -152,6 +198,9 @@ class SharkeyFlashApiTest {
 
         assertIs<FlashLoadResult.Unauthorized>(api.loadFlashes("expired", FlashListKind.Featured, 20))
         assertIs<FlashShowResult.Unauthorized>(api.showFlash("expired", flashId = "flash-1"))
+        assertIs<FlashMutationResult.Unauthorized>(
+            api.createFlash("expired", FlashDraft(title = "x", script = "x")),
+        )
     }
 
     @Test

@@ -1,5 +1,7 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
 enum class GalleryListKind(val label: String) {
     Featured("精选"),
     Popular("热门"),
@@ -8,6 +10,7 @@ enum class GalleryListKind(val label: String) {
     Liked("喜欢"),
 }
 
+@Immutable
 data class GalleryPost(
     val id: String,
     val title: String,
@@ -18,6 +21,7 @@ data class GalleryPost(
     val files: List<DriveFile>,
     val tags: List<String>,
     val isSensitive: Boolean,
+    val isPublic: Boolean = true,
     val likedCount: Int,
     val isLiked: Boolean,
     val createdAtLabel: String = "",
@@ -26,3 +30,12 @@ data class GalleryPost(
     val imageCountLabel: String
         get() = "${files.size} 张"
 }
+
+@Immutable
+data class GalleryPostDraft(
+    val title: String,
+    val description: String = "",
+    val fileIds: List<String> = emptyList(),
+    val isSensitive: Boolean = false,
+    val isPublic: Boolean = true,
+)

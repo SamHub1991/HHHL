@@ -104,6 +104,10 @@ Theme support must be registry-driven:
 - Instance accent from meta can feed an HHHL/Sharkey preset without affecting X-style presets.
 - The theme layer should remain UI-only; repositories must not depend on it.
 
+## UI Style Baseline
+
+The current product direction is defined in `docs/ui-style-guide.md`: X-like feeds, Apple-like app chrome and controls, and Telegram-like chat. This supersedes older blanket restrictions against rounded panels or subtle navigation polish. The feed must remain list-first and non-card-heavy, while navigation, dialogs, form controls, and chat may use restrained rounded surfaces when they fit their screen family.
+
 ## Web Interaction Parity Rules
 
 - If the web client hides or disables a feature because the instance policy disables it, the app should do the same instead of showing a broken button.
@@ -132,4 +136,3 @@ Each feature slice needs:
 7. Trends/explore and federation entry points.
 8. Chat shell and message loading.
 9. Cache and offline-first feed restore.
-

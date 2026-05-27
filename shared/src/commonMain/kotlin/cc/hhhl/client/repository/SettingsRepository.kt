@@ -1,22 +1,198 @@
 package cc.hhhl.client.repository
 
+import cc.hhhl.client.api.SettingsApi
+import cc.hhhl.client.api.SettingsCapabilityResult
+import cc.hhhl.client.api.SettingsManagementMutationResult
+import cc.hhhl.client.api.SettingsManagementSectionResult
+import cc.hhhl.client.api.SettingsPreferencesResult
+import cc.hhhl.client.api.SettingsWebhookDetailResult
+import cc.hhhl.client.api.SharkeySettingsApi
 import cc.hhhl.client.display.DefaultNoteVisibility
 import cc.hhhl.client.display.NotificationBadgeMode
 import cc.hhhl.client.display.TimelineDensity
+import cc.hhhl.client.model.FilterSettings
+import cc.hhhl.client.model.NotificationSettings
+import cc.hhhl.client.model.PrivacySettings
+import cc.hhhl.client.model.SecuritySettings
+import cc.hhhl.client.model.SettingsPreferenceUpdate
+import cc.hhhl.client.model.SettingsPreferences
+import cc.hhhl.client.model.IntegrationSettings
+import cc.hhhl.client.model.SettingsManagementSection
+import cc.hhhl.client.model.SettingsWebhookDetail
+import cc.hhhl.client.model.SettingsWebhookCreateInput
+import cc.hhhl.client.model.SettingsWebhookUpdateInput
 import cc.hhhl.client.state.SettingsGroup
 import cc.hhhl.client.state.SettingsGroupKey
 import cc.hhhl.client.state.SettingsItem
 import cc.hhhl.client.state.SettingsItemKey
 import cc.hhhl.client.theme.HhhlThemePreset
+import cc.hhhl.client.theme.HhhlCustomTheme
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
-class SettingsRepository {
+open class SettingsRepository(
+    private val tokenProvider: () -> String? = { null },
+    private val api: SettingsApi = SharkeySettingsApi(),
+) {
+    open suspend fun loadRemotePreferences(): SettingsRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsRepositoryResult.Unauthorized
+
+        return mapResult(token, api.loadPreferences(token))
+    }
+
+    open suspend fun updatePrivacy(privacy: PrivacySettings): SettingsRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsRepositoryResult.Unauthorized
+
+        return mapResult(token, api.updatePreferences(token, SettingsPreferenceUpdate(privacy = privacy)))
+    }
+
+    open suspend fun updateNotifications(notifications: NotificationSettings): SettingsRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsRepositoryResult.Unauthorized
+
+        return mapResult(token, api.updatePreferences(token, SettingsPreferenceUpdate(notifications = notifications)))
+    }
+
+    open suspend fun updateFilters(filters: FilterSettings): SettingsRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsRepositoryResult.Unauthorized
+
+        return mapResult(token, api.updatePreferences(token, SettingsPreferenceUpdate(filters = filters)))
+    }
+
+    open suspend fun loadManagementSection(key: cc.hhhl.client.model.SettingsManagementSectionKey): SettingsManagementRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsManagementRepositoryResult.Unauthorized
+
+        return when (val result = api.loadManagementSection(token, key)) {
+            is SettingsManagementSectionResult.Success -> SettingsManagementRepositoryResult.Success(result.section)
+            SettingsManagementSectionResult.Unauthorized -> SettingsManagementRepositoryResult.Unauthorized
+            is SettingsManagementSectionResult.NetworkError -> {
+                SettingsManagementRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsManagementSectionResult.ServerError -> SettingsManagementRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun revokeApiToken(tokenId: String): SettingsManagementMutationRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsManagementMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.revokeApiToken(token, tokenId)) {
+            SettingsManagementMutationResult.Success -> SettingsManagementMutationRepositoryResult.Success
+            SettingsManagementMutationResult.Unauthorized -> SettingsManagementMutationRepositoryResult.Unauthorized
+            is SettingsManagementMutationResult.NetworkError -> {
+                SettingsManagementMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsManagementMutationResult.ServerError -> SettingsManagementMutationRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun deleteWebhook(webhookId: String): SettingsManagementMutationRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsManagementMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.deleteWebhook(token, webhookId)) {
+            SettingsManagementMutationResult.Success -> SettingsManagementMutationRepositoryResult.Success
+            SettingsManagementMutationResult.Unauthorized -> SettingsManagementMutationRepositoryResult.Unauthorized
+            is SettingsManagementMutationResult.NetworkError -> {
+                SettingsManagementMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsManagementMutationResult.ServerError -> SettingsManagementMutationRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadWebhook(webhookId: String): SettingsWebhookDetailRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsWebhookDetailRepositoryResult.Unauthorized
+
+        return when (val result = api.loadWebhook(token, webhookId)) {
+            is SettingsWebhookDetailResult.Success -> SettingsWebhookDetailRepositoryResult.Success(result.webhook)
+            SettingsWebhookDetailResult.Unauthorized -> SettingsWebhookDetailRepositoryResult.Unauthorized
+            is SettingsWebhookDetailResult.NetworkError -> {
+                SettingsWebhookDetailRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsWebhookDetailResult.ServerError -> SettingsWebhookDetailRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun updateWebhookActive(
+        webhookId: String,
+        active: Boolean,
+    ): SettingsManagementMutationRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsManagementMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.updateWebhookActive(token, webhookId, active)) {
+            SettingsManagementMutationResult.Success -> SettingsManagementMutationRepositoryResult.Success
+            SettingsManagementMutationResult.Unauthorized -> SettingsManagementMutationRepositoryResult.Unauthorized
+            is SettingsManagementMutationResult.NetworkError -> {
+                SettingsManagementMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsManagementMutationResult.ServerError -> SettingsManagementMutationRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun testWebhook(webhookId: String): SettingsManagementMutationRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsManagementMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.testWebhook(token, webhookId)) {
+            SettingsManagementMutationResult.Success -> SettingsManagementMutationRepositoryResult.Success
+            SettingsManagementMutationResult.Unauthorized -> SettingsManagementMutationRepositoryResult.Unauthorized
+            is SettingsManagementMutationResult.NetworkError -> {
+                SettingsManagementMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsManagementMutationResult.ServerError -> SettingsManagementMutationRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun createWebhook(input: SettingsWebhookCreateInput): SettingsManagementMutationRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsManagementMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.createWebhook(token, input)) {
+            SettingsManagementMutationResult.Success -> SettingsManagementMutationRepositoryResult.Success
+            SettingsManagementMutationResult.Unauthorized -> SettingsManagementMutationRepositoryResult.Unauthorized
+            is SettingsManagementMutationResult.NetworkError -> {
+                SettingsManagementMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsManagementMutationResult.ServerError -> SettingsManagementMutationRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun updateWebhook(
+        webhookId: String,
+        input: SettingsWebhookUpdateInput,
+    ): SettingsManagementMutationRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsManagementMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.updateWebhook(token, webhookId, input)) {
+            SettingsManagementMutationResult.Success -> SettingsManagementMutationRepositoryResult.Success
+            SettingsManagementMutationResult.Unauthorized -> SettingsManagementMutationRepositoryResult.Unauthorized
+            is SettingsManagementMutationResult.NetworkError -> {
+                SettingsManagementMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsManagementMutationResult.ServerError -> SettingsManagementMutationRepositoryResult.Error(result.message)
+        }
+    }
+
     fun groups(
         selectedTheme: HhhlThemePreset = HhhlThemePreset.System,
+        customTheme: HhhlCustomTheme = HhhlCustomTheme(),
         selectedTimelineDensity: TimelineDensity = TimelineDensity.Comfortable,
         selectedDefaultNoteVisibility: DefaultNoteVisibility = DefaultNoteVisibility.Public,
         selectedNotificationBadgeMode: NotificationBadgeMode = NotificationBadgeMode.Show,
+        backgroundNotificationsEnabled: Boolean = false,
+        specialCareBackgroundNotificationsEnabled: Boolean = true,
         accountDisplayName: String = "未登录",
+        remotePreferences: SettingsPreferences? = null,
+        isRemoteLoading: Boolean = false,
     ): List<SettingsGroup> {
+        val remoteValue = if (isRemoteLoading) "同步中" else "网页版"
         return listOf(
             SettingsGroup(
                 key = SettingsGroupKey.Appearance,
@@ -29,6 +205,12 @@ class SettingsRepository {
                         icon = "色",
                     ),
                     SettingsItem(
+                        key = SettingsItemKey.AdvancedTheme,
+                        label = "高级自定义主题",
+                        value = if (customTheme.enabled) "已自定义" else "未启用",
+                        icon = "画",
+                    ),
+                    SettingsItem(
                         key = SettingsItemKey.TimelineDensity,
                         label = "信息流密度",
                         value = selectedTimelineDensity.label,
@@ -37,14 +219,56 @@ class SettingsRepository {
                 ),
             ),
             SettingsGroup(
-                key = SettingsGroupKey.Account,
-                label = "账号",
+                key = SettingsGroupKey.AccountSecurity,
+                label = "账号与安全",
                 items = listOf(
                     SettingsItem(
                         key = SettingsItemKey.AccountProfile,
                         label = "账号资料",
                         value = accountDisplayName,
                         icon = "我",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.TwoFactor,
+                        label = "双重验证",
+                        value = remotePreferences?.security?.twoFactorEnabled?.let { if (it) "已开启" else "未开启" }
+                            ?: "状态未返回",
+                        icon = "2F",
+                        enabled = remotePreferences?.security?.twoFactorEnabled != null,
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.Passkeys,
+                        label = "Passkey",
+                        value = remotePreferences?.security?.passkeysEnabled?.let { if (it) "已开启" else "未开启" }
+                            ?: "状态未返回",
+                        icon = "钥",
+                        enabled = remotePreferences?.security?.passkeysEnabled != null,
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.SigninHistory,
+                        label = "登录记录",
+                        value = remotePreferences?.security?.let { security ->
+                            when {
+                                security.signinHistoryCount == null -> null
+                                security.latestSigninLabel != null ->
+                                    "${security.signinHistoryCount} 条，最近 ${security.latestSigninLabel}"
+                                else -> "${security.signinHistoryCount} 条"
+                            }
+                        } ?: remoteValue,
+                        icon = "录",
+                        enabled = remotePreferences?.security?.signinHistoryAvailable == true,
+                    ),
+                ),
+            ),
+            SettingsGroup(
+                key = SettingsGroupKey.Management,
+                label = "管理",
+                items = listOf(
+                    SettingsItem(
+                        key = SettingsItemKey.AdminDashboard,
+                        label = "管理后台",
+                        value = "举报、用户、角色和公告",
+                        icon = "管",
                     ),
                 ),
             ),
@@ -58,6 +282,36 @@ class SettingsRepository {
                         value = selectedDefaultNoteVisibility.label,
                         icon = "权",
                     ),
+                    SettingsItem(
+                        key = SettingsItemKey.LockAccount,
+                        label = "关注需批准",
+                        value = remotePreferences?.privacy?.isLocked?.onOffLabel() ?: remoteValue,
+                        icon = "锁",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.AutoAcceptFollowed,
+                        label = "自动批准已关注者",
+                        value = remotePreferences?.privacy?.autoAcceptFollowed?.onOffLabel() ?: remoteValue,
+                        icon = "批",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.NoCrawle,
+                        label = "拒绝搜索引擎索引",
+                        value = remotePreferences?.privacy?.noCrawle?.onOffLabel() ?: remoteValue,
+                        icon = "搜",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.PreventAiLearning,
+                        label = "拒绝 AI 学习",
+                        value = remotePreferences?.privacy?.preventAiLearning?.onOffLabel() ?: remoteValue,
+                        icon = "AI",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.PublicReactions,
+                        label = "公开回应记录",
+                        value = remotePreferences?.privacy?.publicReactions?.onOffLabel() ?: remoteValue,
+                        icon = "应",
+                    ),
                 ),
             ),
             SettingsGroup(
@@ -70,12 +324,237 @@ class SettingsRepository {
                         value = selectedNotificationBadgeMode.label,
                         icon = "铃",
                     ),
+                    SettingsItem(
+                        key = SettingsItemKey.BackgroundNotifications,
+                        label = "后台收消息",
+                        value = backgroundNotificationsEnabled.onOffLabel(),
+                        icon = "收",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.SpecialCareBackgroundNotifications,
+                        label = "特别关心后台提醒",
+                        value = specialCareBackgroundNotificationsEnabled.onOffLabel(),
+                        icon = "特",
+                        enabled = backgroundNotificationsEnabled,
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.ChatMessageCache,
+                        label = "聊天缓存",
+                        value = "用于离线保留与按日期搜索历史消息",
+                        icon = "存",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.MuteReactions,
+                        label = "静音回应通知",
+                        value = remotePreferences?.notifications?.mutedTypes?.contains("reaction")?.onOffLabel()
+                            ?: remoteValue,
+                        icon = "应",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.MuteFollows,
+                        label = "静音关注通知",
+                        value = remotePreferences?.notifications?.mutedTypes?.contains("follow")?.onOffLabel()
+                            ?: remoteValue,
+                        icon = "关",
+                    ),
+                ),
+            ),
+            SettingsGroup(
+                key = SettingsGroupKey.Filters,
+                label = "过滤",
+                items = listOf(
+                    SettingsItem(
+                        key = SettingsItemKey.MutedWords,
+                        label = "词语静音",
+                        value = remotePreferences?.filters?.mutedWords?.size?.let { "$it 条" } ?: remoteValue,
+                        icon = "词",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.HardMutedWords,
+                        label = "强过滤词",
+                        value = remotePreferences?.filters?.hardMutedWords?.size?.let { "$it 条" } ?: remoteValue,
+                        icon = "滤",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.MutedInstances,
+                        label = "静音实例",
+                        value = remotePreferences?.filters?.mutedInstances?.size?.let { "$it 个" } ?: remoteValue,
+                        icon = "域",
+                    ),
+                ),
+            ),
+            SettingsGroup(
+                key = SettingsGroupKey.Integrations,
+                label = "授权",
+                items = listOf(
+                    SettingsItem(
+                        key = SettingsItemKey.ApiTokens,
+                        label = "访问令牌",
+                        value = remotePreferences?.integrations?.apiTokensCount?.let { "$it 个" } ?: remoteValue,
+                        icon = "令",
+                        enabled = remotePreferences?.integrations?.apiTokensAvailable == true,
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.SharedAccess,
+                        label = "共享访问",
+                        value = remotePreferences?.integrations?.sharedAccessCount?.let { "$it 个" } ?: remoteValue,
+                        icon = "共",
+                        enabled = remotePreferences?.integrations?.sharedAccessAvailable == true,
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.Webhooks,
+                        label = "Webhook",
+                        value = remotePreferences?.integrations?.let { integrations ->
+                            when {
+                                integrations.webhooksCount == null -> null
+                                integrations.activeWebhooksCount != null ->
+                                    "${integrations.webhooksCount} 个，启用 ${integrations.activeWebhooksCount} 个"
+                                else -> "${integrations.webhooksCount} 个"
+                            }
+                        } ?: remoteValue,
+                        icon = "钩",
+                        enabled = remotePreferences?.integrations?.webhooksAvailable == true,
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.AuthorizedApps,
+                        label = "已授权应用",
+                        value = remotePreferences?.security?.authorizedAppsCount?.let { "$it 个" } ?: remoteValue,
+                        icon = "应",
+                        enabled = remotePreferences?.security?.authorizedAppsAvailable == true,
+                    ),
                 ),
             ),
         )
+    }
+
+    private suspend fun mapResult(
+        token: String,
+        result: SettingsPreferencesResult,
+    ): SettingsRepositoryResult {
+        return when (result) {
+            is SettingsPreferencesResult.Success -> SettingsRepositoryResult.Success(
+                result.preferences.withCapabilityCounts(token),
+            )
+            SettingsPreferencesResult.Unauthorized -> SettingsRepositoryResult.Unauthorized
+            is SettingsPreferencesResult.NetworkError -> {
+                SettingsRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsPreferencesResult.ServerError -> SettingsRepositoryResult.Error(result.message)
+        }
+    }
+
+    private suspend fun SettingsPreferences.withCapabilityCounts(token: String): SettingsPreferences {
+        return coroutineScope {
+            val apiTokens = async { api.loadApiTokens(token) }
+            val sharedAccess = async { api.loadSharedAccess(token) }
+            val webhooks = async { api.loadWebhooks(token) }
+            val authorizedApps = async { api.loadAuthorizedApps(token) }
+            val signinHistory = async { api.loadSigninHistory(token) }
+
+            copy(
+                security = security
+                    .withAuthorizedApps(authorizedApps.await())
+                    .withSigninHistory(signinHistory.await()),
+                integrations = integrations
+                    .withApiTokens(apiTokens.await())
+                    .withSharedAccess(sharedAccess.await())
+                    .withWebhooks(webhooks.await()),
+            )
+        }
+    }
+
+    private fun SecuritySettings.withAuthorizedApps(result: SettingsCapabilityResult): SecuritySettings {
+        return when (result) {
+            is SettingsCapabilityResult.Count -> copy(
+                authorizedAppsAvailable = true,
+                authorizedAppsCount = result.total,
+            )
+            SettingsCapabilityResult.Available -> copy(authorizedAppsAvailable = true)
+            is SettingsCapabilityResult.Unsupported -> copy(authorizedAppsAvailable = false)
+        }
+    }
+
+    private fun SecuritySettings.withSigninHistory(result: SettingsCapabilityResult): SecuritySettings {
+        return when (result) {
+            is SettingsCapabilityResult.Count -> copy(
+                signinHistoryAvailable = true,
+                signinHistoryCount = result.total,
+                latestSigninLabel = result.latestLabel,
+            )
+            SettingsCapabilityResult.Available -> copy(signinHistoryAvailable = true)
+            is SettingsCapabilityResult.Unsupported -> copy(signinHistoryAvailable = false)
+        }
+    }
+
+    private fun IntegrationSettings.withApiTokens(result: SettingsCapabilityResult): IntegrationSettings {
+        return when (result) {
+            is SettingsCapabilityResult.Count -> copy(
+                apiTokensAvailable = true,
+                apiTokensCount = result.total,
+            )
+            SettingsCapabilityResult.Available -> copy(apiTokensAvailable = true)
+            is SettingsCapabilityResult.Unsupported -> copy(apiTokensAvailable = false)
+        }
+    }
+
+    private fun IntegrationSettings.withSharedAccess(result: SettingsCapabilityResult): IntegrationSettings {
+        return when (result) {
+            is SettingsCapabilityResult.Count -> copy(
+                sharedAccessAvailable = true,
+                sharedAccessCount = result.total,
+            )
+            SettingsCapabilityResult.Available -> copy(sharedAccessAvailable = true)
+            is SettingsCapabilityResult.Unsupported -> copy(sharedAccessAvailable = false)
+        }
+    }
+
+    private fun IntegrationSettings.withWebhooks(result: SettingsCapabilityResult): IntegrationSettings {
+        return when (result) {
+            is SettingsCapabilityResult.Count -> copy(
+                webhooksAvailable = true,
+                webhooksCount = result.total,
+                activeWebhooksCount = result.active,
+            )
+            SettingsCapabilityResult.Available -> copy(webhooksAvailable = true)
+            is SettingsCapabilityResult.Unsupported -> copy(webhooksAvailable = false)
+        }
     }
 
     companion object {
         fun defaultGroups(): List<SettingsGroup> = SettingsRepository().groups()
     }
 }
+
+sealed interface SettingsRepositoryResult {
+    data class Success(val preferences: SettingsPreferences) : SettingsRepositoryResult
+
+    data object Unauthorized : SettingsRepositoryResult
+
+    data class Error(val message: String) : SettingsRepositoryResult
+}
+
+sealed interface SettingsManagementRepositoryResult {
+    data class Success(val section: SettingsManagementSection) : SettingsManagementRepositoryResult
+
+    data object Unauthorized : SettingsManagementRepositoryResult
+
+    data class Error(val message: String) : SettingsManagementRepositoryResult
+}
+
+sealed interface SettingsManagementMutationRepositoryResult {
+    data object Success : SettingsManagementMutationRepositoryResult
+
+    data object Unauthorized : SettingsManagementMutationRepositoryResult
+
+    data class Error(val message: String) : SettingsManagementMutationRepositoryResult
+}
+
+sealed interface SettingsWebhookDetailRepositoryResult {
+    data class Success(val webhook: SettingsWebhookDetail) : SettingsWebhookDetailRepositoryResult
+
+    data object Unauthorized : SettingsWebhookDetailRepositoryResult
+
+    data class Error(val message: String) : SettingsWebhookDetailRepositoryResult
+}
+
+private fun Boolean.onOffLabel(): String = if (this) "开启" else "关闭"

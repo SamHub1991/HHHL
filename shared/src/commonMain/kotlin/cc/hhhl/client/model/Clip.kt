@@ -1,10 +1,13 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
 enum class ClipListKind(val label: String) {
     Owned("我的"),
     Favorites("收藏"),
 }
 
+@Immutable
 data class Clip(
     val id: String,
     val name: String,

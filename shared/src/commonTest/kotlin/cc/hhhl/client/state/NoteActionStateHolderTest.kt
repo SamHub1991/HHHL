@@ -231,6 +231,11 @@ class NoteActionStateHolderTest {
                     noteId: String,
                     comment: String,
                 ): NoteActionApiResult = NoteActionApiResult.Success
+
+                override suspend fun muteNote(
+                    token: String,
+                    noteId: String,
+                ): NoteActionApiResult = NoteActionApiResult.Success
             },
         ) {
             override suspend fun perform(request: NoteActionRequest): NoteActionRepositoryResult {
@@ -302,6 +307,11 @@ class NoteActionStateHolderTest {
                     userId: String,
                     noteId: String,
                     comment: String,
+                ): NoteActionApiResult = NoteActionApiResult.Success
+
+                override suspend fun muteNote(
+                    token: String,
+                    noteId: String,
                 ): NoteActionApiResult = NoteActionApiResult.Success
             },
         ) {

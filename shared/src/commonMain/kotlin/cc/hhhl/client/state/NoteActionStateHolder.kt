@@ -3,6 +3,7 @@ package cc.hhhl.client.state
 import cc.hhhl.client.repository.EmojiRepository
 import cc.hhhl.client.repository.EmojiRepositoryResult
 import cc.hhhl.client.model.CustomEmoji
+import cc.hhhl.client.model.commonReactionOptions
 import cc.hhhl.client.repository.NoteActionRepository
 import cc.hhhl.client.repository.NoteActionRepositoryResult
 import cc.hhhl.client.repository.NoteActionRequest
@@ -175,7 +176,7 @@ private fun defaultReactionOptions(
     customOptions: List<String> = emptyList(),
 ): List<String> {
     return (listOf(defaultReaction.trim().takeIf { it.isNotEmpty() } ?: NoteActionRequest.DEFAULT_REACTION) +
-        listOf("👍", "🎉", "😄", "🚀", "👀", "🙏", "🔥") +
+        commonReactionOptions +
         customOptions)
         .distinct()
 }

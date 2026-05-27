@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -22,11 +21,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import cc.hhhl.client.ui.component.HhhlTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,7 +35,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.UserList
 import cc.hhhl.client.model.UserListDraft
@@ -48,6 +44,9 @@ import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlStatusRow
+import cc.hhhl.client.ui.component.HhhlIconActionButton
+import cc.hhhl.client.ui.component.HhhlInlinePanel
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTextInput
@@ -90,9 +89,9 @@ fun UserListScreen(
     canDeleteAuthor: (String) -> Boolean = { false },
     noteRowDensity: NoteRowDensity = NoteRowDensity.Comfortable,
 ) {
-    val lists = state?.lists ?: fakeLists()
+    val lists = state?.lists.orEmpty()
     val selectedList = state?.selectedList ?: lists.firstOrNull()
-    val notes = state?.notes ?: FakeData.timeline
+    val notes = state?.notes.orEmpty()
     val listState = rememberLazyListState()
     var editorMode by remember { mutableStateOf<UserListEditorMode?>(null) }
     var deleteDialogOpen by remember { mutableStateOf(false) }
@@ -140,19 +139,21 @@ fun UserListScreen(
             isLoadingTimeline = state?.isLoadingTimeline == true,
         )
         HhhlDivider()
-        UserListPickerRow(
-            lists = lists,
-            selectedList = selectedList,
-            isLoading = state?.isLoadingLists == true,
-            onSelectList = onSelectList,
-        )
-        HhhlDivider()
+        if (lists.isNotEmpty()) {
+            UserListPickerRow(
+                lists = lists,
+                selectedList = selectedList,
+                isLoading = state?.isLoadingLists == true,
+                onSelectList = onSelectList,
+            )
+            HhhlDivider()
+        }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item {
+                item(contentType = "user-list-status") {
                     UserListStatusRow(
                         text = message,
                         actionText = "重试",
@@ -161,16 +162,20 @@ fun UserListScreen(
                 }
             }
             if (state?.isLoadingLists == true && lists.isEmpty()) {
-                item { UserListStatusRow(text = "正在加载列表...", loading = true) }
+                item(contentType = "user-list-status") {
+                    UserListStatusRow(text = "正在加载列表...", loading = true)
+                }
             }
             if (state != null && !state.isLoadingLists && lists.isEmpty() && state.errorMessage == null) {
-                item { UserListStatusRow(text = "还没有创建或收藏列表") }
+                item(contentType = "user-list-status") { UserListStatusRow(text = "还没有创建或收藏列表") }
             }
             if (state?.isLoadingTimeline == true && notes.isEmpty()) {
-                item { UserListStatusRow(text = "正在加载列表时间线...", loading = true) }
+                item(contentType = "user-list-status") {
+                    UserListStatusRow(text = "正在加载列表时间线...", loading = true)
+                }
             }
             selectedList?.let { list ->
-                item {
+                item(contentType = "user-list-header") {
                     UserListHeaderRow(
                         list = list,
                         isMutating = state?.isMutatingList == true,
@@ -188,7 +193,7 @@ fun UserListScreen(
                 }
             }
             state?.timelineErrorMessage?.let { message ->
-                item {
+                item(contentType = "user-list-status") {
                     UserListStatusRow(
                         text = message,
                         actionText = "重试",
@@ -203,9 +208,13 @@ fun UserListScreen(
                 notes.isEmpty() &&
                 state.timelineErrorMessage == null
             ) {
-                item { UserListStatusRow(text = "这个列表还没有动态") }
+                item(contentType = "user-list-status") { UserListStatusRow(text = "这个列表还没有动态") }
             }
-            items(notes, key = { "user-list-note-${it.id}" }) { note ->
+            items(
+                items = notes,
+                key = { "user-list-note-${it.id}" },
+                contentType = { "user-list-note" },
+            ) { note ->
                 NoteRow(
                     note = note,
                     onClick = onOpenNote,
@@ -230,12 +239,11 @@ fun UserListScreen(
                     density = noteRowDensity,
                 )
             }
-            if (state != null && notes.isNotEmpty() && !state.endReached) {
-                item {
+            if (state != null && notes.isNotEmpty() && state.isLoadingMore) {
+                item(contentType = "user-list-status") {
                     UserListStatusRow(
-                        text = if (state.isLoadingMore) "正在加载更多..." else "加载更多",
+                        text = "正在加载更多...",
                         loading = state.isLoadingMore,
-                        onAction = if (state.isLoadingMore) null else onLoadMore,
                     )
                 }
             }
@@ -335,21 +343,13 @@ private fun UserListCreateButton(
     isMutating: Boolean,
     onClick: () -> Unit,
 ) {
-    IconButton(
+    HhhlIconActionButton(
+        icon = Icons.Filled.Add,
+        contentDescription = if (isMutating) "正在新建列表" else "新建列表",
         onClick = onClick,
         enabled = !isMutating,
-        modifier = Modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Add,
-            contentDescription = if (isMutating) "正在新建列表" else "新建列表",
-            tint = if (isMutating) LocalHhhlColors.current.subtleText else MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
-        )
-    }
+        emphasized = true,
+    )
 }
 
 fun userListSummaryActions(
@@ -383,13 +383,10 @@ private fun UserListHeaderRow(
     onAddMember: () -> Unit,
     onRemoveMember: (String) -> Unit,
 ) {
-    Column(
+    HhhlInlinePanel(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.64f))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
@@ -447,7 +444,11 @@ private fun UserListHeaderRow(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                items(list.userIds, key = { it }) { userId ->
+                items(
+                    items = list.userIds,
+                    key = { it },
+                    contentType = { "user-list-member-chip" },
+                ) { userId ->
                     Row(
                         modifier = Modifier
                             .background(
@@ -546,7 +547,7 @@ private fun UserListEditorDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            HhhlTextButton(
                 onClick = { onSubmit(UserListDraft(name = name, isPublic = isPublic)) },
                 enabled = canSubmit,
             ) {
@@ -554,7 +555,7 @@ private fun UserListEditorDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isMutating) {
+            HhhlTextButton(onClick = onDismiss, enabled = !isMutating) {
                 Text("取消")
             }
         },
@@ -579,12 +580,12 @@ private fun DeleteUserListDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onDelete, enabled = !isMutating) {
+            HhhlTextButton(onClick = onDelete, enabled = !isMutating, destructive = true) {
                 Text(if (isMutating) "删除中" else "删除")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isMutating) {
+            HhhlTextButton(onClick = onDismiss, enabled = !isMutating) {
                 Text("取消")
             }
         },
@@ -609,12 +610,12 @@ private fun RemoveUserListMemberDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onRemove, enabled = !isMutating) {
+            HhhlTextButton(onClick = onRemove, enabled = !isMutating, destructive = true) {
                 Text(if (isMutating) "移除中" else "移除")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isMutating) {
+            HhhlTextButton(onClick = onDismiss, enabled = !isMutating) {
                 Text("取消")
             }
         },
@@ -635,8 +636,8 @@ private fun UserListPickerRow(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (isLoading) {
-            item {
+        if (isLoading && lists.isNotEmpty()) {
+            item(contentType = "user-list-picker-status") {
                 Row(
                     modifier = Modifier.padding(horizontal = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -651,7 +652,11 @@ private fun UserListPickerRow(
                 }
             }
         }
-        items(lists, key = { it.id }) { list ->
+        items(
+            items = lists,
+            key = { it.id },
+            contentType = { "user-list-picker" },
+        ) { list ->
             val active = selectedList?.id == list.id
             UserListPickerChip(
                 list = list,
@@ -710,45 +715,10 @@ private fun UserListStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
-}
-
-private fun fakeLists(): List<UserList> {
-    return listOf(
-        UserList(
-            id = "list-friends",
-            name = "朋友",
-            createdBy = "me",
-            userIds = FakeData.timeline.map { it.author.id }.distinct(),
-            isPublic = false,
-        ),
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
     )
 }

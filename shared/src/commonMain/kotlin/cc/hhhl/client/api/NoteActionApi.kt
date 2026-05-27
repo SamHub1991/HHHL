@@ -58,6 +58,11 @@ interface NoteActionApi {
         noteId: String,
         comment: String,
     ): NoteActionApiResult
+
+    suspend fun muteNote(
+        token: String,
+        noteId: String,
+    ): NoteActionApiResult
 }
 
 sealed interface NoteActionApiResult {
@@ -167,6 +172,16 @@ class SharkeyNoteActionApi(
         )
     }
 
+    override suspend fun muteNote(
+        token: String,
+        noteId: String,
+    ): NoteActionApiResult {
+        return postAction(
+            endpoint = arrayOf("notes", "thread-muting", "create"),
+            body = NoteIdRequest(i = token.trim(), noteId = noteId.trim()),
+        )
+    }
+
     private suspend inline fun <reified T : Any> postAction(
         endpoint: Array<String>,
         body: T,
@@ -179,7 +194,7 @@ class SharkeyNoteActionApi(
 
             when {
                 response.status.value in 200..299 -> NoteActionApiResult.Success
-                response.status == HttpStatusCode.Unauthorized -> NoteActionApiResult.Unauthorized
+                response.isSharkeyUnauthorized() -> NoteActionApiResult.Unauthorized
                 else -> NoteActionApiResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",

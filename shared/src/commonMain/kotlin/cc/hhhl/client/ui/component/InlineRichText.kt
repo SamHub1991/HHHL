@@ -24,11 +24,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isSpecified
 import coil3.compose.AsyncImage
@@ -40,13 +43,24 @@ fun InlineRichText(
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyMedium,
     color: Color = MaterialTheme.colorScheme.onBackground,
+    accentColor: Color = MaterialTheme.colorScheme.primary,
     onOpenUrl: (String) -> Unit = {},
     onOpenMention: (String) -> Unit = {},
     onOpenHashtag: (String) -> Unit = {},
 ) {
     val emojiUrls = LocalCustomEmojiUrls.current
+    if (canRenderPlainRichTextFastPath(text, emojiUrls)) {
+        Text(
+            text = text,
+            modifier = modifier,
+            color = color,
+            style = style,
+        )
+        return
+    }
+
     val blocks = remember(text) {
-        parseMarkdownBlocks(text)
+        cachedMarkdownBlocks(text)
     }
 
     Column(
@@ -60,6 +74,7 @@ fun InlineRichText(
                     emojiUrls = emojiUrls,
                     style = style,
                     color = color,
+                    accentColor = accentColor,
                     onOpenUrl = onOpenUrl,
                     onOpenMention = onOpenMention,
                     onOpenHashtag = onOpenHashtag,
@@ -69,6 +84,7 @@ fun InlineRichText(
                     emojiUrls = emojiUrls,
                     style = style,
                     color = color,
+                    accentColor = accentColor,
                     onOpenUrl = onOpenUrl,
                     onOpenMention = onOpenMention,
                     onOpenHashtag = onOpenHashtag,
@@ -83,6 +99,7 @@ fun InlineRichText(
                         emojiUrls = emojiUrls,
                         style = style,
                         color = color,
+                        accentColor = accentColor,
                         onOpenUrl = onOpenUrl,
                         onOpenMention = onOpenMention,
                         onOpenHashtag = onOpenHashtag,
@@ -113,6 +130,10 @@ private fun InlinePlainText(
     color: Color,
     markdownStyle: InlineMarkdownStyle = InlineMarkdownStyle.Plain,
 ) {
+    if (markdownStyle == InlineMarkdownStyle.Rainbow) {
+        InlineRainbowText(text = text, style = style)
+        return
+    }
     Text(
         text = text,
         color = if (markdownStyle == InlineMarkdownStyle.Blurry) color.copy(alpha = 0.48f) else color,
@@ -121,15 +142,44 @@ private fun InlinePlainText(
 }
 
 @Composable
+private fun InlineRainbowText(
+    text: String,
+    style: TextStyle,
+) {
+    val colors = remember {
+        listOf(
+            Color(0xFFFF2D2D),
+            Color(0xFFFF8A00),
+            Color(0xFFFFD400),
+            Color(0xFF3FE000),
+            Color(0xFF00A7FF),
+            Color(0xFF7A5CFF),
+            Color(0xFFFF4FD8),
+        )
+    }
+    Text(
+        text = buildAnnotatedString {
+            text.forEachIndexed { index, char ->
+                withStyle(SpanStyle(color = colors[index % colors.size])) {
+                    append(char)
+                }
+            }
+        },
+        style = style.markdown(InlineMarkdownStyle.Rainbow),
+    )
+}
+
+@Composable
 private fun InlineActionText(
     text: String,
     style: TextStyle,
+    accentColor: Color,
     markdownStyle: InlineMarkdownStyle = InlineMarkdownStyle.Plain,
     onClick: () -> Unit,
 ) {
     Text(
         text = text,
-        color = MaterialTheme.colorScheme.primary,
+        color = accentColor,
         style = style.markdown(markdownStyle),
         modifier = Modifier.clickable { onClick() },
     )
@@ -141,6 +191,7 @@ private fun InlineMarkdownFlow(
     emojiUrls: Map<String, String>,
     style: TextStyle,
     color: Color,
+    accentColor: Color,
     onOpenUrl: (String) -> Unit,
     onOpenMention: (String) -> Unit,
     onOpenHashtag: (String) -> Unit,
@@ -152,14 +203,19 @@ private fun InlineMarkdownFlow(
         spans.forEach { span ->
             when (span) {
                 is InlineMarkdownSpan.Text -> {
-                    if (span.richTextEnabled) {
+                    if (span.richTextEnabled && needsRichTextParsing(span.value, emojiUrls)) {
                         val segments = remember(span.value, emojiUrls) {
-                            parseRichText(text = span.value, emojiUrls = emojiUrls)
+                            if (emojiUrls.isEmpty()) {
+                                cachedRichTextSegmentsWithoutEmoji(span.value)
+                            } else {
+                                parseRichText(text = span.value, emojiUrls = emojiUrls)
+                            }
                         }
                         InlineRichSegments(
                             segments = segments,
                             style = style,
                             color = color,
+                            accentColor = accentColor,
                             markdownStyle = span.style,
                             onOpenUrl = onOpenUrl,
                             onOpenMention = onOpenMention,
@@ -172,6 +228,7 @@ private fun InlineMarkdownFlow(
                 is InlineMarkdownSpan.Link -> InlineActionText(
                     text = span.label,
                     style = style,
+                    accentColor = accentColor,
                     markdownStyle = InlineMarkdownStyle.Link,
                     onClick = { onOpenUrl(span.url) },
                 )
@@ -212,6 +269,7 @@ private fun InlineRichSegments(
     segments: List<RichTextSegment>,
     style: TextStyle,
     color: Color,
+    accentColor: Color,
     markdownStyle: InlineMarkdownStyle,
     onOpenUrl: (String) -> Unit,
     onOpenMention: (String) -> Unit,
@@ -224,18 +282,21 @@ private fun InlineRichSegments(
             is RichTextSegment.Url -> InlineActionText(
                 text = segment.value,
                 style = style,
+                accentColor = accentColor,
                 markdownStyle = markdownStyle,
                 onClick = { onOpenUrl(segment.value) },
             )
             is RichTextSegment.Mention -> InlineActionText(
                 text = segment.value,
                 style = style,
+                accentColor = accentColor,
                 markdownStyle = markdownStyle,
                 onClick = { onOpenMention(segment.username) },
             )
             is RichTextSegment.Hashtag -> InlineActionText(
                 text = segment.value,
                 style = style,
+                accentColor = accentColor,
                 markdownStyle = markdownStyle,
                 onClick = { onOpenHashtag(segment.tag) },
             )
@@ -249,16 +310,32 @@ private fun InlineQuoteBlock(
     emojiUrls: Map<String, String>,
     style: TextStyle,
     color: Color,
+    accentColor: Color,
     onOpenUrl: (String) -> Unit,
     onOpenMention: (String) -> Unit,
     onOpenHashtag: (String) -> Unit,
 ) {
+    val filledBubbleTone = accentColor == color
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(LocalHhhlColors.current.mediaBackground)
-            .border(1.dp, LocalHhhlColors.current.divider, RoundedCornerShape(6.dp))
+            .background(
+                if (filledBubbleTone) {
+                    color.copy(alpha = 0.12f)
+                } else {
+                    LocalHhhlColors.current.mediaBackground
+                },
+            )
+            .border(
+                width = 1.dp,
+                color = if (filledBubbleTone) {
+                    color.copy(alpha = 0.14f)
+                } else {
+                    LocalHhhlColors.current.divider
+                },
+                shape = RoundedCornerShape(6.dp),
+            )
             .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
@@ -267,6 +344,7 @@ private fun InlineQuoteBlock(
             emojiUrls = emojiUrls,
             style = style,
             color = color,
+            accentColor = accentColor,
             onOpenUrl = onOpenUrl,
             onOpenMention = onOpenMention,
             onOpenHashtag = onOpenHashtag,
@@ -286,8 +364,8 @@ private fun InlineCodeBlock(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f))
-            .border(1.dp, LocalHhhlColors.current.divider, RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))
+            .border(1.dp, LocalHhhlColors.current.divider.copy(alpha = 0.42f), RoundedCornerShape(6.dp))
             .padding(horizontal = 10.dp, vertical = 8.dp),
     )
 }
@@ -356,6 +434,7 @@ internal enum class InlineMarkdownStyle {
     Code,
     Link,
     Blurry,
+    Rainbow,
 }
 
 internal fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
@@ -380,7 +459,7 @@ internal fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
         }
     }
 
-    text.split('\n').forEach { line ->
+    text.lineSequence().forEach { line ->
         val trimmed = line.trimStart()
         if (trimmed.startsWith("```")) {
             if (inCodeBlock) {
@@ -424,6 +503,12 @@ internal fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
     flushQuote()
     flushParagraph()
     return blocks.ifEmpty { listOf(MarkdownBlock.Paragraph(listOf(InlineMarkdownSpan.Text("")))) }
+}
+
+private fun cachedMarkdownBlocks(text: String): List<MarkdownBlock> = parseMarkdownBlocks(text)
+
+private fun cachedRichTextSegmentsWithoutEmoji(text: String): List<RichTextSegment> {
+    return parseRichText(text = text, emojiUrls = emptyMap())
 }
 
 internal fun parseInlineMarkdown(text: String): List<InlineMarkdownSpan> {
@@ -633,28 +718,23 @@ private fun parseInlineHtmlSpan(text: String, start: Int): ParsedStyledSpan? {
 }
 
 private fun parseMfmSpan(text: String, start: Int): ParsedStyledSpan? {
-    if (!text.startsWith("$[", start)) return null
-    val end = text.indexOf(']', startIndex = start + 2)
-    if (end <= start + 3) return null
-    val body = text.substring(start + 2, end)
-    val firstSpace = body.indexOf(' ')
-    if (firstSpace <= 0 || firstSpace == body.lastIndex) return null
-    val rawName = body.substring(0, firstSpace).lowercase()
-    val name = rawName.substringBefore('.')
-    val value = body.substring(firstSpace + 1)
+    val function = parseMfmFunction(text, start) ?: return null
+    val rawName = function.rawName
+    val name = function.name
+    val value = function.value
     if (name == "ruby") {
         val parts = value.split(' ', limit = 2)
         if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) return null
         return ParsedStyledSpan(
             span = InlineMarkdownSpan.Ruby(parts[0], parts[1]),
-            end = end + 1,
+            end = function.end,
         )
     }
     if (name == "link") {
         val link = parseMfmLinkValue(value) ?: return null
         return ParsedStyledSpan(
             span = InlineMarkdownSpan.Link(link.label, link.url),
-            end = end + 1,
+            end = function.end,
         )
     }
     val style = when (name) {
@@ -664,7 +744,8 @@ private fun parseMfmSpan(text: String, start: Int): ParsedStyledSpan? {
         "x4" -> InlineMarkdownStyle.X4
         "scale" -> parseMfmScaleStyle(rawName)
         "blur", "blurry" -> InlineMarkdownStyle.Blurry
-        "font", "fg", "bg", "rainbow", "jelly", "tada", "jump", "bounce", "spin", "shake", "twitch" -> {
+        "rainbow" -> InlineMarkdownStyle.Rainbow
+        "font", "fg", "bg", "jelly", "tada", "jump", "bounce", "spin", "shake", "twitch" -> {
             InlineMarkdownStyle.Plain
         }
         "plain" -> InlineMarkdownStyle.Plain
@@ -672,12 +753,66 @@ private fun parseMfmSpan(text: String, start: Int): ParsedStyledSpan? {
     }
     return ParsedStyledSpan(
         span = InlineMarkdownSpan.Text(
-            value = value,
+            value = value.unwrapSingleMfmFunctions(),
             style = style,
             richTextEnabled = name != "plain",
         ),
-        end = end + 1,
+        end = function.end,
     )
+}
+
+private data class MfmFunction(
+    val rawName: String,
+    val name: String,
+    val value: String,
+    val end: Int,
+)
+
+private fun parseMfmFunction(text: String, start: Int): MfmFunction? {
+    if (!text.startsWith("$[", start)) return null
+    val closeIndex = findMfmCloseIndex(text, start)
+    if (closeIndex <= start + 3) return null
+    val body = text.substring(start + 2, closeIndex)
+    val separatorIndex = body.indexOfFirst { it.isWhitespace() }
+    if (separatorIndex <= 0 || separatorIndex == body.lastIndex) return null
+    val rawName = body.substring(0, separatorIndex).lowercase()
+    val name = rawName.substringBefore('.')
+    val value = body.substring(separatorIndex + 1).trim()
+    if (name.isBlank() || value.isBlank()) return null
+    return MfmFunction(
+        rawName = rawName,
+        name = name,
+        value = value,
+        end = closeIndex + 1,
+    )
+}
+
+private fun findMfmCloseIndex(text: String, start: Int): Int {
+    var depth = 1
+    var index = start + 2
+    while (index < text.length) {
+        if (text.startsWith("$[", index)) {
+            depth += 1
+            index += 2
+            continue
+        }
+        if (text[index] == ']') {
+            depth -= 1
+            if (depth == 0) return index
+        }
+        index += 1
+    }
+    return -1
+}
+
+private fun String.unwrapSingleMfmFunctions(): String {
+    var value = trim()
+    while (value.startsWith("$[")) {
+        val function = parseMfmFunction(value, 0) ?: break
+        if (function.end != value.length) break
+        value = function.value.trim()
+    }
+    return value
 }
 
 private fun parseStaticLineBlock(line: String): MarkdownBlock? {
@@ -733,12 +868,18 @@ private fun parseHtmlImageAlt(rawTag: String): String? {
 }
 
 private fun parseHtmlAttribute(rawTag: String, name: String): String? {
-    val pattern = Regex("""(?i)\b${Regex.escape(name)}\s*=\s*(['"])(.*?)\1""")
+    val pattern = when (name) {
+        "alt" -> htmlAltAttributePattern
+        "href" -> htmlHrefAttributePattern
+        "title" -> htmlTitleAttributePattern
+        else -> Regex("""(?i)\b${Regex.escape(name)}\s*=\s*(['"])(.*?)\1""")
+    }
     return pattern.find(rawTag)?.groupValues?.getOrNull(2)
 }
 
 private fun parseWrappedHtmlLine(text: String, tag: String): String? {
-    val openPattern = Regex("""(?i)^<${Regex.escape(tag)}(?:\s+[^>]*)?>""")
+    val openPattern = wrappedHtmlOpenPatterns[tag]
+        ?: Regex("""(?i)^<${Regex.escape(tag)}(?:\s+[^>]*)?>""")
     val open = openPattern.find(text) ?: return null
     val closeToken = "</$tag>"
     if (!text.endsWith(closeToken, ignoreCase = true)) return null
@@ -747,10 +888,10 @@ private fun parseWrappedHtmlLine(text: String, tag: String): String? {
 
 private fun htmlInlineText(value: String): String {
     return value
-        .replace(Regex("""(?i)<br\s*/?>"""), "\n")
-        .replace(Regex("""(?i)</?span(?:\s+[^>]*)?>"""), "")
-        .replace(Regex("""(?i)</?p(?:\s+[^>]*)?>"""), "\n")
-        .replace(Regex("""<[^>]+>"""), "")
+        .replace(htmlBreakPattern, "\n")
+        .replace(htmlSpanPattern, "")
+        .replace(htmlParagraphPattern, "\n")
+        .replace(htmlAnyTagPattern, "")
         .decodeHtmlEntities()
 }
 
@@ -760,7 +901,7 @@ private fun stripSingleWrappedHtmlTag(text: String, tag: String): String? {
 
 private fun parseMfmScaleStyle(rawName: String): InlineMarkdownStyle {
     val options = rawName.substringAfter('.', missingDelimiterValue = "")
-    val scale = Regex("""(?:^|[.,])(?:x|y)=([0-9]+(?:\.[0-9]+)?)""")
+    val scale = mfmScaleOptionPattern
         .findAll(options)
         .mapNotNull { it.groupValues.getOrNull(1)?.toFloatOrNull() }
         .maxOrNull()
@@ -795,7 +936,7 @@ private fun String.isSafeUrl(): Boolean {
 }
 
 private fun String.removeRubyFallbackTags(): String {
-    return replace(Regex("""(?i)<rp>.*?</rp>"""), "")
+    return replace(htmlRubyFallbackPattern, "")
 }
 
 private fun String.decodeHtmlEntities(): String {
@@ -840,6 +981,7 @@ private fun TextStyle.markdown(markdownStyle: InlineMarkdownStyle): TextStyle {
         InlineMarkdownStyle.Code -> copy(fontFamily = FontFamily.Monospace)
         InlineMarkdownStyle.Link -> copy(fontWeight = FontWeight.Medium, textAlign = TextAlign.Start)
         InlineMarkdownStyle.Blurry -> copy(fontStyle = FontStyle.Italic)
+        InlineMarkdownStyle.Rainbow -> copy(fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -850,3 +992,53 @@ private fun TextStyle.scaledText(scale: Float): TextStyle {
         this
     }
 }
+
+private fun canRenderPlainRichTextFastPath(
+    text: String,
+    emojiUrls: Map<String, String>,
+): Boolean {
+    if (text.isEmpty()) return true
+    var index = 0
+    var lineCanStartBlock = true
+    while (index < text.length) {
+        val char = text[index]
+        if (text.startsWith("https://", index) || text.startsWith("http://", index)) return false
+        when (char) {
+            '`', '[', '*', '_', '<', '@', '#' -> return false
+            ':' -> if (emojiUrls.isNotEmpty()) return false
+            '$' -> if (text.startsWith("$[", index)) return false
+            '>' -> if (lineCanStartBlock) return false
+        }
+        lineCanStartBlock = char == '\n' || (lineCanStartBlock && (char == ' ' || char == '\t'))
+        index += 1
+    }
+    return true
+}
+
+private fun needsRichTextParsing(
+    text: String,
+    emojiUrls: Map<String, String>,
+): Boolean {
+    var index = 0
+    while (index < text.length) {
+        if (text.startsWith("https://", index) || text.startsWith("http://", index)) return true
+        when (text[index]) {
+            '@', '#' -> return true
+            ':' -> if (emojiUrls.isNotEmpty()) return true
+        }
+        index += 1
+    }
+    return false
+}
+
+private val htmlAltAttributePattern = Regex("""(?i)\balt\s*=\s*(['"])(.*?)\1""")
+private val htmlAnyTagPattern = Regex("""<[^>]+>""")
+private val htmlBreakPattern = Regex("""(?i)<br\s*/?>""")
+private val htmlHrefAttributePattern = Regex("""(?i)\bhref\s*=\s*(['"])(.*?)\1""")
+private val htmlParagraphPattern = Regex("""(?i)</?p(?:\s+[^>]*)?>""")
+private val htmlRubyFallbackPattern = Regex("""(?i)<rp>.*?</rp>""")
+private val htmlSpanPattern = Regex("""(?i)</?span(?:\s+[^>]*)?>""")
+private val htmlTitleAttributePattern = Regex("""(?i)\btitle\s*=\s*(['"])(.*?)\1""")
+private val mfmScaleOptionPattern = Regex("""(?:^|[.,])(?:x|y)=([0-9]+(?:\.[0-9]+)?)""")
+private val wrappedHtmlOpenPatterns = listOf("blockquote", "center", "code", "p", "pre", "quote")
+    .associateWith { tag -> Regex("""(?i)^<$tag(?:\s+[^>]*)?>""") }

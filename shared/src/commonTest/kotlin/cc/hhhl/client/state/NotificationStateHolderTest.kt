@@ -121,6 +121,30 @@ class NotificationStateHolderTest {
     }
 
     @Test
+    fun filteredRefreshMergesIntoRemoteSourceAndKeepsTotalUnread() = runTest {
+        val remote = FakeData.notifications[0].copy(id = "remote-all")
+        val mention = FakeData.notifications[1].copy(
+            id = "remote-mention",
+            type = NotificationType.Mention,
+        )
+        val holder = NotificationStateHolder(
+            repository = sequenceRepository(
+                NotificationRepositoryResult.Success(listOf(remote)),
+                NotificationRepositoryResult.Success(listOf(mention)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFilter(NotificationFilter.Mentions)
+        advanceUntilIdle()
+
+        assertEquals(listOf("remote-mention"), holder.state.value.notifications.map { it.id })
+        assertEquals(2, holder.state.value.unreadCount)
+    }
+
+    @Test
     fun loadMoreDoesNothingAfterEndReached() = runTest {
         val first = FakeData.notifications[0]
         val calls = mutableListOf<String>()
@@ -145,7 +169,7 @@ class NotificationStateHolderTest {
     }
 
     @Test
-    fun markAllAsReadClearsNotificationsAndStoresMessage() = runTest {
+    fun markAllAsReadKeepsVisibleNotificationsAndStoresMessage() = runTest {
         val first = FakeData.notifications[0]
         val holder = NotificationStateHolder(
             repository = fakeRepository(
@@ -162,9 +186,30 @@ class NotificationStateHolderTest {
         advanceUntilIdle()
 
         assertFalse(holder.state.value.isMarkingAllRead)
-        assertEquals(emptyList(), holder.state.value.notifications)
+        assertEquals(listOf(first.id), holder.state.value.notifications.map { it.id })
+        assertTrue(holder.state.value.notifications.single().isRead)
         assertEquals(0, holder.state.value.unreadCount)
         assertEquals("通知已全部标记为已读", holder.state.value.message)
+    }
+
+    @Test
+    fun markNotificationReadUpdatesVisibleItemAndUnreadCountOnce() = runTest {
+        val first = FakeData.notifications[0]
+        val second = FakeData.notifications[1]
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(listOf(first, second)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.markNotificationRead(first.id)
+        holder.markNotificationRead(first.id)
+
+        assertTrue(holder.state.value.notifications.first { it.id == first.id }.isRead)
+        assertEquals(1, holder.state.value.unreadCount)
     }
 
     @Test
@@ -196,6 +241,66 @@ class NotificationStateHolderTest {
         holder.dismissFollowRequestNotification(actor.id)
 
         assertEquals(listOf(accepted), holder.state.value.notifications)
+        assertEquals(1, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun dismissFollowRequestNotificationAlsoUpdatesRemoteSourceList() = runTest {
+        val actor = FakeData.me
+        val followRequest = NotificationItem(
+            id = "follow-request-remote",
+            type = NotificationType.FollowRequestReceived,
+            actor = actor,
+            text = "请求关注你",
+            createdAtLabel = "刚刚",
+        )
+        val nextRemote = FakeData.notifications[0].copy(id = "remote-next")
+        val holder = NotificationStateHolder(
+            repository = sequenceRepository(
+                NotificationRepositoryResult.Success(listOf(followRequest, nextRemote)),
+                NotificationRepositoryResult.Success(listOf(nextRemote)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.dismissFollowRequestNotification(actor.id)
+        holder.loadMore()
+        advanceUntilIdle()
+
+        assertEquals(listOf("remote-next"), holder.state.value.notifications.map { it.id })
+    }
+
+    @Test
+    fun dismissFollowRequestNotificationUpdatesUnreadWhenRequestIsNotVisible() = runTest {
+        val actor = FakeData.me
+        val followRequest = NotificationItem(
+            id = "follow-request-hidden",
+            type = NotificationType.FollowRequestReceived,
+            actor = actor,
+            text = "请求关注你",
+            createdAtLabel = "刚刚",
+        )
+        val mention = FakeData.notifications[1].copy(
+            id = "visible-mention",
+            type = NotificationType.Mention,
+        )
+        val holder = NotificationStateHolder(
+            repository = sequenceRepository(
+                NotificationRepositoryResult.Success(listOf(followRequest, mention)),
+                NotificationRepositoryResult.Success(listOf(mention)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFilter(NotificationFilter.Mentions)
+        advanceUntilIdle()
+        holder.dismissFollowRequestNotification(actor.id)
+
+        assertEquals(listOf("visible-mention"), holder.state.value.notifications.map { it.id })
         assertEquals(1, holder.state.value.unreadCount)
     }
 
@@ -266,12 +371,218 @@ class NotificationStateHolderTest {
         assertEquals(1, holder.state.value.unreadCount)
     }
 
+    @Test
+    fun refreshDerivesSpecialCareNotificationsFromRemoteActors() = runTest {
+        val specialCareUser = FakeData.notifications[0].actor
+        val specialCareNotification = FakeData.notifications[0].copy(id = "remote-special")
+        val regularNotification = FakeData.notifications[1].copy(id = "remote-regular")
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                NotificationRepositoryResult.Success(listOf(specialCareNotification, regularNotification)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateSpecialCareUsers(setOf(specialCareUser.id))
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFilter(NotificationFilter.SpecialCare)
+
+        assertEquals(listOf("remote-special"), holder.state.value.notifications.map { it.id })
+        assertTrue(holder.state.value.notifications.single().isSpecialCare)
+        assertEquals(1, holder.state.value.specialCareUnreadCount)
+        assertEquals(2, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun remoteDerivedSpecialCareNotificationsDoNotDoubleCountUnread() = runTest {
+        val specialCareNotification = FakeData.notifications[0].copy(id = "remote-special-2")
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(NotificationRepositoryResult.Success(listOf(specialCareNotification))),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateSpecialCareUsers(setOf(specialCareNotification.actor.id))
+        holder.refresh()
+        advanceUntilIdle()
+
+        assertEquals(1, holder.state.value.specialCareUnreadCount)
+        assertEquals(1, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun mergeRemoteSpecialCareNotificationsKeepsExistingLocalItemsAndMarksRemoteItems() {
+        val specialCareUser = FakeData.notifications[0].actor
+        val remote = FakeData.notifications[0].copy(id = "remote-special-3", actor = specialCareUser)
+        val local = FakeData.notifications[1].copy(id = "special-local-merge", isSpecialCare = true)
+
+        val merged = mergeRemoteSpecialCareNotifications(
+            current = listOf(local),
+            remote = listOf(remote),
+            specialCareUserIds = setOf(specialCareUser.id),
+            limit = 10,
+        )
+
+        assertEquals(listOf("remote-special-3", "special-local-merge"), merged.map { it.id })
+        assertTrue(merged.first().isSpecialCare)
+    }
+
+    @Test
+    fun refreshAllKeepsLocalSpecialCareUnreadInTotalUnreadCount() = runTest {
+        val remote = FakeData.notifications[0].copy(id = "remote-1")
+        val specialCare = FakeData.notifications[1].copy(id = "special-local-0")
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(NotificationRepositoryResult.Success(listOf(remote))),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.addSpecialCareNotification(specialCare)
+        holder.refresh()
+        advanceUntilIdle()
+
+        assertEquals(listOf("remote-1"), holder.state.value.notifications.map { it.id })
+        assertEquals(2, holder.state.value.unreadCount)
+        assertEquals(1, holder.state.value.specialCareUnreadCount)
+    }
+
+    @Test
+    fun selectSpecialCareShowsLocalNotificationsWithoutRefreshingRepository() {
+        val calls = mutableListOf<NotificationFilter>()
+        val notification = FakeData.notifications[0].copy(id = "special-local-1")
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(emptyList()),
+                onRefresh = { calls.add(it) },
+            ),
+            scope = TestScope(),
+        )
+
+        holder.addSpecialCareNotification(notification)
+        holder.selectFilter(NotificationFilter.SpecialCare)
+
+        assertEquals(NotificationFilter.SpecialCare, holder.state.value.selectedFilter)
+        assertEquals(listOf("special-local-1"), holder.state.value.notifications.map { it.id })
+        assertEquals(1, holder.state.value.specialCareNotificationCount)
+        assertEquals(1, holder.state.value.specialCareUnreadCount)
+        assertEquals(emptyList(), calls)
+        assertTrue(holder.state.value.endReached)
+    }
+
+    @Test
+    fun markSpecialCareNotificationReadUpdatesSpecialCareUnreadCount() {
+        val notification = FakeData.notifications[0].copy(id = "special-local-2")
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(NotificationRepositoryResult.Success(emptyList())),
+            scope = TestScope(),
+        )
+
+        holder.addSpecialCareNotification(notification)
+        holder.selectFilter(NotificationFilter.SpecialCare)
+        holder.markNotificationRead(notification.id)
+
+        assertTrue(holder.state.value.notifications.single().isRead)
+        assertEquals(0, holder.state.value.specialCareUnreadCount)
+        assertEquals(0, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun markAllAsReadKeepsSpecialCareItemsButClearsTheirUnreadCount() = runTest {
+        val notification = FakeData.notifications[0].copy(id = "special-local-3")
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(emptyList()),
+                markAllResult = NotificationRepositoryResult.AllRead,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.addSpecialCareNotification(notification)
+        holder.selectFilter(NotificationFilter.SpecialCare)
+        holder.markAllAsRead()
+        advanceUntilIdle()
+
+        assertEquals(listOf("special-local-3"), holder.state.value.notifications.map { it.id })
+        assertTrue(holder.state.value.notifications.single().isRead)
+        assertEquals(1, holder.state.value.specialCareNotificationCount)
+        assertEquals(0, holder.state.value.specialCareUnreadCount)
+        assertEquals(0, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun streamingReadAllSyncMarksVisibleAndSpecialCareNotificationsReadWithoutCallingRepository() = runTest {
+        var markAllCalls = 0
+        val remote = FakeData.notifications[0].copy(id = "remote-stream-read")
+        val specialCare = FakeData.notifications[1].copy(id = "special-stream-read")
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(listOf(remote)),
+                onMarkAll = { markAllCalls += 1 },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.addSpecialCareNotification(specialCare)
+        holder.syncAllReadFromStreaming()
+        advanceUntilIdle()
+
+        assertEquals(0, markAllCalls)
+        assertTrue(holder.state.value.notifications.all { it.isRead })
+        assertEquals(0, holder.state.value.unreadCount)
+        assertEquals(0, holder.state.value.specialCareUnreadCount)
+    }
+
+    @Test
+    fun refreshQuietlyUpdatesAllUnreadCountAndAllFilterList() = runTest {
+        val first = FakeData.notifications[0].copy(id = "remote-a")
+        val second = FakeData.notifications[1].copy(id = "remote-b")
+        val holder = NotificationStateHolder(
+            repository = sequenceRepository(
+                NotificationRepositoryResult.Success(listOf(first)),
+                NotificationRepositoryResult.Success(listOf(second, first)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.refreshQuietly()
+        advanceUntilIdle()
+
+        assertEquals(listOf("remote-b", "remote-a"), holder.state.value.notifications.map { it.id })
+        assertEquals(2, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun refreshQuietlyKeepsSpecialCareViewVisibleWhileUpdatingTotalUnread() = runTest {
+        val remote = FakeData.notifications[0].copy(id = "remote-c")
+        val specialCare = FakeData.notifications[1].copy(id = "special-local-4")
+        val holder = NotificationStateHolder(
+            repository = sequenceRepository(
+                NotificationRepositoryResult.Success(listOf(remote)),
+                NotificationRepositoryResult.Success(listOf(remote)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.addSpecialCareNotification(specialCare)
+        holder.selectFilter(NotificationFilter.SpecialCare)
+        holder.refreshQuietly()
+        advanceUntilIdle()
+
+        assertEquals(listOf("special-local-4"), holder.state.value.notifications.map { it.id })
+        assertEquals(2, holder.state.value.unreadCount)
+        assertEquals(1, holder.state.value.specialCareUnreadCount)
+    }
+
     private fun fakeRepository(
         refreshResult: NotificationRepositoryResult,
         loadMoreResult: NotificationRepositoryResult = refreshResult,
         markAllResult: NotificationRepositoryResult = NotificationRepositoryResult.AllRead,
         onRefresh: (NotificationFilter) -> Unit = {},
         onLoadMore: () -> Unit = {},
+        onMarkAll: () -> Unit = {},
     ): NotificationRepository {
         return object : NotificationRepository(
             tokenProvider = { "token-123" },
@@ -307,6 +618,7 @@ class NotificationStateHolderTest {
             }
 
             override suspend fun markAllAsRead(): NotificationRepositoryResult {
+                onMarkAll()
                 return markAllResult
             }
         }

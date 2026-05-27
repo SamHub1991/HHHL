@@ -28,6 +28,7 @@ class NotificationActionSpecTest {
     @Test
     fun chatRoomInvitationNotificationCanOpenChat() {
         assertTrue(notification(type = NotificationType.ChatRoomInvitation).canOpenChat)
+        assertTrue(notification(type = NotificationType.App, chatUserId = "user-1").canOpenChat)
         assertFalse(notification(type = NotificationType.Mention).canOpenChat)
     }
 
@@ -63,6 +64,19 @@ class NotificationActionSpecTest {
     }
 
     @Test
+    fun chatUserNotificationNavigationTargetsUserConversation() {
+        val target = notification(
+            type = NotificationType.App,
+            chatUserId = "user-1",
+            chatMessageId = "message-1",
+        ).navigationTarget
+
+        assertIs<NotificationNavigationTarget.ChatUser>(target)
+        assertEquals("user-1", target.userId)
+        assertEquals("message-1", target.messageId)
+    }
+
+    @Test
     fun systemNotificationsWithoutRelatedObjectsDoNotOpenSyntheticProfile() {
         assertNull(notification(type = NotificationType.App).navigationTarget)
         assertNull(notification(type = NotificationType.ExportCompleted).navigationTarget)
@@ -81,6 +95,8 @@ class NotificationActionSpecTest {
         type: NotificationType,
         notePreviewText: String? = null,
         noteId: String? = null,
+        chatUserId: String? = null,
+        chatMessageId: String? = null,
     ): NotificationItem {
         return NotificationItem(
             id = "notification-$type",
@@ -90,6 +106,8 @@ class NotificationActionSpecTest {
             createdAtLabel = "刚刚",
             noteId = noteId,
             notePreviewText = notePreviewText,
+            chatUserId = chatUserId,
+            chatMessageId = chatMessageId,
         )
     }
 }

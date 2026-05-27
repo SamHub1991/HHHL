@@ -9,9 +9,13 @@ import cc.hhhl.client.api.DriveFileMutationResult
 import cc.hhhl.client.api.DriveFolderMutationResult
 import cc.hhhl.client.api.DriveFolderListResult
 import cc.hhhl.client.model.DriveFile
+import cc.hhhl.client.model.DriveFileDetails
 import cc.hhhl.client.model.DriveFileTypeFilter
 import cc.hhhl.client.model.DriveFolder
+import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.User
 import cc.hhhl.client.repository.DriveFileRepository
+import cc.hhhl.client.repository.DriveFileDetailsRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepositoryResult
 import cc.hhhl.client.repository.DriveFilesRepositoryResult
 import cc.hhhl.client.repository.DriveFoldersRepositoryResult
@@ -144,6 +148,7 @@ class DriveFilesStateHolderTest {
         val holder = DriveFilesStateHolder(
             repository = fakeRepository(
                 refreshResult = DriveFilesRepositoryResult.Success(listOf(image)),
+                fileDetailsResult = DriveFileDetailsRepositoryResult.Success(DriveFileDetails(image)),
             ),
             scope = TestScope(testScheduler),
         )
@@ -155,6 +160,38 @@ class DriveFilesStateHolderTest {
 
         assertEquals(null, holder.state.value.selectedFile)
         assertEquals(emptyList(), holder.state.value.visibleFiles)
+    }
+
+    @Test
+    fun selectFileLoadsRealFileDetailsAndAttachedNotes() = runTest {
+        val file = sampleFile("file-1")
+        val detailed = file.copy(comment = "real comment")
+        val note = Note(
+            id = "note-1",
+            author = User("user-1", "Alice", "alice", "A"),
+            text = "used here",
+            createdAtLabel = "2026-05-27 23:49",
+        )
+        val holder = DriveFilesStateHolder(
+            repository = fakeRepository(
+                refreshResult = DriveFilesRepositoryResult.Success(listOf(file)),
+                fileDetailsResult = DriveFileDetailsRepositoryResult.Success(
+                    DriveFileDetails(file = detailed, attachedNotes = listOf(note)),
+                ),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFile(file)
+
+        assertTrue(holder.state.value.isLoadingFileDetails)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isLoadingFileDetails)
+        assertEquals(detailed, holder.state.value.selectedFile)
+        assertEquals(listOf(note), holder.state.value.selectedFileDetails?.attachedNotes)
     }
 
     @Test
@@ -399,6 +436,28 @@ class DriveFilesStateHolderTest {
         assertFalse(holder.state.value.isManaging)
         assertEquals(listOf(updated), holder.state.value.files)
         assertEquals(null, holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun moveFileOutOfCurrentFolderRemovesItemAndClearsDetails() = runTest {
+        val folder = sampleFolder("folder-1")
+        val existing = sampleFile("file-1").copy(folderId = folder.id)
+        val holder = DriveFilesStateHolder(
+            repository = fakeRepository(
+                refreshResult = DriveFilesRepositoryResult.Success(listOf(existing)),
+                refreshFoldersResult = DriveFoldersRepositoryResult.Success(emptyList()),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.openFolder(folder)
+        advanceUntilIdle()
+        holder.selectFile(existing)
+        holder.moveFile(existing, folderId = null)
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), holder.state.value.files)
+        assertEquals(null, holder.state.value.selectedFile)
     }
 
     @Test
@@ -700,6 +759,7 @@ class DriveFilesStateHolderTest {
         createFolderResult: DriveManagementRepositoryResult = DriveManagementRepositoryResult.FolderCreated(sampleFolder("folder-created")),
         updateFolderResult: DriveManagementRepositoryResult = DriveManagementRepositoryResult.FolderUpdated(sampleFolder("folder-updated")),
         deleteFolderResult: DriveManagementRepositoryResult = DriveManagementRepositoryResult.FolderDeleted("folder-1"),
+        fileDetailsResult: DriveFileDetailsRepositoryResult = DriveFileDetailsRepositoryResult.Error("unused"),
         onRefresh: (String?, DriveFileSort, String) -> Unit = { _, _, _ -> },
         onUpload: (DriveFileUpload) -> Unit = {},
         refreshResultProvider: (() -> DriveFilesRepositoryResult)? = null,
@@ -762,6 +822,15 @@ class DriveFilesStateHolderTest {
                     token: String,
                     folderId: String,
                 ): DriveFolderMutationResult = DriveFolderMutationResult.Deleted
+
+                override suspend fun loadFileDetails(
+                    token: String,
+                    fileId: String,
+                ): cc.hhhl.client.api.DriveFileDetailsResult {
+                    return cc.hhhl.client.api.DriveFileDetailsResult.Success(
+                        cc.hhhl.client.model.DriveFileDetails(sampleFile(fileId)),
+                    )
+                }
             },
         ) {
             override suspend fun refreshFiles(
@@ -833,6 +902,10 @@ class DriveFilesStateHolderTest {
 
             override suspend fun deleteFolder(folderId: String): DriveManagementRepositoryResult {
                 return deleteFolderResult
+            }
+
+            override suspend fun loadFileDetails(fileId: String): DriveFileDetailsRepositoryResult {
+                return fileDetailsResult
             }
         }
     }

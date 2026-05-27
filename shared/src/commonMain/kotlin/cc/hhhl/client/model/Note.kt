@@ -1,5 +1,8 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class Note(
     val id: String,
     val author: User,
@@ -21,11 +24,13 @@ data class Note(
     val replyId: String? = null,
 )
 
+@Immutable
 data class NoteReaction(
     val reaction: String,
     val count: Int,
 )
 
+@Immutable
 data class NoteMedia(
     val id: String,
     val description: String,
@@ -35,6 +40,7 @@ data class NoteMedia(
     val isSensitive: Boolean = false,
 )
 
+@Immutable
 data class NotePoll(
     val multiple: Boolean,
     val expiresAtLabel: String = "",
@@ -42,6 +48,7 @@ data class NotePoll(
     val choices: List<NotePollChoice>,
 )
 
+@Immutable
 data class NotePollChoice(
     val text: String,
     val votes: Int,

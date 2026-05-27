@@ -152,6 +152,8 @@ class SharkeyChannelApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return ChannelLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> ChannelLoadResult.Success(
                     response.body<List<ChannelDto>>().map { it.toDomainChannel() },
@@ -194,6 +196,8 @@ class SharkeyChannelApi(
                     ),
                 )
             }
+
+            if (response.isSharkeyUnauthorized()) return ChannelTimelineLoadResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> ChannelTimelineLoadResult.Success(
@@ -278,7 +282,7 @@ class SharkeyChannelApi(
 
             when {
                 response.status.value in 200..299 -> ChannelActionResult.Success
-                response.status == HttpStatusCode.Unauthorized -> ChannelActionResult.Unauthorized
+                response.isSharkeyUnauthorized() -> ChannelActionResult.Unauthorized
                 else -> ChannelActionResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -312,6 +316,8 @@ class SharkeyChannelApi(
                 contentType(ContentType.Application.Json)
                 setBody(ChannelMutationRequest.fromDraft(cleanToken, cleanChannelId.ifBlank { null }, draft))
             }
+
+            if (response.isSharkeyUnauthorized()) return ChannelMutationResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> ChannelMutationResult.Success(

@@ -141,6 +141,41 @@ class MarkdownRichTextPresentationTest {
     }
 
     @Test
+    fun parsesMultilineMfmRainbowSpans() {
+        val spans = parseInlineMarkdown(
+            """
+            $[rainbow
+            说谎的这
+            辈子硬不起来
+            @sunxiaochuan
+            ]
+            """.trimIndent(),
+        )
+
+        assertEquals(
+            listOf(
+                InlineMarkdownSpan.Text(
+                    "说谎的这\n辈子硬不起来\n@sunxiaochuan",
+                    InlineMarkdownStyle.Rainbow,
+                ),
+            ),
+            spans,
+        )
+    }
+
+    @Test
+    fun unwrapsNestedMfmFunctionText() {
+        val spans = parseInlineMarkdown("""$[x4 $[rainbow 说谎的这辈子硬不起来]]""")
+
+        assertEquals(
+            listOf(
+                InlineMarkdownSpan.Text("说谎的这辈子硬不起来", InlineMarkdownStyle.X4),
+            ),
+            spans,
+        )
+    }
+
+    @Test
     fun parsesCenteredHtmlBlock() {
         val blocks = parseMarkdownBlocks("<center>hello</center>")
 

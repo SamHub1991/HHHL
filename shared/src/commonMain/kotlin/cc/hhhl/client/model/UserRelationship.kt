@@ -1,5 +1,8 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class UserRelationship(
     val userId: String,
     val isFollowing: Boolean = false,

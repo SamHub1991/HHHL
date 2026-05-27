@@ -134,13 +134,19 @@ class ComposeTargetPreviewSpecTest {
     fun editorSurfaceUsesSoftMarkdownPanelMetrics() {
         assertEquals(
             ComposeEditorSurfaceSpec(
-                cornerRadius = 14,
-                contentPadding = 12,
-                bodyMinHeight = 172,
+                cornerRadius = 20,
+                contentPadding = 14,
+                bodyMinHeight = 184,
             ),
             composeEditorSurfaceSpec(),
         )
         assertEquals(true, composeTargetPreviewUsesMarkdownQuoteRail())
+    }
+
+    @Test
+    fun editorModeLabelsKeepPreviewEntryExplicit() {
+        assertEquals("编辑", composeEditorModeLabel(ComposeEditorMode.Edit))
+        assertEquals("预览", composeEditorModeLabel(ComposeEditorMode.Preview))
     }
 
     @Test

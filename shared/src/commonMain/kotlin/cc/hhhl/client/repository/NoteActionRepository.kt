@@ -33,6 +33,8 @@ sealed interface NoteActionRequest {
         val comment: String = "客户端举报帖子",
     ) : NoteActionRequest
 
+    data class Mute(override val noteId: String) : NoteActionRequest
+
     companion object {
         const val DEFAULT_REACTION = "❤️"
     }
@@ -65,6 +67,7 @@ open class NoteActionRepository(
             is NoteActionRequest.Renote -> api.createRenote(token, noteId)
             is NoteActionRequest.Delete -> api.deleteNote(token, noteId)
             is NoteActionRequest.Report -> api.reportNote(token, userId.orEmpty(), noteId, request.comment)
+            is NoteActionRequest.Mute -> api.muteNote(token, noteId)
         }
 
         return when (result) {
@@ -96,4 +99,5 @@ private val NoteActionRequest.successMessage: String
         is NoteActionRequest.Renote -> "已转发"
         is NoteActionRequest.Delete -> "已删除"
         is NoteActionRequest.Report -> "已提交举报"
+        is NoteActionRequest.Mute -> "已静音帖子"
     }

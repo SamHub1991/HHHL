@@ -1,6 +1,7 @@
 package cc.hhhl.client.state
 
 import cc.hhhl.client.model.Page
+import cc.hhhl.client.model.PageDraft
 import cc.hhhl.client.model.PageListKind
 import cc.hhhl.client.repository.PageActionRepositoryResult
 import cc.hhhl.client.repository.PageRepository
@@ -182,6 +183,28 @@ class PageStateHolderTest {
         assertEquals(null, holder.state.value.selectedPage)
     }
 
+    @Test
+    fun createPageStoresCreatedPageAndSelectsMine() = runTest {
+        val page = samplePage("page-created")
+        val holder = PageStateHolder(
+            repository = fakeRepository(
+                pagesResult = PagesRepositoryResult.Success(emptyList()),
+                pageResult = PageRepositoryResult.Success(page),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.startCreatingPage()
+        holder.updateDraft(PageDraft(title = "Title", name = "title", content = "body"))
+        holder.saveEditingPage()
+        advanceUntilIdle()
+
+        assertEquals(page, holder.state.value.selectedPage)
+        assertEquals(listOf(page), holder.state.value.pages)
+        assertEquals(PageListKind.Mine, holder.state.value.selectedKind)
+        assertEquals(null, holder.state.value.editingDraft)
+    }
+
     private fun fakeRepository(
         pagesResult: PagesRepositoryResult,
         pageResult: PageRepositoryResult = PageRepositoryResult.Success(samplePage("page-1")),
@@ -231,6 +254,14 @@ class PageStateHolderTest {
                     return cc.hhhl.client.api.PageShowResult.Success(samplePage("page-1"))
                 }
 
+                override suspend fun showPageByPath(
+                    token: String,
+                    username: String,
+                    name: String,
+                ): cc.hhhl.client.api.PageShowResult {
+                    return cc.hhhl.client.api.PageShowResult.Success(samplePage("page-1"))
+                }
+
                 override suspend fun likePage(
                     token: String,
                     pageId: String,
@@ -239,6 +270,28 @@ class PageStateHolderTest {
                 }
 
                 override suspend fun unlikePage(
+                    token: String,
+                    pageId: String,
+                ): cc.hhhl.client.api.PageActionResult {
+                    return cc.hhhl.client.api.PageActionResult.Success
+                }
+
+                override suspend fun createPage(
+                    token: String,
+                    draft: PageDraft,
+                ): cc.hhhl.client.api.PageMutationResult {
+                    return cc.hhhl.client.api.PageMutationResult.Success(samplePage("page-1"))
+                }
+
+                override suspend fun updatePage(
+                    token: String,
+                    pageId: String,
+                    draft: PageDraft,
+                ): cc.hhhl.client.api.PageMutationResult {
+                    return cc.hhhl.client.api.PageMutationResult.Success(samplePage("page-1"))
+                }
+
+                override suspend fun deletePage(
                     token: String,
                     pageId: String,
                 ): cc.hhhl.client.api.PageActionResult {
@@ -258,6 +311,14 @@ class PageStateHolderTest {
                 return pageResult
             }
 
+            override suspend fun showPageByPath(
+                username: String,
+                name: String,
+            ): PageRepositoryResult {
+                onShowPage("$username/$name")
+                return pageResult
+            }
+
             override suspend fun likePage(pageId: String): PageActionRepositoryResult {
                 onLikePage(pageId)
                 return actionResult
@@ -265,6 +326,21 @@ class PageStateHolderTest {
 
             override suspend fun unlikePage(pageId: String): PageActionRepositoryResult {
                 onUnlikePage(pageId)
+                return actionResult
+            }
+
+            override suspend fun createPage(draft: PageDraft): PageRepositoryResult {
+                return pageResult
+            }
+
+            override suspend fun updatePage(
+                pageId: String,
+                draft: PageDraft,
+            ): PageRepositoryResult {
+                return pageResult
+            }
+
+            override suspend fun deletePage(pageId: String): PageActionRepositoryResult {
                 return actionResult
             }
         }

@@ -1,7 +1,9 @@
 package cc.hhhl.client.state
 
 import cc.hhhl.client.model.GalleryListKind
+import cc.hhhl.client.model.GalleryPostDraft
 import cc.hhhl.client.repository.GalleryActionRepositoryResult
+import cc.hhhl.client.repository.GalleryMutationRepositoryResult
 import cc.hhhl.client.repository.GalleryPostRepositoryResult
 import cc.hhhl.client.repository.GalleryPostsRepositoryResult
 import cc.hhhl.client.repository.GalleryRepository
@@ -181,6 +183,43 @@ class GalleryStateHolderTest {
         assertEquals(null, holder.state.value.selectedPost)
     }
 
+    @Test
+    fun createUpdateAndDeleteMutateStoredPosts() = runTest {
+        val original = sampleGalleryPost("gallery-1")
+        val updated = original.copy(title = "更新后的图")
+        val created = sampleGalleryPost("gallery-2")
+        val holder = GalleryStateHolder(
+            repository = sequenceMutationRepository(
+                postsResult = GalleryPostsRepositoryResult.Success(listOf(original)),
+                postResult = GalleryPostRepositoryResult.Success(original),
+                mutationResults = listOf(
+                    GalleryMutationRepositoryResult.Success(created),
+                    GalleryMutationRepositoryResult.Success(updated),
+                ),
+                actionResult = GalleryActionRepositoryResult.Success,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshPosts()
+        advanceUntilIdle()
+        holder.createPost(GalleryPostDraft(title = "新图", fileIds = listOf("file-2")))
+        advanceUntilIdle()
+        assertEquals(listOf(created, original), holder.state.value.posts)
+
+        holder.openPost(original.id)
+        advanceUntilIdle()
+        holder.updateSelectedPost(GalleryPostDraft(title = "更新后的图", fileIds = original.fileIds))
+        advanceUntilIdle()
+        assertEquals(updated, holder.state.value.selectedPost)
+        assertEquals(listOf(created, updated), holder.state.value.posts)
+
+        holder.deleteSelectedPost()
+        advanceUntilIdle()
+        assertEquals(null, holder.state.value.selectedPost)
+        assertEquals(listOf(created), holder.state.value.posts)
+    }
+
     private fun fakeRepository(
         postsResult: GalleryPostsRepositoryResult,
         postResult: GalleryPostRepositoryResult = GalleryPostRepositoryResult.Success(sampleGalleryPost("gallery-1")),
@@ -243,6 +282,28 @@ class GalleryStateHolderTest {
                 ): cc.hhhl.client.api.GalleryActionResult {
                     return cc.hhhl.client.api.GalleryActionResult.Success
                 }
+
+                override suspend fun createPost(
+                    token: String,
+                    draft: GalleryPostDraft,
+                ): cc.hhhl.client.api.GalleryMutationResult {
+                    return cc.hhhl.client.api.GalleryMutationResult.Success(sampleGalleryPost("gallery-1"))
+                }
+
+                override suspend fun updatePost(
+                    token: String,
+                    postId: String,
+                    draft: GalleryPostDraft,
+                ): cc.hhhl.client.api.GalleryMutationResult {
+                    return cc.hhhl.client.api.GalleryMutationResult.Success(sampleGalleryPost("gallery-1"))
+                }
+
+                override suspend fun deletePost(
+                    token: String,
+                    postId: String,
+                ): cc.hhhl.client.api.GalleryActionResult {
+                    return cc.hhhl.client.api.GalleryActionResult.Success
+                }
             },
         ) {
             override suspend fun refreshPosts(kind: GalleryListKind): GalleryPostsRepositoryResult {
@@ -266,6 +327,78 @@ class GalleryStateHolderTest {
                 onUnlikePost(postId)
                 return actionResult
             }
+        }
+    }
+
+    private fun sequenceMutationRepository(
+        postsResult: GalleryPostsRepositoryResult,
+        postResult: GalleryPostRepositoryResult,
+        mutationResults: List<GalleryMutationRepositoryResult>,
+        actionResult: GalleryActionRepositoryResult,
+    ): GalleryRepository {
+        var mutationIndex = 0
+        return object : GalleryRepository(
+            tokenProvider = { "token-123" },
+            api = object : cc.hhhl.client.api.GalleryApi {
+                override suspend fun loadPosts(
+                    token: String,
+                    kind: GalleryListKind,
+                    limit: Int,
+                    untilId: String?,
+                ) = cc.hhhl.client.api.GalleryLoadResult.Success(emptyList())
+
+                override suspend fun showPost(
+                    token: String,
+                    postId: String,
+                ) = cc.hhhl.client.api.GalleryShowResult.Success(sampleGalleryPost("gallery-1"))
+
+                override suspend fun likePost(
+                    token: String,
+                    postId: String,
+                ) = cc.hhhl.client.api.GalleryActionResult.Success
+
+                override suspend fun unlikePost(
+                    token: String,
+                    postId: String,
+                ) = cc.hhhl.client.api.GalleryActionResult.Success
+
+                override suspend fun createPost(
+                    token: String,
+                    draft: GalleryPostDraft,
+                ) = cc.hhhl.client.api.GalleryMutationResult.Success(sampleGalleryPost("gallery-1"))
+
+                override suspend fun updatePost(
+                    token: String,
+                    postId: String,
+                    draft: GalleryPostDraft,
+                ) = cc.hhhl.client.api.GalleryMutationResult.Success(sampleGalleryPost("gallery-1"))
+
+                override suspend fun deletePost(
+                    token: String,
+                    postId: String,
+                ) = cc.hhhl.client.api.GalleryActionResult.Success
+            },
+        ) {
+            override suspend fun refreshPosts(kind: GalleryListKind): GalleryPostsRepositoryResult = postsResult
+
+            override suspend fun showPost(postId: String): GalleryPostRepositoryResult = postResult
+
+            override suspend fun createPost(draft: GalleryPostDraft): GalleryMutationRepositoryResult {
+                val result = mutationResults.getOrElse(mutationIndex) { mutationResults.last() }
+                mutationIndex += 1
+                return result
+            }
+
+            override suspend fun updatePost(
+                postId: String,
+                draft: GalleryPostDraft,
+            ): GalleryMutationRepositoryResult {
+                val result = mutationResults.getOrElse(mutationIndex) { mutationResults.last() }
+                mutationIndex += 1
+                return result
+            }
+
+            override suspend fun deletePost(postId: String): GalleryActionRepositoryResult = actionResult
         }
     }
 }

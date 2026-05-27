@@ -15,10 +15,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import cc.hhhl.client.ui.component.HhhlTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +38,9 @@ import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlSegmentedControl
+import cc.hhhl.client.ui.component.HhhlSegmentedItem
+import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTopBar
@@ -98,10 +100,10 @@ fun RelationshipManagementScreen(
             state = listState,
         ) {
             state.message?.let { message ->
-                item { RelationshipManagementStatusRow(text = message) }
+                item(contentType = "relationship-status") { RelationshipManagementStatusRow(text = message) }
             }
             state.errorMessage?.let { message ->
-                item {
+                item(contentType = "relationship-status") {
                     RelationshipManagementStatusRow(
                         text = message,
                         actionText = "重试",
@@ -110,12 +112,20 @@ fun RelationshipManagementScreen(
                 }
             }
             if (state.isLoading && entries.isEmpty()) {
-                item { RelationshipManagementStatusRow(text = "加载中...", loading = true) }
+                item(contentType = "relationship-status") {
+                    RelationshipManagementStatusRow(text = "加载中...", loading = true)
+                }
             }
             if (!state.isLoading && entries.isEmpty() && state.errorMessage == null) {
-                item { RelationshipManagementStatusRow(text = relationshipManagementEmptyText(state.selectedTab)) }
+                item(contentType = "relationship-status") {
+                    RelationshipManagementStatusRow(text = relationshipManagementEmptyText(state.selectedTab))
+                }
             }
-            items(entries, key = { it.id }) { entry ->
+            items(
+                items = entries,
+                key = { it.id },
+                contentType = { "relationship-row" },
+            ) { entry ->
                 RelationshipManagementRow(
                     entry = entry,
                     selectedTab = state.selectedTab,
@@ -124,12 +134,11 @@ fun RelationshipManagementScreen(
                     onRemoveRelationship = onRemoveRelationship,
                 )
             }
-            if (entries.isNotEmpty() && !state.currentEndReached) {
-                item {
+            if (entries.isNotEmpty() && state.isLoadingMore) {
+                item(contentType = "relationship-status") {
                     RelationshipManagementStatusRow(
-                        text = if (state.isLoadingMore) "正在加载更多..." else "加载更多",
+                        text = "正在加载更多...",
                         loading = state.isLoadingMore,
-                        onAction = if (state.isLoadingMore) null else onLoadMore,
                     )
                 }
             }
@@ -144,59 +153,22 @@ private fun RelationshipManagementTabs(
     blockedCount: Int,
     onTabSelected: (RelationshipManagementTab) -> Unit,
 ) {
-    Row(
+    HhhlSegmentedControl(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.78f))
-            .padding(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
-        RelationshipManagementTabItem(
-            text = relationshipManagementTabLabel(RelationshipManagementTab.Muted, mutedCount),
+        HhhlSegmentedItem(
+            label = relationshipManagementTabLabel(RelationshipManagementTab.Muted, mutedCount),
             selected = selectedTab == RelationshipManagementTab.Muted,
             onClick = { onTabSelected(RelationshipManagementTab.Muted) },
             modifier = Modifier.weight(1f),
         )
-        RelationshipManagementTabItem(
-            text = relationshipManagementTabLabel(RelationshipManagementTab.Blocked, blockedCount),
+        HhhlSegmentedItem(
+            label = relationshipManagementTabLabel(RelationshipManagementTab.Blocked, blockedCount),
             selected = selectedTab == RelationshipManagementTab.Blocked,
             onClick = { onTabSelected(RelationshipManagementTab.Blocked) },
             modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-@Composable
-private fun RelationshipManagementTabItem(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier,
-) {
-    Box(
-        modifier = modifier
-            .height(30.dp)
-            .clip(RoundedCornerShape(15.dp))
-            .background(
-                if (selected) {
-                    MaterialTheme.colorScheme.surface
-                } else {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0f)
-                },
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            color = if (selected) MaterialTheme.colorScheme.onSurface else LocalHhhlColors.current.subtleText,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -330,12 +302,12 @@ private fun RelationshipManagementRemoveDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !isMutating) {
+            HhhlTextButton(onClick = onConfirm, enabled = !isMutating) {
                 Text(if (isMutating) "处理中" else relationshipManagementRemoveLabel(tab))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isMutating) {
+            HhhlTextButton(onClick = onDismiss, enabled = !isMutating) {
                 Text("取消")
             }
         },
@@ -424,33 +396,10 @@ private fun RelationshipManagementStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
+    )
 }

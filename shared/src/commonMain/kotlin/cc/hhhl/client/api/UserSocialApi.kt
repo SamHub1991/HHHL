@@ -76,6 +76,8 @@ class SharkeyUserSocialApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return UserSocialLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> UserSocialLoadResult.Success(
                     response.body<List<UserSocialRelationDto>>()

@@ -1,7 +1,13 @@
 package cc.hhhl.client.state
 
-import cc.hhhl.client.api.ComposeDraft
 import cc.hhhl.client.api.ComposeCreateResult
+import cc.hhhl.client.api.ComposeDraft
+import cc.hhhl.client.api.ComposePollDraft
+import cc.hhhl.client.api.ComposeReactionAcceptance
+import cc.hhhl.client.api.ComposeScheduleDraft
+import cc.hhhl.client.api.ComposeScheduleDeleteResult
+import cc.hhhl.client.api.ComposeScheduledNote
+import cc.hhhl.client.api.ComposeScheduledNotesResult
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.DriveFile
@@ -11,6 +17,7 @@ import cc.hhhl.client.repository.DriveFileRepositoryResult
 import cc.hhhl.client.repository.DriveManagementRepositoryResult
 import cc.hhhl.client.repository.ComposeRepository
 import cc.hhhl.client.repository.ComposeRepositoryResult
+import cc.hhhl.client.repository.ComposeScheduleDeleteRepositoryResult
 import cc.hhhl.client.repository.UserProfileRepository
 import cc.hhhl.client.repository.UserProfileRepositoryResult
 import cc.hhhl.client.state.ComposePollDeadlinePreset.OneDay
@@ -28,6 +35,102 @@ import kotlinx.coroutines.test.runTest
 @OptIn(ExperimentalCoroutinesApi::class)
 class ComposeStateHolderTest {
     @Test
+    fun composeDraftCodecRoundTripsPollAndVisibility() {
+        val draft = ComposeDraft(
+            text = "draft text",
+            editId = "note-edit-1",
+            visibility = NoteVisibility.Specified,
+            visibleUserIds = listOf("user-1", "user-2"),
+            cw = "spoiler",
+            replyId = "reply-1",
+            renoteId = "quote-1",
+            channelId = "channel-1",
+            fileIds = listOf("file-1"),
+            poll = ComposePollDraft(
+                choices = listOf("A", "B"),
+                multiple = true,
+                expiresAt = "2026-05-26T12:00:00Z",
+            ),
+            localOnly = true,
+            reactionAcceptance = ComposeReactionAcceptance.LikeOnlyForRemote,
+            scheduleNote = ComposeScheduleDraft(1_779_800_000_000L),
+        )
+
+        assertEquals(draft, ComposeDraftCodec.decode(ComposeDraftCodec.encode(draft)))
+    }
+
+    @Test
+    fun restoreStoredDraftLoadsPersistedDraft() {
+        val storedDraft = ComposeDraft(
+            text = "saved draft",
+            visibility = NoteVisibility.Followers,
+            fileIds = listOf("file-1"),
+        )
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            draftStore = memoryDraftStore(storedDraft),
+            scope = TestScope(),
+        )
+
+        holder.restoreStoredDraft()
+
+        assertEquals(storedDraft, holder.state.value.draft)
+        assertEquals(null as String?, holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun restoreStoredDraftFallsBackFromPublicWhenPublicNotesDisabled() {
+        val store = memoryDraftStore(ComposeDraft(text = "saved draft", visibility = NoteVisibility.Public))
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            draftStore = store,
+            scope = TestScope(),
+        )
+
+        holder.updateCapabilities(canPublicNote = false)
+        holder.restoreStoredDraft()
+
+        assertEquals(NoteVisibility.Home, holder.state.value.draft.visibility)
+        assertEquals(NoteVisibility.Home, store.savedDraft?.visibility)
+    }
+
+    @Test
+    fun editingDraftPersistsStoredDraft() {
+        val store = memoryDraftStore()
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            draftStore = store,
+            scope = TestScope(),
+        )
+
+        holder.updateText("saved text")
+        holder.updateCw("cw")
+        holder.updateVisibility(NoteVisibility.Followers)
+
+        assertEquals("saved text", store.savedDraft?.text)
+        assertEquals("cw", store.savedDraft?.cw)
+        assertEquals(NoteVisibility.Followers, store.savedDraft?.visibility)
+    }
+
+    @Test
+    fun sendSuccessClearsStoredDraft() = runTest {
+        val store = memoryDraftStore()
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            draftStore = store,
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateText("hello")
+        assertEquals("hello", store.savedDraft?.text)
+        holder.send()
+        advanceUntilIdle()
+
+        assertEquals(null, store.savedDraft)
+        assertTrue(store.wasCleared)
+    }
+
+    @Test
     fun sendSuccessClearsDraftAndMarksCreatedNote() = runTest {
         val holder = ComposeStateHolder(
             repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
@@ -43,6 +146,21 @@ class ComposeStateHolderTest {
         assertEquals("", holder.state.value.draft.text)
         assertEquals("note-created", holder.state.value.createdNoteId)
         assertEquals(null as String?, holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun sendSuccessResetsDraftToHomeWhenPublicNotesDisabled() = runTest {
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateCapabilities(canPublicNote = false)
+        holder.updateText("hello")
+        holder.send()
+        advanceUntilIdle()
+
+        assertEquals(NoteVisibility.Home, holder.state.value.draft.visibility)
     }
 
     @Test
@@ -424,6 +542,20 @@ class ComposeStateHolderTest {
     }
 
     @Test
+    fun updateCapabilitiesClearsScheduleWhenSchedulingDisabled() {
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            scope = TestScope(),
+        )
+
+        holder.updateCapabilities(canPublicNote = true, canScheduleNotes = true)
+        holder.updateScheduleNote(1_779_800_000_000L)
+        holder.updateCapabilities(canPublicNote = true, canScheduleNotes = false)
+
+        assertEquals(null, holder.state.value.draft.scheduleNote)
+    }
+
+    @Test
     fun startNewNoteUsesHomeVisibilityWhenPublicNotesDisabled() {
         val holder = ComposeStateHolder(
             repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
@@ -560,6 +692,62 @@ class ComposeStateHolderTest {
     }
 
     @Test
+    fun editScheduledNoteDeletesOriginalAndRestoresDraftForEditing() = runTest {
+        val deletedNoteIds = mutableListOf<String>()
+        val scheduledNote = ComposeScheduledNote(
+            id = "note-scheduled-1",
+            text = "later",
+            cw = "spoiler",
+            scheduledAt = 1_779_800_000_000L,
+            visibility = NoteVisibility.Specified,
+            visibleUserIds = listOf("user-1"),
+            replyId = "reply-1",
+            renoteId = "renote-1",
+            channelId = "channel-1",
+            fileIds = listOf("file-1"),
+            attachedFiles = listOf(sampleDriveFile()),
+            poll = ComposePollDraft(choices = listOf("A", "B"), multiple = true),
+            localOnly = true,
+            reactionAcceptance = ComposeReactionAcceptance.LikeOnly,
+        )
+        val store = memoryDraftStore()
+        val holder = ComposeStateHolder(
+            repository = object : ComposeRepository(
+                tokenProvider = { "token-123" },
+                api = fakeComposeApi(),
+            ) {
+                override suspend fun deleteScheduledNote(noteId: String): ComposeScheduleDeleteRepositoryResult {
+                    deletedNoteIds.add(noteId)
+                    return ComposeScheduleDeleteRepositoryResult.Success
+                }
+            },
+            draftStore = store,
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateCapabilities(canPublicNote = true, canScheduleNotes = true)
+        holder.editScheduledNote(scheduledNote)
+        assertTrue(holder.state.value.deletingScheduledNoteIds.contains("note-scheduled-1"))
+        advanceUntilIdle()
+
+        assertEquals(listOf("note-scheduled-1"), deletedNoteIds)
+        assertEquals("later", holder.state.value.draft.text)
+        assertEquals("spoiler", holder.state.value.draft.cw)
+        assertEquals(NoteVisibility.Specified, holder.state.value.draft.visibility)
+        assertEquals(listOf("user-1"), holder.state.value.draft.visibleUserIds)
+        assertEquals("reply-1", holder.state.value.draft.replyId)
+        assertEquals("renote-1", holder.state.value.draft.renoteId)
+        assertEquals("channel-1", holder.state.value.draft.channelId)
+        assertEquals(listOf("file-1"), holder.state.value.draft.fileIds)
+        assertEquals(listOf(sampleDriveFile()), holder.state.value.attachedFiles)
+        assertEquals(ComposeScheduleDraft(1_779_800_000_000L), holder.state.value.draft.scheduleNote)
+        assertEquals(true, holder.state.value.draft.localOnly)
+        assertEquals(ComposeReactionAcceptance.LikeOnly, holder.state.value.draft.reactionAcceptance)
+        assertEquals(emptySet(), holder.state.value.deletingScheduledNoteIds)
+        assertEquals(holder.state.value.draft, store.savedDraft)
+    }
+
+    @Test
     fun addPollChoiceAppendsBlankChoiceUpToLimit() {
         val holder = ComposeStateHolder(
             repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
@@ -669,6 +857,17 @@ class ComposeStateHolderTest {
                     token: String,
                     draft: ComposeDraft,
                 ): ComposeCreateResult = ComposeCreateResult.Success("unused")
+
+                override suspend fun listScheduledNotes(
+                    token: String,
+                    limit: Int,
+                    offset: Int,
+                ): ComposeScheduledNotesResult = ComposeScheduledNotesResult.Success(emptyList())
+
+                override suspend fun deleteScheduledNote(
+                    token: String,
+                    noteId: String,
+                ): ComposeScheduleDeleteResult = ComposeScheduleDeleteResult.Success
             },
         ) {
             override suspend fun send(draft: ComposeDraft): ComposeRepositoryResult {
@@ -766,6 +965,15 @@ class ComposeStateHolderTest {
                 ): cc.hhhl.client.api.DriveFolderMutationResult {
                     return cc.hhhl.client.api.DriveFolderMutationResult.Deleted
                 }
+
+                override suspend fun loadFileDetails(
+                    token: String,
+                    fileId: String,
+                ): cc.hhhl.client.api.DriveFileDetailsResult {
+                    return cc.hhhl.client.api.DriveFileDetailsResult.Success(
+                        cc.hhhl.client.model.DriveFileDetails(sampleDriveFile()),
+                    )
+                }
             },
         ) {
             override suspend fun upload(upload: DriveFileUpload): DriveFileRepositoryResult = uploadResultProvider()
@@ -807,6 +1015,17 @@ class ComposeStateHolderTest {
                     token: String,
                     draft: ComposeDraft,
                 ): ComposeCreateResult = ComposeCreateResult.Success("unused")
+
+                override suspend fun listScheduledNotes(
+                    token: String,
+                    limit: Int,
+                    offset: Int,
+                ): ComposeScheduledNotesResult = ComposeScheduledNotesResult.Success(emptyList())
+
+                override suspend fun deleteScheduledNote(
+                    token: String,
+                    noteId: String,
+                ): ComposeScheduleDeleteResult = ComposeScheduleDeleteResult.Success
             },
         ) {
             override suspend fun send(draft: ComposeDraft): ComposeRepositoryResult {
@@ -814,6 +1033,51 @@ class ComposeStateHolderTest {
                 index += 1
                 return result
             }
+        }
+    }
+
+    private fun fakeComposeApi(): cc.hhhl.client.api.ComposeApi {
+        return object : cc.hhhl.client.api.ComposeApi {
+            override suspend fun createNote(
+                token: String,
+                draft: ComposeDraft,
+            ): ComposeCreateResult = ComposeCreateResult.Success("unused")
+
+            override suspend fun listScheduledNotes(
+                token: String,
+                limit: Int,
+                offset: Int,
+            ): ComposeScheduledNotesResult = ComposeScheduledNotesResult.Success(emptyList())
+
+            override suspend fun deleteScheduledNote(
+                token: String,
+                noteId: String,
+            ): ComposeScheduleDeleteResult = ComposeScheduleDeleteResult.Success
+        }
+    }
+
+    private fun memoryDraftStore(initialDraft: ComposeDraft? = null): MemoryComposeDraftStore {
+        return MemoryComposeDraftStore(initialDraft)
+    }
+
+    private class MemoryComposeDraftStore(
+        initialDraft: ComposeDraft? = null,
+    ) : ComposeDraftStore {
+        var savedDraft: ComposeDraft? = initialDraft
+            private set
+        var wasCleared: Boolean = false
+            private set
+
+        override fun loadDraft(): ComposeDraft? = savedDraft
+
+        override fun saveDraft(draft: ComposeDraft) {
+            savedDraft = draft
+            wasCleared = false
+        }
+
+        override fun clearDraft() {
+            savedDraft = null
+            wasCleared = true
         }
     }
 

@@ -1,6 +1,8 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.PageListKind
+import cc.hhhl.client.model.PageDraft
+import cc.hhhl.client.model.PageVisibility
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -101,6 +103,30 @@ class SharkeyPageApiTest {
     }
 
     @Test
+    fun showPageByPathPostsUsernameAndNameToPagesShowEndpoint() = runTest {
+        var capturedRequest: HttpRequestData? = null
+        val api = SharkeyPageApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                capturedRequest = request
+                respondPage()
+            },
+        )
+
+        val result = api.showPageByPath("token-123", username = "@alice", name = "guide")
+
+        assertIs<PageShowResult.Success>(result)
+        val request = checkNotNull(capturedRequest)
+        assertEquals("https://dc.hhhl.cc/api/pages/show", request.url.toString())
+        val body = (request.body as TextContent).text
+        assertTrue(body.contains(""""i":"token-123""""))
+        assertTrue(body.contains(""""username":"alice""""))
+        assertTrue(body.contains(""""name":"guide""""))
+        assertTrue(!body.contains(""""pageId""""))
+        assertEquals("page-1", result.page.id)
+    }
+
+    @Test
     fun likesAndUnlikesPageUsingPageId() = runTest {
         val paths = mutableListOf<String>()
         val api = SharkeyPageApi(
@@ -127,6 +153,46 @@ class SharkeyPageApiTest {
     }
 
     @Test
+    fun createUpdateAndDeletePageUsePageEndpoints() = runTest {
+        val calls = mutableListOf<Pair<String, String>>()
+        val api = SharkeyPageApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                calls.add(request.url.toString() to (request.body as TextContent).text)
+                if (request.url.encodedPath.endsWith("/delete")) {
+                    respond(content = "", status = HttpStatusCode.NoContent)
+                } else {
+                    respondPage()
+                }
+            },
+        )
+        val draft = PageDraft(
+            title = "Title",
+            name = "title",
+            summary = "Summary",
+            content = "第一段\n\n第二段",
+            visibility = PageVisibility.Followers,
+            fileIds = listOf("file-1"),
+        )
+
+        assertIs<PageMutationResult.Success>(api.createPage("token-123", draft))
+        assertIs<PageMutationResult.Success>(api.updatePage("token-123", "page-1", draft))
+        assertIs<PageActionResult.Success>(api.deletePage("token-123", "page-1"))
+
+        assertEquals("https://dc.hhhl.cc/api/pages/create", calls[0].first)
+        assertTrue(calls[0].second.contains(""""title":"Title""""))
+        assertTrue(calls[0].second.contains(""""name":"title""""))
+        assertTrue(calls[0].second.contains(""""summary":"Summary""""))
+        assertTrue(calls[0].second.contains(""""visibility":"followers""""))
+        assertTrue(calls[0].second.contains(""""fileIds":["file-1"]"""))
+        assertEquals("https://dc.hhhl.cc/api/pages/update", calls[1].first)
+        assertTrue(calls[1].second.contains(""""pageId":"page-1""""))
+        assertEquals("https://dc.hhhl.cc/api/pages/delete", calls[2].first)
+        assertTrue(calls[2].second.contains(""""pageId":"page-1""""))
+    }
+
+
+    @Test
     fun mapsUnauthorizedToUnauthorizedResult() = runTest {
         val api = SharkeyPageApi(
             client = testClient {
@@ -140,6 +206,10 @@ class SharkeyPageApiTest {
 
         assertIs<PageLoadResult.Unauthorized>(api.loadPages("expired", PageListKind.Featured, limit = 20))
         assertIs<PageShowResult.Unauthorized>(api.showPage("expired", pageId = "page-1"))
+        assertIs<PageShowResult.Unauthorized>(api.showPageByPath("expired", username = "alice", name = "guide"))
+        assertIs<PageMutationResult.Unauthorized>(
+            api.createPage("expired", PageDraft(title = "Title", name = "title")),
+        )
     }
 
     @Test
@@ -207,7 +277,12 @@ class SharkeyPageApiTest {
         return HttpClient(MockEngine { request -> handler(request) }) {
             expectSuccess = false
             install(ContentNegotiation) {
-                json(Json { ignoreUnknownKeys = true })
+                json(
+                    Json {
+                        ignoreUnknownKeys = true
+                        explicitNulls = false
+                    },
+                )
             }
         }
     }

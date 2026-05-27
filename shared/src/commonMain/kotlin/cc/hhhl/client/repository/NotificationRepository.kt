@@ -85,11 +85,7 @@ internal fun mergeNotificationPage(
     currentNotifications: List<NotificationItem>,
     loadedNotifications: List<NotificationItem>,
 ): List<NotificationItem> {
-    if (loadedNotifications.isEmpty()) return currentNotifications
-    val seenIds = currentNotifications.mapTo(mutableSetOf()) { it.id }
-    val newItems = loadedNotifications.filter { seenIds.add(it.id) }
-    if (newItems.isEmpty()) return currentNotifications
-    return currentNotifications + newItems
+    return currentNotifications.appendDistinctBy(loadedNotifications) { it.id }
 }
 
 sealed interface NotificationRepositoryResult {

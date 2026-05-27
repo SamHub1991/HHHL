@@ -25,4 +25,20 @@ open class ChatStreamingRepository(
             )
         return api.streamRoomMessages(token, cleanRoomId)
     }
+
+    open fun streamUserMessages(userId: String): Flow<ChatStreamingEvent> {
+        val cleanUserId = userId.trim()
+        if (cleanUserId.isEmpty()) {
+            return flowOf(
+                ChatStreamingEvent.Error("请选择用户"),
+                ChatStreamingEvent.Closed,
+            )
+        }
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return flowOf(
+                ChatStreamingEvent.Unauthorized,
+                ChatStreamingEvent.Closed,
+            )
+        return api.streamUserMessages(token, cleanUserId)
+    }
 }

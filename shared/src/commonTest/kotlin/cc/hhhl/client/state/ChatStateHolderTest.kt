@@ -2,23 +2,30 @@ package cc.hhhl.client.state
 
 import cc.hhhl.client.api.ChatApi
 import cc.hhhl.client.api.ChatMessageCreateResult
+import cc.hhhl.client.api.ChatMessageDeleteResult
 import cc.hhhl.client.api.ChatMessageLoadResult
 import cc.hhhl.client.api.ChatMessageReactionResult
+import cc.hhhl.client.api.ChatRoomActionResult
 import cc.hhhl.client.api.ChatRoomMemberLoadResult
 import cc.hhhl.client.api.ChatRoomLoadResult
+import cc.hhhl.client.api.ChatRoomMutationResult
 import cc.hhhl.client.api.ChatStreamingEvent
+import cc.hhhl.client.api.ChatUserHistoryLoadResult
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageReaction
 import cc.hhhl.client.model.ChatRoom
 import cc.hhhl.client.model.ChatRoomMember
+import cc.hhhl.client.model.ChatUserConversation
 import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
+import cc.hhhl.client.model.commonReactionOptions
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRoomMemberRepositoryResult
 import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ChatRepositoryResult
 import cc.hhhl.client.repository.ChatStreamingRepository
+import cc.hhhl.client.repository.ChatUserConversationRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.DriveFileRepositoryResult
 import kotlin.test.Test
@@ -124,7 +131,7 @@ class ChatStateHolderTest {
     fun permissionErrorRefreshDoesNotRequestRelogin() = runTest {
         val holder = ChatStateHolder(
             repository = fakeRepository(
-                ChatRepositoryResult.Error("当前登录缺少此功能权限，请重新登录一次后再试"),
+                ChatRepositoryResult.Error("当前登录缺少此功能权限，请检查应用授权或账号权限"),
             ),
             scope = TestScope(testScheduler),
         )
@@ -134,7 +141,7 @@ class ChatStateHolderTest {
         advanceUntilIdle()
 
         assertFalse(holder.state.value.requiresRelogin)
-        assertEquals("当前登录缺少此功能权限，请重新登录一次后再试", holder.state.value.errorMessage)
+        assertEquals("当前登录缺少此功能权限，请检查应用授权或账号权限", holder.state.value.errorMessage)
     }
 
     @Test
@@ -186,6 +193,126 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun staleMessageRefreshDoesNotOverwriteCurrentRoom() = runTest {
+        val firstRoom = sampleRoom(id = "room-1")
+        val secondRoom = sampleRoom(id = "room-2")
+        val firstRoomMessage = sampleMessage("message-room-1", roomId = "room-1")
+        val secondRoomMessage = sampleMessage("message-room-2", roomId = "room-2")
+        val messageRoomRequestIds = ArrayDeque<String>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(firstRoom, secondRoom)),
+                refreshMessagesResultProvider = {
+                    when (messageRoomRequestIds.removeFirst()) {
+                        "room-1" -> ChatMessageRepositoryResult.Success(listOf(firstRoomMessage))
+                        else -> ChatMessageRepositoryResult.Success(listOf(secondRoomMessage))
+                    }
+                },
+                onRefreshMessages = { messageRoomRequestIds.add(it) },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(firstRoom)
+        holder.selectRoom(secondRoom)
+        advanceUntilIdle()
+
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals(listOf(secondRoomMessage), holder.state.value.messages)
+    }
+
+    @Test
+    fun quietRoomRefreshUpdatesSelectedRoomUnreadCountWhileRoomIsNotVisible() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshResultProvider = {
+                    ChatRepositoryResult.Success(listOf(room.copy(unreadCount = 3)))
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.refreshRoomsQuietly(markSelectedRoomRead = false)
+        advanceUntilIdle()
+
+        assertEquals(3, holder.state.value.selectedRoomUnreadCount)
+        assertEquals(3, holder.state.value.rooms.first().unreadCount)
+        assertEquals(3, holder.state.value.selectedRoom?.unreadCount)
+    }
+
+    @Test
+    fun quietRoomRefreshAccumulatesUnreadWhenRemoteCountStaysFlat() = runTest {
+        val first = sampleRoom(
+            unreadCount = 1,
+            latestMessageAtLabel = "2026-05-25 10:01",
+            latestMessageMarker = "message-1",
+        )
+        val next = first.copy(
+            unreadCount = 1,
+            latestMessageAtLabel = "2026-05-25 10:02",
+            latestMessageMarker = "message-2",
+        )
+        var refreshCount = 0
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshResultProvider = {
+                    refreshCount += 1
+                    ChatRepositoryResult.Success(if (refreshCount == 1) listOf(first) else listOf(next))
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.refreshRoomsQuietly(markSelectedRoomRead = false)
+        advanceUntilIdle()
+
+        assertEquals(2, holder.state.value.rooms.first().unreadCount)
+    }
+
+    @Test
+    fun quietMessageRefreshComputesUnreadJumpWhenUnreadCountWasRestored() = runTest {
+        val room = sampleRoom()
+        var refreshMessagesResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Success(emptyList())
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshResultProvider = {
+                    ChatRepositoryResult.Success(listOf(room.copy(unreadCount = 2)))
+                },
+                refreshMessagesResultProvider = { refreshMessagesResult },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.refreshRoomsQuietly(markSelectedRoomRead = false)
+        advanceUntilIdle()
+
+        val older = sampleMessage("message-older", createdAt = "2026-05-25T01:00:00.000Z")
+        val middle = sampleMessage("message-middle", createdAt = "2026-05-25T02:00:00.000Z")
+        val latest = sampleMessage("message-latest", createdAt = "2026-05-25T03:00:00.000Z")
+        refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(older, middle, latest))
+
+        holder.refreshSelectedMessagesQuietly()
+        advanceUntilIdle()
+
+        assertEquals(2, holder.state.value.selectedRoomUnreadCount)
+        assertEquals("message-middle", holder.state.value.unreadJumpMessageId)
+    }
+
+    @Test
     fun sendMessageCreatesMessageAndClearsDraft() = runTest {
         val room = sampleRoom()
         val created = sampleMessage("message-created", text = "你好")
@@ -229,10 +356,11 @@ class ChatStateHolderTest {
         assertEquals("message-1", holder.state.value.quotedMessage?.messageId)
         assertEquals("Alice", holder.state.value.quotedMessage?.authorName)
         assertEquals("第一行", holder.state.value.quotedMessage?.previewText)
+        assertEquals(null, holder.state.value.replyingMessage)
     }
 
     @Test
-    fun sendQuotedMessagePrefixesQuoteAndClearsComposerQuote() = runTest {
+    fun sendReplyMessageUsesNativeReplyIdAndClearsComposerReply() = runTest {
         val room = sampleRoom()
         val message = sampleMessage("message-1", text = "原消息")
         val created = sampleMessage("message-created", text = "回复")
@@ -242,7 +370,40 @@ class ChatStateHolderTest {
                 result = ChatRepositoryResult.Success(listOf(room)),
                 refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
                 sendMessageResult = ChatMessageRepositoryResult.Created(created),
-                onSend = { roomId, text, fileId -> calls.add(SendCall(roomId, text, fileId)) },
+                onSend = { roomId, text, fileIds, replyId, quoteId ->
+                    calls.add(SendCall(roomId, text, fileIds, replyId, quoteId))
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.replyMessage("message-1")
+        holder.updateMessageDraft("收到")
+        holder.sendMessage()
+        advanceUntilIdle()
+
+        assertEquals(listOf(SendCall("room-1", "收到", emptyList(), "message-1", null)), calls)
+        assertEquals(null, holder.state.value.replyingMessage)
+        assertEquals(null, holder.state.value.quotedMessage)
+    }
+
+    @Test
+    fun sendQuotedMessageUsesNativeQuoteIdAndClearsComposerQuote() = runTest {
+        val room = sampleRoom()
+        val message = sampleMessage("message-1", text = "原消息")
+        val created = sampleMessage("message-created", text = "回复")
+        val calls = mutableListOf<SendCall>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+                sendMessageResult = ChatMessageRepositoryResult.Created(created),
+                onSend = { roomId, text, fileIds, replyId, quoteId ->
+                    calls.add(SendCall(roomId, text, fileIds, replyId, quoteId))
+                },
             ),
             scope = TestScope(testScheduler),
         )
@@ -255,8 +416,9 @@ class ChatStateHolderTest {
         holder.sendMessage()
         advanceUntilIdle()
 
-        assertEquals(listOf(SendCall("room-1", "> Alice: 原消息\n\n收到", null)), calls)
+        assertEquals(listOf(SendCall("room-1", "收到", emptyList(), null, "message-1")), calls)
         assertEquals(null, holder.state.value.quotedMessage)
+        assertEquals(null, holder.state.value.replyingMessage)
     }
 
     @Test
@@ -300,7 +462,7 @@ class ChatStateHolderTest {
     }
 
     @Test
-    fun uploadMediaKeepsLatestQueuedAttachmentForChatMessage() = runTest {
+    fun uploadMediaQueuesAttachmentsForChatMessage() = runTest {
         val files = listOf(
             sampleDriveFile().copy(id = "file-1", name = "first.png"),
             sampleDriveFile().copy(id = "file-2", name = "second.png"),
@@ -320,22 +482,29 @@ class ChatStateHolderTest {
 
         assertFalse(holder.state.value.isUploadingMedia)
         assertEquals(files[1], holder.state.value.attachedFile)
-        assertEquals(listOf(files[1].toChatComposerAttachment()), holder.state.value.attachments)
+        assertEquals(files.map { it.toChatComposerAttachment() }, holder.state.value.attachments)
     }
 
     @Test
-    fun sendMessageWithAttachedFilePassesFileIdAndClearsAttachment() = runTest {
+    fun sendMessageWithAttachedFilesPassesFileIdsAndClearsAttachment() = runTest {
         val room = sampleRoom()
         val file = sampleDriveFile()
         val created = sampleMessage("message-created", text = "")
         val calls = mutableListOf<SendCall>()
+        var uploadIndex = 0
         val holder = ChatStateHolder(
             repository = fakeRepository(
                 result = ChatRepositoryResult.Success(listOf(room)),
                 sendMessageResult = ChatMessageRepositoryResult.Created(created),
-                onSend = { roomId, text, fileId -> calls.add(SendCall(roomId, text, fileId)) },
+                onSend = { roomId, text, fileIds, replyId, quoteId ->
+                    calls.add(SendCall(roomId, text, fileIds, replyId, quoteId))
+                },
             ),
-            driveFileRepository = fakeDriveRepository(DriveFileRepositoryResult.Success(file)),
+            driveFileRepository = fakeDriveRepository {
+                DriveFileRepositoryResult.Success(
+                    if (uploadIndex++ == 0) file else file.copy(id = "file-2", name = "second.png"),
+                )
+            },
             scope = TestScope(testScheduler),
         )
 
@@ -343,11 +512,12 @@ class ChatStateHolderTest {
         holder.selectRoom(room)
         advanceUntilIdle()
         holder.uploadMedia(sampleUpload())
+        holder.uploadMedia(sampleUpload().copy(fileName = "second.png"))
         advanceUntilIdle()
         holder.sendMessage()
         advanceUntilIdle()
 
-        assertEquals(listOf(SendCall("room-1", "", "file-1")), calls)
+        assertEquals(listOf(SendCall("room-1", "", listOf("file-1", "file-2"), null, null)), calls)
         assertEquals(null, holder.state.value.attachedFile)
         assertEquals(emptyList(), holder.state.value.attachments)
         assertEquals(listOf(created), holder.state.value.messages)
@@ -447,6 +617,38 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun staleMemberRefreshDoesNotOverwriteCurrentRoom() = runTest {
+        val firstRoom = sampleRoom(id = "room-1")
+        val secondRoom = sampleRoom(id = "room-2")
+        val firstMember = sampleMember("membership-room-1", roomId = "room-1")
+        val secondMember = sampleMember("membership-room-2", roomId = "room-2")
+        val memberRoomRequestIds = ArrayDeque<String>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(firstRoom, secondRoom)),
+                refreshMembersResultProvider = {
+                    when (memberRoomRequestIds.removeFirst()) {
+                        "room-1" -> ChatRoomMemberRepositoryResult.Success(listOf(firstMember))
+                        else -> ChatRoomMemberRepositoryResult.Success(listOf(secondMember))
+                    }
+                },
+                onRefreshMembers = { memberRoomRequestIds.add(it) },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(firstRoom)
+        holder.showMembers()
+        holder.selectRoom(secondRoom)
+        holder.showMembers()
+        advanceUntilIdle()
+
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals(listOf(secondMember), holder.state.value.members)
+    }
+
+    @Test
     fun loadMoreMembersAppendsAndMarksEndReached() = runTest {
         val room = sampleRoom()
         val first = sampleMember("membership-member-1")
@@ -530,7 +732,7 @@ class ChatStateHolderTest {
 
     @Test
     fun streamingMessageAppendsToSelectedRoomWithoutBreakingLoadedMessages() = runTest {
-        val room = sampleRoom()
+        val room = sampleRoom(unreadCount = 4)
         val existing = sampleMessage("message-1", text = "旧消息")
         val streamed = sampleMessage("message-2", text = "实时消息")
         val stream = MutableSharedFlow<ChatStreamingEvent>()
@@ -552,7 +754,40 @@ class ChatStateHolderTest {
 
         assertTrue(holder.state.value.isStreamingMessages)
         assertEquals(listOf(existing, streamed), holder.state.value.messages)
+        assertEquals(0, holder.state.value.rooms.first().unreadCount)
         assertEquals(null, holder.state.value.streamingErrorMessage)
+    }
+
+    @Test
+    fun openingSpecialCareToastFromRoomListReopensTargetRoomAndSchedulesJump() = runTest {
+        val room = sampleRoom()
+        val streamed = sampleMessage("message-2", text = "实时消息")
+        val stream = MutableSharedFlow<ChatStreamingEvent>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(emptyList()),
+            ),
+            streamingRepository = fakeStreamingRepository(stream),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectRoom(room)
+        holder.updateSpecialCareUsers(setOf(streamed.fromUser.id))
+        advanceUntilIdle()
+        stream.emit(ChatStreamingEvent.MessageReceived(streamed))
+        advanceUntilIdle()
+        holder.closeRoom()
+
+        holder.openSpecialCareToast()
+        advanceUntilIdle()
+
+        assertEquals(room.id, holder.state.value.selectedRoom?.id)
+        assertEquals(streamed.id, holder.state.value.specialCareJumpMessageId)
+        assertEquals(null, holder.state.value.specialCareToast)
     }
 
     @Test
@@ -584,10 +819,10 @@ class ChatStateHolderTest {
     }
 
     @Test
-    fun streamingMessageIsDedupedById() = runTest {
+    fun streamingMessageReplacesDuplicateById() = runTest {
         val room = sampleRoom()
         val existing = sampleMessage("message-1", text = "旧消息")
-        val duplicate = sampleMessage("message-1", text = "实时重复")
+        val duplicate = sampleMessage("message-1", text = "实时更新")
         val stream = MutableSharedFlow<ChatStreamingEvent>()
         val holder = ChatStateHolder(
             repository = fakeRepository(
@@ -604,11 +839,11 @@ class ChatStateHolderTest {
         stream.emit(ChatStreamingEvent.MessageReceived(duplicate))
         advanceUntilIdle()
 
-        assertEquals(listOf(existing), holder.state.value.messages)
+        assertEquals(listOf(duplicate), holder.state.value.messages)
     }
 
     @Test
-    fun withChronologicalMessageReusesListForDuplicateAndSortsNewMessages() {
+    fun withChronologicalMessageReplacesChangedDuplicateAndSortsNewMessages() {
         val older = sampleMessage(
             id = "message-older",
             createdAt = "2026-05-25T01:00:00.000Z",
@@ -619,16 +854,62 @@ class ChatStateHolderTest {
         )
         val current = listOf(newer)
 
-        val unchanged = current.withChronologicalMessage(newer.copy(text = "duplicate"))
+        val unchanged = current.withChronologicalMessage(newer)
+        val replaced = current.withChronologicalMessage(newer.copy(text = "updated"))
         val inserted = current.withChronologicalMessage(older)
 
         assertSame(current, unchanged)
+        assertEquals("updated", replaced.single().text)
         assertEquals(listOf("message-older", "message-newer"), inserted.map { it.id })
     }
 
     @Test
+    fun ensureChronologicalMessagesReusesAlreadyOrderedUniqueList() {
+        val messages = listOf(
+            sampleMessage(
+                id = "message-older",
+                createdAt = "2026-05-25T01:00:00.000Z",
+            ),
+            sampleMessage(
+                id = "message-newer",
+                createdAt = "2026-05-25T02:00:00.000Z",
+            ),
+        )
+
+        assertSame(messages, messages.ensureChronologicalMessages())
+    }
+
+    @Test
+    fun mergeReplacingChronologicalMessagesReplacesExistingMessageById() {
+        val current = listOf(
+            sampleMessage(
+                id = "message-1",
+                text = "旧内容",
+                createdAt = "2026-05-25T01:00:00.000Z",
+            ),
+        )
+        val refreshed = listOf(
+            sampleMessage(
+                id = "message-1",
+                text = "新内容",
+                createdAt = "2026-05-25T01:00:00.000Z",
+            ),
+            sampleMessage(
+                id = "message-2",
+                createdAt = "2026-05-25T02:00:00.000Z",
+            ),
+        )
+
+        val merged = current.mergeReplacingChronologicalMessages(refreshed)
+
+        assertEquals(listOf("message-1", "message-2"), merged.map { it.id })
+        assertEquals("新内容", merged.first().text)
+    }
+
+    @Test
     fun userFacingStreamingErrorMessageHidesTransportDetails() {
-        assertEquals("登录已失效，请重新登录", userFacingStreamingErrorMessage("HTTP 401 Unauthorized"))
+        assertEquals("实时连接暂时不可用，请稍后重试", userFacingStreamingErrorMessage("HTTP 401 Unauthorized"))
+        assertEquals("实时连接暂时不可用，请稍后重试", userFacingStreamingErrorMessage("authentication handshake failed"))
         assertEquals("实时连接超时，请稍后重试", userFacingStreamingErrorMessage("Socket timeout"))
         assertEquals("实时连接已断开，请稍后重试", userFacingStreamingErrorMessage("connection reset by peer"))
         assertEquals("实时连接暂时不可用，请稍后重试", userFacingStreamingErrorMessage("serializer failed at frame 12"))
@@ -649,6 +930,82 @@ class ChatStateHolderTest {
         assertSame(current, current.withStableSpecialCareToast(duplicate))
         assertEquals(next, current.withStableSpecialCareToast(next))
         assertSame(current, current.withStableSpecialCareToast(null))
+    }
+
+    @Test
+    fun openUserConversationCreatesEmptyConversationAndSchedulesJump() = runTest {
+        val user = User("user-2", "Bob", "bob", "B")
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshUserMessagesResult = ChatMessageRepositoryResult.Success(emptyList()),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.openUserConversation(user, jumpMessageId = "message-2")
+        advanceUntilIdle()
+
+        assertEquals(user.id, holder.state.value.selectedUserConversation?.user?.id)
+        assertEquals(listOf(user.id), holder.state.value.userConversations.map { it.user.id })
+        assertEquals("message-2", holder.state.value.specialCareJumpMessageId)
+    }
+
+    @Test
+    fun refreshingUserConversationsCreatesSpecialCareToastOnlyForNewPeerMessages() = runTest {
+        val peer = User("user-1", "Alice", "alice", "A")
+        val first = sampleMessage("message-1")
+        val next = sampleMessage("message-2", text = "new dm")
+        var conversations = listOf(ChatUserConversation(peer, first))
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                userConversationResultProvider = {
+                    ChatUserConversationRepositoryResult.Success(conversations)
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.updateSpecialCareUsers(setOf(peer.id))
+        holder.refreshUserConversationsQuietly()
+        advanceUntilIdle()
+        assertEquals(null, holder.state.value.specialCareToast)
+
+        conversations = listOf(ChatUserConversation(peer, next))
+        holder.refreshUserConversationsQuietly()
+        advanceUntilIdle()
+
+        assertEquals(next.id, holder.state.value.specialCareToast?.messageId)
+        assertEquals(peer.id, holder.state.value.specialCareToast?.chatUserId)
+    }
+
+    @Test
+    fun refreshingUserConversationsAccumulatesUnreadWhenRemoteCountStaysFlat() = runTest {
+        val peer = User("user-1", "Alice", "alice", "A")
+        val first = sampleMessage("message-1").copy(isRead = false)
+        val next = sampleMessage("message-2", text = "new dm").copy(isRead = false)
+        var conversations = listOf(ChatUserConversation(peer, first, unreadCount = 1))
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                userConversationResultProvider = {
+                    ChatUserConversationRepositoryResult.Success(conversations)
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        conversations = listOf(ChatUserConversation(peer, next, unreadCount = 1))
+        holder.refreshUserConversationsQuietly()
+        advanceUntilIdle()
+
+        assertEquals(2, holder.state.value.userConversations.first().unreadCount)
     }
 
     @Test
@@ -702,6 +1059,49 @@ class ChatStateHolderTest {
         assertEquals(room, holder.state.value.selectedRoom)
     }
 
+    @Test
+    fun staleStreamingMessageDoesNotOverwriteCurrentRoom() = runTest {
+        val firstRoom = sampleRoom(id = "room-1")
+        val secondRoom = sampleRoom(id = "room-2")
+        val staleMessage = sampleMessage("message-room-1", roomId = "room-1")
+        val stream = MutableSharedFlow<ChatStreamingEvent>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(firstRoom, secondRoom)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(emptyList()),
+            ),
+            streamingRepository = fakeStreamingRepository(stream),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(firstRoom)
+        advanceUntilIdle()
+        holder.selectRoom(secondRoom)
+        advanceUntilIdle()
+        stream.emit(ChatStreamingEvent.MessageReceived(staleMessage))
+        advanceUntilIdle()
+
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals(emptyList(), holder.state.value.messages)
+    }
+
+    @Test
+    fun updateReactionOptionsPrependsLoadedReactionsForChatMenu() {
+        val holder = ChatStateHolder(
+            repository = fakeRepository(ChatRepositoryResult.Success(emptyList())),
+            scope = TestScope(),
+        )
+
+        holder.updateReactionOptions(listOf("🔥", "👍", "", "🔥", ":hhhl:"))
+
+        assertEquals(
+            listOf("🔥", "👍", ":hhhl:") +
+                commonReactionOptions.filterNot { it in listOf("🔥", "👍", ":hhhl:") },
+            holder.state.value.reactionOptions,
+        )
+    }
+
     private fun fakeRepository(
         result: ChatRepositoryResult,
         loadMoreResult: ChatRepositoryResult = result,
@@ -711,11 +1111,22 @@ class ChatStateHolderTest {
         reactResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.ReactionUpdated,
         refreshMembersResult: ChatRoomMemberRepositoryResult = ChatRoomMemberRepositoryResult.Success(emptyList()),
         loadMoreMembersResult: ChatRoomMemberRepositoryResult = refreshMembersResult,
+        refreshUserConversationsResult: ChatUserConversationRepositoryResult =
+            ChatUserConversationRepositoryResult.Success(emptyList()),
+        refreshUserMessagesResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Success(emptyList()),
         onRefresh: () -> Unit = {},
         onLoadMore: () -> Unit = {},
-        onSend: (String, String, String?) -> Unit = { _, _, _ -> },
+        onRefreshMessages: (String) -> Unit = {},
+        onRefreshMembers: (String) -> Unit = {},
+        onSend: (String, String, List<String>, String?, String?) -> Unit = { _, _, _, _, _ -> },
+        cachedMessagesResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Success(emptyList()),
+        cachedUserMessagesResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Success(emptyList()),
+        onCacheRoomMessage: (String, ChatMessage) -> Unit = { _, _ -> },
+        onCacheUserMessage: (String, ChatMessage) -> Unit = { _, _ -> },
         refreshResultProvider: (() -> ChatRepositoryResult)? = null,
+        refreshMessagesResultProvider: (() -> ChatMessageRepositoryResult)? = null,
         refreshMembersResultProvider: (() -> ChatRoomMemberRepositoryResult)? = null,
+        userConversationResultProvider: (() -> ChatUserConversationRepositoryResult)? = null,
     ): ChatRepository {
         return object : ChatRepository(
             tokenProvider = { "token-123" },
@@ -738,7 +1149,51 @@ class ChatStateHolderTest {
                     roomId: String,
                     text: String,
                     fileId: String?,
+                    fileIds: List<String>,
+                    replyId: String?,
+                    quoteId: String?,
                 ): ChatMessageCreateResult = ChatMessageCreateResult.Success(sampleMessage("created"))
+
+                override suspend fun createRoom(
+                    token: String,
+                    name: String,
+                    description: String,
+                ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom())
+
+                override suspend fun loadUserHistory(
+                    token: String,
+                    limit: Int,
+                ): ChatUserHistoryLoadResult = ChatUserHistoryLoadResult.Success(emptyList())
+
+                override suspend fun loadUserMessages(
+                    token: String,
+                    userId: String,
+                    limit: Int,
+                    untilId: String?,
+                ): ChatMessageLoadResult = ChatMessageLoadResult.Success(emptyList())
+
+                override suspend fun searchMessages(
+                    token: String,
+                    query: String,
+                    limit: Int,
+                    untilId: String?,
+                    roomId: String?,
+                    userId: String?,
+                ): ChatMessageLoadResult = ChatMessageLoadResult.Success(emptyList())
+
+                override suspend fun createUserMessage(
+                    token: String,
+                    userId: String,
+                    text: String,
+                    fileId: String?,
+                    replyId: String?,
+                    quoteId: String?,
+                ): ChatMessageCreateResult = ChatMessageCreateResult.Success(sampleMessage("created-user"))
+
+                override suspend fun deleteMessage(
+                    token: String,
+                    messageId: String,
+                ): ChatMessageDeleteResult = ChatMessageDeleteResult.Success
 
                 override suspend fun reactToMessage(
                     token: String,
@@ -758,6 +1213,35 @@ class ChatStateHolderTest {
                     limit: Int,
                     untilId: String?,
                 ): ChatRoomMemberLoadResult = ChatRoomMemberLoadResult.Success(emptyList())
+
+                override suspend fun updateRoom(
+                    token: String,
+                    roomId: String,
+                    name: String,
+                    description: String,
+                ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom())
+
+                override suspend fun inviteRoomMember(
+                    token: String,
+                    roomId: String,
+                    userId: String,
+                ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+                override suspend fun leaveRoom(
+                    token: String,
+                    roomId: String,
+                ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+                override suspend fun deleteRoom(
+                    token: String,
+                    roomId: String,
+                ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+                override suspend fun muteRoom(
+                    token: String,
+                    roomId: String,
+                    muted: Boolean,
+                ): ChatRoomActionResult = ChatRoomActionResult.Success
             },
         ) {
             override suspend fun refresh(): ChatRepositoryResult {
@@ -771,7 +1255,24 @@ class ChatStateHolderTest {
             }
 
             override suspend fun refreshMessages(roomId: String): ChatMessageRepositoryResult {
-                return refreshMessagesResult
+                onRefreshMessages(roomId)
+                return refreshMessagesResultProvider?.invoke() ?: refreshMessagesResult
+            }
+
+            override suspend fun restoreCachedMessages(roomId: String): ChatMessageRepositoryResult {
+                return cachedMessagesResult
+            }
+
+            override suspend fun restoreCachedUserMessages(userId: String): ChatMessageRepositoryResult {
+                return cachedUserMessagesResult
+            }
+
+            override suspend fun cacheRoomMessage(roomId: String, message: ChatMessage) {
+                onCacheRoomMessage(roomId, message)
+            }
+
+            override suspend fun cacheUserMessage(userId: String, message: ChatMessage) {
+                onCacheUserMessage(userId, message)
             }
 
             override suspend fun loadMoreMessages(
@@ -781,12 +1282,30 @@ class ChatStateHolderTest {
                 return loadMoreMessagesResult
             }
 
+            override suspend fun refreshUserConversations(): ChatUserConversationRepositoryResult {
+                return userConversationResultProvider?.invoke() ?: refreshUserConversationsResult
+            }
+
+            override suspend fun refreshUserMessages(userId: String): ChatMessageRepositoryResult {
+                return refreshUserMessagesResult
+            }
+
+            override suspend fun loadMoreUserMessages(
+                userId: String,
+                currentMessages: List<ChatMessage>,
+            ): ChatMessageRepositoryResult {
+                return refreshUserMessagesResult
+            }
+
             override suspend fun sendMessage(
                 roomId: String,
                 text: String,
                 fileId: String?,
+                fileIds: List<String>,
+                replyId: String?,
+                quoteId: String?,
             ): ChatMessageRepositoryResult {
-                onSend(roomId, text, fileId)
+                onSend(roomId, text, fileIds + listOfNotNull(fileId), replyId, quoteId)
                 return sendMessageResult
             }
 
@@ -805,6 +1324,7 @@ class ChatStateHolderTest {
             }
 
             override suspend fun refreshMembers(roomId: String): ChatRoomMemberRepositoryResult {
+                onRefreshMembers(roomId)
                 return refreshMembersResultProvider?.invoke() ?: refreshMembersResult
             }
 
@@ -827,9 +1347,16 @@ class ChatStateHolderTest {
                     token: String,
                     roomId: String,
                 ): Flow<ChatStreamingEvent> = flow
+
+                override fun streamUserMessages(
+                    token: String,
+                    userId: String,
+                ): Flow<ChatStreamingEvent> = flow
             },
         ) {
             override fun streamRoomMessages(roomId: String): Flow<ChatStreamingEvent> = flow
+
+            override fun streamUserMessages(userId: String): Flow<ChatStreamingEvent> = flow
         }
     }
 
@@ -911,6 +1438,15 @@ class ChatStateHolderTest {
                 ): cc.hhhl.client.api.DriveFolderMutationResult {
                     return cc.hhhl.client.api.DriveFolderMutationResult.Deleted
                 }
+
+                override suspend fun loadFileDetails(
+                    token: String,
+                    fileId: String,
+                ): cc.hhhl.client.api.DriveFileDetailsResult {
+                    return cc.hhhl.client.api.DriveFileDetailsResult.Success(
+                        cc.hhhl.client.model.DriveFileDetails(sampleDriveFile()),
+                    )
+                }
             },
         ) {
             override suspend fun upload(upload: DriveFileUpload): DriveFileRepositoryResult {
@@ -919,21 +1455,30 @@ class ChatStateHolderTest {
         }
     }
 
-    private fun sampleRoom(): ChatRoom {
+    private fun sampleRoom(
+        id: String = "room-1",
+        unreadCount: Int = 0,
+        latestMessageAtLabel: String = "",
+        latestMessageMarker: String = "",
+    ): ChatRoom {
         return ChatRoom(
-            id = "room-1",
-            membershipId = "membership-1",
+            id = id,
+            membershipId = "membership-$id",
             name = "AGI 讨论",
             description = "聊 AGI",
             joinMode = "open",
             memberCount = 2,
             isMuted = false,
             owner = User("owner", "Owner", "owner", "O"),
+            unreadCount = unreadCount,
+            latestMessageAtLabel = latestMessageAtLabel,
+            latestMessageMarker = latestMessageMarker,
         )
     }
 
     private fun sampleMessage(
         id: String,
+        roomId: String = "room-1",
         text: String = "message $id",
         reactions: List<ChatMessageReaction> = emptyList(),
         createdAt: String = "",
@@ -941,7 +1486,7 @@ class ChatStateHolderTest {
     ): ChatMessage {
         return ChatMessage(
             id = id,
-            roomId = "room-1",
+            roomId = roomId,
             fromUser = User("user-1", "Alice", "alice", "A"),
             text = text,
             createdAtLabel = createdAtLabel,
@@ -953,10 +1498,11 @@ class ChatStateHolderTest {
     private fun sampleMember(
         membershipId: String,
         userId: String = "user-1",
+        roomId: String = "room-1",
     ): ChatRoomMember {
         return ChatRoomMember(
             membershipId = membershipId,
-            roomId = "room-1",
+            roomId = roomId,
             user = User(userId, "Member $userId", "member$userId", "M"),
             joinedAtLabel = "2026-05-25 02:00",
         )
@@ -996,6 +1542,8 @@ class ChatStateHolderTest {
     private data class SendCall(
         val roomId: String,
         val text: String,
-        val fileId: String?,
+        val fileIds: List<String>,
+        val replyId: String?,
+        val quoteId: String?,
     )
 }

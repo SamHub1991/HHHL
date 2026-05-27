@@ -18,6 +18,7 @@ import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
@@ -155,6 +156,34 @@ class SharkeyDriveFileApiTest {
         assertTrue(body.contains(""""isSensitive":true"""))
         assertEquals("renamed.png", result.file.name)
         assertEquals(true, result.file.isSensitive)
+    }
+
+    @Test
+    fun moveFileToRootPostsExplicitNullFolderId() = runTest {
+        var capturedRequest: HttpRequestData? = null
+        val api = SharkeyDriveFileApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                capturedRequest = request
+                respondDriveFile()
+            },
+        )
+
+        val result = api.moveFile(
+            token = "token-123",
+            fileId = "file-1",
+            folderId = null,
+        )
+
+        assertIs<DriveFileMutationResult.Success>(result)
+        val request = checkNotNull(capturedRequest)
+        assertEquals("https://dc.hhhl.cc/api/drive/files/update", request.url.toString())
+        assertEquals(HttpMethod.Post, request.method)
+        val body = (request.body as TextContent).text
+        assertTrue(body.contains(""""i":"token-123""""))
+        assertTrue(body.contains(""""fileId":"file-1""""))
+        assertTrue(body.contains(""""folderId":null"""))
+        assertFalse(body.contains(""""name""""))
     }
 
     @Test
@@ -362,6 +391,50 @@ class SharkeyDriveFileApiTest {
 
         assertIs<DriveFileUploadResult.ServerError>(result)
         assertEquals("Cannot upload the file because you have no free space of drive.", result.message)
+    }
+
+    @Test
+    fun loadFileDetailsLoadsShowAndAttachedNotes() = runTest {
+        val requestedUrls = mutableListOf<String>()
+        val api = SharkeyDriveFileApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                requestedUrls += request.url.toString()
+                when (request.url.toString()) {
+                    "https://dc.hhhl.cc/api/drive/files/show" -> respondDriveFile(name = "details.png", isSensitive = false)
+                    "https://dc.hhhl.cc/api/drive/files/attached-notes" -> respond(
+                        content = """
+                            [
+                              {
+                                "id":"note-1",
+                                "createdAt":"2026-05-27T15:49:00.000Z",
+                                "text":"used in note",
+                                "user":{"id":"user-1","username":"alice","name":"Alice","avatarUrl":null},
+                                "files":[]
+                              }
+                            ]
+                        """.trimIndent(),
+                        status = HttpStatusCode.OK,
+                        headers = jsonHeaders,
+                    )
+                    else -> error("Unexpected request ${request.url}")
+                }
+            },
+        )
+
+        val result = api.loadFileDetails("token-123", "file-1")
+
+        assertIs<DriveFileDetailsResult.Success>(result)
+        assertEquals(
+            listOf(
+                "https://dc.hhhl.cc/api/drive/files/show",
+                "https://dc.hhhl.cc/api/drive/files/attached-notes",
+            ),
+            requestedUrls,
+        )
+        assertEquals("details.png", result.details.file.name)
+        assertEquals(1, result.details.attachedNotes.size)
+        assertEquals("note-1", result.details.attachedNotes.first().id)
     }
 
     private fun MockRequestHandleScope.respondDriveFile(

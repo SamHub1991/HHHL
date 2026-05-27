@@ -13,7 +13,7 @@ class AvatarImageSpecTest {
         )
 
         assertEquals("https://dc.hhhl.cc/avatar.webp", spec.remoteUrl)
-        assertEquals("H", spec.fallbackInitial)
+        assertEquals(HHHL_BRAND_AVATAR_URL, spec.fallbackUrl)
     }
 
     @Test
@@ -21,6 +21,6 @@ class AvatarImageSpecTest {
         val spec = avatarImageSpec(initial = "", avatarUrl = " ")
 
         assertNull(spec.remoteUrl)
-        assertEquals("H", spec.fallbackInitial)
+        assertEquals(HHHL_BRAND_AVATAR_URL, spec.fallbackUrl)
     }
 }

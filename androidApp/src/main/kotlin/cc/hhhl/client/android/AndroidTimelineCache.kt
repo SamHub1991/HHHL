@@ -11,16 +11,22 @@ class AndroidTimelineCache(context: Context) : TimelineCache {
         PREFERENCES_NAME,
         Context.MODE_PRIVATE,
     )
+    private var snapshots: Map<TimelineKind, List<Note>>? = null
 
     override suspend fun read(kind: TimelineKind): List<Note> {
-        return readSnapshots()[kind].orEmpty()
+        return loadedSnapshots()[kind].orEmpty()
     }
 
     override suspend fun write(kind: TimelineKind, notes: List<Note>) {
-        val snapshots = readSnapshots() + (kind to notes.take(MAX_NOTES_PER_TIMELINE))
+        val nextSnapshots = loadedSnapshots() + (kind to notes.take(MAX_NOTES_PER_TIMELINE))
+        snapshots = nextSnapshots
         preferences.edit()
-            .putString(KEY_SNAPSHOTS, TimelineCacheCodec.encode(snapshots))
+            .putString(KEY_SNAPSHOTS, TimelineCacheCodec.encode(nextSnapshots))
             .apply()
+    }
+
+    private fun loadedSnapshots(): Map<TimelineKind, List<Note>> {
+        return snapshots ?: readSnapshots().also { snapshots = it }
     }
 
     private fun readSnapshots(): Map<TimelineKind, List<Note>> {

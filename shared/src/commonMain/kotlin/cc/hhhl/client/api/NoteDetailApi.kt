@@ -60,6 +60,8 @@ class SharkeyNoteDetailApi(
                 setBody(NoteDetailRequest(i = cleanToken, noteId = cleanNoteId))
             }
 
+            if (response.isSharkeyUnauthorized()) return NoteDetailLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> NoteDetailLoadResult.Success(
                     response.body<SharkeyNoteDto>().toDomainNote(),

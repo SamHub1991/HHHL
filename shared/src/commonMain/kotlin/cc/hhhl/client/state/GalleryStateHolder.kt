@@ -2,7 +2,9 @@ package cc.hhhl.client.state
 
 import cc.hhhl.client.model.GalleryListKind
 import cc.hhhl.client.model.GalleryPost
+import cc.hhhl.client.model.GalleryPostDraft
 import cc.hhhl.client.repository.GalleryActionRepositoryResult
+import cc.hhhl.client.repository.GalleryMutationRepositoryResult
 import cc.hhhl.client.repository.GalleryPostRepositoryResult
 import cc.hhhl.client.repository.GalleryPostsRepositoryResult
 import cc.hhhl.client.repository.GalleryRepository
@@ -20,6 +22,7 @@ data class GalleryUiState(
     val isLoadingMore: Boolean = false,
     val isLoadingDetail: Boolean = false,
     val isChangingLike: Boolean = false,
+    val isMutatingPost: Boolean = false,
     val endReached: Boolean = false,
     val errorMessage: String? = null,
     val detailErrorMessage: String? = null,
@@ -152,6 +155,65 @@ class GalleryStateHolder(
         }
     }
 
+    fun createPost(draft: GalleryPostDraft) {
+        if (state.value.isMutatingPost) return
+        mutableState.update {
+            it.copy(isMutatingPost = true, errorMessage = null, detailErrorMessage = null, requiresRelogin = false)
+        }
+
+        scope.launch {
+            applyMutationResult(repository.createPost(draft), closeDetail = false)
+        }
+    }
+
+    fun updateSelectedPost(draft: GalleryPostDraft) {
+        val post = state.value.selectedPost ?: return
+        if (state.value.isMutatingPost) return
+        mutableState.update {
+            it.copy(isMutatingPost = true, detailErrorMessage = null, requiresRelogin = false)
+        }
+
+        scope.launch {
+            applyMutationResult(repository.updatePost(post.id, draft), closeDetail = false)
+        }
+    }
+
+    fun deleteSelectedPost() {
+        val post = state.value.selectedPost ?: return
+        if (state.value.isMutatingPost) return
+        mutableState.update {
+            it.copy(isMutatingPost = true, detailErrorMessage = null, requiresRelogin = false)
+        }
+
+        scope.launch {
+            when (val result = repository.deletePost(post.id)) {
+                GalleryActionRepositoryResult.Success -> mutableState.update { current ->
+                    current.copy(
+                        posts = current.posts.filterNot { it.id == post.id },
+                        selectedPost = null,
+                        isMutatingPost = false,
+                        detailErrorMessage = null,
+                        requiresRelogin = false,
+                    )
+                }
+                GalleryActionRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(
+                        isMutatingPost = false,
+                        detailErrorMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is GalleryActionRepositoryResult.Error -> mutableState.update {
+                    it.copy(
+                        isMutatingPost = false,
+                        detailErrorMessage = result.message,
+                        requiresRelogin = false,
+                    )
+                }
+            }
+        }
+    }
+
     private fun applyPostsResult(
         result: GalleryPostsRepositoryResult,
         loadingMore: Boolean,
@@ -225,6 +287,48 @@ class GalleryStateHolder(
                 it.copy(
                     isChangingLike = false,
                     detailErrorMessage = result.message,
+                    requiresRelogin = false,
+                )
+            }
+        }
+    }
+
+    private fun applyMutationResult(
+        result: GalleryMutationRepositoryResult,
+        closeDetail: Boolean,
+    ) {
+        when (result) {
+            is GalleryMutationRepositoryResult.Success -> mutableState.update { current ->
+                val existing = current.posts.any { it.id == result.post.id }
+                current.copy(
+                    posts = if (existing) {
+                        current.posts.map { if (it.id == result.post.id) result.post else it }
+                    } else {
+                        listOf(result.post) + current.posts
+                    },
+                    selectedPost = if (closeDetail) null else {
+                        current.selectedPost?.takeIf { it.id == result.post.id }?.let { result.post }
+                            ?: current.selectedPost
+                    },
+                    isMutatingPost = false,
+                    errorMessage = null,
+                    detailErrorMessage = null,
+                    requiresRelogin = false,
+                )
+            }
+            GalleryMutationRepositoryResult.Unauthorized -> mutableState.update {
+                it.copy(
+                    isMutatingPost = false,
+                    detailErrorMessage = "登录已失效，请重新登录",
+                    errorMessage = if (it.selectedPost == null) "登录已失效，请重新登录" else it.errorMessage,
+                    requiresRelogin = true,
+                )
+            }
+            is GalleryMutationRepositoryResult.Error -> mutableState.update {
+                it.copy(
+                    isMutatingPost = false,
+                    detailErrorMessage = if (it.selectedPost != null) result.message else it.detailErrorMessage,
+                    errorMessage = if (it.selectedPost == null) result.message else it.errorMessage,
                     requiresRelogin = false,
                 )
             }

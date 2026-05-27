@@ -1,7 +1,10 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.AnnouncementApi
+import cc.hhhl.client.api.AnnouncementAdminLoadResult
+import cc.hhhl.client.api.AnnouncementDeleteResult
 import cc.hhhl.client.api.AnnouncementLoadResult
+import cc.hhhl.client.api.AnnouncementMutationResult
 import cc.hhhl.client.api.AnnouncementReadResult
 import cc.hhhl.client.api.AnnouncementShowResult
 import cc.hhhl.client.model.Announcement
@@ -84,6 +87,40 @@ class AnnouncementRepositoryTest {
     }
 
     @Test
+    fun adminCreateUpdateDeleteUseTokenAndDraft() = runTest {
+        val mutationCalls = mutableListOf<MutationCall>()
+        val deleteCalls = mutableListOf<DeleteCall>()
+        val repository = AnnouncementRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                mutationCalls = mutationCalls,
+                deleteCalls = deleteCalls,
+                mutationResult = AnnouncementMutationResult.Success(sampleAnnouncement("ann-2")),
+            ),
+        )
+
+        val draft = AnnouncementDraft(
+            title = " 新公告 ",
+            text = " 内容 ",
+            icon = "warning",
+            display = "banner",
+        )
+
+        assertIs<AnnouncementMutationRepositoryResult.Success>(repository.createAnnouncement(draft))
+        assertIs<AnnouncementMutationRepositoryResult.Success>(repository.updateAnnouncement("ann-1", draft))
+        assertIs<AnnouncementDeleteRepositoryResult.Success>(repository.deleteAnnouncement("ann-1"))
+
+        assertEquals(
+            listOf(
+                MutationCall("create", "token-123", null, "新公告", "内容", "warning", "banner"),
+                MutationCall("update", "token-123", "ann-1", "新公告", "内容", "warning", "banner"),
+            ),
+            mutationCalls,
+        )
+        assertEquals(listOf(DeleteCall("token-123", "ann-1")), deleteCalls)
+    }
+
+    @Test
     fun missingTokenReturnsUnauthorizedWithoutCallingApi() = runTest {
         var calls = 0
         val repository = AnnouncementRepository(
@@ -94,6 +131,11 @@ class AnnouncementRepositoryTest {
         assertIs<AnnouncementsRepositoryResult.Unauthorized>(repository.refresh())
         assertIs<AnnouncementRepositoryResult.Unauthorized>(repository.show("ann-1"))
         assertIs<AnnouncementReadRepositoryResult.Unauthorized>(repository.markRead("ann-1"))
+        assertIs<AnnouncementsRepositoryResult.Unauthorized>(repository.refreshAdmin())
+        assertIs<AnnouncementMutationRepositoryResult.Unauthorized>(
+            repository.createAnnouncement(AnnouncementDraft("标题", "内容")),
+        )
+        assertIs<AnnouncementDeleteRepositoryResult.Unauthorized>(repository.deleteAnnouncement("ann-1"))
         assertEquals(0, calls)
     }
 
@@ -101,9 +143,14 @@ class AnnouncementRepositoryTest {
         listCalls: MutableList<ListCall> = mutableListOf(),
         showCalls: MutableList<ShowCall> = mutableListOf(),
         readCalls: MutableList<ReadCall> = mutableListOf(),
+        mutationCalls: MutableList<MutationCall> = mutableListOf(),
+        deleteCalls: MutableList<DeleteCall> = mutableListOf(),
         listResult: AnnouncementLoadResult = AnnouncementLoadResult.Success(emptyList()),
+        adminListResult: AnnouncementAdminLoadResult = AnnouncementAdminLoadResult.Success(emptyList()),
         showResult: AnnouncementShowResult = AnnouncementShowResult.Success(sampleAnnouncement("ann-1")),
         readResult: AnnouncementReadResult = AnnouncementReadResult.Success,
+        mutationResult: AnnouncementMutationResult = AnnouncementMutationResult.Success(sampleAnnouncement("ann-1")),
+        deleteResult: AnnouncementDeleteResult = AnnouncementDeleteResult.Success,
         onCall: () -> Unit = {},
     ): AnnouncementApi {
         return object : AnnouncementApi {
@@ -134,6 +181,48 @@ class AnnouncementRepositoryTest {
                 readCalls.add(ReadCall(token, announcementId))
                 return readResult
             }
+
+            override suspend fun loadAdminAnnouncements(
+                token: String,
+                limit: Int,
+            ): AnnouncementAdminLoadResult {
+                onCall()
+                return adminListResult
+            }
+
+            override suspend fun createAnnouncement(
+                token: String,
+                title: String,
+                text: String,
+                icon: String,
+                display: String,
+            ): AnnouncementMutationResult {
+                onCall()
+                mutationCalls.add(MutationCall("create", token, null, title, text, icon, display))
+                return mutationResult
+            }
+
+            override suspend fun updateAnnouncement(
+                token: String,
+                announcementId: String,
+                title: String,
+                text: String,
+                icon: String,
+                display: String,
+            ): AnnouncementMutationResult {
+                onCall()
+                mutationCalls.add(MutationCall("update", token, announcementId, title, text, icon, display))
+                return mutationResult
+            }
+
+            override suspend fun deleteAnnouncement(
+                token: String,
+                announcementId: String,
+            ): AnnouncementDeleteResult {
+                onCall()
+                deleteCalls.add(DeleteCall(token, announcementId))
+                return deleteResult
+            }
         }
     }
 
@@ -148,6 +237,21 @@ class AnnouncementRepositoryTest {
     )
 
     private data class ReadCall(
+        val token: String,
+        val announcementId: String,
+    )
+
+    private data class MutationCall(
+        val action: String,
+        val token: String,
+        val announcementId: String?,
+        val title: String,
+        val text: String,
+        val icon: String,
+        val display: String,
+    )
+
+    private data class DeleteCall(
         val token: String,
         val announcementId: String,
     )

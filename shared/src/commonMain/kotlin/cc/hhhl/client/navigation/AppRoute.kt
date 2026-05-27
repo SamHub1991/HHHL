@@ -1,6 +1,7 @@
 package cc.hhhl.client.navigation
 
 import cc.hhhl.client.model.InstanceCapabilities
+import cc.hhhl.client.model.SettingsManagementSectionKey
 import cc.hhhl.client.model.UserSocialKind
 
 enum class RootRoute(val label: String, val icon: String) {
@@ -54,8 +55,12 @@ fun rootRouteFor(route: AppRoute): RootRoute {
         AppRoute.Chat -> RootRoute.Chat
         AppRoute.Notifications -> RootRoute.Notifications
         AppRoute.Profile,
+        AppRoute.ProfileNotes,
         AppRoute.Settings,
+        is AppRoute.SettingsManagement,
+        AppRoute.AdminDashboard,
         AppRoute.Drive,
+        AppRoute.Achievements,
         AppRoute.FavoriteNotes,
         AppRoute.UserLists,
         AppRoute.FollowRequests,
@@ -74,8 +79,12 @@ sealed interface AppRoute {
     data object Chat : AppRoute
     data object Notifications : AppRoute
     data object Profile : AppRoute
+    data object ProfileNotes : AppRoute
     data object Settings : AppRoute
+    data class SettingsManagement(val key: SettingsManagementSectionKey) : AppRoute
+    data object AdminDashboard : AppRoute
     data object Drive : AppRoute
+    data object Achievements : AppRoute
     data object FavoriteNotes : AppRoute
     data object UserLists : AppRoute
     data object FollowRequests : AppRoute

@@ -26,6 +26,15 @@ interface DiscoverApi {
         query: String,
         limit: Int,
         untilId: String? = null,
+        options: DiscoverNoteSearchOptions = DiscoverNoteSearchOptions(),
+    ): DiscoverSearchResult
+
+    suspend fun searchNotesByTag(
+        token: String?,
+        tag: String,
+        limit: Int,
+        untilId: String? = null,
+        options: DiscoverNoteSearchOptions = DiscoverNoteSearchOptions(),
     ): DiscoverSearchResult
 
     suspend fun searchUsers(
@@ -42,6 +51,15 @@ interface DiscoverApi {
         offset: Int = 0,
         host: String? = null,
     ): DiscoverFederationResult
+
+    suspend fun loadFederationInstance(host: String): DiscoverFederationInstanceResult
+
+    suspend fun updateFederationInstance(
+        token: String,
+        host: String,
+        isSilenced: Boolean,
+        isSuspended: Boolean,
+    ): DiscoverFederationActionResult
 }
 
 sealed interface DiscoverSearchResult {
@@ -92,6 +110,34 @@ sealed interface DiscoverFederationResult {
     data class NetworkError(val message: String) : DiscoverFederationResult
 }
 
+sealed interface DiscoverFederationInstanceResult {
+    data class Success(val instance: FederationInstance) : DiscoverFederationInstanceResult
+
+    data object Unavailable : DiscoverFederationInstanceResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : DiscoverFederationInstanceResult
+
+    data class NetworkError(val message: String) : DiscoverFederationInstanceResult
+}
+
+sealed interface DiscoverFederationActionResult {
+    data object Success : DiscoverFederationActionResult
+
+    data object Unauthorized : DiscoverFederationActionResult
+
+    data object Unavailable : DiscoverFederationActionResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : DiscoverFederationActionResult
+
+    data class NetworkError(val message: String) : DiscoverFederationActionResult
+}
+
 class SharkeyDiscoverApi(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val client: HttpClient = defaultDiscoverClient(),
@@ -101,6 +147,7 @@ class SharkeyDiscoverApi(
         query: String,
         limit: Int,
         untilId: String?,
+        options: DiscoverNoteSearchOptions,
     ): DiscoverSearchResult {
         val cleanToken = token.trim()
         val cleanQuery = query.trim()
@@ -118,9 +165,67 @@ class SharkeyDiscoverApi(
                         query = cleanQuery,
                         limit = limit.coerceIn(1, 100),
                         untilId = untilId?.takeIf { it.isNotBlank() },
+                        origin = options.origin.cleanRequestValue(),
+                        userId = options.userId.cleanRequestValue(),
+                        username = options.username.cleanRequestValue(),
+                        host = options.host.cleanRequestValue(),
+                        channelId = options.channelId.cleanRequestValue(),
+                        sinceDate = options.sinceDate.cleanRequestValue(),
+                        untilDate = options.untilDate.cleanRequestValue(),
+                        withFiles = options.withFiles.takeIf { it },
+                        includeReplies = options.includeReplies.takeIf { !it },
                     ),
                 )
             }
+
+            if (response.isSharkeyUnauthorized()) return DiscoverSearchResult.Unauthorized
+
+            when (response.status) {
+                HttpStatusCode.OK -> DiscoverSearchResult.Success(
+                    response.body<List<SharkeyNoteDto>>().map { it.toDomainNote() },
+                )
+                HttpStatusCode.Unauthorized -> DiscoverSearchResult.Unauthorized
+                else -> DiscoverSearchResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            DiscoverSearchResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun searchNotesByTag(
+        token: String?,
+        tag: String,
+        limit: Int,
+        untilId: String?,
+        options: DiscoverNoteSearchOptions,
+    ): DiscoverSearchResult {
+        val cleanToken = token?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanTag = tag.trim().removePrefix("#")
+        if (cleanTag.isEmpty()) {
+            return DiscoverSearchResult.ServerError(400, "请输入话题")
+        }
+
+        return try {
+            val response = client.post(apiUrl("notes", "search-by-tag")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    DiscoverTagSearchRequest(
+                        i = cleanToken,
+                        tag = cleanTag,
+                        limit = limit.coerceIn(1, 100),
+                        untilId = untilId?.takeIf { it.isNotBlank() },
+                        withFiles = options.withFiles.takeIf { it },
+                        reply = false.takeIf { !options.includeReplies },
+                    ),
+                )
+            }
+
+            if (response.isSharkeyUnauthorized()) return DiscoverSearchResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> DiscoverSearchResult.Success(
@@ -165,6 +270,8 @@ class SharkeyDiscoverApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return DiscoverUserSearchResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> DiscoverUserSearchResult.Success(
                     response.body<List<DiscoverUserDto>>().map { it.toDomainUser() },
@@ -186,6 +293,7 @@ class SharkeyDiscoverApi(
         return try {
             val response = client.post(apiUrl("hashtags", "trend")) {
                 contentType(ContentType.Application.Json)
+                setBody(DiscoverEmptyRequest())
             }
 
             when (response.status) {
@@ -238,6 +346,83 @@ class SharkeyDiscoverApi(
         }
     }
 
+    override suspend fun loadFederationInstance(host: String): DiscoverFederationInstanceResult {
+        val cleanHost = host.trim()
+        if (cleanHost.isEmpty()) {
+            return DiscoverFederationInstanceResult.ServerError(400, "实例域名为空")
+        }
+
+        return try {
+            val response = client.post(apiUrl("federation", "show-instance")) {
+                contentType(ContentType.Application.Json)
+                setBody(FederationInstanceShowRequest(host = cleanHost))
+            }
+
+            when (response.status) {
+                HttpStatusCode.OK -> DiscoverFederationInstanceResult.Success(
+                    response.body<FederationInstanceDto>().toDomainInstance(),
+                )
+                HttpStatusCode.NotFound -> DiscoverFederationInstanceResult.Unavailable
+                else -> DiscoverFederationInstanceResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            DiscoverFederationInstanceResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun updateFederationInstance(
+        token: String,
+        host: String,
+        isSilenced: Boolean,
+        isSuspended: Boolean,
+    ): DiscoverFederationActionResult {
+        val cleanToken = token.trim()
+        val cleanHost = host.trim()
+        if (cleanToken.isEmpty()) return DiscoverFederationActionResult.Unauthorized
+        if (cleanHost.isEmpty()) {
+            return DiscoverFederationActionResult.ServerError(400, "实例域名为空")
+        }
+
+        return try {
+            val response = client.post(apiUrl("admin", "federation", "update-instance")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    FederationInstanceUpdateRequest(
+                        i = cleanToken,
+                        host = cleanHost,
+                        isSilenced = isSilenced,
+                        isSuspended = isSuspended,
+                    ),
+                )
+            }
+
+            if (response.isSharkeyUnauthorized()) return DiscoverFederationActionResult.Unauthorized
+
+            when (response.status) {
+                HttpStatusCode.OK, HttpStatusCode.NoContent -> DiscoverFederationActionResult.Success
+                HttpStatusCode.Unauthorized -> DiscoverFederationActionResult.Unauthorized
+                HttpStatusCode.Forbidden -> DiscoverFederationActionResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+                HttpStatusCode.NotFound -> DiscoverFederationActionResult.Unavailable
+                else -> DiscoverFederationActionResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            DiscoverFederationActionResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
     private fun apiUrl(vararg endpoint: String): String {
         return URLBuilder(baseUrl.trim().trimEnd('/'))
             .appendPathSegments("api", *endpoint)
@@ -249,12 +434,43 @@ class SharkeyDiscoverApi(
     }
 }
 
+data class DiscoverNoteSearchOptions(
+    val origin: String = "",
+    val username: String = "",
+    val userId: String = "",
+    val host: String = "",
+    val channelId: String = "",
+    val sinceDate: String = "",
+    val untilDate: String = "",
+    val withFiles: Boolean = false,
+    val includeReplies: Boolean = true,
+)
+
 @Serializable
 private data class DiscoverSearchRequest(
     val i: String,
     val query: String,
     val limit: Int,
     val untilId: String? = null,
+    val origin: String? = null,
+    val userId: String? = null,
+    val username: String? = null,
+    val host: String? = null,
+    val channelId: String? = null,
+    val sinceDate: String? = null,
+    val untilDate: String? = null,
+    val withFiles: Boolean? = null,
+    val includeReplies: Boolean? = null,
+)
+
+@Serializable
+private data class DiscoverTagSearchRequest(
+    val i: String? = null,
+    val tag: String,
+    val limit: Int,
+    val untilId: String? = null,
+    val withFiles: Boolean? = null,
+    val reply: Boolean? = null,
 )
 
 @Serializable
@@ -297,6 +513,9 @@ private data class DiscoverUserDto(
 }
 
 @Serializable
+private class DiscoverEmptyRequest
+
+@Serializable
 private data class TrendingHashtagDto(
     val tag: String,
     val chart: List<Int> = emptyList(),
@@ -320,8 +539,21 @@ private data class FederationInstancesRequest(
 )
 
 @Serializable
+private data class FederationInstanceShowRequest(
+    val host: String,
+)
+
+@Serializable
+private data class FederationInstanceUpdateRequest(
+    val i: String,
+    val host: String,
+    val isSilenced: Boolean,
+    val isSuspended: Boolean,
+)
+
+@Serializable
 private data class FederationInstanceDto(
-    val id: String,
+    val id: String = "",
     val host: String,
     val usersCount: Int = 0,
     val notesCount: Int = 0,
@@ -333,13 +565,21 @@ private data class FederationInstanceDto(
     val softwareName: String? = null,
     val softwareVersion: String? = null,
     val name: String? = null,
+    val description: String? = null,
     val isSilenced: Boolean = false,
+    val maintainerName: String? = null,
+    val maintainerEmail: String? = null,
+    val iconUrl: String? = null,
+    val faviconUrl: String? = null,
+    val latestRequestReceivedAt: String? = null,
+    val infoUpdatedAt: String? = null,
 ) {
     fun toDomainInstance(): FederationInstance {
         return FederationInstance(
-            id = id,
+            id = id.ifBlank { host },
             host = host,
             name = name,
+            description = description,
             softwareName = softwareName,
             softwareVersion = softwareVersion,
             usersCount = usersCount,
@@ -350,6 +590,18 @@ private data class FederationInstanceDto(
             isSuspended = isSuspended,
             isBlocked = isBlocked,
             isSilenced = isSilenced,
+            maintainerName = maintainerName,
+            maintainerEmail = maintainerEmail,
+            iconUrl = iconUrl,
+            faviconUrl = faviconUrl,
+            latestRequestReceivedAtLabel = latestRequestReceivedAt
+                ?.takeIf { it.isNotBlank() }
+                ?.toLocalCompactDateLabel()
+                .orEmpty(),
+            infoUpdatedAtLabel = infoUpdatedAt
+                ?.takeIf { it.isNotBlank() }
+                ?.toLocalCompactDateLabel()
+                .orEmpty(),
         )
     }
 }
@@ -364,6 +616,10 @@ private fun String.toDiscoverOriginValue(): String {
         "remote" -> "remote"
         else -> "combined"
     }
+}
+
+private fun String.cleanRequestValue(): String? {
+    return trim().takeIf { it.isNotBlank() }
 }
 
 @Serializable

@@ -161,6 +161,8 @@ class SharkeyClipApi(
                 setBody(ClipsRequest(i = cleanToken))
             }
 
+            if (response.isSharkeyUnauthorized()) return ClipLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> ClipLoadResult.Success(
                     response.body<List<ClipDto>>().map { it.toDomainClip() },
@@ -199,6 +201,8 @@ class SharkeyClipApi(
                     ),
                 )
             }
+
+            if (response.isSharkeyUnauthorized()) return ClipNotesLoadResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> ClipNotesLoadResult.Success(
@@ -246,6 +250,8 @@ class SharkeyClipApi(
                     ),
                 )
             }
+
+            if (response.isSharkeyUnauthorized()) return ClipCreateResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> ClipCreateResult.Success(
@@ -302,6 +308,8 @@ class SharkeyClipApi(
                     ),
                 )
             }
+
+            if (response.isSharkeyUnauthorized()) return ClipUpdateResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> ClipUpdateResult.Success(
@@ -366,7 +374,7 @@ class SharkeyClipApi(
 
             when {
                 response.status.value in 200..299 -> ClipActionResult.Success
-                response.status == HttpStatusCode.Unauthorized -> ClipActionResult.Unauthorized
+                response.isSharkeyUnauthorized() -> ClipActionResult.Unauthorized
                 else -> ClipActionResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -416,7 +424,7 @@ class SharkeyClipApi(
 
             when {
                 response.status.value in 200..299 -> ClipActionResult.Success
-                response.status == HttpStatusCode.Unauthorized -> ClipActionResult.Unauthorized
+                response.isSharkeyUnauthorized() -> ClipActionResult.Unauthorized
                 else -> ClipActionResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",

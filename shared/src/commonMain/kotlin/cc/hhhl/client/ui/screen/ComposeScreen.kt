@@ -1,6 +1,8 @@
 package cc.hhhl.client.ui.screen
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,44 +12,77 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.AlternateEmail
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Poll
+import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import cc.hhhl.client.ui.component.HhhlTextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.api.ComposeDraft
+import cc.hhhl.client.api.ComposeReactionAcceptance
+import cc.hhhl.client.api.ComposeScheduleDraft
+import cc.hhhl.client.api.ComposeScheduledNote
 import cc.hhhl.client.model.CustomEmoji
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NoteVisibility
+import cc.hhhl.client.model.TrendingHashtag
+import cc.hhhl.client.model.User
+import cc.hhhl.client.state.ComposeCompletionKind
+import cc.hhhl.client.state.ComposeCompletionUiState
 import cc.hhhl.client.state.ComposePollDeadlinePreset
 import cc.hhhl.client.state.ComposeUiState
 import cc.hhhl.client.state.isComposeVisibleUserMention
 import cc.hhhl.client.state.toComposeVisibleUserTokens
 import cc.hhhl.client.state.toExpiresAtIso
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.CustomEmojiPicker
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlInlinePanel
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
+import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
+import cc.hhhl.client.ui.component.InlineRichText
+import kotlinx.datetime.Instant
+import kotlinx.datetime.LocalDateTime
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toInstant
+import kotlinx.datetime.toLocalDateTime
 
 @Composable
 fun ComposeScreen(
@@ -55,6 +90,14 @@ fun ComposeScreen(
     onTextChanged: (String) -> Unit = {},
     onCwChanged: (String?) -> Unit = {},
     onVisibilitySelected: (NoteVisibility) -> Unit = {},
+    onLocalOnlyChanged: (Boolean) -> Unit = {},
+    onReactionAcceptanceSelected: (ComposeReactionAcceptance) -> Unit = {},
+    onScheduleAtChanged: (Long?) -> Unit = {},
+    onInsertText: (String) -> Unit = {},
+    onResetDraft: () -> Unit = {},
+    onLoadScheduledNotes: () -> Unit = {},
+    onEditScheduledNote: (ComposeScheduledNote) -> Unit = {},
+    onDeleteScheduledNote: (String) -> Unit = {},
     onVisibleUserIdsChanged: (String) -> Unit = {},
     onResolveVisibleUserMentions: () -> Unit = {},
     onPollEnabledChanged: (Boolean) -> Unit = {},
@@ -65,11 +108,14 @@ fun ComposeScreen(
     onPollChoiceAdded: () -> Unit = {},
     onPollChoiceRemoved: (Int) -> Unit = {},
     onAddMedia: () -> Unit = {},
+    onOpenDrivePicker: () -> Unit = {},
     onRemoveFileId: (String) -> Unit = {},
     onAttachedFileMetadataChanged: (String, String?, Boolean) -> Unit = { _, _, _ -> },
     isMediaPickerAvailable: Boolean = false,
     customEmojis: List<CustomEmoji> = emptyList(),
     recentEmojiCodes: List<String> = emptyList(),
+    completionState: ComposeCompletionUiState = ComposeCompletionUiState(),
+    onCompletionTokenChanged: (ComposeCompletionKind?, String) -> Unit = { _, _ -> },
     targetNote: Note? = null,
     onSend: () -> Unit = {},
     onBack: () -> Unit = {},
@@ -77,10 +123,14 @@ fun ComposeScreen(
     var localDraft by remember { mutableStateOf(ComposeDraft()) }
     var pendingRemoveFileId by remember { mutableStateOf<String?>(null) }
     var removePollDialogOpen by remember { mutableStateOf(false) }
+    var scheduleEditorOpen by remember { mutableStateOf(false) }
+    var scheduledNotesDialogOpen by remember { mutableStateOf(false) }
+    var resetDraftDialogOpen by remember { mutableStateOf(false) }
     val draft = state?.draft ?: localDraft
     val maxTextLength = state?.maxTextLength ?: 3000
     val maxCwLength = state?.maxCwLength ?: 500
     val canPublicNote = state?.canPublicNote ?: true
+    val canScheduleNotes = state?.canScheduleNotes ?: true
     val isSending = state?.isSending ?: false
     val isUploadingMedia = state?.isUploadingMedia ?: false
     val isResolvingVisibleUsers = state?.isResolvingVisibleUsers ?: false
@@ -88,6 +138,8 @@ fun ComposeScreen(
     val attachedFileById = state?.attachedFiles?.associateBy { it.id }.orEmpty()
     val isReply = draft.replyId != null
     val isQuote = draft.renoteId != null
+    val isEditingScheduled = draft.editId != null
+    val isScheduledDraft = draft.scheduleNote != null
     val targetKind = when {
         isReply -> ComposeTargetKind.Reply
         isQuote -> ComposeTargetKind.Quote
@@ -124,6 +176,45 @@ fun ComposeScreen(
                 visibility = value,
                 visibleUserIds = if (value == NoteVisibility.Specified) localDraft.visibleUserIds else emptyList(),
             )
+        }
+    }
+    val localOnlyUpdater: (Boolean) -> Unit = { value ->
+        if (state != null) {
+            onLocalOnlyChanged(value)
+        } else {
+            localDraft = localDraft.copy(localOnly = value)
+        }
+    }
+    val reactionAcceptanceUpdater: (ComposeReactionAcceptance) -> Unit = { value ->
+        if (state != null) {
+            onReactionAcceptanceSelected(value)
+        } else {
+            localDraft = localDraft.copy(reactionAcceptance = value)
+        }
+    }
+    val scheduleAtUpdater: (Long?) -> Unit = { value ->
+        if (state != null) {
+            onScheduleAtChanged(value)
+        } else {
+            localDraft = localDraft.copy(scheduleNote = value?.let(::ComposeScheduleDraft))
+        }
+    }
+    val insertTextUpdater: (String) -> Unit = { fragment ->
+        if (state != null) {
+            onInsertText(fragment)
+        } else {
+            val cleanFragment = fragment.trim()
+            if (cleanFragment.isNotEmpty()) {
+                val separator = if (localDraft.text.isBlank() || localDraft.text.endsWith(" ")) "" else " "
+                localDraft = localDraft.copy(text = localDraft.text + separator + cleanFragment)
+            }
+        }
+    }
+    val resetDraftUpdater: () -> Unit = {
+        if (state != null) {
+            onResetDraft()
+        } else {
+            localDraft = ComposeDraft(visibility = if (canPublicNote) NoteVisibility.Public else NoteVisibility.Home)
         }
     }
     val visibleUserIdsUpdater: (String) -> Unit = { value ->
@@ -196,6 +287,8 @@ fun ComposeScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         HhhlTopBar(
             title = when {
+                isEditingScheduled -> "编辑帖子"
+                isScheduledDraft -> "预约发帖"
                 isReply -> "回复"
                 isQuote -> "引用"
                 isChannelNote -> "频道发帖"
@@ -203,6 +296,8 @@ fun ComposeScreen(
             },
             supportingText = when {
                 isSending -> "正在发布"
+                isEditingScheduled -> "修改现有帖子"
+                isScheduledDraft -> "预约内容"
                 draft.fileIds.isNotEmpty() -> "含 ${draft.fileIds.size} 个文件"
                 poll != null -> "含投票"
                 else -> "草稿"
@@ -218,31 +313,22 @@ fun ComposeScreen(
             },
         )
         HhhlDivider()
-        ComposeSummaryRow(
-            draft = draft,
-            targetPreview = targetPreview,
-            isReply = isReply,
-            isQuote = isQuote,
-            isChannelNote = isChannelNote,
-            isUploadingMedia = isUploadingMedia,
-            maxTextLength = maxTextLength,
-        )
-        HhhlDivider()
         LazyColumn(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                ComposeVisibilitySection(
+            item(contentType = "compose-summary") {
+                ComposeSummaryRow(
                     draft = draft,
-                    canPublicNote = canPublicNote,
-                    isResolvingVisibleUsers = isResolvingVisibleUsers,
-                    onVisibilitySelected = visibilityUpdater,
-                    onVisibleUserIdsChanged = visibleUserIdsUpdater,
-                    onResolveVisibleUserMentions = onResolveVisibleUserMentions,
+                    targetPreview = targetPreview,
+                    isReply = isReply,
+                    isQuote = isQuote,
+                    isChannelNote = isChannelNote,
+                    isUploadingMedia = isUploadingMedia,
+                    maxTextLength = maxTextLength,
                 )
             }
-            item {
+            item(contentType = "compose-editor") {
                 ComposeEditorSection(
                     draft = draft,
                     pollEnabled = poll != null,
@@ -252,9 +338,12 @@ fun ComposeScreen(
                     isResolvingVisibleUsers = isResolvingVisibleUsers,
                     customEmojis = customEmojis,
                     recentEmojiCodes = recentEmojiCodes,
+                    completionState = completionState,
+                    onCompletionTokenChanged = onCompletionTokenChanged,
                     onTextChanged = textUpdater,
                     onCwChanged = cwUpdater,
                     onAddMedia = onAddMedia,
+                    onOpenDrivePicker = onOpenDrivePicker,
                     onTogglePoll = {
                         if (poll == null) {
                             pollEnabledUpdater(true)
@@ -262,11 +351,12 @@ fun ComposeScreen(
                             removePollDialogOpen = true
                         }
                     },
+                    onInsertText = insertTextUpdater,
                     onResolveVisibleUserMentions = onResolveVisibleUserMentions,
                 )
             }
             if (draft.fileIds.isNotEmpty()) {
-                item {
+                item(contentType = "compose-attachments") {
                     ComposeAttachmentSection(
                         fileIds = draft.fileIds,
                         attachedFileById = attachedFileById,
@@ -277,7 +367,7 @@ fun ComposeScreen(
                 }
             }
             poll?.let { pollDraft ->
-                item {
+                item(contentType = "compose-poll") {
                     ComposePollSection(
                         pollDraft = pollDraft,
                         pollChoiceUpdater = pollChoiceUpdater,
@@ -293,8 +383,44 @@ fun ComposeScreen(
                     )
                 }
             }
+            item(contentType = "compose-visibility") {
+                ComposeVisibilitySection(
+                    draft = draft,
+                    canPublicNote = canPublicNote,
+                    isResolvingVisibleUsers = isResolvingVisibleUsers,
+                    onVisibilitySelected = visibilityUpdater,
+                    onVisibleUserIdsChanged = visibleUserIdsUpdater,
+                    onResolveVisibleUserMentions = onResolveVisibleUserMentions,
+                )
+            }
+            item(contentType = "compose-web-actions") {
+                ComposeWebActionSection(
+                    draft = draft,
+                    canScheduleNotes = canScheduleNotes,
+                    pollEnabled = poll != null,
+                    onLocalOnlyChanged = localOnlyUpdater,
+                    onReactionAcceptanceSelected = reactionAcceptanceUpdater,
+                    onToggleCw = { cwUpdater(if (draft.cw == null) "" else null) },
+                    onTogglePoll = {
+                        if (poll == null) {
+                            pollEnabledUpdater(true)
+                        } else {
+                            removePollDialogOpen = true
+                        }
+                    },
+                    onInsertMention = { insertTextUpdater("@") },
+                    onInsertHashtag = { insertTextUpdater("#") },
+                    onOpenScheduleEditor = { scheduleEditorOpen = true },
+                    onClearSchedule = { scheduleAtUpdater(null) },
+                    onOpenScheduledNotes = {
+                        scheduledNotesDialogOpen = true
+                        onLoadScheduledNotes()
+                    },
+                    onResetDraft = { resetDraftDialogOpen = true },
+                )
+            }
             errorMessage?.let { message ->
-                item {
+                item(contentType = "compose-error") {
                     Text(
                         text = message,
                         modifier = Modifier.padding(horizontal = 14.dp),
@@ -346,17 +472,18 @@ fun ComposeScreen(
                 )
             },
             confirmButton = {
-                TextButton(
+                HhhlTextButton(
                     onClick = {
                         onRemoveFileId(fileId)
                         pendingRemoveFileId = null
                     },
+                    destructive = true,
                 ) {
                     Text("移除")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingRemoveFileId = null }) {
+                HhhlTextButton(onClick = { pendingRemoveFileId = null }) {
                     Text("取消")
                 }
             },
@@ -375,21 +502,152 @@ fun ComposeScreen(
                 )
             },
             confirmButton = {
-                TextButton(
+                HhhlTextButton(
                     onClick = {
                         pollEnabledUpdater(false)
                         removePollDialogOpen = false
                     },
+                    destructive = true,
                 ) {
                     Text("移除")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { removePollDialogOpen = false }) {
+                HhhlTextButton(onClick = { removePollDialogOpen = false }) {
                     Text("取消")
                 }
             },
         )
+    }
+
+    if (scheduleEditorOpen) {
+        ComposeScheduleDialog(
+            scheduledAt = draft.scheduleNote?.scheduledAt,
+            onDismiss = { scheduleEditorOpen = false },
+            onConfirm = {
+                scheduleAtUpdater(it)
+                scheduleEditorOpen = false
+            },
+        )
+    }
+
+    if (scheduledNotesDialogOpen) {
+        ComposeScheduledNotesDialog(
+            notes = state?.scheduledNotes.orEmpty(),
+            isLoading = state?.isLoadingScheduledNotes ?: false,
+            deletingNoteIds = state?.deletingScheduledNoteIds.orEmpty(),
+            onRefresh = onLoadScheduledNotes,
+            onEdit = {
+                onEditScheduledNote(it)
+                scheduledNotesDialogOpen = false
+            },
+            onDelete = onDeleteScheduledNote,
+            onDismiss = { scheduledNotesDialogOpen = false },
+        )
+    }
+
+    if (resetDraftDialogOpen) {
+        AlertDialog(
+            onDismissRequest = { resetDraftDialogOpen = false },
+            title = { Text("重置发帖") },
+            text = {
+                Text(
+                    text = "当前文字、附件、投票和发帖设置都会清空。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                HhhlTextButton(
+                    onClick = {
+                        resetDraftUpdater()
+                        resetDraftDialogOpen = false
+                    },
+                    destructive = true,
+                ) {
+                    Text("重置")
+                }
+            },
+            dismissButton = {
+                HhhlTextButton(onClick = { resetDraftDialogOpen = false }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ComposeWebActionSection(
+    draft: ComposeDraft,
+    canScheduleNotes: Boolean,
+    pollEnabled: Boolean,
+    onLocalOnlyChanged: (Boolean) -> Unit,
+    onReactionAcceptanceSelected: (ComposeReactionAcceptance) -> Unit,
+    onToggleCw: () -> Unit,
+    onTogglePoll: () -> Unit,
+    onInsertMention: () -> Unit,
+    onInsertHashtag: () -> Unit,
+    onOpenScheduleEditor: () -> Unit,
+    onClearSchedule: () -> Unit,
+    onOpenScheduledNotes: () -> Unit,
+    onResetDraft: () -> Unit,
+) {
+    ComposeSection(
+        title = "发帖选项",
+        supportingText = composePostOptionSummary(draft),
+    ) {
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            HhhlActionChip(
+                label = if (draft.localOnly) "仅本站" else "可联合",
+                emphasized = draft.localOnly,
+                onClick = { onLocalOnlyChanged(!draft.localOnly) },
+            )
+            HhhlActionChip(
+                label = if (draft.cw != null) "关闭 CW" else "内容警告",
+                emphasized = draft.cw != null,
+                onClick = onToggleCw,
+            )
+            HhhlActionChip(
+                label = if (pollEnabled) "移除投票" else "投票",
+                emphasized = pollEnabled,
+                onClick = onTogglePoll,
+            )
+            HhhlActionChip(label = "@", onClick = onInsertMention)
+            HhhlActionChip(label = "#", onClick = onInsertHashtag)
+            HhhlActionChip(
+                label = "回应：${draft.reactionAcceptance.label}",
+                onClick = {
+                    onReactionAcceptanceSelected(draft.reactionAcceptance.next())
+                },
+            )
+            HhhlActionChip(
+                label = draft.scheduleNote?.scheduledAt?.let { "预约 ${it.toCompactLocalDateTime()}" } ?: "预约发布",
+                emphasized = draft.scheduleNote != null,
+                enabled = canScheduleNotes,
+                onClick = onOpenScheduleEditor,
+            )
+            if (draft.scheduleNote != null) {
+                HhhlActionChip(
+                    label = "取消预约",
+                    onClick = onClearSchedule,
+                )
+            }
+            HhhlActionChip(
+                label = "预约列表",
+                enabled = canScheduleNotes,
+                onClick = onOpenScheduledNotes,
+            )
+            HhhlActionChip(
+                label = "重置",
+                emphasized = true,
+                onClick = onResetDraft,
+            )
+        }
     }
 }
 
@@ -403,40 +661,48 @@ private fun ComposeEditorSection(
     isResolvingVisibleUsers: Boolean,
     customEmojis: List<CustomEmoji>,
     recentEmojiCodes: List<String>,
+    completionState: ComposeCompletionUiState,
+    onCompletionTokenChanged: (ComposeCompletionKind?, String) -> Unit,
     onTextChanged: (String) -> Unit,
     onCwChanged: (String?) -> Unit,
     onAddMedia: () -> Unit,
+    onOpenDrivePicker: () -> Unit,
     onTogglePoll: () -> Unit,
+    onInsertText: (String) -> Unit,
     onResolveVisibleUserMentions: () -> Unit,
 ) {
     var emojiPickerOpen by remember { mutableStateOf(false) }
+    var editorMode by remember { mutableStateOf(ComposeEditorMode.Edit) }
+    LaunchedEffect(draft.text) {
+        onCompletionTokenChanged(null, "")
+    }
+    fun insertMarker(marker: String) {
+        val needsLeadingSpace = draft.text.isNotEmpty() && !draft.text.last().isWhitespace()
+        onTextChanged(draft.text + if (needsLeadingSpace) " $marker" else marker)
+    }
     ComposeSection(
-        title = "编辑器",
+        title = "正文",
+        supportingText = if (draft.cw != null) "已启用内容警告" else "支持 Markdown、表情、提及和话题",
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(composeEditorSurfaceSpec().cornerRadius.dp))
-                .background(LocalHhhlColors.current.inputBackground)
+                .clip(RoundedCornerShape(18.dp))
+                .background(
+                    if (MaterialTheme.colorScheme.surface.luminance() < 0.2f) {
+                        MaterialTheme.colorScheme.background.copy(alpha = 0.34f)
+                    } else {
+                        LocalHhhlColors.current.inputBackground.copy(alpha = 0.74f)
+                    },
+                )
+                .border(
+                    1.dp,
+                    LocalHhhlColors.current.divider.copy(alpha = 0.48f),
+                    RoundedCornerShape(18.dp),
+                )
                 .padding(composeEditorSurfaceSpec().contentPadding.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            draft.cw?.let { cw ->
-                ComposePlainInput(
-                    value = cw,
-                    onValueChange = onCwChanged,
-                    placeholder = "内容警告",
-                    minHeight = 28,
-                    singleLine = true,
-                )
-            }
-            ComposePlainInput(
-                value = draft.text,
-                onValueChange = onTextChanged,
-                placeholder = "有什么新想法？",
-                minHeight = composeEditorSurfaceSpec().bodyMinHeight,
-                singleLine = false,
-            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -447,30 +713,18 @@ private fun ComposeEditorSection(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    HhhlActionChip(
-                        label = when {
-                            isUploadingMedia -> "上传中"
-                            draft.fileIds.isEmpty() -> "文件"
-                            else -> "文件 ${draft.fileIds.size}"
-                        },
-                        enabled = isMediaPickerAvailable && !isSending && !isUploadingMedia,
-                        onClick = onAddMedia,
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.Edit,
+                        contentDescription = composeEditorModeLabel(ComposeEditorMode.Edit),
+                        emphasized = editorMode == ComposeEditorMode.Edit,
+                        onClick = { editorMode = ComposeEditorMode.Edit },
                     )
-                    HhhlActionChip(
-                        label = if (emojiPickerOpen) "收起表情" else "表情",
-                        enabled = !isSending,
-                        onClick = { emojiPickerOpen = !emojiPickerOpen },
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.Visibility,
+                        contentDescription = composeEditorModeLabel(ComposeEditorMode.Preview),
+                        emphasized = editorMode == ComposeEditorMode.Preview,
+                        onClick = { editorMode = ComposeEditorMode.Preview },
                     )
-                    if (draft.visibility == NoteVisibility.Specified &&
-                        draft.visibleUserIds.any { it.isComposeVisibleUserMention() }
-                    ) {
-                        HhhlActionChip(
-                            label = if (isResolvingVisibleUsers) "解析中" else "解析用户",
-                            emphasized = true,
-                            enabled = !isResolvingVisibleUsers,
-                            onClick = onResolveVisibleUserMentions,
-                        )
-                    }
                 }
                 HhhlOverflowMenu(
                     actions = composeSecondaryActions(
@@ -483,8 +737,488 @@ private fun ComposeEditorSection(
                     label = "编辑器更多操作",
                 )
             }
+
+            if (editorMode == ComposeEditorMode.Edit) {
+                draft.cw?.let { cw ->
+                    ComposePlainInput(
+                        value = cw,
+                        onValueChange = onCwChanged,
+                        placeholder = "内容警告",
+                        minHeight = 28,
+                        singleLine = true,
+                    )
+                }
+                ComposePlainInput(
+                    value = draft.text,
+                    onValueChange = onTextChanged,
+                    placeholder = "有什么新想法？",
+                    minHeight = composeEditorSurfaceSpec().bodyMinHeight,
+                    singleLine = false,
+                )
+            } else {
+                ComposeMarkdownPreview(
+                    text = draft.text,
+                    cw = draft.cw,
+                    minHeight = composeEditorSurfaceSpec().bodyMinHeight,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FlowRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.Image,
+                        contentDescription = when {
+                            isUploadingMedia -> "上传中"
+                            draft.fileIds.isEmpty() -> "添加媒体"
+                            else -> "添加媒体，已选 ${draft.fileIds.size} 个文件"
+                        },
+                        enabled = isMediaPickerAvailable && !isSending && !isUploadingMedia,
+                        onClick = onAddMedia,
+                    )
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.AttachFile,
+                        contentDescription = "从 Drive 添加附件",
+                        enabled = !isSending && !isUploadingMedia,
+                        onClick = onOpenDrivePicker,
+                    )
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.EmojiEmotions,
+                        contentDescription = if (emojiPickerOpen) "收起表情" else "选择表情",
+                        enabled = !isSending,
+                        emphasized = emojiPickerOpen,
+                        onClick = { emojiPickerOpen = !emojiPickerOpen },
+                    )
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.Poll,
+                        contentDescription = if (pollEnabled) "移除投票" else "添加投票",
+                        enabled = !isSending,
+                        emphasized = pollEnabled,
+                        onClick = onTogglePoll,
+                    )
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.AlternateEmail,
+                        contentDescription = "插入提及",
+                        enabled = !isSending,
+                        onClick = { insertMarker("@") },
+                    )
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.Tag,
+                        contentDescription = "插入话题",
+                        enabled = !isSending,
+                        onClick = { insertMarker("#") },
+                    )
+                    if (draft.visibility == NoteVisibility.Specified &&
+                        draft.visibleUserIds.any { it.isComposeVisibleUserMention() }
+                    ) {
+                        HhhlActionChip(
+                            label = if (isResolvingVisibleUsers) "解析中" else "解析用户",
+                            emphasized = true,
+                            enabled = !isResolvingVisibleUsers,
+                            onClick = onResolveVisibleUserMentions,
+                        )
+                    }
+                }
+            }
+            Text(
+                text = "${draft.text.length} 字",
+                color = LocalHhhlColors.current.subtleText,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.align(Alignment.End),
+            )
+            if (emojiPickerOpen) {
+                CustomEmojiPicker(
+                    customEmojis = customEmojis,
+                    recentEmojiCodes = recentEmojiCodes,
+                    onEmojiSelected = { emoji ->
+                        onInsertText(emoji)
+                        emojiPickerOpen = false
+                    },
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun ComposeMarkdownPreview(
+    text: String,
+    cw: String?,
+    minHeight: Int,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = minHeight.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        cw?.takeIf { it.isNotBlank() }?.let { warning ->
+            Text(
+                text = warning,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        if (text.isBlank()) {
+            Text(
+                text = "预览会在输入内容后显示",
+                color = LocalHhhlColors.current.subtleText,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        } else {
+            InlineRichText(
+                text = text,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComposeCompletionPanel(
+    token: ComposeCompletionToken?,
+    state: ComposeCompletionUiState,
+    customEmojis: List<CustomEmoji>,
+    recentEmojiCodes: List<String>,
+    onHashtagSelected: (String) -> Unit,
+    onUserSelected: (User) -> Unit,
+    onEmojiSelected: (CustomEmoji) -> Unit,
+) {
+    val visibleToken = token ?: return
+    val emojis = remember(customEmojis, recentEmojiCodes, visibleToken) {
+        if (visibleToken.kind != ComposeCompletionKind.Emoji) {
+            emptyList()
+        } else {
+            val query = visibleToken.query.trim()
+            val recentNames = recentEmojiCodes
+                .map { it.trim(':') }
+                .filter { it.isNotBlank() }
+            val ordered = (recentNames.mapNotNull { recentName ->
+                customEmojis.firstOrNull { it.name.equals(recentName, ignoreCase = true) }
+            } + customEmojis).distinctBy { it.name }
+            ordered
+                .filter { emoji ->
+                    query.isBlank() ||
+                        emoji.name.contains(query, ignoreCase = true) ||
+                        emoji.aliases.any { it.contains(query, ignoreCase = true) }
+                }
+                .take(8)
+        }
+    }
+    val showHashtags = visibleToken.kind == ComposeCompletionKind.Hashtag &&
+        state.activeKind == ComposeCompletionKind.Hashtag &&
+        (state.hashtags.isNotEmpty() || state.isLoading || state.errorMessage != null)
+    val showUsers = visibleToken.kind == ComposeCompletionKind.Mention &&
+        state.activeKind == ComposeCompletionKind.Mention &&
+        (state.users.isNotEmpty() || state.isLoading || state.errorMessage != null || visibleToken.query.isBlank())
+    val showEmojis = visibleToken.kind == ComposeCompletionKind.Emoji && emojis.isNotEmpty()
+    if (!showHashtags && !showUsers && !showEmojis) return
+
+    HhhlInlinePanel(
+        emphasized = true,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        when (visibleToken.kind) {
+            ComposeCompletionKind.Hashtag -> {
+                state.hashtags.forEach { trend ->
+                    ComposeHashtagCompletionRow(trend = trend, onClick = { onHashtagSelected(trend.tag) })
+                }
+            }
+            ComposeCompletionKind.Mention -> {
+                if (visibleToken.query.isBlank() && !state.isLoading && state.users.isEmpty()) {
+                    Text(
+                        text = "继续输入用户名",
+                        color = LocalHhhlColors.current.subtleText,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    )
+                }
+                state.users.forEach { user ->
+                    ComposeUserCompletionRow(user = user, onClick = { onUserSelected(user) })
+                }
+            }
+            ComposeCompletionKind.Emoji -> {
+                emojis.forEach { emoji ->
+                    ComposeEmojiCompletionRow(emoji = emoji, onClick = { onEmojiSelected(emoji) })
+                }
+            }
+        }
+        if (state.isLoading) {
+            Text(
+                text = "搜索中",
+                color = LocalHhhlColors.current.subtleText,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            )
+        }
+        state.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+            Text(
+                text = message,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComposeHashtagCompletionRow(
+    trend: TrendingHashtag,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "#",
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = trend.tag,
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${trend.usersCount} 人正在使用",
+                color = LocalHhhlColors.current.subtleText,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComposeUserCompletionRow(
+    user: User,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Avatar(
+            initial = user.avatarInitial,
+            avatarUrl = user.avatarUrl,
+            size = 30.dp,
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = user.displayName,
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = user.composeHandleText(),
+                color = LocalHhhlColors.current.subtleText,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComposeEmojiCompletionRow(
+    emoji: CustomEmoji,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(LocalHhhlColors.current.inputBackground),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = ":",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = emoji.name,
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            emoji.category?.takeIf { it.isNotBlank() }?.let { category ->
+                Text(
+                    text = category,
+                    color = LocalHhhlColors.current.subtleText,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ComposeScheduleDialog(
+    scheduledAt: Long?,
+    onDismiss: () -> Unit,
+    onConfirm: (Long) -> Unit,
+) {
+    val initial = scheduledAt ?: (currentEpochMillis() + ONE_DAY_MILLIS)
+    var date by remember(scheduledAt) { mutableStateOf(initial.toLocalDateInput()) }
+    var time by remember(scheduledAt) { mutableStateOf(initial.toLocalTimeInput()) }
+    val parsed = remember(date, time) { parseLocalScheduleMillis(date, time) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("预约发布") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                HhhlTextInput(
+                    value = date,
+                    onValueChange = { date = it },
+                    placeholder = "日期 YYYY-MM-DD",
+                    singleLine = true,
+                )
+                HhhlTextInput(
+                    value = time,
+                    onValueChange = { time = it },
+                    placeholder = "时间 HH:mm",
+                    singleLine = true,
+                )
+                Text(
+                    text = if (parsed == null) {
+                        "请输入有效的本地日期和时间。"
+                    } else {
+                        "将于 ${parsed.toCompactLocalDateTime()} 发布。"
+                    },
+                    color = LocalHhhlColors.current.subtleText,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        confirmButton = {
+            HhhlTextButton(
+                enabled = parsed != null,
+                onClick = { parsed?.let(onConfirm) },
+            ) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            HhhlTextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun ComposeScheduledNotesDialog(
+    notes: List<ComposeScheduledNote>,
+    isLoading: Boolean,
+    deletingNoteIds: Set<String>,
+    onRefresh: () -> Unit,
+    onEdit: (ComposeScheduledNote) -> Unit,
+    onDelete: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("预约列表") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when {
+                    isLoading -> Text("加载中", color = LocalHhhlColors.current.subtleText)
+                    notes.isEmpty() -> Text("暂无预约帖子", color = LocalHhhlColors.current.subtleText)
+                    else -> notes.forEach { note ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = note.cw?.takeIf { it.isNotBlank() }
+                                        ?: note.text.takeIf { it.isNotBlank() }
+                                        ?: "无正文",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = note.scheduledAt?.toCompactLocalDateTime() ?: note.visibility.label,
+                                    color = LocalHhhlColors.current.subtleText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            HhhlIconActionButton(
+                                icon = Icons.Filled.Edit,
+                                contentDescription = "编辑预约",
+                                enabled = !deletingNoteIds.contains(note.id),
+                                onClick = { onEdit(note) },
+                            )
+                            HhhlIconActionButton(
+                                icon = Icons.Filled.Delete,
+                                contentDescription = "删除预约",
+                                enabled = !deletingNoteIds.contains(note.id),
+                                onClick = { onDelete(note.id) },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            HhhlTextButton(onClick = onRefresh) {
+                Text(if (isLoading) "加载中" else "刷新")
+            }
+        },
+        dismissButton = {
+            HhhlTextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        },
+    )
 }
 
 @Composable
@@ -494,10 +1228,18 @@ private fun ComposePlainInput(
     placeholder: String,
     minHeight: Int,
     singleLine: Boolean,
+    fieldValue: TextFieldValue? = null,
+    onFieldValueChange: ((TextFieldValue) -> Unit)? = null,
 ) {
     BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
+        value = fieldValue ?: TextFieldValue(value, selection = TextRange(value.length)),
+        onValueChange = { nextValue ->
+            if (onFieldValueChange != null) {
+                onFieldValueChange(nextValue)
+            } else {
+                onValueChange(nextValue.text)
+            }
+        },
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = minHeight.dp),
@@ -527,10 +1269,89 @@ data class ComposeEditorSurfaceSpec(
 )
 
 fun composeEditorSurfaceSpec(): ComposeEditorSurfaceSpec = ComposeEditorSurfaceSpec(
-    cornerRadius = 14,
-    contentPadding = 12,
-    bodyMinHeight = 172,
+    cornerRadius = 20,
+    contentPadding = 14,
+    bodyMinHeight = 184,
 )
+
+enum class ComposeEditorMode {
+    Edit,
+    Preview,
+}
+
+fun composeEditorModeLabel(mode: ComposeEditorMode): String = when (mode) {
+    ComposeEditorMode.Edit -> "编辑"
+    ComposeEditorMode.Preview -> "预览"
+}
+
+private data class ComposeCompletionToken(
+    val kind: ComposeCompletionKind,
+    val start: Int,
+    val end: Int,
+    val query: String,
+)
+
+private fun TextFieldValue.activeComposeCompletionToken(): ComposeCompletionToken? {
+    val cursor = selection.end.coerceIn(0, text.length)
+    if (cursor != selection.start || cursor == 0) return null
+    var start = cursor - 1
+    while (start >= 0 && !text[start].isComposeTokenBoundary()) {
+        start--
+    }
+    start += 1
+    if (start >= cursor) return null
+    val marker = text[start]
+    val kind = when (marker) {
+        '#' -> ComposeCompletionKind.Hashtag
+        '@' -> ComposeCompletionKind.Mention
+        ':' -> ComposeCompletionKind.Emoji
+        else -> return null
+    }
+    if (start > 0 && !text[start - 1].isComposeCompletionPrefixBoundary()) return null
+    val query = text.substring(start + 1, cursor)
+    if (kind == ComposeCompletionKind.Emoji && query.contains(':')) return null
+    return ComposeCompletionToken(kind = kind, start = start, end = cursor, query = query)
+}
+
+private fun TextFieldValue.replaceComposeCompletionToken(
+    token: ComposeCompletionToken,
+    replacement: String,
+): TextFieldValue {
+    val cleanStart = token.start.coerceIn(0, text.length)
+    val cleanEnd = token.end.coerceIn(cleanStart, text.length)
+    val nextText = text.replaceRange(cleanStart, cleanEnd, replacement)
+    val nextCursor = cleanStart + replacement.length
+    return copy(text = nextText, selection = TextRange(nextCursor))
+}
+
+private fun TextFieldValue.insertComposeText(fragment: String): TextFieldValue {
+    val start = selection.min.coerceIn(0, text.length)
+    val end = selection.max.coerceIn(start, text.length)
+    val prefix = text.take(start)
+    val suffix = text.drop(end)
+    val needsLeadingSpace = prefix.isNotEmpty() && !prefix.last().isWhitespace()
+    val insertion = buildString {
+        if (needsLeadingSpace) append(' ')
+        append(fragment)
+    }
+    val nextText = prefix + insertion + suffix
+    val nextCursor = prefix.length + insertion.length
+    return copy(text = nextText, selection = TextRange(nextCursor))
+}
+
+private fun Char.isComposeTokenBoundary(): Boolean {
+    return isWhitespace() || this in listOf('(', ')', '[', ']', '{', '}', '<', '>', '"', '\'', '`')
+}
+
+private fun Char.isComposeCompletionPrefixBoundary(): Boolean {
+    return isWhitespace() || this in listOf('(', '[', '{', '<', '"', '\'', '`')
+}
+
+private fun User.composeHandleText(): String {
+    return "@$username" + host?.takeIf { it.isNotBlank() }?.let { "@$it" }.orEmpty()
+}
+
+private fun User.composeMentionText(): String = composeHandleText() + " "
 
 @Composable
 private fun ComposeSummaryRow(
@@ -543,6 +1364,8 @@ private fun ComposeSummaryRow(
     maxTextLength: Int,
 ) {
     val primaryText = when {
+        draft.editId != null -> "编辑帖子"
+        draft.scheduleNote != null -> "预约帖子"
         targetPreview != null -> targetPreview.title
         isReply -> "回复帖子"
         isQuote -> "引用帖子"
@@ -557,27 +1380,32 @@ private fun ComposeSummaryRow(
         if (isUploadingMedia) add("上传中")
         add("${draft.text.length}/$maxTextLength")
     }.joinToString(" · ")
-    val summaryText = "$primaryText · $secondaryText"
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    ComposeSection(
+        title = primaryText,
+        supportingText = secondaryText,
+        compact = true,
     ) {
-        Text(
-            text = summaryText,
-            color = MaterialTheme.colorScheme.onBackground,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-    targetPreview?.let { preview ->
-        ComposeTargetPreviewCard(preview = preview)
+        targetPreview?.let { preview ->
+            ComposeTargetPreviewCard(preview = preview)
+        } ?: FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            HhhlActionChip(label = draft.visibility.label, emphasized = true, onClick = {})
+            if (draft.localOnly) {
+                HhhlActionChip(label = "仅本站", emphasized = true, onClick = {})
+            }
+            if (draft.scheduleNote != null) {
+                HhhlActionChip(label = "预约", emphasized = true, onClick = {})
+            }
+            if (draft.fileIds.isNotEmpty()) {
+                HhhlActionChip(label = "${draft.fileIds.size} 个附件", onClick = {})
+            }
+            if (draft.poll != null) {
+                HhhlActionChip(label = "投票", onClick = {})
+            }
+        }
     }
 }
 
@@ -826,19 +1654,37 @@ private fun ComposePollSection(
 private fun ComposeSection(
     title: String,
     supportingText: String? = null,
+    compact: Boolean = false,
     content: @Composable () -> Unit,
 ) {
+    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
+    val shape = RoundedCornerShape(if (compact) 18.dp else 20.dp)
+    val containerColor = if (isDarkSurface) {
+        LocalHhhlColors.current.cardBackground.copy(alpha = 0.82f)
+    } else {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+    }
+    val borderColor = if (isDarkSurface) {
+        Color.White.copy(alpha = 0.07f)
+    } else {
+        LocalHhhlColors.current.divider.copy(alpha = 0.64f)
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 14.dp)
+            .shadow(if (isDarkSurface) 3.dp else 1.dp, shape, clip = false)
+            .clip(shape)
+            .background(containerColor)
+            .border(1.dp, borderColor, shape)
+            .padding(horizontal = 14.dp, vertical = if (compact) 12.dp else 14.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = title,
                 color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.bodyMedium,
+                style = if (compact) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             supportingText?.takeIf { it.isNotBlank() }?.let { text ->
@@ -930,13 +1776,23 @@ fun composePollSectionActions(
 
 fun composeEditorStatusParts(draft: ComposeDraft): List<String> = buildList {
     add(draft.visibility.label)
+    if (draft.editId != null) add("编辑帖子")
+    if (draft.localOnly) add("仅本站")
     if (draft.channelId != null) add("频道")
     if (draft.replyId != null) add("回复")
     if (draft.renoteId != null) add("引用")
     if (draft.cw != null) add("内容警告")
     if (draft.fileIds.isNotEmpty()) add("${draft.fileIds.size} 个文件")
     if (draft.poll != null) add("投票已开启")
+    if (draft.scheduleNote != null) add("预约发布")
 }
+
+fun composePostOptionSummary(draft: ComposeDraft): String = buildList {
+    if (draft.editId != null) add("编辑中")
+    add(if (draft.localOnly) "仅本站" else "可联合")
+    add("回应 ${draft.reactionAcceptance.label}")
+    draft.scheduleNote?.scheduledAt?.let { add("预约 ${it.toCompactLocalDateTime()}") }
+}.joinToString(" · ")
 
 fun composeVisibleUserResolutionText(
     visibleUserIds: List<String>,
@@ -986,39 +1842,39 @@ fun composeTargetPreview(
 
 @Composable
 private fun ComposeTargetPreviewCard(preview: ComposeTargetPreview) {
-    Row(
+    HhhlInlinePanel(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(LocalHhhlColors.current.inputBackground)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .width(3.dp)
-                .heightIn(min = 42.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(MaterialTheme.colorScheme.primary),
-        )
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(
-                text = preview.title,
-                color = LocalHhhlColors.current.subtleText,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .heightIn(min = 42.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MaterialTheme.colorScheme.primary),
             )
-            Text(
-                text = preview.body,
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = preview.title,
+                    color = LocalHhhlColors.current.subtleText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = preview.body,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -1033,6 +1889,57 @@ private val NoteVisibility.label: String
         NoteVisibility.Specified -> "指定"
     }
 
+private val ComposeReactionAcceptance.label: String
+    get() = when (this) {
+        ComposeReactionAcceptance.LikeOnly -> "仅喜欢"
+        ComposeReactionAcceptance.LikeOnlyForRemote -> "远端仅喜欢"
+        ComposeReactionAcceptance.NonSensitiveOnly -> "非敏感"
+        ComposeReactionAcceptance.NonSensitiveOnlyForLocalLikeOnlyForRemote -> "本站非敏感/远端喜欢"
+    }
+
+private fun ComposeReactionAcceptance.next(): ComposeReactionAcceptance {
+    val entries = ComposeReactionAcceptance.entries
+    return entries[(entries.indexOf(this) + 1) % entries.size]
+}
+
 private fun NoteVisibility.canSendWithVisibleUsers(visibleUserIds: List<String>): Boolean {
     return this != NoteVisibility.Specified || visibleUserIds.isNotEmpty()
 }
+
+private const val ONE_DAY_MILLIS = 24L * 60L * 60L * 1000L
+
+private fun Long.toCompactLocalDateTime(): String {
+    val value = Instant.fromEpochMilliseconds(this).toLocalDateTime(TimeZone.currentSystemDefault())
+    return "${value.year}-${value.monthNumber.twoDigits()}-${value.dayOfMonth.twoDigits()} " +
+        "${value.hour.twoDigits()}:${value.minute.twoDigits()}"
+}
+
+private fun Long.toLocalDateInput(): String {
+    val value = Instant.fromEpochMilliseconds(this).toLocalDateTime(TimeZone.currentSystemDefault())
+    return "${value.year}-${value.monthNumber.twoDigits()}-${value.dayOfMonth.twoDigits()}"
+}
+
+private fun Long.toLocalTimeInput(): String {
+    val value = Instant.fromEpochMilliseconds(this).toLocalDateTime(TimeZone.currentSystemDefault())
+    return "${value.hour.twoDigits()}:${value.minute.twoDigits()}"
+}
+
+private fun parseLocalScheduleMillis(
+    date: String,
+    time: String,
+): Long? {
+    val dateParts = date.trim().split("-").mapNotNull { it.toIntOrNull() }
+    val timeParts = time.trim().split(":").mapNotNull { it.toIntOrNull() }
+    if (dateParts.size != 3 || timeParts.size < 2) return null
+    return runCatching {
+        LocalDateTime(
+            year = dateParts[0],
+            monthNumber = dateParts[1],
+            dayOfMonth = dateParts[2],
+            hour = timeParts[0],
+            minute = timeParts[1],
+        ).toInstant(TimeZone.currentSystemDefault()).toEpochMilliseconds()
+    }.getOrNull()
+}
+
+private fun Int.twoDigits(): String = toString().padStart(2, '0')

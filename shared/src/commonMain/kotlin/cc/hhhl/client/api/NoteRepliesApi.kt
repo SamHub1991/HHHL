@@ -78,6 +78,8 @@ class SharkeyNoteRepliesApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return NoteRepliesLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> NoteRepliesLoadResult.Success(
                     response.body<List<SharkeyNoteDto>>().map { it.toDomainNote() },
@@ -124,6 +126,8 @@ class SharkeyNoteRepliesApi(
                     ),
                 )
             }
+
+            if (response.isSharkeyUnauthorized()) return NoteRepliesLoadResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> NoteRepliesLoadResult.Success(

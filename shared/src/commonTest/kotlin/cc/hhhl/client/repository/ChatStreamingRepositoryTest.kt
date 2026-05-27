@@ -23,6 +23,14 @@ class ChatStreamingRepositoryTest {
                     calls += 1
                     return flowOf(ChatStreamingEvent.Connected)
                 }
+
+                override fun streamUserMessages(
+                    token: String,
+                    userId: String,
+                ): Flow<ChatStreamingEvent> {
+                    calls += 1
+                    return flowOf(ChatStreamingEvent.Connected)
+                }
             },
         )
 
@@ -41,6 +49,14 @@ class ChatStreamingRepositoryTest {
                 override fun streamRoomMessages(
                     token: String,
                     roomId: String,
+                ): Flow<ChatStreamingEvent> {
+                    calls += 1
+                    return flowOf(ChatStreamingEvent.Connected)
+                }
+
+                override fun streamUserMessages(
+                    token: String,
+                    userId: String,
                 ): Flow<ChatStreamingEvent> {
                     calls += 1
                     return flowOf(ChatStreamingEvent.Connected)

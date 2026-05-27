@@ -1,11 +1,15 @@
 package cc.hhhl.client.ui.component
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,22 +18,24 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,21 +43,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import cc.hhhl.client.model.CustomEmoji
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NoteMedia
 import cc.hhhl.client.model.NoteVisibility
+import cc.hhhl.client.model.commonReactionOptions
 import cc.hhhl.client.theme.LocalHhhlColors
 
 internal val HhhlNoteActionMinHeight = HhhlControlMinHeight
@@ -60,6 +73,21 @@ internal val HhhlNoteActionHorizontalPadding = 6.dp
 internal val HhhlNoteActionVerticalPadding = 5.dp
 internal val HhhlNoteActionIconSize = 17.dp
 internal val HhhlNoteActionSpacing = 4.dp
+internal val HhhlReactionPickerMenuWidth = 260.dp
+internal val HhhlReactionPickerItemSize = 42.dp
+internal val HhhlReactionPickerGridSpacing = 6.dp
+private val HhhlUnifiedReactionPickerMenuWidth = 292.dp
+private val HhhlUnifiedReactionPickerMenuHeight = 318.dp
+
+@Immutable
+data class NoteRowActions(
+    val onShareNote: ((String) -> Unit)? = null,
+    val onHideFromList: (String) -> Unit = {},
+    val onMuteNote: (String) -> Unit = {},
+    val onReportNote: (String, String) -> Unit = { _, _ -> },
+)
+
+val LocalNoteRowActions = staticCompositionLocalOf { NoteRowActions() }
 
 @Composable
 fun NoteRow(
@@ -75,6 +103,10 @@ fun NoteRow(
     onVotePoll: (String, Int) -> Unit = { _, _ -> },
     onFavorite: (String) -> Unit = {},
     onAddToClip: ((Note) -> Unit)? = null,
+    onShareNote: ((String) -> Unit)? = null,
+    onHideFromList: ((String) -> Unit)? = null,
+    onMuteNote: ((String) -> Unit)? = null,
+    onReportNote: ((String, String) -> Unit)? = null,
     onDelete: (String) -> Unit = {},
     onOpenMedia: (String) -> Unit = {},
     onOpenMediaPreview: ((MediaPreviewSession) -> Unit)? = null,
@@ -82,25 +114,34 @@ fun NoteRow(
     onOpenMention: (String) -> Unit = {},
     onOpenHashtag: (String) -> Unit = {},
     reactionOptions: List<String> = emptyList(),
+    customEmojis: List<CustomEmoji> = emptyList(),
     recentReactions: List<String> = emptyList(),
     isActionPending: Boolean = false,
     canDelete: Boolean = false,
+    isSpecialCareAuthor: Boolean = false,
     density: NoteRowDensity = NoteRowDensity.Comfortable,
 ) {
     var reactionMenuExpanded by remember(note.id) { mutableStateOf(false) }
-    var reactionSearchQuery by remember(note.id) { mutableStateOf("") }
-    var renoteMenuExpanded by remember(note.id) { mutableStateOf(false) }
     var deleteConfirmOpen by remember(note.id) { mutableStateOf(false) }
+    var reportConfirmOpen by remember(note.id) { mutableStateOf(false) }
     var contentExpanded by remember(note.id, note.cw) { mutableStateOf(note.cw.isNullOrBlank()) }
-    val reactionSections = remember(reactionOptions, reactionSearchQuery, recentReactions) {
-        reactionPickerSections(
+    @Suppress("DEPRECATION")
+    val clipboardManager = LocalClipboardManager.current
+    val rowActions = LocalNoteRowActions.current
+    val effectiveOnShareNote = onShareNote ?: rowActions.onShareNote ?: onOpenUrl
+    val effectiveOnHideFromList = onHideFromList ?: rowActions.onHideFromList
+    val effectiveOnMuteNote = onMuteNote ?: rowActions.onMuteNote
+    val effectiveOnReportNote = onReportNote ?: rowActions.onReportNote
+    val customEmojiUrls = LocalCustomEmojiUrls.current
+    val pickerCustomEmojis = remember(customEmojis, reactionOptions, customEmojiUrls) {
+        customEmojisForReactionPicker(
             reactionOptions = reactionOptions,
-            query = reactionSearchQuery,
-            recentReactions = recentReactions,
+            customEmojis = customEmojis,
+            customEmojiUrls = customEmojiUrls,
         )
     }
     val isContentVisible = noteContentVisible(note, expanded = contentExpanded)
-    val metrics = noteRowMetrics(density)
+    val metrics = remember(density) { noteRowMetrics(density) }
     val canAddToClip = onAddToClip != null
     val overflowActions = remember(canAddToClip, canDelete) {
         noteOverflowActions(
@@ -108,10 +149,19 @@ fun NoteRow(
             canDelete = canDelete,
         )
     }
+    val noteLink = remember(note.id) { notePermalink(note.id) }
+    val noteCopyText = remember(note.text, note.cw) { noteClipboardText(note) }
+    val noteEmbedCode = remember(note.id) { noteEmbedCode(note.id) }
+    val rowSizeAnimationModifier = if (note.cw.isNullOrBlank()) {
+        Modifier
+    } else {
+        Modifier.animateContentSize()
+    }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .then(rowSizeAnimationModifier)
             .clickable { onClick(note.id) },
     ) {
         Row(
@@ -132,33 +182,13 @@ fun NoteRow(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(metrics.contentSpacing.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = note.author.displayName,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        softWrap = false,
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .widthIn(min = 0.dp)
-                            .clickable { onOpenUser(note.author.id) },
-                    )
-                    Text(
-                        text = "  @${note.author.username} · ${note.createdAtLabel}",
-                        color = LocalHhhlColors.current.subtleText,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        softWrap = false,
-                        modifier = Modifier
-                            .weight(1f)
-                            .widthIn(min = 0.dp)
-                            .clickable { onOpenUser(note.author.id) },
-                    )
-                }
+                NoteAuthorLine(
+                    note = note,
+                    onOpenUser = onOpenUser,
+                    isSpecialCareAuthor = isSpecialCareAuthor,
+                    displayStyle = MaterialTheme.typography.bodyMedium,
+                    metaStyle = MaterialTheme.typography.bodySmall,
+                )
                 if (note.isRenote) {
                     Text(
                         text = "转发",
@@ -246,31 +276,24 @@ fun NoteRow(
                         count = note.renoteCount,
                         contentDescription = "转发",
                         enabled = !isActionPending,
-                        onClick = { renoteMenuExpanded = true },
+                        onClick = { onRenote(note.id) },
                         modifier = Modifier.weight(1f),
                     )
-                    DropdownMenu(
-                        expanded = renoteMenuExpanded,
-                        onDismissRequest = { renoteMenuExpanded = false },
-                        offset = DpOffset(x = HhhlOverflowMenuOffsetX, y = HhhlOverflowMenuOffsetY),
-                        modifier = Modifier.widthIn(
-                            min = HhhlOverflowMenuMinWidth,
-                            max = HhhlOverflowMenuMaxWidth,
-                        ).heightIn(max = HhhlDropdownMenuMaxHeight),
-                    ) {
-                        noteRenoteActions().forEach { action ->
-                            DropdownMenuItem(
-                                text = { Text(action.label) },
-                                onClick = {
-                                    renoteMenuExpanded = false
-                                    when (action) {
-                                        NoteRenoteAction.Repost -> onRenote(note.id)
-                                        NoteRenoteAction.Quote -> onQuote(note.id)
-                                    }
-                                },
-                            )
-                        }
-                    }
+                    NoteActionButton(
+                        icon = Icons.Outlined.FormatQuote,
+                        contentDescription = "引用",
+                        enabled = !isActionPending,
+                        onClick = { onQuote(note.id) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    NoteActionButton(
+                        icon = if (note.isFavorited) Icons.Outlined.Star else Icons.Outlined.StarBorder,
+                        selected = note.isFavorited,
+                        contentDescription = if (note.isFavorited) "取消收藏" else "收藏",
+                        enabled = !isActionPending,
+                        onClick = { onFavorite(note.id) },
+                        modifier = Modifier.weight(1f),
+                    )
                     NoteActionButton(
                         icon = if (note.myReaction == null) Icons.Outlined.AddReaction else null,
                         reactionText = note.myReaction,
@@ -292,91 +315,54 @@ fun NoteRow(
                         expanded = reactionMenuExpanded,
                         onDismissRequest = {
                             reactionMenuExpanded = false
-                            reactionSearchQuery = ""
                         },
                         offset = DpOffset(x = HhhlOverflowMenuOffsetX, y = HhhlOverflowMenuOffsetY),
-                        modifier = Modifier.widthIn(
-                            min = HhhlOverflowMenuMinWidth,
-                            max = HhhlOverflowMenuMaxWidth,
-                        ).heightIn(max = HhhlDropdownMenuMaxHeight),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .width(HhhlUnifiedReactionPickerMenuWidth)
+                            .height(HhhlUnifiedReactionPickerMenuHeight),
                     ) {
-                        HhhlTextInput(
-                            value = reactionSearchQuery,
-                            onValueChange = { reactionSearchQuery = it },
-                            placeholder = "搜索反应",
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        CustomEmojiPicker(
+                            customEmojis = pickerCustomEmojis,
+                            recentEmojiCodes = recentReactions,
+                            onEmojiSelected = { reaction ->
+                                reactionMenuExpanded = false
+                                onReact(note.id, reaction)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            compact = true,
                         )
-                        reactionSections.forEach { section ->
-                            Text(
-                                text = section.label,
-                                color = LocalHhhlColors.current.subtleText,
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                            )
-                            section.reactions.forEach { reaction ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            CustomEmojiReactionLabel(reaction = reaction)
-                                            if (LocalCustomEmojiUrls.current[reaction] != null) {
-                                                Text(
-                                                    text = reaction,
-                                                    color = MaterialTheme.colorScheme.onBackground,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                )
-                                            }
-                                        }
-                                    },
-                                    onClick = {
-                                        reactionMenuExpanded = false
-                                        reactionSearchQuery = ""
-                                        onReact(note.id, reaction)
-                                    },
-                                )
-                            }
-                        }
-                        if (reactionSections.isEmpty()) {
-                            Text(
-                                text = "没有匹配的反应",
-                                color = LocalHhhlColors.current.subtleText,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                            )
-                        }
                     }
-                    NoteActionButton(
-                        icon = if (note.isFavorited) Icons.Outlined.Star else Icons.Outlined.StarBorder,
-                        selected = note.isFavorited,
-                        contentDescription = if (note.isFavorited) "取消收藏" else "收藏",
-                        enabled = !isActionPending,
-                        onClick = { onFavorite(note.id) },
-                        modifier = Modifier.weight(1f),
-                    )
                     if (overflowActions.isNotEmpty()) {
-                        val menuActions = remember(overflowActions, note.id, onAddToClip) {
-                            overflowActions.map { action ->
-                                HhhlOverflowMenuAction(
-                                    label = action.label,
-                                    destructive = action == NoteOverflowAction.Delete,
-                                    onClick = {
-                                        when (action) {
-                                            NoteOverflowAction.OpenDetail -> onClick(note.id)
-                                            NoteOverflowAction.Reply -> onReply(note.id)
-                                            NoteOverflowAction.Repost -> onRenote(note.id)
-                                            NoteOverflowAction.Quote -> onQuote(note.id)
-                                            NoteOverflowAction.Favorite -> onFavorite(note.id)
-                                            NoteOverflowAction.AddToClip -> onAddToClip?.invoke(note)
-                                            NoteOverflowAction.Delete -> deleteConfirmOpen = true
+                        val menuActions = overflowActions.map { action ->
+                            HhhlOverflowMenuAction(
+                                label = action.label,
+                                destructive = action == NoteOverflowAction.Report ||
+                                    action == NoteOverflowAction.Delete,
+                                onClick = {
+                                    when (action) {
+                                        NoteOverflowAction.OpenDetail -> onClick(note.id)
+                                        NoteOverflowAction.CopyContent -> {
+                                            clipboardManager.setText(AnnotatedString(noteCopyText))
                                         }
-                                    },
-                                )
-                            }
+                                        NoteOverflowAction.CopyLink -> {
+                                            clipboardManager.setText(AnnotatedString(noteLink))
+                                        }
+                                        NoteOverflowAction.Embed -> {
+                                            clipboardManager.setText(AnnotatedString(noteEmbedCode))
+                                        }
+                                        NoteOverflowAction.Share -> effectiveOnShareNote(noteLink)
+                                        NoteOverflowAction.Favorite -> onFavorite(note.id)
+                                        NoteOverflowAction.AddToClip -> onAddToClip?.invoke(note)
+                                        NoteOverflowAction.HideFromList -> effectiveOnHideFromList(note.id)
+                                        NoteOverflowAction.MuteNote -> effectiveOnMuteNote(note.id)
+                                        NoteOverflowAction.User -> onOpenUser(note.author.id)
+                                        NoteOverflowAction.Report -> reportConfirmOpen = true
+                                        NoteOverflowAction.Delete -> deleteConfirmOpen = true
+                                    }
+                                },
+                            )
                         }
                         HhhlOverflowMenu(
                             actions = menuActions,
@@ -395,17 +381,42 @@ fun NoteRow(
             title = { Text("删除帖子") },
             text = { Text("这会从实例删除这条帖子，操作完成后不可在客户端恢复。") },
             confirmButton = {
-                TextButton(
+                HhhlTextButton(
                     onClick = {
                         deleteConfirmOpen = false
                         onDelete(note.id)
                     },
+                    destructive = true,
                 ) {
                     Text("删除")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { deleteConfirmOpen = false }) {
+                HhhlTextButton(onClick = { deleteConfirmOpen = false }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+
+    if (reportConfirmOpen) {
+        AlertDialog(
+            onDismissRequest = { reportConfirmOpen = false },
+            title = { Text("举报帖子") },
+            text = { Text("会把这条帖子提交给实例管理员处理。") },
+            confirmButton = {
+                HhhlTextButton(
+                    onClick = {
+                        reportConfirmOpen = false
+                        effectiveOnReportNote(note.id, note.author.id)
+                    },
+                    destructive = true,
+                ) {
+                    Text("举报")
+                }
+            },
+            dismissButton = {
+                HhhlTextButton(onClick = { reportConfirmOpen = false }) {
                     Text("取消")
                 }
             },
@@ -413,19 +424,24 @@ fun NoteRow(
     }
 }
 
+enum class NoteOverflowAction(val label: String) {
+    OpenDetail("详情"),
+    CopyContent("复制内容"),
+    CopyLink("复制链接"),
+    Embed("嵌入"),
+    Share("分享"),
+    Favorite("收藏"),
+    AddToClip("便签"),
+    HideFromList("隐藏帖子列表"),
+    MuteNote("Mute note"),
+    User("用户"),
+    Report("举报"),
+    Delete("删除帖子"),
+}
+
 enum class NoteRenoteAction(val label: String) {
     Repost("转发"),
     Quote("引用"),
-}
-
-enum class NoteOverflowAction(val label: String) {
-    OpenDetail("打开详情"),
-    Reply("回复"),
-    Repost("转发"),
-    Quote("引用"),
-    Favorite("收藏/取消收藏"),
-    AddToClip("添加到剪辑"),
-    Delete("删除帖子"),
 }
 
 enum class NoteRowDensity {
@@ -433,11 +449,68 @@ enum class NoteRowDensity {
     Comfortable,
 }
 
+@Immutable
 data class ReactionPickerSection(
     val label: String,
     val reactions: List<String>,
 )
 
+@Composable
+private fun ReactionPickerGrid(
+    sections: List<ReactionPickerSection>,
+    onReactionSelected: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        sections.forEach { section ->
+            Text(
+                text = section.label,
+                color = LocalHhhlColors.current.subtleText,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 2.dp),
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(HhhlReactionPickerGridSpacing),
+                verticalArrangement = Arrangement.spacedBy(HhhlReactionPickerGridSpacing),
+            ) {
+                section.reactions.forEach { reaction ->
+                    ReactionPickerGridItem(
+                        reaction = reaction,
+                        onClick = { onReactionSelected(reaction) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReactionPickerGridItem(
+    reaction: String,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(HhhlReactionPickerItemSize)
+            .clip(RoundedCornerShape(12.dp))
+            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.72f))
+            .border(
+                width = 1.dp,
+                color = LocalHhhlColors.current.divider.copy(alpha = 0.42f),
+                shape = RoundedCornerShape(12.dp),
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        CustomEmojiReactionLabel(reaction = reaction)
+    }
+}
+
+@Immutable
 data class NoteRowMetrics(
     val horizontalPadding: Int,
     val verticalPadding: Int,
@@ -446,23 +519,47 @@ data class NoteRowMetrics(
     val mediaHeight: Int,
 )
 
-fun noteRenoteActions(): List<NoteRenoteAction> {
-    return listOf(NoteRenoteAction.Repost, NoteRenoteAction.Quote)
-}
+fun noteRenoteActions(): List<NoteRenoteAction> = noteRenoteActionList
+
+private val noteRenoteActionList: List<NoteRenoteAction> = listOf(NoteRenoteAction.Repost, NoteRenoteAction.Quote)
 
 fun noteOverflowActions(
     canAddToClip: Boolean,
     canDelete: Boolean,
-): List<NoteOverflowAction> {
-    return buildList {
-        add(NoteOverflowAction.OpenDetail)
-        add(NoteOverflowAction.Reply)
-        add(NoteOverflowAction.Repost)
-        add(NoteOverflowAction.Quote)
-        add(NoteOverflowAction.Favorite)
-        if (canAddToClip) add(NoteOverflowAction.AddToClip)
-        if (canDelete) add(NoteOverflowAction.Delete)
+): List<NoteOverflowAction> = buildList {
+    add(NoteOverflowAction.OpenDetail)
+    add(NoteOverflowAction.CopyContent)
+    add(NoteOverflowAction.CopyLink)
+    add(NoteOverflowAction.Embed)
+    add(NoteOverflowAction.Share)
+    add(NoteOverflowAction.Favorite)
+    if (canAddToClip) {
+        add(NoteOverflowAction.AddToClip)
     }
+    add(NoteOverflowAction.HideFromList)
+    add(NoteOverflowAction.MuteNote)
+    add(NoteOverflowAction.User)
+    add(NoteOverflowAction.Report)
+    if (canDelete) {
+        add(NoteOverflowAction.Delete)
+    }
+}
+
+private fun notePermalink(noteId: String): String {
+    return "https://dc.hhhl.cc/notes/${noteId.trim()}"
+}
+
+private fun noteEmbedCode(noteId: String): String {
+    val url = notePermalink(noteId)
+    return """<iframe src="$url/embed" data-misskey-note="$url"></iframe>"""
+}
+
+private fun noteClipboardText(note: Note): String {
+    return buildList {
+        note.cw?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it) }
+        note.text.trim().takeIf { it.isNotEmpty() }?.let { add(it) }
+        if (isEmpty()) add(notePermalink(note.id))
+    }.joinToString("\n\n")
 }
 
 fun reactionPickerSections(
@@ -474,7 +571,7 @@ fun reactionPickerSections(
     val distinctOptions = reactionOptions
         .map { it.trim() }
         .filter { it.isNotEmpty() }
-        .ifEmpty { listOf("❤️") }
+        .ifEmpty { commonReactionOptions }
         .distinct()
     val defaultReaction = distinctOptions.first()
     val cleanRecentReactions = recentReactions
@@ -508,6 +605,51 @@ private fun List<ReactionPickerSection>.filterSections(query: String): List<Reac
 
 private fun String.isCustomEmojiReaction(): Boolean {
     return startsWith(":") && endsWith(":") && length > 2
+}
+
+fun customEmojisForReactionPicker(
+    reactionOptions: List<String>,
+    customEmojis: List<CustomEmoji>,
+    customEmojiUrls: Map<String, String>,
+): List<CustomEmoji> {
+    val resultByName = LinkedHashMap<String, CustomEmoji>()
+    customEmojis
+        .asSequence()
+        .filter { !it.isSensitive && it.name.isNotBlank() && it.url.isNotBlank() }
+        .forEach { resultByName.putIfAbsent(it.name, it) }
+
+    val optionCodes = reactionOptions.asSequence()
+    val urlCodes = customEmojiUrls.keys.asSequence()
+    (optionCodes + urlCodes)
+        .mapNotNull { code -> code.customEmojiReactionName() }
+        .distinct()
+        .forEach { name ->
+            if (!resultByName.containsKey(name)) {
+                val url = customEmojiUrls[":$name:"] ?: customEmojiUrls[":$name@.:"]
+                if (!url.isNullOrBlank()) {
+                    resultByName[name] = CustomEmoji(
+                        name = name,
+                        category = "实例",
+                        url = url,
+                        aliases = emptyList(),
+                        localOnly = true,
+                        isSensitive = false,
+                    )
+                }
+            }
+        }
+
+    return resultByName.values
+        .sortedWith(compareBy<CustomEmoji> { it.category.orEmpty() }.thenBy { it.name })
+}
+
+private fun String.customEmojiReactionName(): String? {
+    val clean = trim()
+    if (!clean.startsWith(":") || !clean.endsWith(":") || clean.length <= 2) return null
+    return clean.removePrefix(":")
+        .removeSuffix(":")
+        .substringBefore("@.")
+        .takeIf { it.isNotBlank() }
 }
 
 fun noteRowMetrics(density: NoteRowDensity): NoteRowMetrics {
@@ -547,6 +689,85 @@ fun noteVisibilityBadge(visibility: NoteVisibility): String? {
 }
 
 @Composable
+private fun NoteAuthorLine(
+    note: Note,
+    onOpenUser: (String) -> Unit,
+    isSpecialCareAuthor: Boolean = false,
+    displayStyle: TextStyle,
+    metaStyle: TextStyle,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalHhhlColors.current
+    val displayColor = MaterialTheme.colorScheme.onBackground
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = buildAnnotatedString {
+                withStyle(
+                    SpanStyle(
+                        color = displayColor,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                ) {
+                    append(note.author.displayName)
+                }
+                withStyle(
+                    SpanStyle(
+                        color = colors.subtleText,
+                        fontSize = metaStyle.fontSize,
+                        fontWeight = FontWeight.Normal,
+                    ),
+                ) {
+                    append("  @${note.author.username}")
+                }
+            },
+            style = displayStyle,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = false,
+            modifier = Modifier
+                .weight(1f)
+                .widthIn(min = 0.dp)
+                .clickable { onOpenUser(note.author.id) },
+        )
+        if (isSpecialCareAuthor) {
+            Text(
+                text = "特别关心",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier
+                    .padding(start = 6.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                        shape = RoundedCornerShape(8.dp),
+                    )
+                    .padding(horizontal = 5.dp, vertical = 1.dp),
+            )
+        }
+        if (note.createdAtLabel.isNotBlank()) {
+            Text(
+                text = " · ${note.createdAtLabel}",
+                color = colors.subtleText,
+                style = metaStyle,
+                maxLines = 1,
+                overflow = TextOverflow.Clip,
+                softWrap = false,
+                modifier = Modifier.clickable { onOpenUser(note.author.id) },
+            )
+        }
+    }
+}
+
+@Composable
 private fun QuotedNoteCard(
     note: Note,
     onOpenNote: (String) -> Unit,
@@ -558,30 +779,19 @@ private fun QuotedNoteCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .border(1.dp, LocalHhhlColors.current.divider, RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(14.dp))
+            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.38f))
+            .border(1.dp, LocalHhhlColors.current.divider.copy(alpha = 0.66f), RoundedCornerShape(14.dp))
             .clickable { onOpenNote(note.id) }
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = note.author.displayName,
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.clickable { onOpenUser(note.author.id) },
-            )
-            Text(
-                text = "  @${note.author.username} · ${note.createdAtLabel}",
-                color = LocalHhhlColors.current.subtleText,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        NoteAuthorLine(
+            note = note,
+            onOpenUser = onOpenUser,
+            displayStyle = MaterialTheme.typography.bodySmall,
+            metaStyle = MaterialTheme.typography.labelSmall,
+        )
         if (note.text.isNotBlank()) {
             InlineRichText(
                 text = note.text,
@@ -655,7 +865,8 @@ private fun PollStrip(
 @Composable
 private fun ReactionStrip(note: Note) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        note.reactions.take(4).forEach { reaction ->
+        repeat(minOf(4, note.reactions.size)) { index ->
+            val reaction = note.reactions[index]
             ReactionChip(
                 reaction = reaction.reaction,
                 count = reaction.count,
@@ -696,33 +907,26 @@ fun Avatar(
     modifier: Modifier = Modifier,
 ) {
     val spec = avatarImageSpec(initial = initial, avatarUrl = avatarUrl)
-    var imageLoaded by remember(spec.remoteUrl) { mutableStateOf(false) }
 
     Box(
         modifier = modifier
             .size(size)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(Color(0xFF08090B)),
         contentAlignment = Alignment.Center,
     ) {
+        AsyncImage(
+            model = spec.fallbackUrl,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
         spec.remoteUrl?.let { remoteUrl ->
             AsyncImage(
                 model = remoteUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                onSuccess = { imageLoaded = true },
-                onError = { imageLoaded = false },
                 modifier = Modifier.fillMaxSize(),
-            )
-        }
-        if (!imageLoaded) {
-            Text(
-                text = spec.fallbackInitial,
-                color = MaterialTheme.colorScheme.onPrimary,
-                style = MaterialTheme.typography.titleMedium,
-                fontStyle = FontStyle.Italic,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.rotate(-12f),
             )
         }
     }
@@ -735,26 +939,20 @@ private fun RemoteMediaImage(
     mediaVisible: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    var imageLoaded by remember(mediaUrl) { mutableStateOf(false) }
-
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
             .background(LocalHhhlColors.current.mediaBackground),
         contentAlignment = Alignment.Center,
     ) {
+        MediaLabel(media = media)
         if (mediaVisible) {
             AsyncImage(
                 model = media.thumbnailUrl ?: mediaUrl,
                 contentDescription = media.description.takeIf { it.isNotBlank() },
                 contentScale = ContentScale.Crop,
-                onSuccess = { imageLoaded = true },
-                onError = { imageLoaded = false },
                 modifier = Modifier.fillMaxSize(),
             )
-        }
-        if (!imageLoaded) {
-            MediaLabel(media = media)
         }
     }
 }
@@ -791,17 +989,25 @@ private fun MediaStrip(
     mediaHeight: Int,
 ) {
     var revealedMediaIds by remember(note.id) { mutableStateOf(emptySet<String>()) }
+    val visibleMedia = remember(note.media) { note.media.take(4) }
+    val hiddenMediaCount = (note.media.size - visibleMedia.size).coerceAtLeast(0)
 
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        note.media.take(3).forEach { media ->
+        visibleMedia.forEachIndexed { index, media ->
             val mediaUrl = media.url ?: media.thumbnailUrl
             val isMediaVisible = noteMediaVisible(media, revealed = media.id in revealedMediaIds)
+            val showOverflowBadge = index == visibleMedia.lastIndex && hiddenMediaCount > 0
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .height(mediaHeight.dp)
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .background(LocalHhhlColors.current.mediaBackground)
+                    .border(
+                        width = 1.dp,
+                        color = LocalHhhlColors.current.divider.copy(alpha = 0.42f),
+                        shape = RoundedCornerShape(12.dp),
+                    )
                     .then(
                         if (mediaUrl != null) {
                             Modifier.clickable {
@@ -835,6 +1041,21 @@ private fun MediaStrip(
                 } else {
                     MediaLabel(media = media)
                 }
+                if (showOverflowBadge) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.48f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "+$hiddenMediaCount",
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
             }
         }
     }
@@ -852,7 +1073,7 @@ private val NoteMedia.displayLabel: String
 
 private val NoteMedia.metaLabel: String
     get() = buildList {
-        if (type.isNotBlank()) add(type)
+        add(mediaTypeDisplayName(type))
         if (url != null || thumbnailUrl != null) add("可打开")
     }.joinToString(" · ").ifBlank { "附件" }
 
@@ -886,24 +1107,47 @@ private fun NoteActionButton(
     selected: Boolean = false,
 ) {
     val spec = noteActionButtonSpec(count)
-    val contentColor = when {
-        !enabled -> LocalHhhlColors.current.subtleText
-        selected -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    val contentColor by animateColorAsState(
+        targetValue = when {
+            !enabled -> LocalHhhlColors.current.subtleText
+            selected -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = tween(durationMillis = 150),
+        label = "note-action-content",
+    )
+    val containerColor by animateColorAsState(
+        targetValue = when {
+            selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+            !enabled -> LocalHhhlColors.current.mediaBackground.copy(alpha = 0.36f)
+            else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.025f)
+        },
+        animationSpec = tween(durationMillis = 150),
+        label = "note-action-container",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+            !enabled -> Color.Transparent
+            else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+        },
+        animationSpec = tween(durationMillis = 150),
+        label = "note-action-border",
+    )
+    val shape = RoundedCornerShape(HhhlControlCornerRadius)
     Row(
         modifier = Modifier
             .then(modifier)
             .widthIn(min = 0.dp)
             .defaultMinSize(minHeight = HhhlNoteActionMinHeight, minWidth = HhhlNoteActionMinWidth)
-            .clip(RoundedCornerShape(HhhlControlCornerRadius))
-            .background(
-                when {
-                    selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-                    !enabled -> LocalHhhlColors.current.mediaBackground.copy(alpha = 0.36f)
-                    else -> Color.Transparent
-                },
+            .shadow(
+                elevation = if (selected) HhhlIconActionIdleElevation else 0.dp,
+                shape = shape,
+                clip = false,
             )
+            .clip(shape)
+            .background(containerColor)
+            .border(1.dp, borderColor, shape)
             .then(if (enabled) Modifier.clickable { onClick() } else Modifier)
             .padding(
                 horizontal = HhhlNoteActionHorizontalPadding,

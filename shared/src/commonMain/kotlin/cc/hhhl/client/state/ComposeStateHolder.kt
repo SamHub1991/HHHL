@@ -2,11 +2,16 @@ package cc.hhhl.client.state
 
 import cc.hhhl.client.api.ComposeDraft
 import cc.hhhl.client.api.ComposePollDraft
+import cc.hhhl.client.api.ComposeReactionAcceptance
+import cc.hhhl.client.api.ComposeScheduleDraft
+import cc.hhhl.client.api.ComposeScheduledNote
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.NoteVisibility
 import cc.hhhl.client.repository.ComposeRepository
 import cc.hhhl.client.repository.ComposeRepositoryResult
+import cc.hhhl.client.repository.ComposeScheduleDeleteRepositoryResult
+import cc.hhhl.client.repository.ComposeScheduledNotesRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.DriveFileRepositoryResult
 import cc.hhhl.client.repository.DriveManagementRepositoryResult
@@ -17,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.datetime.Clock
 
 data class ComposeUiState(
     val draft: ComposeDraft = ComposeDraft(),
@@ -24,9 +30,13 @@ data class ComposeUiState(
     val maxTextLength: Int = 3000,
     val maxCwLength: Int = 500,
     val canPublicNote: Boolean = true,
+    val canScheduleNotes: Boolean = false,
     val isSending: Boolean = false,
     val isUploadingMedia: Boolean = false,
     val isResolvingVisibleUsers: Boolean = false,
+    val isLoadingScheduledNotes: Boolean = false,
+    val deletingScheduledNoteIds: Set<String> = emptySet(),
+    val scheduledNotes: List<ComposeScheduledNote> = emptyList(),
     val updatingFileIds: Set<String> = emptySet(),
     val errorMessage: String? = null,
     val createdNoteId: String? = null,
@@ -48,7 +58,7 @@ class ComposeStateHolder(
         val storedDraft = runCatching { draftStore.loadDraft() }.getOrNull() ?: return
         updateDraftState { current ->
             current.copy(
-                draft = storedDraft.sanitizedForCapabilities(current.canPublicNote),
+                draft = storedDraft.sanitizedForCapabilities(current.canPublicNote, current.canScheduleNotes),
                 errorMessage = null,
                 createdNoteId = null,
                 requiresRelogin = false,
@@ -104,7 +114,7 @@ class ComposeStateHolder(
     fun startNewNote() {
         updateDraftState {
             it.copy(
-                draft = ComposeDraft(visibility = defaultVisibility(it.canPublicNote)),
+                draft = newDraft(it.canPublicNote),
                 attachedFiles = emptyList(),
                 errorMessage = null,
                 createdNoteId = null,
@@ -151,6 +161,62 @@ class ComposeStateHolder(
                     },
                 ),
                 errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    fun updateLocalOnly(localOnly: Boolean) {
+        updateDraftState {
+            it.copy(
+                draft = it.draft.copy(localOnly = localOnly),
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    fun updateReactionAcceptance(acceptance: ComposeReactionAcceptance) {
+        updateDraftState {
+            it.copy(
+                draft = it.draft.copy(reactionAcceptance = acceptance),
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    fun updateScheduleNote(scheduledAt: Long?) {
+        updateDraftState {
+            it.copy(
+                draft = it.draft.copy(scheduleNote = scheduledAt?.let(::ComposeScheduleDraft)),
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    fun appendText(fragment: String) {
+        val cleanFragment = fragment.trim()
+        if (cleanFragment.isEmpty()) return
+        updateDraftState { current ->
+            val separator = if (current.draft.text.isBlank() || current.draft.text.endsWith(" ")) "" else " "
+            current.copy(
+                draft = current.draft.copy(text = current.draft.text + separator + cleanFragment),
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    fun resetDraft() {
+        updateDraftState {
+            it.copy(
+                draft = newDraft(it.canPublicNote),
+                attachedFiles = emptyList(),
+                updatingFileIds = emptySet(),
+                errorMessage = null,
+                createdNoteId = null,
                 requiresRelogin = false,
             )
         }
@@ -344,8 +410,8 @@ class ComposeStateHolder(
 
     fun removePollChoice(index: Int) {
         updateDraftState { current ->
-            val poll = current.draft.poll ?: return@update current
-            if (index !in poll.choices.indices) {
+            val poll = current.draft.poll
+            if (poll == null || index !in poll.choices.indices) {
                 current
             } else {
                 val nextChoices = poll.choices
@@ -379,6 +445,28 @@ class ComposeStateHolder(
                 draft = it.draft.copy(
                     fileIds = (it.draft.fileIds + cleanFileIds).distinct().take(MAX_FILE_COUNT),
                 ),
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    fun attachDriveFile(file: DriveFile) {
+        if (state.value.draft.fileIds.size >= MAX_FILE_COUNT && state.value.draft.fileIds.none { it == file.id }) {
+            mutableState.update {
+                it.copy(errorMessage = "最多只能添加 $MAX_FILE_COUNT 个附件", requiresRelogin = false)
+            }
+            return
+        }
+
+        updateDraftState {
+            it.copy(
+                draft = it.draft.copy(
+                    fileIds = (it.draft.fileIds + file.id).distinct().take(MAX_FILE_COUNT),
+                ),
+                attachedFiles = (it.attachedFiles + file)
+                    .distinctBy { attachedFile -> attachedFile.id }
+                    .take(MAX_FILE_COUNT),
                 errorMessage = null,
                 requiresRelogin = false,
             )
@@ -584,23 +672,77 @@ class ComposeStateHolder(
         }
     }
 
-    fun updateCapabilities(canPublicNote: Boolean) {
+    fun updateCapabilities(
+        canPublicNote: Boolean,
+        canScheduleNotes: Boolean = state.value.canScheduleNotes,
+    ) {
         updateDraftState { current ->
-            if (current.canPublicNote == canPublicNote) {
+            if (current.canPublicNote == canPublicNote && current.canScheduleNotes == canScheduleNotes) {
                 current
             } else {
                 current.copy(
                     canPublicNote = canPublicNote,
+                    canScheduleNotes = canScheduleNotes,
                     draft = current.draft.copy(
                         visibility = if (!canPublicNote && current.draft.visibility == NoteVisibility.Public) {
                             defaultVisibility(canPublicNote = false)
                         } else {
                             current.draft.visibility
                         },
+                        scheduleNote = if (canScheduleNotes) current.draft.scheduleNote else null,
                     ),
                     errorMessage = null,
                     requiresRelogin = false,
                 )
+            }
+        }
+    }
+
+    fun editScheduledNote(note: ComposeScheduledNote) {
+        val cleanNoteId = note.id.trim()
+        if (cleanNoteId.isEmpty() || state.value.deletingScheduledNoteIds.contains(cleanNoteId)) return
+        mutableState.update {
+            it.copy(
+                deletingScheduledNoteIds = it.deletingScheduledNoteIds + cleanNoteId,
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+        scope.launch {
+            when (val result = repository.deleteScheduledNote(cleanNoteId)) {
+                ComposeScheduleDeleteRepositoryResult.Success -> {
+                    val nextDraft = note.toDraft(
+                        canPublicNote = state.value.canPublicNote,
+                        canScheduleNotes = state.value.canScheduleNotes,
+                    )
+                    mutableState.update {
+                        it.copy(
+                            draft = nextDraft,
+                            attachedFiles = note.attachedFiles,
+                            scheduledNotes = it.scheduledNotes.filterNot { scheduledNote -> scheduledNote.id == cleanNoteId },
+                            deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
+                            updatingFileIds = emptySet(),
+                            errorMessage = null,
+                            createdNoteId = null,
+                            requiresRelogin = false,
+                        )
+                    }
+                    persistDraft(nextDraft)
+                }
+                ComposeScheduleDeleteRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(
+                        deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
+                        errorMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is ComposeScheduleDeleteRepositoryResult.Error -> mutableState.update {
+                    it.copy(
+                        deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
+                        errorMessage = result.message,
+                        requiresRelogin = false,
+                    )
+                }
             }
         }
     }
@@ -646,8 +788,9 @@ class ComposeStateHolder(
                     runCatching { draftStore.clearDraft() }
                     mutableState.update {
                         it.copy(
-                            draft = ComposeDraft(),
+                            draft = newDraft(it.canPublicNote),
                             attachedFiles = emptyList(),
+                            updatingFileIds = emptySet(),
                             isSending = false,
                             errorMessage = null,
                             createdNoteId = result.createdNoteId,
@@ -684,12 +827,89 @@ class ComposeStateHolder(
         mutableState.update { it.copy(createdNoteId = null, requiresRelogin = false) }
     }
 
+    fun loadScheduledNotes() {
+        if (state.value.isLoadingScheduledNotes) return
+        mutableState.update {
+            it.copy(
+                isLoadingScheduledNotes = true,
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+        scope.launch {
+            when (val result = repository.listScheduledNotes()) {
+                is ComposeScheduledNotesRepositoryResult.Success -> mutableState.update {
+                    it.copy(
+                        scheduledNotes = result.notes,
+                        isLoadingScheduledNotes = false,
+                        errorMessage = null,
+                        requiresRelogin = false,
+                    )
+                }
+                ComposeScheduledNotesRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(
+                        isLoadingScheduledNotes = false,
+                        errorMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is ComposeScheduledNotesRepositoryResult.Error -> mutableState.update {
+                    it.copy(
+                        isLoadingScheduledNotes = false,
+                        errorMessage = result.message,
+                        requiresRelogin = false,
+                    )
+                }
+            }
+        }
+    }
+
+    fun deleteScheduledNote(noteId: String) {
+        val cleanNoteId = noteId.trim()
+        if (cleanNoteId.isEmpty() || state.value.deletingScheduledNoteIds.contains(cleanNoteId)) return
+        mutableState.update {
+            it.copy(
+                deletingScheduledNoteIds = it.deletingScheduledNoteIds + cleanNoteId,
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+        scope.launch {
+            when (val result = repository.deleteScheduledNote(cleanNoteId)) {
+                ComposeScheduleDeleteRepositoryResult.Success -> mutableState.update {
+                    it.copy(
+                        scheduledNotes = it.scheduledNotes.filterNot { note -> note.id == cleanNoteId },
+                        deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
+                        errorMessage = null,
+                        requiresRelogin = false,
+                    )
+                }
+                ComposeScheduleDeleteRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(
+                        deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
+                        errorMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is ComposeScheduleDeleteRepositoryResult.Error -> mutableState.update {
+                    it.copy(
+                        deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
+                        errorMessage = result.message,
+                        requiresRelogin = false,
+                    )
+                }
+            }
+        }
+    }
+
     private fun ComposeUiState.validationError(): String? {
         return when {
             draft.text.isBlank() && draft.fileIds.isEmpty() -> "内容不能为空"
             draft.text.length > maxTextLength -> "内容不能超过 $maxTextLength 字"
             draft.cw.orEmpty().length > maxCwLength -> "内容警告不能超过 $maxCwLength 字"
             !canPublicNote && draft.visibility == NoteVisibility.Public -> "实例未启用公开发帖"
+            draft.scheduleNote != null && !canScheduleNotes -> "实例未启用预约发帖"
+            draft.scheduleNote != null && draft.scheduleNote.scheduledAt <= currentEpochMillis() -> "预约时间必须晚于当前时间"
             draft.visibility == NoteVisibility.Specified && draft.visibleUserIds.isEmpty() -> {
                 "指定可见至少需要 1 个用户"
             }
@@ -706,6 +926,14 @@ class ComposeStateHolder(
         return if (canPublicNote) NoteVisibility.Public else NoteVisibility.Home
     }
 
+    private fun newDraft(canPublicNote: Boolean): ComposeDraft {
+        return ComposeDraft(visibility = defaultVisibility(canPublicNote))
+    }
+
+    private fun currentEpochMillis(): Long {
+        return Clock.System.now().toEpochMilliseconds()
+    }
+
     private fun updateDraftState(transform: (ComposeUiState) -> ComposeUiState) {
         var nextDraft: ComposeDraft? = null
         mutableState.update { current ->
@@ -718,7 +946,10 @@ class ComposeStateHolder(
         runCatching { draftStore.saveDraft(draft) }
     }
 
-    private fun ComposeDraft.sanitizedForCapabilities(canPublicNote: Boolean): ComposeDraft {
+    private fun ComposeDraft.sanitizedForCapabilities(
+        canPublicNote: Boolean,
+        canScheduleNotes: Boolean,
+    ): ComposeDraft {
         val nextVisibility = if (!canPublicNote && visibility == NoteVisibility.Public) {
             defaultVisibility(canPublicNote = false)
         } else {
@@ -727,6 +958,30 @@ class ComposeStateHolder(
         return copy(
             visibility = nextVisibility,
             visibleUserIds = if (nextVisibility == NoteVisibility.Specified) visibleUserIds else emptyList(),
+            scheduleNote = if (canScheduleNotes) scheduleNote else null,
+        )
+    }
+
+    private fun ComposeScheduledNote.toDraft(
+        canPublicNote: Boolean,
+        canScheduleNotes: Boolean,
+    ): ComposeDraft {
+        return ComposeDraft(
+            text = text,
+            visibility = visibility,
+            visibleUserIds = visibleUserIds,
+            cw = cw,
+            replyId = replyId,
+            renoteId = renoteId,
+            channelId = channelId,
+            fileIds = fileIds,
+            poll = poll,
+            localOnly = localOnly,
+            reactionAcceptance = reactionAcceptance,
+            scheduleNote = scheduledAt?.takeIf { canScheduleNotes }?.let(::ComposeScheduleDraft),
+        ).sanitizedForCapabilities(
+            canPublicNote = canPublicNote,
+            canScheduleNotes = canScheduleNotes,
         )
     }
 

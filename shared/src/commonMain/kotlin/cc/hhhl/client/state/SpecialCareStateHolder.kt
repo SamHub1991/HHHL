@@ -12,6 +12,16 @@ interface SpecialCareStore {
     fun loadSpecialCareUserIds(): Set<String>
 
     fun saveSpecialCareUserIds(userIds: Set<String>)
+
+    fun loadSpecialCareUserIds(accountId: String): Set<String> = loadSpecialCareUserIds()
+
+    fun saveSpecialCareUserIds(accountId: String, userIds: Set<String>) {
+        saveSpecialCareUserIds(userIds)
+    }
+
+    fun clearAccount(accountId: String) {
+        saveSpecialCareUserIds(accountId, emptySet())
+    }
 }
 
 object NoopSpecialCareStore : SpecialCareStore {
@@ -22,12 +32,13 @@ object NoopSpecialCareStore : SpecialCareStore {
 
 class SpecialCareStateHolder(
     private val store: SpecialCareStore = NoopSpecialCareStore,
+    private val accountId: String? = null,
 ) {
     private val mutableState = MutableStateFlow(SpecialCareUiState())
     val state: StateFlow<SpecialCareUiState> = mutableState
 
     fun restoreStoredSpecialCare() {
-        val restoredUserIds = runCatching { store.loadSpecialCareUserIds().cleanUserIds() }
+        val restoredUserIds = runCatching { store.loadUserIds(accountId).cleanUserIds() }
             .getOrDefault(emptySet())
 
         mutableState.update { it.copy(userIds = restoredUserIds) }
@@ -46,12 +57,30 @@ class SpecialCareStateHolder(
         } else {
             state.value.userIds + cleanUserId
         }
-        runCatching { store.saveSpecialCareUserIds(nextUserIds) }
+        runCatching { store.saveUserIds(accountId, nextUserIds) }
         mutableState.update { it.copy(userIds = nextUserIds) }
         return cleanUserId in nextUserIds
     }
 
     private fun Set<String>.cleanUserIds(): Set<String> {
         return mapNotNull { it.trim().takeIf(String::isNotEmpty) }.toSet()
+    }
+}
+
+private fun SpecialCareStore.loadUserIds(accountId: String?): Set<String> {
+    val cleanAccountId = accountId?.trim().takeUnless { it.isNullOrEmpty() }
+    return if (cleanAccountId == null) {
+        loadSpecialCareUserIds()
+    } else {
+        loadSpecialCareUserIds(cleanAccountId)
+    }
+}
+
+private fun SpecialCareStore.saveUserIds(accountId: String?, userIds: Set<String>) {
+    val cleanAccountId = accountId?.trim().takeUnless { it.isNullOrEmpty() }
+    if (cleanAccountId == null) {
+        saveSpecialCareUserIds(userIds)
+    } else {
+        saveSpecialCareUserIds(cleanAccountId, userIds)
     }
 }

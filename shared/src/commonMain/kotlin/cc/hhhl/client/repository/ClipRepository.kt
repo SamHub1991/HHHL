@@ -169,7 +169,7 @@ open class ClipRepository(
             )
         ) {
             is ClipNotesLoadResult.Success -> ClipNotesRepositoryResult.Success(
-                notes = (currentNotes + result.notes).distinctBy { it.id },
+                notes = currentNotes.appendDistinctBy(result.notes) { it.id },
                 endReached = result.notes.isEmpty(),
             )
             ClipNotesLoadResult.Unauthorized -> ClipNotesRepositoryResult.Unauthorized

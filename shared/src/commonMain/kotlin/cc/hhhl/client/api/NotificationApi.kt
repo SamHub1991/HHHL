@@ -84,6 +84,7 @@ class SharkeyNotificationApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return NotificationLoadResult.Unauthorized
             when (response.status) {
                 HttpStatusCode.OK -> NotificationLoadResult.Success(
                     response.body<List<NotificationDto>>().map { it.toDomainNotification() },
@@ -113,7 +114,7 @@ class SharkeyNotificationApi(
 
             when {
                 response.status.value in 200..299 -> NotificationActionResult.Success
-                response.status == HttpStatusCode.Unauthorized -> NotificationActionResult.Unauthorized
+                response.isSharkeyUnauthorized() -> NotificationActionResult.Unauthorized
                 else -> NotificationActionResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -155,6 +156,8 @@ private data class NotificationDto(
     val id: String,
     val createdAt: String,
     val type: String,
+    val isRead: Boolean? = null,
+    val read: Boolean? = null,
     val user: NotificationUserDto? = null,
     val note: NotificationNoteDto? = null,
     val reaction: String? = null,
@@ -187,6 +190,7 @@ private data class NotificationDto(
             createdAtLabel = createdAt.toLocalCompactDateLabel(),
             noteId = note?.id,
             notePreviewText = note?.text?.takeIf { it.isNotBlank() },
+            isRead = isRead ?: read ?: false,
         )
     }
 

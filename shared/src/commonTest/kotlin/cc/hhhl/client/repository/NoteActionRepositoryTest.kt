@@ -194,6 +194,15 @@ class NoteActionRepositoryTest {
                 calls.add(ApiCall("report", token, noteId, comment))
                 return result
             }
+
+            override suspend fun muteNote(
+                token: String,
+                noteId: String,
+            ): NoteActionApiResult {
+                onCall()
+                calls.add(ApiCall("mute", token, noteId, null))
+                return result
+            }
         }
     }
 

@@ -22,6 +22,13 @@ class HhhlBottomNavSpecTest {
     }
 
     @Test
+    fun bottomNavBadgeWidthKeepsTwoDigitsVisible() {
+        assertEquals(18.dp, bottomNavBadgeMinWidth("7"))
+        assertEquals(24.dp, bottomNavBadgeMinWidth("20"))
+        assertEquals(30.dp, bottomNavBadgeMinWidth("99+"))
+    }
+
+    @Test
     fun primaryRootRoutesKeepOnlyHighestFrequencyDestinations() {
         assertEquals(
             listOf(
@@ -51,21 +58,50 @@ class HhhlBottomNavSpecTest {
 
     @Test
     fun sharedActionControlsStayCompactButTouchable() {
-        assertEquals(52.dp, HhhlBottomNavHeight)
-        assertEquals(22.dp, HhhlBottomNavIconSize)
-        assertEquals(8.dp, HhhlControlCornerRadius)
+        assertEquals(58.dp, HhhlBottomNavHeight)
+        assertEquals(46.dp, HhhlBottomNavPanelHeight)
+        assertEquals(12.dp, HhhlBottomNavPanelHorizontalPadding)
+        assertEquals(28.dp, HhhlBottomNavPanelCornerRadius)
+        assertEquals(18.dp, HhhlBottomNavPanelElevation)
+        assertEquals(0.24f, HhhlBottomNavPanelHighlightAlpha)
+        assertEquals(20.dp, HhhlBottomNavIconSize)
+        assertEquals(60.dp, HhhlBottomNavIconSlotWidth)
+        assertEquals(28.dp, HhhlBottomNavIconSlotHeight)
+        assertEquals(13.dp, HhhlBottomNavLabelSlotHeight)
+        assertEquals(6.dp, HhhlBottomNavIconOffsetIdle)
+        assertEquals(0.dp, HhhlBottomNavIconOffsetActive)
+        assertEquals(40.dp, HhhlBottomNavIdlePillWidth)
+        assertEquals(56.dp, HhhlBottomNavSelectedPillWidth)
+        assertEquals(26.dp, HhhlBottomNavSelectedPillHeight)
+        assertEquals(16.dp, HhhlBottomNavSelectedPillCornerRadius)
+        assertEquals(6.dp, HhhlBottomNavVerticalPadding)
+        assertEquals(18.dp, HhhlBottomNavBadgeHeight)
+        assertEquals(18.dp, HhhlBottomNavBadgeSingleMinWidth)
+        assertEquals(24.dp, HhhlBottomNavBadgeDoubleMinWidth)
+        assertEquals(30.dp, HhhlBottomNavBadgeLargeMinWidth)
+        assertEquals(12.dp, HhhlControlCornerRadius)
+        assertEquals(14.dp, HhhlIconActionCornerRadius)
+        assertEquals(0.dp, HhhlIconActionIdleElevation)
+        assertEquals(0.dp, HhhlIconActionEmphasizedElevation)
+        assertEquals(0.08f, HhhlControlHighlightAlpha)
         assertEquals(30.dp, HhhlControlMinHeight)
         assertEquals(34.dp, HhhlControlMinWidth)
         assertEquals(30.dp, HhhlActionChipMinHeight)
-        assertEquals(8.dp, HhhlActionChipHorizontalPadding)
-        assertEquals(5.dp, HhhlActionChipVerticalPadding)
+        assertEquals(10.dp, HhhlActionChipHorizontalPadding)
+        assertEquals(4.dp, HhhlActionChipVerticalPadding)
         assertEquals(184.dp, HhhlActionChipMaxWidth)
+        assertEquals(32.dp, HhhlTextButtonMinHeight)
+        assertEquals(12.dp, HhhlTextButtonHorizontalPadding)
+        assertEquals(6.dp, HhhlTextButtonVerticalPadding)
+        assertEquals(14.dp, HhhlTextButtonCornerRadius)
         assertEquals(30.dp, HhhlOverflowMenuButtonHeight)
         assertEquals(34.dp, HhhlOverflowMenuButtonMinWidth)
-        assertEquals(18.dp, HhhlOverflowMenuIconSize)
-        assertEquals(168.dp, HhhlOverflowMenuMinWidth)
+        assertEquals(19.dp, HhhlOverflowMenuIconSize)
+        assertEquals(184.dp, HhhlOverflowMenuMinWidth)
         assertEquals(240.dp, HhhlOverflowMenuMaxWidth)
         assertEquals(0.dp, HhhlOverflowMenuOffsetX)
         assertEquals(6.dp, HhhlOverflowMenuOffsetY)
+        assertEquals(20.dp, HhhlOverflowMenuItemIconSlotWidth)
+        assertEquals(18.dp, HhhlOverflowMenuItemIconSize)
     }
 }

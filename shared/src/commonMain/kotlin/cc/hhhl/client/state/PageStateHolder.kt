@@ -1,6 +1,7 @@
 package cc.hhhl.client.state
 
 import cc.hhhl.client.model.Page
+import cc.hhhl.client.model.PageDraft
 import cc.hhhl.client.model.PageListKind
 import cc.hhhl.client.repository.PageActionRepositoryResult
 import cc.hhhl.client.repository.PageRepository
@@ -20,6 +21,10 @@ data class PageUiState(
     val isLoadingMore: Boolean = false,
     val isLoadingDetail: Boolean = false,
     val isChangingLike: Boolean = false,
+    val isSavingPage: Boolean = false,
+    val isDeletingPage: Boolean = false,
+    val editingPageId: String? = null,
+    val editingDraft: PageDraft? = null,
     val endReached: Boolean = false,
     val errorMessage: String? = null,
     val detailErrorMessage: String? = null,
@@ -87,6 +92,21 @@ class PageStateHolder(
     fun openPage(pageId: String) {
         if (pageId.isBlank() || state.value.isLoadingDetail) return
 
+        openPageDetail { repository.showPage(pageId) }
+    }
+
+    fun openPageByPath(
+        username: String,
+        name: String,
+    ) {
+        if (username.isBlank() || name.isBlank() || state.value.isLoadingDetail) return
+
+        openPageDetail { repository.showPageByPath(username, name) }
+    }
+
+    private fun openPageDetail(
+        load: suspend () -> PageRepositoryResult,
+    ) {
         mutableState.update {
             it.copy(
                 isLoadingDetail = true,
@@ -96,7 +116,7 @@ class PageStateHolder(
         }
 
         scope.launch {
-            when (val result = repository.showPage(pageId)) {
+            when (val result = load()) {
                 is PageRepositoryResult.Success -> mutableState.update {
                     it.copy(
                         selectedPage = result.page,
@@ -129,8 +149,111 @@ class PageStateHolder(
                 selectedPage = null,
                 isLoadingDetail = false,
                 detailErrorMessage = null,
+                editingPageId = null,
+                editingDraft = null,
+                isSavingPage = false,
+                isDeletingPage = false,
                 requiresRelogin = false,
             )
+        }
+    }
+
+    fun startCreatingPage() {
+        mutableState.update {
+            it.copy(
+                selectedPage = null,
+                editingPageId = null,
+                editingDraft = PageDraft(),
+                detailErrorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    fun startEditingSelectedPage() {
+        val page = state.value.selectedPage ?: return
+        mutableState.update {
+            it.copy(
+                editingPageId = page.id,
+                editingDraft = page.toDraft(),
+                detailErrorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    fun cancelEditingPage() {
+        mutableState.update {
+            it.copy(
+                editingPageId = null,
+                editingDraft = null,
+                isSavingPage = false,
+                detailErrorMessage = null,
+            )
+        }
+    }
+
+    fun updateDraft(draft: PageDraft) {
+        mutableState.update {
+            it.copy(editingDraft = draft, detailErrorMessage = null)
+        }
+    }
+
+    fun saveEditingPage() {
+        val draft = state.value.editingDraft ?: return
+        if (state.value.isSavingPage || !draft.canSubmit) return
+
+        mutableState.update {
+            it.copy(isSavingPage = true, detailErrorMessage = null, requiresRelogin = false)
+        }
+
+        scope.launch {
+            val editingPageId = state.value.editingPageId
+            val result = if (editingPageId == null) {
+                repository.createPage(draft)
+            } else {
+                repository.updatePage(editingPageId, draft)
+            }
+            applySaveResult(result, created = editingPageId == null)
+        }
+    }
+
+    fun deleteSelectedPage() {
+        val page = state.value.selectedPage ?: return
+        if (state.value.isDeletingPage) return
+
+        mutableState.update {
+            it.copy(isDeletingPage = true, detailErrorMessage = null, requiresRelogin = false)
+        }
+
+        scope.launch {
+            when (val result = repository.deletePage(page.id)) {
+                PageActionRepositoryResult.Success -> mutableState.update { current ->
+                    current.copy(
+                        pages = current.pages.filterNot { it.id == page.id },
+                        selectedPage = null,
+                        editingPageId = null,
+                        editingDraft = null,
+                        isDeletingPage = false,
+                        detailErrorMessage = null,
+                        requiresRelogin = false,
+                    )
+                }
+                PageActionRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(
+                        isDeletingPage = false,
+                        detailErrorMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is PageActionRepositoryResult.Error -> mutableState.update {
+                    it.copy(
+                        isDeletingPage = false,
+                        detailErrorMessage = result.message,
+                        requiresRelogin = false,
+                    )
+                }
+            }
         }
     }
 
@@ -224,6 +347,46 @@ class PageStateHolder(
             is PageActionRepositoryResult.Error -> mutableState.update {
                 it.copy(
                     isChangingLike = false,
+                    detailErrorMessage = result.message,
+                    requiresRelogin = false,
+                )
+            }
+        }
+    }
+
+    private fun applySaveResult(
+        result: PageRepositoryResult,
+        created: Boolean,
+    ) {
+        when (result) {
+            is PageRepositoryResult.Success -> mutableState.update { current ->
+                val exists = current.pages.any { it.id == result.page.id }
+                val nextPages = when {
+                    exists -> current.pages.map { if (it.id == result.page.id) result.page else it }
+                    created && current.selectedKind != PageListKind.Mine -> listOf(result.page)
+                    else -> listOf(result.page) + current.pages
+                }
+                current.copy(
+                    pages = nextPages,
+                    selectedPage = result.page,
+                    editingPageId = null,
+                    editingDraft = null,
+                    isSavingPage = false,
+                    selectedKind = PageListKind.Mine,
+                    detailErrorMessage = null,
+                    requiresRelogin = false,
+                )
+            }
+            PageRepositoryResult.Unauthorized -> mutableState.update {
+                it.copy(
+                    isSavingPage = false,
+                    detailErrorMessage = "登录已失效，请重新登录",
+                    requiresRelogin = true,
+                )
+            }
+            is PageRepositoryResult.Error -> mutableState.update {
+                it.copy(
+                    isSavingPage = false,
                     detailErrorMessage = result.message,
                     requiresRelogin = false,
                 )

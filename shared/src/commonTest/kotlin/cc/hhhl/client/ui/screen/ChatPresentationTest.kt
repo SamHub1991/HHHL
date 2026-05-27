@@ -26,14 +26,22 @@ class ChatPresentationTest {
             hasAttachment = false,
             canRefreshCurrent = true,
             canAddMedia = true,
+            isManagingRoom = false,
+            isMuted = false,
             onRefresh = {},
-            onShowMessages = {},
-            onShowMembers = {},
             onAddMedia = {},
+            onEditRoom = {},
+            onInviteMember = {},
+            onLeaveRoom = {},
+            onDeleteRoom = {},
+            onToggleMute = {},
         )
 
-        assertEquals(listOf("刷新消息", "查看消息", "查看成员", "添加附件"), actions.map { it.label })
-        assertEquals(listOf(true, false, true, true), actions.map { it.enabled })
+        assertEquals(
+            listOf("刷新消息", "搜索消息", "编辑聊天室", "邀请成员", "静音聊天室", "退出聊天室", "删除聊天室", "添加附件"),
+            actions.map { it.label },
+        )
+        assertEquals(listOf(true, true, true, true, true, true, true, true), actions.map { it.enabled })
     }
 
     @Test
@@ -93,37 +101,51 @@ class ChatPresentationTest {
     }
 
     @Test
-    fun quoteComposerTitleLooksLikeMarkdownQuote() {
+    fun quoteComposerTitleShowsActionAndAuthor() {
         val quote = ChatMessageQuote(
             messageId = "message-1",
             authorName = "Alice",
             previewText = "原消息",
         )
 
-        assertEquals("> Alice", chatQuoteComposerTitle(quote))
+        assertEquals("引用 Alice", chatQuoteComposerTitle("引用", quote))
+        assertEquals("回复 Alice", chatQuoteComposerTitle("回复", quote))
     }
 
     @Test
     fun messageOverflowKeepsRowActionsUnderMoreMenu() {
         val actions = chatMessageOverflowActions(
             messageId = "message-1",
-            defaultReaction = "❤️",
+            reactionOptions = listOf("❤️", "👍", "🎉", "😆", "😮", "😢", "🔥"),
             isReactionPending = false,
+            isOutgoing = false,
+            onReply = {},
             onQuote = {},
-            onReact = { _, _ -> },
+            onOpenReactionPicker = {},
+            onDelete = {},
+            onCopy = {},
+            onReport = {},
         )
         val pendingActions = chatMessageOverflowActions(
             messageId = "message-1",
-            defaultReaction = "❤️",
+            reactionOptions = listOf("❤️", "👍"),
             isReactionPending = true,
+            isOutgoing = true,
+            onReply = {},
             onQuote = {},
-            onReact = { _, _ -> },
+            onOpenReactionPicker = {},
+            onDelete = {},
+            onCopy = {},
+            onReport = {},
         )
 
-        assertEquals(listOf("引用", "回应 ❤️"), actions.map { it.label })
-        assertEquals(listOf(true, true), actions.map { it.enabled })
-        assertEquals(listOf("引用", "回应处理中"), pendingActions.map { it.label })
-        assertEquals(listOf(true, false), pendingActions.map { it.enabled })
+        assertEquals(
+            listOf("回复", "引用", "回应", "复制", "举报"),
+            actions.map { it.label },
+        )
+        assertEquals(List(5) { true }, actions.map { it.enabled })
+        assertEquals(listOf("回复", "引用", "回应处理中", "复制", "删除"), pendingActions.map { it.label })
+        assertEquals(listOf(true, true, false, true, true), pendingActions.map { it.enabled })
     }
 
     @Test
@@ -131,12 +153,13 @@ class ChatPresentationTest {
         val message = chatMessage(
             id = "message-quoted",
             authorId = "user-1",
-            text = "> Alice: 原消息\n\n新的回复",
+            text = "> Alice: 原消息\n<!-- hhhl-chat-quote:message-source -->\n\n新的回复",
         )
 
         val presentation = chatMessagePresentation(message)
 
         assertEquals("Alice", presentation.quote?.author)
+        assertEquals("message-source", presentation.quote?.messageId)
         assertEquals("原消息", presentation.quote?.preview)
         assertEquals("新的回复", presentation.body)
     }
@@ -146,13 +169,27 @@ class ChatPresentationTest {
         val message = chatMessage(
             id = "message-quote-only",
             authorId = "user-1",
-            text = "> Alice: 原消息",
+            text = "> Alice: 原消息\n<!-- hhhl-chat-quote:message-source -->",
         )
 
         val presentation = chatMessagePresentation(message)
 
         assertEquals("Alice", presentation.quote?.author)
         assertEquals("原消息", presentation.body)
+    }
+
+    @Test
+    fun markdownBlockquoteWithoutMarkerStaysInMessageBody() {
+        val message = chatMessage(
+            id = "message-markdown-quote",
+            authorId = "user-1",
+            text = "> 普通 Markdown 引用\n\n正文",
+        )
+
+        val presentation = chatMessagePresentation(message)
+
+        assertEquals(null, presentation.quote)
+        assertEquals("> 普通 Markdown 引用\n\n正文", presentation.body)
     }
 
     private fun chatMessage(

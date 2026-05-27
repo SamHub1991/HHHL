@@ -6,6 +6,15 @@ import kotlinx.datetime.TimeZone
 
 class DateLabelsTest {
     @Test
+    fun defaultFormatUsesCurrentSystemTimeZone() {
+        val raw = "2026-05-26T09:43:27.285Z"
+        assertEquals(
+            raw.toLocalCompactDateLabel(TimeZone.currentSystemDefault()),
+            raw.toLocalCompactDateLabel(),
+        )
+    }
+
+    @Test
     fun isoInstantIsFormattedInProvidedLocalTimeZone() {
         assertEquals(
             "2026-05-25 09:23",

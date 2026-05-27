@@ -3,10 +3,12 @@ package cc.hhhl.client.repository
 import cc.hhhl.client.api.GalleryApi
 import cc.hhhl.client.api.GalleryActionResult
 import cc.hhhl.client.api.GalleryLoadResult
+import cc.hhhl.client.api.GalleryMutationResult
 import cc.hhhl.client.api.GalleryShowResult
 import cc.hhhl.client.api.SharkeyGalleryApi
 import cc.hhhl.client.model.GalleryListKind
 import cc.hhhl.client.model.GalleryPost
+import cc.hhhl.client.model.GalleryPostDraft
 
 open class GalleryRepository(
     private val tokenProvider: () -> String?,
@@ -61,6 +63,49 @@ open class GalleryRepository(
         }
     }
 
+    open suspend fun createPost(draft: GalleryPostDraft): GalleryMutationRepositoryResult {
+        val cleanDraft = draft.cleaned()
+        cleanDraft.validationMessage()?.let { return GalleryMutationRepositoryResult.Error(it) }
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return GalleryMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.createPost(token, cleanDraft)) {
+            is GalleryMutationResult.Success -> GalleryMutationRepositoryResult.Success(result.post)
+            GalleryMutationResult.Unauthorized -> GalleryMutationRepositoryResult.Unauthorized
+            is GalleryMutationResult.NetworkError -> {
+                GalleryMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is GalleryMutationResult.ServerError -> GalleryMutationRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun updatePost(
+        postId: String,
+        draft: GalleryPostDraft,
+    ): GalleryMutationRepositoryResult {
+        val cleanPostId = postId.trim()
+        val cleanDraft = draft.cleaned()
+        if (cleanPostId.isEmpty()) return GalleryMutationRepositoryResult.Error("无法读取图库帖子")
+        cleanDraft.validationMessage()?.let { return GalleryMutationRepositoryResult.Error(it) }
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return GalleryMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.updatePost(token, cleanPostId, cleanDraft)) {
+            is GalleryMutationResult.Success -> GalleryMutationRepositoryResult.Success(result.post)
+            GalleryMutationResult.Unauthorized -> GalleryMutationRepositoryResult.Unauthorized
+            is GalleryMutationResult.NetworkError -> {
+                GalleryMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is GalleryMutationResult.ServerError -> GalleryMutationRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun deletePost(postId: String): GalleryActionRepositoryResult {
+        return performGalleryAction(postId) { token, cleanPostId ->
+            api.deletePost(token, cleanPostId)
+        }
+    }
+
     private suspend fun loadPosts(
         kind: GalleryListKind,
         currentPosts: List<GalleryPost>,
@@ -78,7 +123,7 @@ open class GalleryRepository(
             )
         ) {
             is GalleryLoadResult.Success -> GalleryPostsRepositoryResult.Success(
-                posts = (currentPosts + result.posts).distinctBy { it.id },
+                posts = currentPosts.appendDistinctBy(result.posts) { it.id },
                 endReached = result.posts.isEmpty(),
             )
             GalleryLoadResult.Unauthorized -> GalleryPostsRepositoryResult.Unauthorized
@@ -140,4 +185,28 @@ sealed interface GalleryActionRepositoryResult {
     data object Unauthorized : GalleryActionRepositoryResult
 
     data class Error(val message: String) : GalleryActionRepositoryResult
+}
+
+sealed interface GalleryMutationRepositoryResult {
+    data class Success(val post: GalleryPost) : GalleryMutationRepositoryResult
+
+    data object Unauthorized : GalleryMutationRepositoryResult
+
+    data class Error(val message: String) : GalleryMutationRepositoryResult
+}
+
+private fun GalleryPostDraft.cleaned(): GalleryPostDraft {
+    return copy(
+        title = title.trim(),
+        description = description.trim(),
+        fileIds = fileIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
+    )
+}
+
+private fun GalleryPostDraft.validationMessage(): String? {
+    return when {
+        title.isBlank() -> "请输入标题"
+        fileIds.isEmpty() -> "请至少选择一个文件"
+        else -> null
+    }
 }

@@ -135,6 +135,17 @@ class ManagementActionsPresentationTest {
     }
 
     @Test
+    fun announcementManagementKeepsDeleteInDestructiveOverflowAction() {
+        val actions = announcementManagementActions(
+            isMutating = false,
+            onDelete = {},
+        )
+
+        assertEquals(listOf("删除"), actions.map { it.label })
+        assertEquals(listOf(true), actions.map { it.destructive })
+    }
+
+    @Test
     fun clipManagementKeepsDeleteInDestructiveOverflowAction() {
         val actions = clipHeaderActions(
             isManagingClip = false,
@@ -172,6 +183,24 @@ class ManagementActionsPresentationTest {
 
         assertEquals(listOf("详情", "改名", "敏感", "确认删除"), actions.map { it.label })
         assertEquals(listOf(false, false, false, true), actions.map { it.destructive })
+    }
+
+    @Test
+    fun driveFileActionsExposeMoveToRootWhenFileIsInFolder() {
+        val actions = driveFileRowActions(
+            isSensitive = false,
+            canMoveToRoot = true,
+            actionsEnabled = true,
+            confirmingDelete = false,
+            onDetails = {},
+            onStartEdit = {},
+            onToggleSensitive = {},
+            onMoveToRoot = {},
+            onDelete = {},
+        )
+
+        assertEquals(listOf("详情", "改名", "敏感", "移到根目录", "删除"), actions.map { it.label })
+        assertEquals(listOf(false, false, false, false, true), actions.map { it.destructive })
     }
 
     @Test

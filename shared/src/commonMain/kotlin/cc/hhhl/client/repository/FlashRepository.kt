@@ -3,9 +3,11 @@ package cc.hhhl.client.repository
 import cc.hhhl.client.api.FlashApi
 import cc.hhhl.client.api.FlashActionResult
 import cc.hhhl.client.api.FlashLoadResult
+import cc.hhhl.client.api.FlashMutationResult
 import cc.hhhl.client.api.FlashShowResult
 import cc.hhhl.client.api.SharkeyFlashApi
 import cc.hhhl.client.model.Flash
+import cc.hhhl.client.model.FlashDraft
 import cc.hhhl.client.model.FlashListKind
 
 open class FlashRepository(
@@ -63,6 +65,37 @@ open class FlashRepository(
         }
     }
 
+    open suspend fun createFlash(draft: FlashDraft): FlashRepositoryResult {
+        val cleanDraft = draft.trimmed
+        cleanDraft.validationMessage()?.let { return FlashRepositoryResult.Error(it) }
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return FlashRepositoryResult.Unauthorized
+
+        return mapMutationResult(api.createFlash(token, cleanDraft))
+    }
+
+    open suspend fun updateFlash(
+        flashId: String,
+        draft: FlashDraft,
+    ): FlashRepositoryResult {
+        val cleanFlashId = flashId.trim()
+        if (cleanFlashId.isEmpty()) {
+            return FlashRepositoryResult.Error("无法读取 Play")
+        }
+        val cleanDraft = draft.trimmed
+        cleanDraft.validationMessage()?.let { return FlashRepositoryResult.Error(it) }
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return FlashRepositoryResult.Unauthorized
+
+        return mapMutationResult(api.updateFlash(token, cleanFlashId, cleanDraft))
+    }
+
+    open suspend fun deleteFlash(flashId: String): FlashActionRepositoryResult {
+        return performFlashAction(flashId) { token, cleanFlashId ->
+            api.deleteFlash(token, cleanFlashId)
+        }
+    }
+
     private suspend fun loadFlashes(
         kind: FlashListKind,
         currentFlashes: List<Flash>,
@@ -82,7 +115,7 @@ open class FlashRepository(
             )
         ) {
             is FlashLoadResult.Success -> FlashesRepositoryResult.Success(
-                flashes = (currentFlashes + result.flashes).distinctBy { it.id },
+                flashes = currentFlashes.appendDistinctBy(result.flashes) { it.id },
                 endReached = result.flashes.isEmpty(),
             )
             FlashLoadResult.Unauthorized -> FlashesRepositoryResult.Unauthorized
@@ -114,8 +147,28 @@ open class FlashRepository(
         }
     }
 
+    private fun mapMutationResult(result: FlashMutationResult): FlashRepositoryResult {
+        return when (result) {
+            is FlashMutationResult.Success -> FlashRepositoryResult.Success(result.flash)
+            FlashMutationResult.Unauthorized -> FlashRepositoryResult.Unauthorized
+            is FlashMutationResult.NetworkError -> {
+                FlashRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is FlashMutationResult.ServerError -> FlashRepositoryResult.Error(result.message)
+        }
+    }
+
     private companion object {
         const val DEFAULT_PAGE_SIZE = 20
+    }
+}
+
+private fun FlashDraft.validationMessage(): String? {
+    return when {
+        title.isBlank() -> "请输入标题"
+        script.isBlank() -> "请输入脚本"
+        visibility !in setOf("public", "private") -> "不支持的可见性"
+        else -> null
     }
 }
 

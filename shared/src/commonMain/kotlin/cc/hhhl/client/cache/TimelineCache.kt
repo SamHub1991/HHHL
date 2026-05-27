@@ -9,6 +9,8 @@ import cc.hhhl.client.model.NotePollChoice
 import cc.hhhl.client.model.NoteReaction
 import cc.hhhl.client.model.NoteVisibility
 import cc.hhhl.client.model.User
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -28,13 +30,18 @@ object NoopTimelineCache : TimelineCache {
 
 class InMemoryTimelineCache : TimelineCache {
     private val snapshots = mutableMapOf<TimelineKind, List<Note>>()
+    private val mutex = Mutex()
 
     override suspend fun read(kind: TimelineKind): List<Note> {
-        return snapshots[kind].orEmpty()
+        return mutex.withLock {
+            snapshots[kind].orEmpty()
+        }
     }
 
     override suspend fun write(kind: TimelineKind, notes: List<Note>) {
-        snapshots[kind] = notes
+        mutex.withLock {
+            snapshots[kind] = notes
+        }
     }
 }
 
@@ -91,6 +98,7 @@ private data class CachedNote(
     val poll: CachedNotePoll? = null,
     val isRenote: Boolean = false,
     val quotedNote: CachedNote? = null,
+    val replyId: String? = null,
 )
 
 @Serializable
@@ -104,6 +112,7 @@ private data class CachedUser(
     val followingCount: Int = 0,
     val notesCount: Int = 0,
     val isFollowing: Boolean = false,
+    val host: String? = null,
     val avatarUrl: String? = null,
     val bannerUrl: String? = null,
 )
@@ -158,6 +167,7 @@ private fun Note.toCachedNote(): CachedNote {
         poll = poll?.toCachedPoll(),
         isRenote = isRenote,
         quotedNote = quotedNote?.toCachedNote(),
+        replyId = replyId,
     )
 }
 
@@ -180,6 +190,7 @@ private fun CachedNote.toDomainNote(): Note {
         poll = poll?.toDomainPoll(),
         isRenote = isRenote,
         quotedNote = quotedNote?.toDomainNote(),
+        replyId = replyId,
     )
 }
 
@@ -194,6 +205,7 @@ private fun User.toCachedUser(): CachedUser {
         followingCount = followingCount,
         notesCount = notesCount,
         isFollowing = isFollowing,
+        host = host,
         avatarUrl = avatarUrl,
         bannerUrl = bannerUrl,
     )
@@ -210,6 +222,7 @@ private fun CachedUser.toDomainUser(): User {
         followingCount = followingCount,
         notesCount = notesCount,
         isFollowing = isFollowing,
+        host = host,
         avatarUrl = avatarUrl,
         bannerUrl = bannerUrl,
     )

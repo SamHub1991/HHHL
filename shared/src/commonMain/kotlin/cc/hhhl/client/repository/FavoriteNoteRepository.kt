@@ -29,7 +29,7 @@ open class FavoriteNoteRepository(
 
         return when (val result = api.loadFavorites(token = token, limit = PAGE_SIZE, untilId = untilId)) {
             is FavoriteNoteLoadResult.Success -> FavoriteNotesRepositoryResult.Success(
-                favorites = (currentFavorites + result.favorites).distinctBy { it.id },
+                favorites = currentFavorites.appendDistinctBy(result.favorites) { it.id },
             )
             FavoriteNoteLoadResult.Unauthorized -> FavoriteNotesRepositoryResult.Unauthorized
             is FavoriteNoteLoadResult.NetworkError -> {

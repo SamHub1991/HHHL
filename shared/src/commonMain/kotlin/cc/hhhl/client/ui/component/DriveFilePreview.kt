@@ -45,10 +45,7 @@ fun driveFilePreviewSpec(file: DriveFile): DriveFilePreviewSpec {
         label = when {
             file.isSensitive -> "敏感内容"
             file.name.isNotBlank() -> file.name
-            file.type.startsWith("image/") -> "图片"
-            file.type.startsWith("video/") -> "视频"
-            file.type.startsWith("audio/") -> "音频"
-            else -> "附件"
+            else -> mediaTypeDisplayName(file.type, file.name)
         },
         placeholderLabel = driveFilePreviewPlaceholder(file),
     )
@@ -56,15 +53,7 @@ fun driveFilePreviewSpec(file: DriveFile): DriveFilePreviewSpec {
 
 private fun driveFilePreviewPlaceholder(file: DriveFile): String {
     if (file.isSensitive) return "LOCK"
-    return when {
-        file.type.startsWith("image/") -> "IMG"
-        file.type.startsWith("video/") -> "VID"
-        file.type.startsWith("audio/") -> "AUD"
-        else -> file.name.substringAfterLast('.', missingDelimiterValue = "")
-            .takeIf { it.length in 1..5 }
-            ?.uppercase()
-            ?: "FILE"
-    }
+    return mediaTypeBadge(file.type, file.name)
 }
 
 @Composable

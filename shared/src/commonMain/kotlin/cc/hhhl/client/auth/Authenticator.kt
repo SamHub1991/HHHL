@@ -6,4 +6,10 @@ interface Authenticator {
     suspend fun checkSession(session: String): AuthResult
 
     suspend fun verifyToken(token: String): AuthResult
+
+    suspend fun signInWithPassword(
+        username: String,
+        password: String,
+        token: String? = null,
+    ): PasswordLoginResult
 }

@@ -115,7 +115,7 @@ open class AntennaRepository(
             )
         ) {
             is AntennaNotesLoadResult.Success -> AntennaNotesRepositoryResult.Success(
-                notes = (currentNotes + result.notes).distinctBy { it.id },
+                notes = currentNotes.appendDistinctBy(result.notes) { it.id },
                 endReached = result.notes.isEmpty(),
             )
             AntennaNotesLoadResult.Unauthorized -> AntennaNotesRepositoryResult.Unauthorized

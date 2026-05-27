@@ -1,23 +1,27 @@
 package cc.hhhl.client.ui.screen
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -26,20 +30,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.api.TimelineKind
-import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.InstanceCapabilities
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.state.TimelineTabState
 import cc.hhhl.client.state.TimelineUiState
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
-import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
+import cc.hhhl.client.ui.component.HhhlSegmentedControl
+import cc.hhhl.client.ui.component.HhhlSegmentedItem
+import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.NoteRow
 import cc.hhhl.client.ui.component.NoteRowDensity
@@ -69,9 +78,16 @@ fun TimelineScreen(
     recentReactions: List<String> = emptyList(),
     isActionPending: (String) -> Boolean = { false },
     canDeleteAuthor: (String) -> Boolean = { false },
+    isSpecialCareAuthor: (String) -> Boolean = { false },
     noteRowDensity: NoteRowDensity = NoteRowDensity.Comfortable,
     capabilities: InstanceCapabilities = InstanceCapabilities(),
     listStates: Map<TimelineKind, LazyListState> = emptyMap(),
+    isTrendSelected: Boolean = false,
+    trends: List<TrendingHashtag> = emptyList(),
+    isRefreshingTrends: Boolean = false,
+    trendErrorMessage: String? = null,
+    onTrendSelected: () -> Unit = {},
+    onRefreshTrends: () -> Unit = {},
     onCompose: () -> Unit = {},
     onSearch: () -> Unit = {},
 ) {
@@ -79,90 +95,147 @@ fun TimelineScreen(
     val selectedKind = state?.selectedKind ?: TimelineKind.Home
     val visibleSelectedKind = selectedKind.takeIf { it in kinds } ?: TimelineKind.Home
     val visibleKinds = kinds
-    val selectedTab = visibleKinds.indexOf(visibleSelectedKind).coerceAtLeast(0)
+    val hasTrendTab = capabilities.canTrend
+    val showTrends = isTrendSelected && hasTrendTab
     val selectedTabState = state?.tabs?.get(visibleSelectedKind)
-        ?: TimelineTabState(notes = FakeData.timeline)
+        ?: TimelineTabState()
     val fallbackListState = rememberLazyListState()
     val listState = listStates[visibleSelectedKind] ?: fallbackListState
+    val trendListState = rememberLazyListState()
     val timelineThreadItems = remember(selectedTabState.notes) {
         timelineThreadItems(selectedTabState.notes)
     }
 
-    AutoLoadMoreEffect(
-        listState = listState,
-        itemCount = selectedTabState.notes.size,
-        isLoadingMore = selectedTabState.isLoadingMore || selectedTabState.endReached,
-        onLoadMore = { onLoadMore(visibleSelectedKind) },
-    )
+    if (!showTrends) {
+        AutoLoadMoreEffect(
+            listState = listState,
+            itemCount = timelineThreadItems.size,
+            isLoadingMore = selectedTabState.isLoadingMore || selectedTabState.endReached,
+            onLoadMore = { onLoadMore(visibleSelectedKind) },
+        )
+    }
 
     Column(
         modifier = Modifier.fillMaxSize(),
     ) {
-        TimelineSummaryRow(
+        if (showTrends) {
+            TimelineTrendSummaryRow(
+                trendCount = trends.size,
+                isRefreshing = isRefreshingTrends,
+                onRefresh = onRefreshTrends,
+                onCompose = onCompose,
+                onSearch = onSearch,
+            )
+        } else {
+            TimelineSummaryRow(
+                selectedKind = visibleSelectedKind,
+                selectedTabState = selectedTabState,
+                onRefresh = { onRefresh(visibleSelectedKind) },
+                onCompose = onCompose,
+                onSearch = onSearch,
+            )
+        }
+        TimelineTabStrip(
+            kinds = visibleKinds,
             selectedKind = visibleSelectedKind,
-            selectedTabState = selectedTabState,
-            onRefresh = { onRefresh(visibleSelectedKind) },
-            onLoadMore = { onLoadMore(visibleSelectedKind) },
-            onCompose = onCompose,
-            onSearch = onSearch,
+            showTrends = showTrends,
+            hasTrendTab = hasTrendTab,
+            onTimelineSelected = onTimelineSelected,
+            onTrendSelected = onTrendSelected,
         )
         HhhlDivider()
-        TabRow(selectedTabIndex = selectedTab) {
-            visibleKinds.forEachIndexed { index, kind ->
-                Tab(
-                    selected = selectedTab == index,
-                    onClick = { onTimelineSelected(kind) },
-                    text = { Text(kind.label) },
-                )
-            }
-        }
-        HhhlDivider()
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            state = listState,
-        ) {
-            if (selectedTabState.isLoading && selectedTabState.notes.isEmpty()) {
-                item { TimelineStatusRow(text = "正在加载时间线...", loading = true) }
-            }
-            selectedTabState.errorMessage?.let { message ->
-                item {
-                    TimelineStatusRow(
-                        text = message,
-                        actionText = "重试",
-                        onAction = { onRefresh(visibleSelectedKind) },
+        if (showTrends) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                state = trendListState,
+            ) {
+                if (isRefreshingTrends && trends.isEmpty()) {
+                    item(key = "timeline-trends-loading", contentType = "timeline-status") {
+                        TimelineStatusRow(text = "正在加载趋势...", loading = true)
+                    }
+                }
+                trendErrorMessage?.let { message ->
+                    item(key = "timeline-trends-error", contentType = "timeline-status") {
+                        TimelineStatusRow(
+                            text = message,
+                            actionText = "重试",
+                            onAction = onRefreshTrends,
+                        )
+                    }
+                }
+                if (!isRefreshingTrends && trends.isEmpty() && trendErrorMessage == null) {
+                    item(key = "timeline-trends-empty", contentType = "timeline-status") {
+                        TimelineStatusRow(text = "暂无趋势")
+                    }
+                }
+                items(
+                    items = trends,
+                    key = { "timeline-trend-${it.tag}" },
+                    contentType = { "timeline-trend" },
+                ) { trend ->
+                    TimelineTrendRow(
+                        trend = trend,
+                        onOpenHashtag = onOpenHashtag,
                     )
                 }
             }
-            if (!selectedTabState.isLoading && selectedTabState.notes.isEmpty() && selectedTabState.errorMessage == null) {
-                item { TimelineStatusRow(text = "这里还没有内容") }
-            }
-            items(timelineThreadItems, key = { it.note.id }) { item ->
-                TimelineThreadNoteRow(
-                    item = item,
-                ) {
-                    NoteRow(
-                        note = item.note,
-                        onClick = onOpenNote,
-                        onOpenUser = onOpenUser,
-                        onReply = onReply,
-                        onRenote = onRenote,
-                        onQuote = onQuote,
-                        onReact = onReact,
-                        onDeleteReaction = onDeleteReaction,
-                        onFavorite = onFavorite,
-                        onAddToClip = onAddToClip,
-                        onDelete = onDelete,
-                        onOpenMedia = onOpenMedia,
-                        onOpenMediaPreview = onOpenMediaPreview,
-                        onOpenMention = onOpenMention,
-                        onOpenHashtag = onOpenHashtag,
-                        onVotePoll = onVotePoll,
-                        reactionOptions = reactionOptions,
-                        recentReactions = recentReactions,
-                        isActionPending = isActionPending(item.note.id),
-                        canDelete = canDeleteAuthor(item.note.author.id),
-                        density = noteRowDensity,
-                    )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                state = listState,
+            ) {
+                if (selectedTabState.isLoading && selectedTabState.notes.isEmpty()) {
+                    item(key = "timeline-notes-loading-${visibleSelectedKind.name}", contentType = "timeline-status") {
+                        TimelineStatusRow(text = "正在加载时间线...", loading = true)
+                    }
+                }
+                selectedTabState.errorMessage?.let { message ->
+                    item(key = "timeline-notes-error-${visibleSelectedKind.name}", contentType = "timeline-status") {
+                        TimelineStatusRow(
+                            text = message,
+                            actionText = "重试",
+                            onAction = { onRefresh(visibleSelectedKind) },
+                        )
+                    }
+                }
+                if (!selectedTabState.isLoading && selectedTabState.notes.isEmpty() && selectedTabState.errorMessage == null) {
+                    item(key = "timeline-notes-empty-${visibleSelectedKind.name}", contentType = "timeline-status") {
+                        TimelineStatusRow(text = "这里还没有内容")
+                    }
+                }
+                items(
+                    items = timelineThreadItems,
+                    key = { it.note.id },
+                    contentType = { "timeline-note" },
+                ) { item ->
+                    TimelineThreadNoteRow(
+                        item = item,
+                    ) {
+                        NoteRow(
+                            note = item.note,
+                            onClick = onOpenNote,
+                            onOpenUser = onOpenUser,
+                            onReply = onReply,
+                            onRenote = onRenote,
+                            onQuote = onQuote,
+                            onReact = onReact,
+                            onDeleteReaction = onDeleteReaction,
+                            onFavorite = onFavorite,
+                            onAddToClip = onAddToClip,
+                            onDelete = onDelete,
+                            onOpenMedia = onOpenMedia,
+                            onOpenMediaPreview = onOpenMediaPreview,
+                            onOpenMention = onOpenMention,
+                            onOpenHashtag = onOpenHashtag,
+                            onVotePoll = onVotePoll,
+                            reactionOptions = reactionOptions,
+                            recentReactions = recentReactions,
+                            isActionPending = isActionPending(item.note.id),
+                            canDelete = canDeleteAuthor(item.note.author.id),
+                            isSpecialCareAuthor = isSpecialCareAuthor(item.note.author.id),
+                            density = noteRowDensity,
+                        )
+                    }
                 }
             }
         }
@@ -170,11 +243,53 @@ fun TimelineScreen(
 }
 
 @Composable
+private fun TimelineTabStrip(
+    kinds: List<TimelineKind>,
+    selectedKind: TimelineKind,
+    showTrends: Boolean,
+    hasTrendTab: Boolean,
+    onTimelineSelected: (TimelineKind) -> Unit,
+    onTrendSelected: () -> Unit,
+) {
+    val tabs = buildList {
+        addAll(kinds.map { TimelineTabItem(label = it.label, kind = it) })
+        if (hasTrendTab) add(TimelineTabItem(label = "趋势", kind = null))
+    }
+
+    HhhlSegmentedControl(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        tabs.forEach { tab ->
+            val isTrend = tab.kind == null
+            HhhlSegmentedItem(
+                label = tab.label,
+                selected = if (isTrend) showTrends else !showTrends && selectedKind == tab.kind,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    val kind = tab.kind
+                    if (kind == null) {
+                        onTrendSelected()
+                    } else {
+                        onTimelineSelected(kind)
+                    }
+                },
+            )
+        }
+    }
+}
+
+private data class TimelineTabItem(
+    val label: String,
+    val kind: TimelineKind?,
+)
+
+@Composable
 private fun TimelineSummaryRow(
     selectedKind: TimelineKind,
     selectedTabState: TimelineTabState,
     onRefresh: () -> Unit,
-    onLoadMore: () -> Unit,
     onCompose: () -> Unit,
     onSearch: () -> Unit,
 ) {
@@ -201,29 +316,119 @@ private fun TimelineSummaryRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            HhhlActionChip(
-                label = "搜索",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Search,
+                contentDescription = "搜索",
                 onClick = onSearch,
             )
-            HhhlActionChip(
-                label = "写帖",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Edit,
+                contentDescription = "写帖",
                 emphasized = true,
                 onClick = onCompose,
             )
-            if (selectedTabState.notes.isNotEmpty() && !selectedTabState.endReached) {
-                HhhlActionChip(
-                    label = if (selectedTabState.isLoadingMore) "加载中" else "加载更多",
-                    enabled = !selectedTabState.isLoadingMore,
-                    onClick = onLoadMore,
-                )
-            }
-            HhhlActionChip(
-                label = if (selectedTabState.isLoading || selectedTabState.isLoadingMore) "刷新中" else "刷新",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (selectedTabState.isLoading || selectedTabState.isLoadingMore) "刷新中" else "刷新",
                 enabled = !selectedTabState.isLoading && !selectedTabState.isLoadingMore,
                 onClick = onRefresh,
             )
         }
     }
+}
+
+@Composable
+private fun TimelineTrendSummaryRow(
+    trendCount: Int,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    onCompose: () -> Unit,
+    onSearch: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = when {
+                    isRefreshing && trendCount == 0 -> "趋势 · 加载中"
+                    else -> "趋势 · $trendCount 个"
+                },
+                color = LocalHhhlColors.current.subtleText,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            HhhlIconActionButton(
+                icon = Icons.Filled.Search,
+                contentDescription = "搜索",
+                onClick = onSearch,
+            )
+            HhhlIconActionButton(
+                icon = Icons.Filled.Edit,
+                contentDescription = "写帖",
+                emphasized = true,
+                onClick = onCompose,
+            )
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (isRefreshing) "刷新中" else "刷新",
+                enabled = !isRefreshing,
+                onClick = onRefresh,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TimelineTrendRow(
+    trend: TrendingHashtag,
+    onOpenHashtag: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onOpenHashtag(trend.tag) }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = "#${trend.tag}",
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${trend.usersCount} 人正在使用",
+                color = MaterialTheme.colorScheme.secondary,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            text = trendChartSummary(trend),
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    HhhlDivider()
 }
 
 fun timelineSummaryActions(
@@ -288,15 +493,28 @@ data class TimelineThreadItem(
 )
 
 fun timelineThreadItems(notes: List<Note>): List<TimelineThreadItem> {
-    val distinctNotes = notes.distinctBy { it.id }
-    val knownIds = distinctNotes.mapTo(mutableSetOf()) { it.id }
-    val childrenByParent = distinctNotes
-        .filter { it.replyId in knownIds }
-        .groupBy { it.replyId.orEmpty() }
-    val roots = distinctNotes.filter { it.replyId !in knownIds }
-    val visible = mutableListOf<TimelineThreadItem>()
-    val seen = mutableSetOf<String>()
-    val notesById = distinctNotes.associateBy { it.id }
+    if (notes.isEmpty()) return emptyList()
+
+    val notesById = LinkedHashMap<String, Note>()
+    notes.forEach { note ->
+        if (!notesById.containsKey(note.id)) {
+            notesById[note.id] = note
+        }
+    }
+
+    val childrenByParent = LinkedHashMap<String, MutableList<Note>>()
+    val roots = ArrayList<Note>()
+    notesById.values.forEach { note ->
+        val parentId = note.replyId
+        if (!parentId.isNullOrBlank() && notesById.containsKey(parentId)) {
+            childrenByParent.getOrPut(parentId) { mutableListOf() }.add(note)
+        } else {
+            roots += note
+        }
+    }
+
+    val visible = ArrayList<TimelineThreadItem>(notesById.size)
+    val seen = HashSet<String>(notesById.size)
 
     fun append(note: Note, depth: Int) {
         if (!seen.add(note.id)) return
@@ -307,7 +525,7 @@ fun timelineThreadItems(notes: List<Note>): List<TimelineThreadItem> {
     }
 
     roots.forEach { append(it, 1) }
-    distinctNotes.forEach { append(it, timelineReplyDepth(it, notesById)) }
+    notesById.values.forEach { append(it, timelineReplyDepth(it, notesById)) }
     return visible
 }
 
@@ -423,33 +641,10 @@ private fun TimelineStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
+    )
 }

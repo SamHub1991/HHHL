@@ -112,6 +112,8 @@ class SharkeyAntennaApi(
                 setBody(AntennasRequest(i = cleanToken))
             }
 
+            if (response.isSharkeyUnauthorized()) return AntennaLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> AntennaLoadResult.Success(
                     response.body<List<AntennaDto>>().map { it.toDomainAntenna() },
@@ -157,6 +159,8 @@ class SharkeyAntennaApi(
                     ),
                 )
             }
+
+            if (response.isSharkeyUnauthorized()) return AntennaNotesLoadResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> AntennaNotesLoadResult.Success(
@@ -212,7 +216,7 @@ class SharkeyAntennaApi(
 
             when {
                 response.status.value in 200..299 -> AntennaActionResult.Success
-                response.status == HttpStatusCode.Unauthorized -> AntennaActionResult.Unauthorized
+                response.isSharkeyUnauthorized() -> AntennaActionResult.Unauthorized
                 else -> AntennaActionResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -246,6 +250,8 @@ class SharkeyAntennaApi(
                 contentType(ContentType.Application.Json)
                 setBody(AntennaMutationRequest.fromDraft(cleanToken, cleanAntennaId.ifBlank { null }, draft))
             }
+
+            if (response.isSharkeyUnauthorized()) return AntennaMutationResult.Unauthorized
 
             when (response.status) {
                 HttpStatusCode.OK -> AntennaMutationResult.Success(

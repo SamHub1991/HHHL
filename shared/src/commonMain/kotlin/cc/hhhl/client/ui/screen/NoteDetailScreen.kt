@@ -12,11 +12,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -25,13 +30,15 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.state.NoteDetailUiState
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlIconActionButton
+import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlTopBar
 import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.NoteRow
@@ -66,14 +73,10 @@ fun NoteDetailScreen(
     canDeleteAuthor: (String) -> Boolean = { false },
     noteRowDensity: NoteRowDensity = NoteRowDensity.Comfortable,
 ) {
-    val selected = state?.note ?: if (state == null) {
-        FakeData.timeline.firstOrNull { it.id == noteId } ?: FakeData.timeline.first()
-    } else {
-        null
-    }
-    val replyCount = state?.replies?.size ?: FakeData.timeline.count { it.id != selected?.id }
+    val selected = state?.note
+    val replyCount = state?.replies?.size ?: 0
     val canLoadMoreReplies = when {
-        state == null -> replyCount > 0
+        state == null -> false
         state.isLoadingMoreReplies -> false
         else -> replyCount > 0
     }
@@ -84,26 +87,31 @@ fun NoteDetailScreen(
         state?.expandedReplyIds,
     ) {
         selected?.let { note ->
-            val replyNotes = state?.replies ?: FakeData.timeline.filterNot { it.id == note.id }
+            val replyNotes = state?.replies.orEmpty()
             val childRepliesByParentId = state?.childRepliesByParentId.orEmpty()
-            val visibleReplies = visibleReplyThread(
-                rootNoteId = note.id,
+            noteReplyThreadData(
+                rootNote = note,
                 replies = replyNotes,
                 childRepliesByParentId = childRepliesByParentId,
                 expandedReplyIds = state?.expandedReplyIds.orEmpty(),
             )
-            val notesById = (listOf(note) + replyNotes + childRepliesByParentId.values.flatten())
-                .associateBy { it.id }
-            val presentationsByReplyId = visibleReplies.associate { reply ->
-                reply.id to noteReplyTreePresentation(note.id, reply, notesById)
-            }
-            NoteReplyThreadData(
-                replies = replyNotes,
-                visibleReplies = visibleReplies,
-                presentationsByReplyId = presentationsByReplyId,
-            )
         }
     }
+    val listState = rememberLazyListState()
+    var lastAutoLoadReplyCount by remember(noteId) { mutableStateOf(0) }
+
+    AutoLoadMoreEffect(
+        listState = listState,
+        itemCount = replyThreadData?.visibleReplies?.size ?: 0,
+        isLoadingMore = state?.isLoadingMoreReplies == true || !canLoadMoreReplies,
+        onLoadMore = {
+            val currentCount = state?.replies?.size ?: 0
+            if (currentCount != lastAutoLoadReplyCount) {
+                lastAutoLoadReplyCount = currentCount
+                onLoadMoreReplies()
+            }
+        },
+    )
 
     Column(modifier = Modifier.fillMaxSize()) {
         HhhlTopBar(
@@ -124,12 +132,14 @@ fun NoteDetailScreen(
             onLoadMoreReplies = onLoadMoreReplies,
         )
         HhhlDivider()
-        LazyColumn {
+        LazyColumn(state = listState) {
             if (state?.isLoading == true && selected == null) {
-                item { NoteDetailStatusRow(text = "正在加载帖子...", loading = true) }
+                item(key = "note-detail-loading", contentType = "note-detail-status") {
+                    NoteDetailStatusRow(text = "正在加载帖子...", loading = true)
+                }
             }
             state?.errorMessage?.let { message ->
-                item {
+                item(key = "note-detail-error", contentType = "note-detail-status") {
                     NoteDetailStatusRow(
                         text = message,
                         actionText = "重试",
@@ -138,12 +148,14 @@ fun NoteDetailScreen(
                 }
             }
             if (state != null && !state.isLoading && selected == null && state.errorMessage == null) {
-                item { NoteDetailStatusRow(text = "无法打开帖子") }
+                item(key = "note-detail-missing", contentType = "note-detail-status") {
+                    NoteDetailStatusRow(text = "无法打开帖子")
+                }
             }
             selected?.let { note ->
                 val replyData = replyThreadData ?: NoteReplyThreadData()
                 val replyRowDensity = NoteRowDensity.Compact
-                item {
+                item(key = "note-detail-root-${note.id}", contentType = "note-detail-root") {
                     NoteRow(
                         note = note,
                         onClick = onOpenNote,
@@ -168,98 +180,79 @@ fun NoteDetailScreen(
                         density = noteRowDensity,
                     )
                 }
-                item {
+                item(key = "note-detail-header", contentType = "note-detail-header") {
                     NoteReplyTreeHeader(
                         replyCount = replyData.replies.size,
                         isLoading = state?.isLoadingReplies == true || state?.isLoadingMoreReplies == true,
                     )
                 }
-                if (state == null) {
-                    items(replyData.visibleReplies, key = { "reply-${it.id}" }) { reply ->
-                        ReplyTreeNoteRow(
-                            presentation = replyData.presentationsByReplyId.getValue(reply.id),
-                        ) {
-                            NoteRow(
-                                note = reply,
-                                onClick = onOpenNote,
-                                onOpenUser = onOpenUser,
-                                onOpenMedia = onOpenMedia,
-                                onOpenMediaPreview = onOpenMediaPreview,
-                                onOpenMention = onOpenMention,
-                                onOpenHashtag = onOpenHashtag,
-                                onVotePoll = onVotePoll,
-                                recentReactions = recentReactions,
-                                density = replyRowDensity,
-                            )
-                        }
-                        ReplyTreeChildControl(
-                            reply = reply,
-                            state = null,
-                            onToggleChildReplies = onToggleChildReplies,
+                if (state.isLoadingReplies && state.replies.isEmpty()) {
+                    item(key = "note-detail-loading-replies", contentType = "note-detail-status") {
+                        NoteDetailStatusRow(text = "正在加载回复...", loading = true)
+                    }
+                }
+                state.repliesErrorMessage?.let { message ->
+                    item(key = "note-detail-replies-error", contentType = "note-detail-status") {
+                        NoteDetailStatusRow(
+                            text = message,
+                            actionText = "重试",
+                            onAction = onRefresh,
                         )
                     }
-                } else {
-                    if (state.isLoadingReplies && state.replies.isEmpty()) {
-                        item { NoteDetailStatusRow(text = "正在加载回复...", loading = true) }
+                }
+                if (
+                    !state.isLoadingReplies &&
+                    state.replies.isEmpty() &&
+                    state.repliesErrorMessage == null
+                ) {
+                    item(key = "note-detail-empty-replies", contentType = "note-detail-status") {
+                        NoteDetailStatusRow(text = "暂无回复")
                     }
-                    state.repliesErrorMessage?.let { message ->
-                        item {
-                            NoteDetailStatusRow(
-                                text = message,
-                                actionText = "重试",
-                                onAction = onRefresh,
-                            )
-                        }
-                    }
-                    if (
-                        !state.isLoadingReplies &&
-                        state.replies.isEmpty() &&
-                        state.repliesErrorMessage == null
+                }
+                items(
+                    items = replyData.visibleReplies,
+                    key = { "detail-reply-${it.id}" },
+                    contentType = { "note-detail-reply" },
+                ) { reply ->
+                    ReplyTreeNoteRow(
+                        presentation = replyData.presentationsByReplyId.getValue(reply.id),
                     ) {
-                        item { NoteDetailStatusRow(text = "暂无回复") }
-                    }
-                    items(replyData.visibleReplies, key = { "detail-reply-${it.id}" }) { reply ->
-                        ReplyTreeNoteRow(
-                            presentation = replyData.presentationsByReplyId.getValue(reply.id),
-                        ) {
-                            NoteRow(
-                                note = reply,
-                                onClick = onOpenNote,
-                                onOpenUser = onOpenUser,
-                                onReply = onReply,
-                                onRenote = onRenote,
-                                onQuote = onQuote,
-                                onReact = onReact,
-                                onDeleteReaction = onDeleteReaction,
-                                onFavorite = onFavorite,
-                                onAddToClip = onAddToClip,
-                                onDelete = onDelete,
-                                onOpenMedia = onOpenMedia,
-                                onOpenMediaPreview = onOpenMediaPreview,
-                                onOpenMention = onOpenMention,
-                                onOpenHashtag = onOpenHashtag,
-                                onVotePoll = onVotePoll,
-                                reactionOptions = reactionOptions,
-                                recentReactions = recentReactions,
-                                isActionPending = isActionPending(reply.id),
-                                canDelete = canDeleteAuthor(reply.author.id),
-                                density = replyRowDensity,
-                            )
-                        }
-                        ReplyTreeChildControl(
-                            reply = reply,
-                            state = state,
-                            onToggleChildReplies = onToggleChildReplies,
+                        NoteRow(
+                            note = reply,
+                            onClick = onOpenNote,
+                            onOpenUser = onOpenUser,
+                            onReply = onReply,
+                            onRenote = onRenote,
+                            onQuote = onQuote,
+                            onReact = onReact,
+                            onDeleteReaction = onDeleteReaction,
+                            onFavorite = onFavorite,
+                            onAddToClip = onAddToClip,
+                            onDelete = onDelete,
+                            onOpenMedia = onOpenMedia,
+                            onOpenMediaPreview = onOpenMediaPreview,
+                            onOpenMention = onOpenMention,
+                            onOpenHashtag = onOpenHashtag,
+                            onVotePoll = onVotePoll,
+                            reactionOptions = reactionOptions,
+                            recentReactions = recentReactions,
+                            isActionPending = isActionPending(reply.id),
+                            canDelete = canDeleteAuthor(reply.author.id),
+                            density = replyRowDensity,
                         )
                     }
-                    if (state.replies.isNotEmpty()) {
-                        item {
-                            NoteDetailStatusRow(
-                                text = if (state.isLoadingMoreReplies) "正在加载更多回复..." else "加载更多回复",
-                                loading = state.isLoadingMoreReplies,
-                                onAction = if (state.isLoadingMoreReplies) null else onLoadMoreReplies,
-                            )
-                        }
+                    ReplyTreeChildControl(
+                        reply = reply,
+                        state = state,
+                        onToggleChildReplies = onToggleChildReplies,
+                    )
+                }
+                if (state.replies.isNotEmpty() && state.isLoadingMoreReplies) {
+                    item(key = "note-detail-load-more-replies", contentType = "note-detail-status") {
+                        NoteDetailStatusRow(
+                            text = "正在加载更多回复...",
+                            loading = true,
+                        )
                     }
                 }
             }
@@ -272,6 +265,39 @@ private data class NoteReplyThreadData(
     val visibleReplies: List<Note> = emptyList(),
     val presentationsByReplyId: Map<String, NoteReplyTreePresentation> = emptyMap(),
 )
+
+private data class NoteReplyThreadIndex(
+    val rootNoteId: String,
+    val allReplies: List<Note>,
+    val knownIds: Set<String>,
+    val childrenByParentId: Map<String, List<Note>>,
+)
+
+private fun noteReplyThreadData(
+    rootNote: Note,
+    replies: List<Note>,
+    childRepliesByParentId: Map<String, List<Note>>,
+    expandedReplyIds: Set<String>,
+): NoteReplyThreadData {
+    val index = noteReplyThreadIndex(rootNote.id, replies, childRepliesByParentId)
+    val visibleReplies = visibleReplyThread(index, expandedReplyIds)
+    val notesById = LinkedHashMap<String, Note>(index.allReplies.size + 1)
+    notesById[rootNote.id] = rootNote
+    index.allReplies.forEach { reply ->
+        if (!notesById.containsKey(reply.id)) {
+            notesById[reply.id] = reply
+        }
+    }
+    val presentationsByReplyId = LinkedHashMap<String, NoteReplyTreePresentation>(visibleReplies.size)
+    visibleReplies.forEach { reply ->
+        presentationsByReplyId[reply.id] = noteReplyTreePresentation(rootNote.id, reply, notesById)
+    }
+    return NoteReplyThreadData(
+        replies = replies,
+        visibleReplies = visibleReplies,
+        presentationsByReplyId = presentationsByReplyId,
+    )
+}
 
 @Composable
 private fun ReplyTreeChildControl(
@@ -355,8 +381,9 @@ private fun NoteDetailSummaryRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            HhhlActionChip(
-                label = if (isLoading) "同步中" else "刷新帖子",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (isLoading) "同步中" else "刷新帖子",
                 emphasized = true,
                 enabled = !isLoading,
                 onClick = onRefresh,
@@ -490,26 +517,69 @@ fun visibleReplyThread(
     childRepliesByParentId: Map<String, List<Note>>,
     expandedReplyIds: Set<String>,
 ): List<Note> {
-    val loadedReplies = childRepliesByParentId.values.flatten()
-    val allReplies = (replies + loadedReplies).distinctBy { it.id }
-    val knownIds = allReplies.mapTo(mutableSetOf()) { it.id } + rootNoteId
-    val childrenByParent = allReplies
-        .filter { it.replyId != null }
-        .groupBy { it.replyId.orEmpty() }
-    val roots = allReplies.filter { reply ->
-        reply.replyId == rootNoteId || reply.replyId !in knownIds
+    return visibleReplyThread(
+        index = noteReplyThreadIndex(rootNoteId, replies, childRepliesByParentId),
+        expandedReplyIds = expandedReplyIds,
+    )
+}
+
+private fun noteReplyThreadIndex(
+    rootNoteId: String,
+    replies: List<Note>,
+    childRepliesByParentId: Map<String, List<Note>>,
+): NoteReplyThreadIndex {
+    val repliesById = LinkedHashMap<String, Note>()
+    replies.forEach { reply ->
+        if (!repliesById.containsKey(reply.id)) {
+            repliesById[reply.id] = reply
+        }
     }
-    val visible = mutableListOf<Note>()
-    val seen = mutableSetOf<String>()
+    childRepliesByParentId.values.forEach { childReplies ->
+        childReplies.forEach { reply ->
+            if (!repliesById.containsKey(reply.id)) {
+                repliesById[reply.id] = reply
+            }
+        }
+    }
+
+    val knownIds = HashSet<String>(repliesById.size + 1)
+    knownIds.add(rootNoteId)
+    knownIds.addAll(repliesById.keys)
+    val childrenByParent = LinkedHashMap<String, MutableList<Note>>()
+    repliesById.values.forEach { reply ->
+        val parentId = reply.replyId
+        if (!parentId.isNullOrBlank()) {
+            childrenByParent.getOrPut(parentId) { mutableListOf() }.add(reply)
+        }
+    }
+
+    return NoteReplyThreadIndex(
+        rootNoteId = rootNoteId,
+        allReplies = repliesById.values.toList(),
+        knownIds = knownIds,
+        childrenByParentId = childrenByParent,
+    )
+}
+
+private fun visibleReplyThread(
+    index: NoteReplyThreadIndex,
+    expandedReplyIds: Set<String>,
+): List<Note> {
+    val visible = ArrayList<Note>(index.allReplies.size)
+    val seen = HashSet<String>(index.allReplies.size)
 
     fun append(note: Note) {
         if (!seen.add(note.id)) return
         visible.add(note)
         if (note.id !in expandedReplyIds) return
-        childrenByParent[note.id].orEmpty().forEach(::append)
+        index.childrenByParentId[note.id].orEmpty().forEach(::append)
     }
 
-    roots.forEach(::append)
+    index.allReplies.forEach { reply ->
+        if (reply.replyId == index.rootNoteId || reply.replyId !in index.knownIds) {
+            append(reply)
+        }
+    }
     return visible
 }
 
@@ -564,33 +634,10 @@ private fun NoteDetailStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
+    )
 }

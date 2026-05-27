@@ -71,6 +71,8 @@ class SharkeyUserNotesApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return UserNotesLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> UserNotesLoadResult.Success(
                     response.body<List<SharkeyNoteDto>>().map { it.toDomainNote() },

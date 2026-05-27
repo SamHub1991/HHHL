@@ -17,6 +17,10 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 
 interface UserRelationshipApi {
     suspend fun loadRelation(
@@ -138,9 +142,9 @@ class SharkeyUserRelationshipApi(
 
             when {
                 response.status.value in 200..299 -> UserRelationshipLoadResult.Success(
-                    response.body<UserRelationshipDto>().toDomainRelationship(cleanUserId),
+                    response.body<JsonElement>().toUserRelationship(cleanUserId),
                 )
-                response.status == HttpStatusCode.Unauthorized -> UserRelationshipLoadResult.Unauthorized
+                response.isSharkeyUnauthorized() -> UserRelationshipLoadResult.Unauthorized
                 else -> UserRelationshipLoadResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -296,7 +300,7 @@ class SharkeyUserRelationshipApi(
 
             when {
                 response.status.value in 200..299 -> UserRelationshipResult.Success
-                response.status == HttpStatusCode.Unauthorized -> UserRelationshipResult.Unauthorized
+                response.isSharkeyUnauthorized() -> UserRelationshipResult.Unauthorized
                 else -> UserRelationshipResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -335,7 +339,7 @@ class SharkeyUserRelationshipApi(
                 response.status.value in 200..299 -> UserRelationshipListResult.Success(
                     response.body<List<UserRelationshipListDto>>().mapNotNull(mapper),
                 )
-                response.status == HttpStatusCode.Unauthorized -> UserRelationshipListResult.Unauthorized
+                response.isSharkeyUnauthorized() -> UserRelationshipListResult.Unauthorized
                 else -> UserRelationshipListResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -407,6 +411,21 @@ private data class UserRelationshipDto(
             isBlocked = isBlocked,
         )
     }
+}
+
+private fun JsonElement.toUserRelationship(fallbackUserId: String): UserRelationship {
+    val relationshipElement = when (this) {
+        is JsonArray -> firstOrNull()
+        is JsonObject -> this
+        else -> null
+    } ?: return UserRelationship(userId = fallbackUserId)
+    return userRelationshipJson.decodeFromJsonElement<UserRelationshipDto>(relationshipElement)
+        .toDomainRelationship(fallbackUserId)
+}
+
+private val userRelationshipJson = Json {
+    ignoreUnknownKeys = true
+    explicitNulls = false
 }
 
 @Serializable

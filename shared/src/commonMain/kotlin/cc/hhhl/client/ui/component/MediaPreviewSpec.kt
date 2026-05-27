@@ -7,6 +7,8 @@ data class MediaPreviewItem(
     val id: String,
     val label: String,
     val type: String,
+    val typeLabel: String,
+    val typeBadge: String,
     val openUrl: String,
     val previewUrl: String?,
     val isImage: Boolean,
@@ -47,6 +49,8 @@ fun mediaPreviewItem(media: NoteMedia): MediaPreviewItem {
             else -> "附件"
         },
         type = media.type,
+        typeLabel = mediaTypeDisplayName(media.type),
+        typeBadge = mediaTypeBadge(media.type),
         openUrl = openUrl,
         previewUrl = when {
             media.isSensitive -> null
@@ -75,6 +79,8 @@ fun mediaPreviewItem(file: DriveFile): MediaPreviewItem {
             else -> "附件"
         },
         type = file.type,
+        typeLabel = mediaTypeDisplayName(file.type, file.name),
+        typeBadge = mediaTypeBadge(file.type, file.name),
         openUrl = openUrl,
         previewUrl = when {
             file.isSensitive -> null
@@ -118,3 +124,81 @@ private fun buildMediaPreviewSession(
         selectedIndex = selectedIndex,
     )
 }
+
+fun mediaTypeDisplayName(
+    type: String,
+    fileName: String? = null,
+): String {
+    val cleanType = type.trim().lowercase()
+    val extension = fileName.fileExtension()
+    return when {
+        cleanType.startsWith("image/") -> "图片"
+        cleanType.startsWith("video/") -> "视频"
+        cleanType.startsWith("audio/") -> "音频"
+        cleanType == "application/pdf" || extension == "pdf" -> "PDF 文档"
+        cleanType in wordMimeTypes || extension in setOf("doc", "docx") -> "Word 文档"
+        cleanType in sheetMimeTypes || extension in setOf("xls", "xlsx", "csv") -> "表格"
+        cleanType in slideMimeTypes || extension in setOf("ppt", "pptx") -> "演示文稿"
+        cleanType.startsWith("text/") || extension in setOf("txt", "md", "log") -> "文本"
+        cleanType == "application/json" || extension == "json" -> "JSON"
+        cleanType in archiveMimeTypes || extension in setOf("zip", "rar", "7z", "tar", "gz") -> "压缩包"
+        cleanType == "application/vnd.android.package-archive" || extension == "apk" -> "Android 安装包"
+        cleanType.isBlank() || cleanType == "application/octet-stream" -> extension.uppercaseOrFile()
+        else -> cleanType.substringAfter('/').substringBefore(';').takeIf { it.length in 1..10 }?.uppercase() ?: "文件"
+    }
+}
+
+fun mediaTypeBadge(
+    type: String,
+    fileName: String? = null,
+): String {
+    val cleanType = type.trim().lowercase()
+    val extension = fileName.fileExtension()
+    return when {
+        cleanType.startsWith("image/") -> "IMG"
+        cleanType.startsWith("video/") -> "VID"
+        cleanType.startsWith("audio/") -> "AUD"
+        cleanType == "application/pdf" || extension == "pdf" -> "PDF"
+        cleanType in wordMimeTypes || extension in setOf("doc", "docx") -> "DOC"
+        cleanType in sheetMimeTypes || extension in setOf("xls", "xlsx", "csv") -> "XLS"
+        cleanType in slideMimeTypes || extension in setOf("ppt", "pptx") -> "PPT"
+        cleanType.startsWith("text/") || extension in setOf("txt", "md", "log") -> "TXT"
+        cleanType == "application/json" || extension == "json" -> "JSON"
+        cleanType in archiveMimeTypes || extension in setOf("zip", "rar", "7z", "tar", "gz") -> "ZIP"
+        cleanType == "application/vnd.android.package-archive" || extension == "apk" -> "APK"
+        else -> extension.uppercaseOrFile()
+    }
+}
+
+private fun String?.fileExtension(): String {
+    return this
+        ?.substringAfterLast('.', missingDelimiterValue = "")
+        ?.lowercase()
+        ?.takeIf { it.length in 1..6 }
+        .orEmpty()
+}
+
+private fun String.uppercaseOrFile(): String = takeIf { it.isNotBlank() }?.uppercase() ?: "FILE"
+
+private val wordMimeTypes = setOf(
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+)
+
+private val sheetMimeTypes = setOf(
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
+
+private val slideMimeTypes = setOf(
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+)
+
+private val archiveMimeTypes = setOf(
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-rar-compressed",
+    "application/x-7z-compressed",
+    "application/gzip",
+)

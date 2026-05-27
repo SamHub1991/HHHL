@@ -16,12 +16,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import cc.hhhl.client.ui.component.HhhlTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,7 +35,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.Channel
 import cc.hhhl.client.model.ChannelDraft
 import cc.hhhl.client.model.ChannelListKind
@@ -44,6 +45,8 @@ import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlStatusRow
+import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTextInput
@@ -88,9 +91,9 @@ fun ChannelScreen(
     canDeleteAuthor: (String) -> Boolean = { false },
     noteRowDensity: NoteRowDensity = NoteRowDensity.Comfortable,
 ) {
-    val channels = state?.channels ?: fakeChannels()
+    val channels = state?.channels.orEmpty()
     val selectedChannel = state?.selectedChannel ?: channels.firstOrNull()
-    val notes = state?.notes ?: FakeData.timeline
+    val notes = state?.notes.orEmpty()
     val visibleTimelineNotes = channelVisibleTimelineNotes(
         notes = notes,
         pinnedNotes = selectedChannel?.pinnedNotes.orEmpty(),
@@ -134,7 +137,6 @@ fun ChannelScreen(
         ChannelPickerRow(
             channels = channels,
             selectedChannel = selectedChannel,
-            isLoading = state?.isLoadingChannels == true,
             onSelectChannel = onSelectChannel,
         )
         HhhlDivider()
@@ -143,8 +145,8 @@ fun ChannelScreen(
             state = listState,
         ) {
             selectedChannel?.let { channel ->
-                item { ChannelHeader(channel = channel) }
-                item {
+                item(contentType = "channel-header") { ChannelHeader(channel = channel) }
+                item(contentType = "channel-actions") {
                     ChannelActionRow(
                         channel = channel,
                         isChangingFollow = state?.isChangingFollow == true,
@@ -158,8 +160,12 @@ fun ChannelScreen(
                     )
                 }
                 if (channel.pinnedNotes.isNotEmpty()) {
-                    item { ChannelStatusRow(text = "置顶动态") }
-                    items(channel.pinnedNotes, key = { "channel-pinned-${it.id}" }) { note ->
+                    item(contentType = "channel-status") { ChannelStatusRow(text = "置顶动态") }
+                    items(
+                        items = channel.pinnedNotes,
+                        key = { "channel-pinned-${it.id}" },
+                        contentType = { "channel-pinned-note" },
+                    ) { note ->
                         NoteRow(
                             note = note,
                             onClick = onOpenNote,
@@ -187,7 +193,7 @@ fun ChannelScreen(
                 }
             }
             state?.errorMessage?.let { message ->
-                item {
+                item(contentType = "channel-status") {
                     ChannelStatusRow(
                         text = message,
                         actionText = "重试",
@@ -196,16 +202,20 @@ fun ChannelScreen(
                 }
             }
             if (state?.isLoadingChannels == true && channels.isEmpty()) {
-                item { ChannelStatusRow(text = "正在加载频道...", loading = true) }
+                item(contentType = "channel-status") {
+                    ChannelStatusRow(text = "正在加载频道...", loading = true)
+                }
             }
             if (state != null && !state.isLoadingChannels && channels.isEmpty() && state.errorMessage == null) {
-                item { ChannelStatusRow(text = "还没有频道") }
+                item(contentType = "channel-status") { ChannelStatusRow(text = "还没有频道") }
             }
             if (state?.isLoadingTimeline == true && notes.isEmpty()) {
-                item { ChannelStatusRow(text = "正在加载频道动态...", loading = true) }
+                item(contentType = "channel-status") {
+                    ChannelStatusRow(text = "正在加载频道动态...", loading = true)
+                }
             }
             state?.timelineErrorMessage?.let { message ->
-                item {
+                item(contentType = "channel-status") {
                     ChannelStatusRow(
                         text = message,
                         actionText = "重试",
@@ -220,9 +230,13 @@ fun ChannelScreen(
                 notes.isEmpty() &&
                 state.timelineErrorMessage == null
             ) {
-                item { ChannelStatusRow(text = "这个频道还没有动态") }
+                item(contentType = "channel-status") { ChannelStatusRow(text = "这个频道还没有动态") }
             }
-            items(visibleTimelineNotes, key = { "channel-note-${it.id}" }) { note ->
+            items(
+                items = visibleTimelineNotes,
+                key = { "channel-note-${it.id}" },
+                contentType = { "channel-note" },
+            ) { note ->
                 NoteRow(
                     note = note,
                     onClick = onOpenNote,
@@ -247,12 +261,11 @@ fun ChannelScreen(
                     density = noteRowDensity,
                 )
             }
-            if (state != null && notes.isNotEmpty() && !state.endReached) {
-                item {
+            if (state != null && notes.isNotEmpty() && state.isLoadingMore) {
+                item(contentType = "channel-status") {
                     ChannelStatusRow(
-                        text = if (state.isLoadingMore) "正在加载更多..." else "加载更多",
+                        text = "正在加载更多...",
                         loading = state.isLoadingMore,
-                        onAction = if (state.isLoadingMore) null else onLoadMore,
                     )
                 }
             }
@@ -480,7 +493,7 @@ private fun ChannelEditorDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            HhhlTextButton(
                 onClick = {
                     onSubmit(
                         ChannelDraft(
@@ -499,7 +512,7 @@ private fun ChannelEditorDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isMutating) {
+            HhhlTextButton(onClick = onDismiss, enabled = !isMutating) {
                 Text("取消")
             }
         },
@@ -548,12 +561,12 @@ private fun ArchiveChannelDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onArchive, enabled = !isMutating) {
+            HhhlTextButton(onClick = onArchive, enabled = !isMutating) {
                 Text(if (isMutating) "归档中" else "归档")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isMutating) {
+            HhhlTextButton(onClick = onDismiss, enabled = !isMutating) {
                 Text("取消")
             }
         },
@@ -602,19 +615,22 @@ private fun ChannelSummaryRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            HhhlActionChip(
-                label = if (isLoadingChannels) "同步频道中" else "刷新频道",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (isLoadingChannels) "同步频道中" else "刷新频道",
                 emphasized = true,
                 enabled = !isLoadingChannels,
                 onClick = onRefreshChannels,
             )
-            HhhlActionChip(
-                label = if (isLoadingTimeline) "同步动态中" else "刷新动态",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (isLoadingTimeline) "同步动态中" else "刷新动态",
                 enabled = selectedChannel != null && !isLoadingTimeline,
                 onClick = onRefreshTimeline,
             )
-            HhhlActionChip(
-                label = if (isMutatingChannel) "处理中" else "新建频道",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Add,
+                contentDescription = if (isMutatingChannel) "处理中" else "新建频道",
                 emphasized = true,
                 enabled = !isMutatingChannel,
                 onClick = onCreateChannel,
@@ -635,7 +651,6 @@ fun channelOverflowKinds(): List<ChannelListKind> =
 private fun ChannelPickerRow(
     channels: List<Channel>,
     selectedChannel: Channel?,
-    isLoading: Boolean,
     onSelectChannel: (Channel) -> Unit,
 ) {
     LazyRow(
@@ -645,23 +660,11 @@ private fun ChannelPickerRow(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (isLoading) {
-            item {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(strokeWidth = 2.dp)
-                    Text(
-                        text = "加载中",
-                        color = LocalHhhlColors.current.subtleText,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-        }
-        items(channels, key = { it.id }) { channel ->
+        items(
+            items = channels,
+            key = { it.id },
+            contentType = { "channel-picker" },
+        ) { channel ->
             val active = selectedChannel?.id == channel.id
             ChannelPickerChip(
                 channel = channel,
@@ -762,57 +765,11 @@ private fun ChannelStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
-}
-
-private fun fakeChannels(): List<Channel> {
-    return listOf(
-        Channel(
-            id = "channel-featured",
-            name = "公告频道",
-            description = "HHHL 站内公告和讨论",
-            color = "#40c057",
-            userId = "me",
-            bannerUrl = null,
-            pinnedNoteIds = emptyList(),
-            pinnedNotes = emptyList(),
-            isArchived = false,
-            isSensitive = false,
-            allowRenoteToExternal = true,
-            isFollowing = true,
-            isFavorited = false,
-            hasUnreadNote = true,
-            usersCount = 4,
-            notesCount = FakeData.timeline.size,
-        ),
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
     )
 }
 

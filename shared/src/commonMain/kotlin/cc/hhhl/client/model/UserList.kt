@@ -1,5 +1,8 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class UserList(
     val id: String,
     val name: String,
@@ -14,6 +17,7 @@ data class UserList(
         get() = userIds.size
 }
 
+@Immutable
 data class UserListDraft(
     val name: String,
     val isPublic: Boolean = false,

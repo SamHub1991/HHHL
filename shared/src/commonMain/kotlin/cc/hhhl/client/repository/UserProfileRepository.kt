@@ -36,6 +36,34 @@ open class UserProfileRepository(
         name: String,
         description: String,
     ): UserProfileRepositoryResult {
+        return updateProfileFields(
+            name = name,
+            description = description,
+        )
+    }
+
+    open suspend fun updateBanner(
+        name: String,
+        description: String,
+        bannerId: String,
+    ): UserProfileRepositoryResult {
+        val cleanBannerId = bannerId.trim()
+        if (cleanBannerId.isBlank()) {
+            return UserProfileRepositoryResult.Error("请选择横幅图片")
+        }
+        return updateProfileFields(
+            name = name,
+            description = description,
+            bannerId = cleanBannerId,
+        )
+    }
+
+    private suspend fun updateProfileFields(
+        name: String,
+        description: String,
+        avatarId: String? = null,
+        bannerId: String? = null,
+    ): UserProfileRepositoryResult {
         val token = tokenProvider()?.takeIf { it.isNotBlank() }
             ?: return UserProfileRepositoryResult.Unauthorized
         val cleanName = name.trim()
@@ -56,6 +84,8 @@ open class UserProfileRepository(
                 draft = UserProfileUpdateDraft(
                     name = cleanName,
                     description = cleanDescription,
+                    avatarId = avatarId?.trim()?.takeIf { it.isNotBlank() },
+                    bannerId = bannerId?.trim()?.takeIf { it.isNotBlank() },
                 ),
             ),
         )

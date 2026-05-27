@@ -3,14 +3,17 @@ package cc.hhhl.client.state
 import cc.hhhl.client.api.DriveFileSort
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.model.DriveFile
+import cc.hhhl.client.model.DriveFileDetails
 import cc.hhhl.client.model.DriveFileTypeFilter
 import cc.hhhl.client.model.DriveFolder
 import cc.hhhl.client.model.matchesTypeFilter
 import cc.hhhl.client.repository.DriveFileRepository
+import cc.hhhl.client.repository.DriveFileDetailsRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepositoryResult
 import cc.hhhl.client.repository.DriveFilesRepositoryResult
 import cc.hhhl.client.repository.DriveFoldersRepositoryResult
 import cc.hhhl.client.repository.DriveManagementRepositoryResult
+import cc.hhhl.client.repository.prependDistinctBy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +29,9 @@ data class DriveFilesUiState(
     val typeFilter: DriveFileTypeFilter = DriveFileTypeFilter.All,
     val searchQuery: String = "",
     val selectedFile: DriveFile? = null,
+    val selectedFileDetails: DriveFileDetails? = null,
+    val isLoadingFileDetails: Boolean = false,
+    val fileDetailsErrorMessage: String? = null,
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
     val isLoadingMoreFolders: Boolean = false,
@@ -91,6 +97,7 @@ class DriveFilesStateHolder(
     private val mutableState = MutableStateFlow(DriveFilesUiState())
     val state: StateFlow<DriveFilesUiState> = mutableState
     private var refreshRequestId = 0
+    private val fileDetailsCache = LinkedHashMap<String, DriveFileDetails>()
 
     fun refresh() {
         val current = state.value
@@ -241,17 +248,73 @@ class DriveFilesStateHolder(
     }
 
     fun selectFile(file: DriveFile) {
+        fileDetailsCache[file.id]?.let { cached ->
+            mutableState.update {
+                it.copy(
+                    selectedFile = cached.file,
+                    selectedFileDetails = cached,
+                    isLoadingFileDetails = false,
+                    fileDetailsErrorMessage = null,
+                    errorMessage = null,
+                    requiresRelogin = false,
+                )
+            }
+            return
+        }
+
         mutableState.update {
             it.copy(
                 selectedFile = file,
+                selectedFileDetails = null,
+                isLoadingFileDetails = true,
+                fileDetailsErrorMessage = null,
                 errorMessage = null,
                 requiresRelogin = false,
             )
         }
+        scope.launch {
+            when (val result = repository.loadFileDetails(file.id)) {
+                is DriveFileDetailsRepositoryResult.Success -> mutableState.update { current ->
+                    if (current.selectedFile?.id != file.id) {
+                        current
+                    } else {
+                        fileDetailsCache[file.id] = result.details
+                        current.copy(
+                            selectedFile = result.details.file,
+                            selectedFileDetails = result.details,
+                            isLoadingFileDetails = false,
+                            fileDetailsErrorMessage = null,
+                            requiresRelogin = false,
+                        )
+                    }
+                }
+                DriveFileDetailsRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    if (current.selectedFile?.id != file.id) current else current.copy(
+                        isLoadingFileDetails = false,
+                        fileDetailsErrorMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is DriveFileDetailsRepositoryResult.Error -> mutableState.update { current ->
+                    if (current.selectedFile?.id != file.id) current else current.copy(
+                        isLoadingFileDetails = false,
+                        fileDetailsErrorMessage = result.message.toFriendlyDriveErrorMessage(),
+                        requiresRelogin = false,
+                    )
+                }
+            }
+        }
     }
 
     fun clearSelectedFile() {
-        mutableState.update { it.copy(selectedFile = null) }
+        mutableState.update {
+            it.copy(
+                selectedFile = null,
+                selectedFileDetails = null,
+                isLoadingFileDetails = false,
+                fileDetailsErrorMessage = null,
+            )
+        }
     }
 
     fun openFolder(folder: DriveFolder) {
@@ -262,6 +325,9 @@ class DriveFilesStateHolder(
                 files = emptyList(),
                 folders = emptyList(),
                 selectedFile = null,
+                selectedFileDetails = null,
+                isLoadingFileDetails = false,
+                fileDetailsErrorMessage = null,
                 endReached = false,
                 foldersEndReached = false,
                 errorMessage = null,
@@ -283,6 +349,9 @@ class DriveFilesStateHolder(
                 files = emptyList(),
                 folders = emptyList(),
                 selectedFile = null,
+                selectedFileDetails = null,
+                isLoadingFileDetails = false,
+                fileDetailsErrorMessage = null,
                 endReached = false,
                 foldersEndReached = false,
                 errorMessage = null,
@@ -307,6 +376,9 @@ class DriveFilesStateHolder(
                 files = emptyList(),
                 folders = emptyList(),
                 selectedFile = null,
+                selectedFileDetails = null,
+                isLoadingFileDetails = false,
+                fileDetailsErrorMessage = null,
                 endReached = false,
                 foldersEndReached = false,
                 errorMessage = null,
@@ -333,7 +405,7 @@ class DriveFilesStateHolder(
             when (val result = repository.upload(scopedUpload)) {
                 is DriveFileRepositoryResult.Success -> mutableState.update {
                     it.copy(
-                        files = (listOf(result.file) + it.files).distinctBy { file -> file.id },
+                        files = it.files.prependDistinctBy(result.file) { file -> file.id },
                         isUploading = false,
                         errorMessage = null,
                         requiresRelogin = false,
@@ -377,6 +449,18 @@ class DriveFilesStateHolder(
                 comment = comment,
                 isSensitive = isSensitive,
                 folderId = file.folderId,
+            )
+        }
+    }
+
+    fun moveFile(
+        file: DriveFile,
+        folderId: String?,
+    ) {
+        launchManagement {
+            repository.moveFile(
+                fileId = file.id,
+                folderId = folderId,
             )
         }
     }
@@ -440,23 +524,44 @@ class DriveFilesStateHolder(
 
     private fun applyManagementResult(result: DriveManagementRepositoryResult) {
         when (result) {
-            is DriveManagementRepositoryResult.FileUpdated -> mutableState.update {
-                it.copy(
-                    files = it.files.map { file ->
+            is DriveManagementRepositoryResult.FileUpdated -> mutableState.update { current ->
+                fileDetailsCache[result.file.id]?.let { cached ->
+                    fileDetailsCache[result.file.id] = cached.copy(file = result.file)
+                }
+                val originalFile = current.files.firstOrNull { file -> file.id == result.file.id }
+                val movedOutOfCurrentFolder = originalFile != null &&
+                    originalFile.folderId != result.file.folderId &&
+                    result.file.folderId != current.folderId
+                val updatedFiles = if (movedOutOfCurrentFolder) {
+                    current.files.filterNot { file -> file.id == result.file.id }
+                } else {
+                    current.files.map { file ->
                         if (file.id == result.file.id) result.file else file
-                    },
-                    selectedFile = it.selectedFile?.let { file ->
+                    }
+                }
+                current.copy(
+                    files = updatedFiles,
+                    selectedFile = current.selectedFile?.let { file ->
                         if (file.id == result.file.id) result.file else file
-                    },
+                    }?.takeIf { file -> !movedOutOfCurrentFolder && file.matchesTypeFilter(current.typeFilter) },
+                    selectedFileDetails = current.selectedFileDetails?.let { details ->
+                        if (details.file.id == result.file.id) details.copy(file = result.file) else details
+                    }?.takeIf { details -> !movedOutOfCurrentFolder && details.file.matchesTypeFilter(current.typeFilter) },
+                    isLoadingFileDetails = false,
+                    fileDetailsErrorMessage = null,
                     isManaging = false,
                     errorMessage = null,
                     requiresRelogin = false,
                 )
             }
             is DriveManagementRepositoryResult.FileDeleted -> mutableState.update {
+                fileDetailsCache.remove(result.fileId)
                 it.copy(
                     files = it.files.filterNot { file -> file.id == result.fileId },
                     selectedFile = it.selectedFile?.takeIf { file -> file.id != result.fileId },
+                    selectedFileDetails = it.selectedFileDetails?.takeIf { details -> details.file.id != result.fileId },
+                    isLoadingFileDetails = false,
+                    fileDetailsErrorMessage = null,
                     isManaging = false,
                     errorMessage = null,
                     requiresRelogin = false,
@@ -464,7 +569,7 @@ class DriveFilesStateHolder(
             }
             is DriveManagementRepositoryResult.FolderCreated -> mutableState.update {
                 it.copy(
-                    folders = (listOf(result.folder) + it.folders).distinctBy { folder -> folder.id },
+                    folders = it.folders.prependDistinctBy(result.folder) { folder -> folder.id },
                     isManaging = false,
                     errorMessage = null,
                     requiresRelogin = false,
@@ -524,6 +629,8 @@ class DriveFilesStateHolder(
     ) {
         when (result) {
             is DriveFilesRepositoryResult.Success -> mutableState.update {
+                val availableIds = result.files.asSequence().map { file -> file.id }.toSet()
+                fileDetailsCache.keys.removeAll { cachedId -> cachedId !in availableIds }
                 it.copy(
                     files = result.files,
                     isLoading = false,

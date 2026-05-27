@@ -138,7 +138,7 @@ open class ChannelRepository(
             )
         ) {
             is ChannelTimelineLoadResult.Success -> ChannelTimelineRepositoryResult.Success(
-                notes = (currentNotes + result.notes).distinctBy { it.id },
+                notes = currentNotes.appendDistinctBy(result.notes) { it.id },
                 endReached = result.notes.isEmpty(),
             )
             ChannelTimelineLoadResult.Unauthorized -> ChannelTimelineRepositoryResult.Unauthorized

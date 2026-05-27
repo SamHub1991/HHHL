@@ -1,5 +1,8 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class DriveFile(
     val id: String,
     val name: String,
@@ -11,6 +14,12 @@ data class DriveFile(
     val isSensitive: Boolean,
     val createdAtLabel: String = "",
     val folderId: String? = null,
+)
+
+@Immutable
+data class DriveFileDetails(
+    val file: DriveFile,
+    val attachedNotes: List<Note> = emptyList(),
 )
 
 enum class DriveFileTypeFilter(
@@ -75,6 +84,7 @@ private val documentExtensions = listOf(
     ".csv",
 )
 
+@Immutable
 data class DriveFolder(
     val id: String,
     val name: String,

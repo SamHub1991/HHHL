@@ -135,6 +135,7 @@ class SharkeyUserProfileApi(
                 setBody(UserProfileUpdateRequest.fromDraft(cleanToken, draft))
             }
 
+            if (response.isSharkeyUnauthorized()) return UserProfileUpdateResult.Unauthorized
             when (response.status) {
                 HttpStatusCode.OK -> UserProfileUpdateResult.Success(response.body<UserProfileDto>().toDomainUser())
                 HttpStatusCode.Unauthorized -> UserProfileUpdateResult.Unauthorized
@@ -157,6 +158,7 @@ class SharkeyUserProfileApi(
                 setBody(requestBody)
             }
 
+            if (response.isSharkeyUnauthorized()) return UserProfileLoadResult.Unauthorized
             when (response.status) {
                 HttpStatusCode.OK -> UserProfileLoadResult.Success(response.body<UserProfileDto>().toDomainUser())
                 HttpStatusCode.Unauthorized -> UserProfileLoadResult.Unauthorized

@@ -12,10 +12,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import cc.hhhl.client.ui.component.HhhlTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.UserSocialItem
 import cc.hhhl.client.model.UserSocialKind
@@ -37,6 +37,8 @@ import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlStatusRow
+import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTopBar
@@ -58,7 +60,7 @@ fun UserSocialScreen(
     isSpecialCareUser: (String) -> Boolean = { false },
     onToggleSpecialCareUser: ((String) -> Unit)? = null,
 ) {
-    val items = state?.items ?: fakeSocialItems(kind)
+    val items = state?.items.orEmpty()
     val title = when {
         displayName.isNullOrBlank() -> kind.label
         else -> "${displayName}的${kind.label}"
@@ -101,13 +103,15 @@ fun UserSocialScreen(
             state = listState,
         ) {
             if (state?.isLoading == true && items.isEmpty()) {
-                item { UserSocialStatusRow(text = "加载中...", loading = true) }
+                item(contentType = "user-social-status") {
+                    UserSocialStatusRow(text = "加载中...", loading = true)
+                }
             }
             state?.message?.let { message ->
-                item { UserSocialStatusRow(text = message) }
+                item(contentType = "user-social-status") { UserSocialStatusRow(text = message) }
             }
             state?.errorMessage?.let { message ->
-                item {
+                item(contentType = "user-social-status") {
                     UserSocialStatusRow(
                         text = message,
                         actionText = "重试",
@@ -116,9 +120,13 @@ fun UserSocialScreen(
                 }
             }
             if (state != null && !state.isLoading && items.isEmpty() && state.errorMessage == null) {
-                item { UserSocialStatusRow(text = "这里还没有用户") }
+                item(contentType = "user-social-status") { UserSocialStatusRow(text = "这里还没有用户") }
             }
-            items(items, key = { "${kind.name}-${it.id}" }) { item ->
+            items(
+                items = items,
+                key = { "${kind.name}-${it.id}" },
+                contentType = { "user-social-row" },
+            ) { item ->
                 UserSocialRow(
                     kind = kind,
                     user = item.user,
@@ -132,12 +140,11 @@ fun UserSocialScreen(
                     onToggleSpecialCareUser = onToggleSpecialCareUser,
                 )
             }
-            if (state != null && items.isNotEmpty() && !state.endReached) {
-                item {
+            if (state != null && items.isNotEmpty() && state.isLoadingMore) {
+                item(contentType = "user-social-status") {
                     UserSocialStatusRow(
-                        text = if (state.isLoadingMore) "正在加载更多..." else "加载更多",
+                        text = "正在加载更多...",
                         loading = state.isLoadingMore,
-                        onAction = if (state.isLoadingMore) null else onLoadMore,
                     )
                 }
             }
@@ -179,8 +186,9 @@ private fun UserSocialSummaryRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            HhhlActionChip(
-                label = if (isLoading) "同步中" else "刷新",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (isLoading) "同步中" else "刷新",
                 emphasized = true,
                 enabled = !isLoading && !isChanging,
                 onClick = onRefresh,
@@ -351,12 +359,12 @@ private fun UserSocialActionDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !isChanging) {
+            HhhlTextButton(onClick = onConfirm, enabled = !isChanging) {
                 Text(if (isChanging) "处理中" else action.label)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isChanging) {
+            HhhlTextButton(onClick = onDismiss, enabled = !isChanging) {
                 Text("取消")
             }
         },
@@ -398,46 +406,10 @@ private fun UserSocialStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
-}
-
-private fun fakeSocialItems(kind: UserSocialKind): List<UserSocialItem> {
-    val users = FakeData.timeline
-        .map { it.author }
-        .distinctBy { it.id }
-
-    return users.mapIndexed { index, user ->
-        UserSocialItem(
-            id = "${kind.name.lowercase()}-$index",
-            user = user,
-        )
-    }
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
+    )
 }

@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalLayoutApi::class)
+
 package cc.hhhl.client.ui.screen
 
 import androidx.compose.foundation.background
@@ -5,19 +7,29 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import cc.hhhl.client.ui.component.HhhlTextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -26,8 +38,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.model.Flash
+import cc.hhhl.client.model.FlashDraft
 import cc.hhhl.client.model.FlashListKind
 import cc.hhhl.client.model.User
+import cc.hhhl.client.state.FlashDraftMode
 import cc.hhhl.client.state.FlashUiState
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
@@ -35,8 +49,11 @@ import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlStatusRow
+import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
+import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
 
 @Composable
@@ -48,12 +65,20 @@ fun FlashScreen(
     onOpenFlash: (String) -> Unit = {},
     onCloseDetail: () -> Unit = {},
     onToggleLikeFlash: () -> Unit = {},
+    onStartCreateFlash: () -> Unit = {},
+    onStartEditFlash: () -> Unit = {},
+    onDraftChanged: (FlashDraft) -> Unit = {},
+    onSaveDraft: () -> Unit = {},
+    onCancelDraft: () -> Unit = {},
+    onDeleteFlash: () -> Unit = {},
     onLoadMore: () -> Unit = {},
     onOpenUser: (String) -> Unit = {},
+    onOpenFlashInWeb: (String) -> Unit = {},
 ) {
-    val flashes = state?.flashes ?: fakeFlashes()
+    val flashes = state?.flashes.orEmpty()
     val selectedFlash = state?.selectedFlash
-    val listState = rememberLazyListState()
+    val selectedKind = state?.selectedKind ?: FlashListKind.Featured
+    val listState = remember(selectedKind) { LazyListState() }
 
     AutoLoadMoreEffect(
         listState = listState,
@@ -62,46 +87,69 @@ fun FlashScreen(
         onLoadMore = onLoadMore,
     )
 
+    if (state?.draftMode != null) {
+        FlashDraftView(
+            mode = state.draftMode,
+            draft = state.draft,
+            isSaving = state.isSavingDraft,
+            errorMessage = state.draftErrorMessage,
+            onDraftChanged = onDraftChanged,
+            onSaveDraft = onSaveDraft,
+            onCancelDraft = onCancelDraft,
+        )
+        return
+    }
+
     if (selectedFlash != null) {
         FlashDetailView(
             flash = selectedFlash,
             isLoading = state.isLoadingDetail,
             isChangingLike = state.isChangingLike,
+            isDeleting = state.isDeletingFlash,
             errorMessage = state.detailErrorMessage,
             onBack = onCloseDetail,
             onToggleLikeFlash = onToggleLikeFlash,
+            onEditFlash = onStartEditFlash,
+            onDeleteFlash = onDeleteFlash,
             onOpenUser = onOpenUser,
+            onOpenFlashInWeb = onOpenFlashInWeb,
         )
         return
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
         val overflowActions = flashMenuActions(
-            selectedKind = state?.selectedKind ?: FlashListKind.Featured,
+            selectedKind = selectedKind,
             onKindSelected = onKindSelected,
         )
         HhhlTopBar(
             title = "Play",
-            supportingText = (state?.selectedKind ?: FlashListKind.Featured).label,
+            supportingText = selectedKind.label,
             navigation = { HhhlBackButton(onClick = onBack) },
-            action = if (overflowActions.isNotEmpty()) {
-                {
-                    HhhlOverflowMenu(actions = overflowActions)
+            action = {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.Add,
+                        contentDescription = "新建 Play",
+                        emphasized = true,
+                        onClick = onStartCreateFlash,
+                    )
+                    if (overflowActions.isNotEmpty()) {
+                        HhhlOverflowMenu(actions = overflowActions)
+                    }
                 }
-            } else {
-                null
             },
         )
         HhhlDivider()
         FlashSummaryRow(
-            selectedKind = state?.selectedKind ?: FlashListKind.Featured,
+            selectedKind = selectedKind,
             flashCount = flashes.size,
             isLoading = state?.isLoadingFlashes == true,
             onRefreshFlashes = onRefreshFlashes,
         )
         HhhlDivider()
         FlashKindFilterRow(
-            selectedKind = state?.selectedKind ?: FlashListKind.Featured,
+            selectedKind = selectedKind,
             onKindSelected = onKindSelected,
         )
         HhhlDivider()
@@ -110,7 +158,7 @@ fun FlashScreen(
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item {
+                item(contentType = "flash-status") {
                     FlashStatusRow(
                         text = message,
                         actionText = "重试",
@@ -119,26 +167,162 @@ fun FlashScreen(
                 }
             }
             if (state?.isLoadingFlashes == true && flashes.isEmpty()) {
-                item { FlashStatusRow(text = "正在加载 Play...", loading = true) }
+                item(contentType = "flash-status") {
+                    FlashStatusRow(text = "正在加载 Play...", loading = true)
+                }
             }
             if (state != null && !state.isLoadingFlashes && flashes.isEmpty() && state.errorMessage == null) {
-                item { FlashStatusRow(text = "还没有 Play") }
+                item(contentType = "flash-status") { FlashStatusRow(text = "还没有 Play") }
             }
-            items(flashes, key = { it.id }) { flash ->
+            items(
+                items = flashes,
+                key = { it.id },
+                contentType = { "flash-row" },
+            ) { flash ->
                 FlashRow(
                     flash = flash,
                     onOpenFlash = onOpenFlash,
                     onOpenUser = onOpenUser,
                 )
             }
-            if (state != null && flashes.isNotEmpty() && !state.endReached) {
-                item {
+            if (state != null && flashes.isNotEmpty() && state.isLoadingMore) {
+                item(contentType = "flash-status") {
                     FlashStatusRow(
-                        text = if (state.isLoadingMore) "正在加载更多..." else "加载更多",
+                        text = "正在加载更多...",
                         loading = state.isLoadingMore,
-                        onAction = if (state.isLoadingMore) null else onLoadMore,
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FlashDraftView(
+    mode: FlashDraftMode,
+    draft: FlashDraft,
+    isSaving: Boolean,
+    errorMessage: String?,
+    onDraftChanged: (FlashDraft) -> Unit,
+    onSaveDraft: () -> Unit,
+    onCancelDraft: () -> Unit,
+) {
+    val scriptPreview = remember(draft.script) {
+        draft.script.lineSequence()
+            .take(80)
+            .joinToString("\n")
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        HhhlTopBar(
+            title = if (mode == FlashDraftMode.Create) "新建 Play" else "编辑 Play",
+            supportingText = if (isSaving) "保存中" else draft.visibility.ifBlank { "public" },
+            navigation = { HhhlBackButton(onClick = onCancelDraft) },
+            action = {
+                HhhlActionChip(
+                    label = if (isSaving) "保存中" else "保存",
+                    emphasized = true,
+                    enabled = !isSaving,
+                    onClick = onSaveDraft,
+                )
+            },
+        )
+        HhhlDivider()
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            errorMessage?.let { message ->
+                item(contentType = "flash-edit-status") { FlashStatusRow(text = message) }
+            }
+            item(contentType = "flash-edit-form") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    HhhlTextInput(
+                        value = draft.title,
+                        onValueChange = { onDraftChanged(draft.copy(title = it)) },
+                        placeholder = "标题",
+                        label = "标题",
+                        enabled = !isSaving,
+                        singleLine = true,
+                    )
+                    HhhlTextInput(
+                        value = draft.summary,
+                        onValueChange = { onDraftChanged(draft.copy(summary = it)) },
+                        placeholder = "摘要，可留空",
+                        label = "摘要",
+                        enabled = !isSaving,
+                        minLines = 2,
+                        maxLines = 4,
+                    )
+                    FlashVisibilityEditor(
+                        visibility = draft.visibility,
+                        enabled = !isSaving,
+                        onVisibilityChanged = { onDraftChanged(draft.copy(visibility = it)) },
+                    )
+                    HhhlTextInput(
+                        value = draft.permissions.joinToString(", "),
+                        onValueChange = { value ->
+                            onDraftChanged(
+                                draft.copy(
+                                    permissions = value.split(',')
+                                        .map { it.trim() }
+                                        .filter { it.isNotBlank() },
+                                ),
+                            )
+                        },
+                        placeholder = "权限，用逗号分隔，可留空",
+                        label = "权限",
+                        enabled = !isSaving,
+                        singleLine = true,
+                    )
+                    HhhlTextInput(
+                        value = draft.script,
+                        onValueChange = { onDraftChanged(draft.copy(script = it)) },
+                        placeholder = "AiScript / Play 脚本",
+                        label = "脚本",
+                        enabled = !isSaving,
+                        minLines = 8,
+                        maxLines = 16,
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    )
+                    Text(
+                        text = "移动端暂不执行 Play 脚本，下方仅显示代码预览。",
+                        color = LocalHhhlColors.current.subtleText,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    FlashCodeBlock(scriptPreview.ifBlank { "暂无脚本" })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FlashVisibilityEditor(
+    visibility: String,
+    enabled: Boolean,
+    onVisibilityChanged: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = "可见性",
+            color = LocalHhhlColors.current.subtleText,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(start = 2.dp),
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf("public" to "公开", "private" to "私密").forEach { (value, label) ->
+                HhhlActionChip(
+                    label = label,
+                    emphasized = visibility == value,
+                    enabled = enabled,
+                    onClick = { onVisibilityChanged(value) },
+                )
             }
         }
     }
@@ -172,8 +356,9 @@ private fun FlashSummaryRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            HhhlActionChip(
-                label = if (isLoading) "同步 Play 中" else "刷新 Play",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (isLoading) "同步 Play 中" else "刷新 Play",
                 emphasized = true,
                 enabled = !isLoading,
                 onClick = onRefreshFlashes,
@@ -257,26 +442,59 @@ private fun FlashDetailView(
     flash: Flash,
     isLoading: Boolean,
     isChangingLike: Boolean,
+    isDeleting: Boolean,
     errorMessage: String?,
     onBack: () -> Unit,
     onToggleLikeFlash: () -> Unit,
+    onEditFlash: () -> Unit,
+    onDeleteFlash: () -> Unit,
     onOpenUser: (String) -> Unit,
+    onOpenFlashInWeb: (String) -> Unit,
 ) {
+    var deleteConfirmOpen by remember(flash.id) { mutableStateOf(false) }
+    val codePreview = remember(flash.script) {
+        flash.script.lineSequence()
+            .take(120)
+            .joinToString("\n")
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         HhhlTopBar(
             title = "Play",
             supportingText = flash.author.displayName,
             navigation = { HhhlBackButton(onClick = onBack) },
+            action = {
+                HhhlOverflowMenu(
+                    actions = listOf(
+                        HhhlOverflowMenuAction(
+                            label = "网页版运行",
+                            onClick = { onOpenFlashInWeb(flash.id) },
+                        ),
+                        HhhlOverflowMenuAction(
+                            label = "编辑",
+                            enabled = !isDeleting,
+                            onClick = onEditFlash,
+                        ),
+                        HhhlOverflowMenuAction(
+                            label = if (isDeleting) "删除中" else "删除",
+                            enabled = !isDeleting,
+                            onClick = { deleteConfirmOpen = true },
+                        ),
+                    ),
+                )
+            },
         )
         HhhlDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             if (isLoading) {
-                item { FlashStatusRow(text = "正在加载 Play...", loading = true) }
+                item(contentType = "flash-detail-status") {
+                    FlashStatusRow(text = "正在加载 Play...", loading = true)
+                }
             }
             errorMessage?.let { message ->
-                item { FlashStatusRow(text = message) }
+                item(contentType = "flash-detail-status") { FlashStatusRow(text = message) }
             }
-            item {
+            item(contentType = "flash-detail") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -337,21 +555,13 @@ private fun FlashDetailView(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
-                    if (flash.scriptPreview.isNotBlank()) {
-                        Text(
-                            text = flash.scriptPreview,
-                            color = MaterialTheme.colorScheme.secondary,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(LocalHhhlColors.current.mediaBackground)
-                                .padding(10.dp),
-                        )
-                    }
+                    FlashRuntimePreview(
+                        script = codePreview,
+                        hasScript = flash.script.isNotBlank(),
+                        onOpenInWeb = { onOpenFlashInWeb(flash.id) },
+                    )
                     Text(
-                        text = "${flash.likedCount} 喜欢",
+                        text = "${flash.likedCount} 喜欢 · 创建 ${flash.createdAtLabel.ifBlank { "未知" }}",
                         color = LocalHhhlColors.current.subtleText,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -360,6 +570,90 @@ private fun FlashDetailView(
             }
         }
     }
+    if (deleteConfirmOpen) {
+        AlertDialog(
+            onDismissRequest = { if (!isDeleting) deleteConfirmOpen = false },
+            title = { Text("删除 Play") },
+            text = {
+                Text(
+                    text = "删除后无法在移动端恢复。服务器会校验权限。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                HhhlTextButton(
+                    onClick = {
+                        deleteConfirmOpen = false
+                        onDeleteFlash()
+                    },
+                    enabled = !isDeleting,
+                ) {
+                    Text(if (isDeleting) "删除中" else "删除")
+                }
+            },
+            dismissButton = {
+                HhhlTextButton(onClick = { deleteConfirmOpen = false }, enabled = !isDeleting) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun FlashRuntimePreview(
+    script: String,
+    hasScript: Boolean,
+    onOpenInWeb: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(LocalHhhlColors.current.mediaBackground)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "运行预览",
+            color = MaterialTheme.colorScheme.onBackground,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = "移动端暂未内置 AiScript Play 运行器，当前不会执行脚本。",
+            color = LocalHhhlColors.current.subtleText,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        HhhlActionChip(
+            label = "网页版运行",
+            emphasized = true,
+            onClick = onOpenInWeb,
+        )
+        FlashCodeBlock(if (hasScript) script else "暂无脚本")
+    }
+}
+
+fun flashWebPath(flashId: String): String {
+    val cleanId = flashId.trim()
+    return if (cleanId.isBlank()) "/play" else "/play/$cleanId"
+}
+
+@Composable
+private fun FlashCodeBlock(text: String) {
+    Text(
+        text = text,
+        color = MaterialTheme.colorScheme.secondary,
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 280.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f))
+            .padding(10.dp),
+    )
 }
 
 @Composable
@@ -398,49 +692,10 @@ private fun FlashStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
-}
-
-private fun fakeFlashes(): List<Flash> {
-    return listOf(
-        Flash(
-            id = "flash-featured",
-            title = "HHHL Play",
-            summary = "站内互动内容",
-            script = "Ui:render([Ui:C:text({text: \"Hello HHHL\"})])",
-            visibility = "public",
-            author = User("me", "HHHL", "me", "H"),
-            userId = "me",
-            likedCount = 4,
-            isLiked = false,
-        ),
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
     )
 }

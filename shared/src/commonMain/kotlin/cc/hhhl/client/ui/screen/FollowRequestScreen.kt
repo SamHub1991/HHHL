@@ -11,7 +11,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,8 +29,10 @@ import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
+import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlTopBar
 
 @Composable
@@ -74,7 +77,7 @@ fun FollowRequestScreen(
             state = listState,
         ) {
             state.errorMessage?.let { message ->
-                item {
+                item(contentType = "follow-request-status") {
                     FollowRequestStatusRow(
                         text = message,
                         actionText = "重试",
@@ -83,15 +86,21 @@ fun FollowRequestScreen(
                 }
             }
             state.actionErrorMessage?.let { message ->
-                item { FollowRequestStatusRow(text = message) }
+                item(contentType = "follow-request-status") { FollowRequestStatusRow(text = message) }
             }
             if (state.isLoading && state.requests.isEmpty()) {
-                item { FollowRequestStatusRow(text = "正在加载关注请求...", loading = true) }
+                item(contentType = "follow-request-status") {
+                    FollowRequestStatusRow(text = "正在加载关注请求...", loading = true)
+                }
             }
             if (!state.isLoading && state.requests.isEmpty() && state.errorMessage == null) {
-                item { FollowRequestStatusRow(text = "暂无关注请求") }
+                item(contentType = "follow-request-status") { FollowRequestStatusRow(text = "暂无关注请求") }
             }
-            items(state.requests, key = { it.id }) { request ->
+            items(
+                items = state.requests,
+                key = { it.id },
+                contentType = { "follow-request-row" },
+            ) { request ->
                 FollowRequestRow(
                     request = request,
                     isPending = state.pendingUserIds.contains(request.user.id),
@@ -100,12 +109,11 @@ fun FollowRequestScreen(
                     onOpenUser = onOpenUser,
                 )
             }
-            if (state.requests.isNotEmpty() && !state.endReached) {
-                item {
+            if (state.requests.isNotEmpty() && state.isLoadingMore) {
+                item(contentType = "follow-request-status") {
                     FollowRequestStatusRow(
-                        text = if (state.isLoadingMore) "正在加载更多..." else "加载更多",
+                        text = "正在加载更多...",
                         loading = state.isLoadingMore,
-                        onAction = if (state.isLoadingMore) null else onLoadMore,
                     )
                 }
             }
@@ -221,8 +229,9 @@ private fun FollowRequestSummaryRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            HhhlActionChip(
-                label = if (isLoading) "同步请求中" else "刷新请求",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (isLoading) "同步请求中" else "刷新请求",
                 emphasized = true,
                 enabled = !isLoading,
                 onClick = onRefresh,
@@ -238,33 +247,10 @@ private fun FollowRequestStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
+    )
 }

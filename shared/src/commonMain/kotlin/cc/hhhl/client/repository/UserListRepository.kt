@@ -162,7 +162,7 @@ open class UserListRepository(
             )
         ) {
             is UserListTimelineLoadResult.Success -> UserListTimelineRepositoryResult.Success(
-                notes = (currentNotes + result.notes).distinctBy { it.id },
+                notes = currentNotes.appendDistinctBy(result.notes) { it.id },
                 endReached = result.notes.isEmpty(),
             )
             UserListTimelineLoadResult.Unauthorized -> UserListTimelineRepositoryResult.Unauthorized

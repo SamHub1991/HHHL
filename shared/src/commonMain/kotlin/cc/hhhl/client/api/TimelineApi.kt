@@ -71,6 +71,7 @@ class SharkeyTimelineApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return TimelineLoadResult.Unauthorized
             when (response.status) {
                 HttpStatusCode.OK -> TimelineLoadResult.Success(
                     response.body<List<SharkeyNoteDto>>().map { it.toDomainNote() },

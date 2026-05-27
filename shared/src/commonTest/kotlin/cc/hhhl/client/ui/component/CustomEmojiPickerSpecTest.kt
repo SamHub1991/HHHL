@@ -1,8 +1,11 @@
 package cc.hhhl.client.ui.component
 
 import cc.hhhl.client.model.CustomEmoji
+import cc.hhhl.client.model.EmojiCategory
+import cc.hhhl.client.model.commonEmojiCategories
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class CustomEmojiPickerSpecTest {
     @Test
@@ -49,6 +52,48 @@ class CustomEmojiPickerSpecTest {
     @Test
     fun pickerResultInsertsReactionCode() {
         assertEquals(":blobcat:", customEmojiPickerResultText(customEmoji("blobcat")))
+    }
+
+    @Test
+    fun unicodePickerKeepsAndroidStyleCategories() {
+        val labels = unicodeEmojiPickerSections().map { it.label }
+
+        assertTrue("表情" in labels)
+        assertTrue("动物与自然" in labels)
+        assertTrue("旗帜" in labels)
+        assertTrue(commonEmojiCategories.flatMap { it.emojis }.distinct().size > 3500)
+    }
+
+    @Test
+    fun unicodePickerSearchesAcrossCategoriesAndCapsEachSection() {
+        val sections = unicodeEmojiPickerSections(
+            query = "😀",
+            categories = listOf(
+                EmojiCategory(key = "face", label = "表情", emojis = listOf("😀", "😀", "😃")),
+                EmojiCategory(key = "other", label = "其他", emojis = listOf("🔥")),
+            ),
+            maxPerCategory = 1,
+        )
+
+        assertEquals(listOf(UnicodeEmojiPickerSection("face", "表情", listOf("😀"))), sections)
+    }
+
+    @Test
+    fun unicodePickerDeduplicatesAcrossCategoriesInDisplayOrder() {
+        val sections = unicodeEmojiPickerSections(
+            categories = listOf(
+                EmojiCategory(key = "first", label = "第一类", emojis = listOf("😀", "🔥")),
+                EmojiCategory(key = "second", label = "第二类", emojis = listOf("🔥", "🎉")),
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                UnicodeEmojiPickerSection("first", "第一类", listOf("😀", "🔥")),
+                UnicodeEmojiPickerSection("second", "第二类", listOf("🎉")),
+            ),
+            sections,
+        )
     }
 
     private fun customEmoji(

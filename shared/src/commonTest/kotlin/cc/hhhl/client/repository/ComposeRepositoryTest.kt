@@ -1,8 +1,12 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.ComposeApi
+import cc.hhhl.client.api.ComposeScheduleDeleteResult
+import cc.hhhl.client.api.ComposeScheduledNotesResult
+import cc.hhhl.client.api.ComposeScheduledNote
 import cc.hhhl.client.api.ComposeCreateResult
 import cc.hhhl.client.api.ComposeDraft
+import cc.hhhl.client.model.NoteVisibility
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -135,6 +139,99 @@ class ComposeRepositoryTest {
         assertEquals(0, calls)
     }
 
+    @Test
+    fun listScheduledNotesUsesTokenProviderAndApi() = runTest {
+        var tokenSeen: String? = null
+        val repository = ComposeRepository(
+            tokenProvider = { "token-123" },
+            api = object : ComposeApi {
+                override suspend fun createNote(token: String, draft: ComposeDraft): ComposeCreateResult {
+                    return ComposeCreateResult.Success(null)
+                }
+
+                override suspend fun listScheduledNotes(
+                    token: String,
+                    limit: Int,
+                    offset: Int,
+                ): ComposeScheduledNotesResult {
+                    tokenSeen = token
+                    assertEquals(10, limit)
+                    assertEquals(0, offset)
+                    return ComposeScheduledNotesResult.Success(
+                        listOf(
+                            ComposeScheduledNote(
+                                id = "note-1",
+                                text = "later",
+                                cw = null,
+                                scheduledAt = 1779800000000,
+                                visibility = NoteVisibility.Home,
+                            ),
+                        ),
+                    )
+                }
+
+                override suspend fun deleteScheduledNote(
+                    token: String,
+                    noteId: String,
+                ): ComposeScheduleDeleteResult {
+                    return ComposeScheduleDeleteResult.Success
+                }
+            },
+        )
+
+        val result = repository.listScheduledNotes()
+
+        assertEquals("token-123", tokenSeen)
+        assertEquals(
+            ComposeScheduledNotesRepositoryResult.Success(
+                listOf(
+                    ComposeScheduledNote(
+                        id = "note-1",
+                        text = "later",
+                        cw = null,
+                        scheduledAt = 1779800000000,
+                        visibility = NoteVisibility.Home,
+                    ),
+                ),
+            ),
+            result,
+        )
+    }
+
+    @Test
+    fun deleteScheduledNoteUsesTokenProviderAndApi() = runTest {
+        var captured: Pair<String, String>? = null
+        val repository = ComposeRepository(
+            tokenProvider = { "token-123" },
+            api = object : ComposeApi {
+                override suspend fun createNote(token: String, draft: ComposeDraft): ComposeCreateResult {
+                    return ComposeCreateResult.Success(null)
+                }
+
+                override suspend fun listScheduledNotes(
+                    token: String,
+                    limit: Int,
+                    offset: Int,
+                ): ComposeScheduledNotesResult {
+                    return ComposeScheduledNotesResult.Success(emptyList())
+                }
+
+                override suspend fun deleteScheduledNote(
+                    token: String,
+                    noteId: String,
+                ): ComposeScheduleDeleteResult {
+                    captured = token to noteId
+                    return ComposeScheduleDeleteResult.Success
+                }
+            },
+        )
+
+        val result = repository.deleteScheduledNote("note-1")
+
+        assertEquals("token-123" to "note-1", captured)
+        assertEquals(ComposeScheduleDeleteRepositoryResult.Success, result)
+    }
+
     private fun fakeApi(
         calls: MutableList<ApiCall> = mutableListOf(),
         result: ComposeCreateResult,
@@ -148,6 +245,21 @@ class ComposeRepositoryTest {
                 onCall()
                 calls.add(ApiCall(token, draft.text, draft.replyId, draft.renoteId, draft.channelId, draft.fileIds))
                 return result
+            }
+
+            override suspend fun listScheduledNotes(
+                token: String,
+                limit: Int,
+                offset: Int,
+            ): ComposeScheduledNotesResult {
+                return ComposeScheduledNotesResult.Success(emptyList())
+            }
+
+            override suspend fun deleteScheduledNote(
+                token: String,
+                noteId: String,
+            ): ComposeScheduleDeleteResult {
+                return ComposeScheduleDeleteResult.Success
             }
         }
     }

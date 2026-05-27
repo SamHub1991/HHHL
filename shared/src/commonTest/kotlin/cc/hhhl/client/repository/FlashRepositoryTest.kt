@@ -3,8 +3,10 @@ package cc.hhhl.client.repository
 import cc.hhhl.client.api.FlashApi
 import cc.hhhl.client.api.FlashActionResult
 import cc.hhhl.client.api.FlashLoadResult
+import cc.hhhl.client.api.FlashMutationResult
 import cc.hhhl.client.api.FlashShowResult
 import cc.hhhl.client.model.Flash
+import cc.hhhl.client.model.FlashDraft
 import cc.hhhl.client.model.FlashListKind
 import cc.hhhl.client.model.User
 import kotlin.test.Test
@@ -126,13 +128,50 @@ class FlashRepositoryTest {
         )
     }
 
+    @Test
+    fun createUpdateAndDeleteUseTokenDraftAndFlashId() = runTest {
+        val calls = mutableListOf<MutationCall>()
+        val actionCalls = mutableListOf<ActionCall>()
+        val flash = sampleFlash("flash-1")
+        val draft = FlashDraft(
+            title = "新 Play",
+            summary = "摘要",
+            script = "Ui:render([])",
+            visibility = "private",
+            permissions = listOf("read:account"),
+        )
+        val repository = FlashRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                mutationCalls = calls,
+                actionCalls = actionCalls,
+                mutationResult = FlashMutationResult.Success(flash),
+                actionResult = FlashActionResult.Success,
+            ),
+        )
+
+        assertIs<FlashRepositoryResult.Success>(repository.createFlash(draft))
+        assertIs<FlashRepositoryResult.Success>(repository.updateFlash("flash-1", draft))
+        assertEquals(FlashActionRepositoryResult.Success, repository.deleteFlash("flash-1"))
+        assertEquals(
+            listOf(
+                MutationCall("create", "token-123", null, draft),
+                MutationCall("update", "token-123", "flash-1", draft),
+            ),
+            calls,
+        )
+        assertEquals(listOf(ActionCall("delete", "token-123", "flash-1")), actionCalls)
+    }
+
     private fun fakeApi(
         flashCalls: MutableList<FlashCall> = mutableListOf(),
         showCalls: MutableList<ShowCall> = mutableListOf(),
         actionCalls: MutableList<ActionCall> = mutableListOf(),
+        mutationCalls: MutableList<MutationCall> = mutableListOf(),
         flashResult: FlashLoadResult = FlashLoadResult.Success(emptyList()),
         showResult: FlashShowResult = FlashShowResult.Success(sampleFlash("flash-1")),
         actionResult: FlashActionResult = FlashActionResult.Success,
+        mutationResult: FlashMutationResult = FlashMutationResult.Success(sampleFlash("flash-1")),
         onCall: () -> Unit = {},
     ): FlashApi {
         return object : FlashApi {
@@ -174,6 +213,34 @@ class FlashRepositoryTest {
                 actionCalls.add(ActionCall("unlike", token, flashId))
                 return actionResult
             }
+
+            override suspend fun createFlash(
+                token: String,
+                draft: FlashDraft,
+            ): FlashMutationResult {
+                onCall()
+                mutationCalls.add(MutationCall("create", token, null, draft))
+                return mutationResult
+            }
+
+            override suspend fun updateFlash(
+                token: String,
+                flashId: String,
+                draft: FlashDraft,
+            ): FlashMutationResult {
+                onCall()
+                mutationCalls.add(MutationCall("update", token, flashId, draft))
+                return mutationResult
+            }
+
+            override suspend fun deleteFlash(
+                token: String,
+                flashId: String,
+            ): FlashActionResult {
+                onCall()
+                actionCalls.add(ActionCall("delete", token, flashId))
+                return actionResult
+            }
         }
     }
 
@@ -193,6 +260,13 @@ class FlashRepositoryTest {
         val action: String,
         val token: String,
         val flashId: String,
+    )
+
+    private data class MutationCall(
+        val action: String,
+        val token: String,
+        val flashId: String?,
+        val draft: FlashDraft,
     )
 }
 

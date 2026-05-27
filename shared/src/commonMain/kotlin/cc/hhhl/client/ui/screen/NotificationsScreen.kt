@@ -1,47 +1,75 @@
 package cc.hhhl.client.ui.screen
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import cc.hhhl.client.fake.FakeData
+import cc.hhhl.client.model.Announcement
 import cc.hhhl.client.model.NotificationFilter
 import cc.hhhl.client.model.NotificationItem
 import cc.hhhl.client.model.NotificationType
+import cc.hhhl.client.state.AnnouncementUiState
 import cc.hhhl.client.state.NotificationUiState
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlFilterPill
+import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
+import cc.hhhl.client.ui.component.HhhlSegmentedControl
+import cc.hhhl.client.ui.component.HhhlSegmentedItem
+import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.ui.component.notificationLineText
 
 @Composable
 fun NotificationsScreen(
     state: NotificationUiState? = null,
+    announcementState: AnnouncementUiState? = null,
     onRefresh: () -> Unit = {},
     onLoadMore: () -> Unit = {},
     onMarkAllAsRead: () -> Unit = {},
+    onMarkNotificationRead: (String) -> Unit = {},
     onFilterSelected: (NotificationFilter) -> Unit = {},
+    onRefreshAnnouncements: () -> Unit = {},
+    onLoadMoreAnnouncements: () -> Unit = {},
+    onOpenAnnouncement: (String) -> Unit = {},
+    onCloseAnnouncement: () -> Unit = {},
+    onMarkAnnouncementRead: (String) -> Unit = {},
     onOpenNote: (String) -> Unit = {},
     onOpenUser: (String) -> Unit = {},
     onOpenUrl: (String) -> Unit = {},
@@ -51,120 +79,385 @@ fun NotificationsScreen(
     onAcceptFollowRequest: (String) -> Unit = {},
     onRejectFollowRequest: (String) -> Unit = {},
     onOpenChat: () -> Unit = {},
+    onOpenChatUser: (String, String?) -> Unit = { _, _ -> },
 ) {
-    val notifications = state?.notifications ?: FakeData.notifications
+    val notifications = state?.notifications.orEmpty()
     val selectedFilter = state?.selectedFilter ?: NotificationFilter.All
+    val announcements = announcementState?.announcements.orEmpty()
+    var selectedSection by remember { mutableStateOf(NotificationInboxSection.Notifications) }
+
+    LaunchedEffect(
+        selectedSection,
+        announcementState?.announcements?.isEmpty(),
+        announcementState?.isLoading,
+        announcementState?.errorMessage,
+    ) {
+        if (
+            selectedSection == NotificationInboxSection.Announcements &&
+            announcementState != null &&
+            announcementState.announcements.isEmpty() &&
+            !announcementState.isLoading &&
+            announcementState.errorMessage == null
+        ) {
+            onRefreshAnnouncements()
+        }
+    }
+
+    val selectedAnnouncement = if (selectedSection == NotificationInboxSection.Announcements) {
+        announcementState?.selectedAnnouncement
+    } else {
+        null
+    }
+    if (selectedAnnouncement != null && announcementState != null) {
+        AnnouncementDetailView(
+            announcement = selectedAnnouncement,
+            isLoading = announcementState.isLoadingDetail,
+            errorMessage = announcementState.detailErrorMessage,
+            actionErrorMessage = announcementState.actionErrorMessage,
+            isPending = announcementState.pendingAnnouncementIds.contains(selectedAnnouncement.id),
+            onBack = onCloseAnnouncement,
+            onMarkRead = onMarkAnnouncementRead,
+        )
+        return
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        NotificationPrimaryFilterRow(
-            selectedFilter = selectedFilter,
-            onFilterSelected = onFilterSelected,
+        NotificationInboxSectionRow(
+            selectedSection = selectedSection,
+            unreadNotificationCount = state?.unreadCount ?: notifications.size,
+            unreadAnnouncementCount = announcements.count { !it.isRead },
+            onSelected = { selectedSection = it },
         )
-        HhhlDivider()
-        NotificationSummaryRow(
-            selectedFilter = selectedFilter,
-            notificationCount = notifications.size,
-            unreadCount = state?.unreadCount ?: notifications.size,
-            isLoading = state?.isLoading == true,
-            isMarkingAllRead = state?.isMarkingAllRead == true,
-            onRefresh = onRefresh,
-            onMarkAllAsRead = onMarkAllAsRead,
+        when (selectedSection) {
+            NotificationInboxSection.Notifications -> NotificationListContent(
+                state = state,
+                notifications = notifications,
+                selectedFilter = selectedFilter,
+                onRefresh = onRefresh,
+                onLoadMore = onLoadMore,
+                onMarkAllAsRead = onMarkAllAsRead,
+                onMarkNotificationRead = onMarkNotificationRead,
+                onFilterSelected = onFilterSelected,
+                onOpenNote = onOpenNote,
+                onOpenUser = onOpenUser,
+                onOpenUrl = onOpenUrl,
+                onOpenMention = onOpenMention,
+                onOpenHashtag = onOpenHashtag,
+                pendingFollowRequestUserIds = pendingFollowRequestUserIds,
+                onAcceptFollowRequest = onAcceptFollowRequest,
+                onRejectFollowRequest = onRejectFollowRequest,
+                onOpenChat = onOpenChat,
+                onOpenChatUser = onOpenChatUser,
+            )
+            NotificationInboxSection.Announcements -> AnnouncementNotificationContent(
+                state = announcementState,
+                announcements = announcements,
+                onRefresh = onRefreshAnnouncements,
+                onLoadMore = onLoadMoreAnnouncements,
+                onOpenAnnouncement = onOpenAnnouncement,
+            )
+        }
+    }
+}
+
+private enum class NotificationInboxSection {
+    Notifications,
+    Announcements,
+}
+
+@Composable
+private fun NotificationInboxSectionRow(
+    selectedSection: NotificationInboxSection,
+    unreadNotificationCount: Int,
+    unreadAnnouncementCount: Int,
+    onSelected: (NotificationInboxSection) -> Unit,
+) {
+    HhhlSegmentedControl(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        HhhlSegmentedItem(
+            label = "通知",
+            badgeCount = unreadNotificationCount,
+            selected = selectedSection == NotificationInboxSection.Notifications,
+            modifier = Modifier.weight(1f),
+            onClick = { onSelected(NotificationInboxSection.Notifications) },
         )
-        HhhlDivider()
-        LazyColumn {
-            state?.message?.let { message ->
-                item { NotificationStatusRow(text = message) }
+        HhhlSegmentedItem(
+            label = "公告",
+            badgeCount = unreadAnnouncementCount,
+            selected = selectedSection == NotificationInboxSection.Announcements,
+            modifier = Modifier.weight(1f),
+            onClick = { onSelected(NotificationInboxSection.Announcements) },
+        )
+    }
+}
+
+@Composable
+private fun NotificationListContent(
+    state: NotificationUiState?,
+    notifications: List<NotificationItem>,
+    selectedFilter: NotificationFilter,
+    onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
+    onMarkAllAsRead: () -> Unit,
+    onMarkNotificationRead: (String) -> Unit,
+    onFilterSelected: (NotificationFilter) -> Unit,
+    onOpenNote: (String) -> Unit,
+    onOpenUser: (String) -> Unit,
+    onOpenUrl: (String) -> Unit,
+    onOpenMention: (String) -> Unit,
+    onOpenHashtag: (String) -> Unit,
+    pendingFollowRequestUserIds: Set<String>,
+    onAcceptFollowRequest: (String) -> Unit,
+    onRejectFollowRequest: (String) -> Unit,
+    onOpenChat: () -> Unit,
+    onOpenChatUser: (String, String?) -> Unit,
+) {
+    NotificationPrimaryFilterRow(
+        selectedFilter = selectedFilter,
+        specialCareUnreadCount = state?.specialCareUnreadCount ?: notifications.countSpecialCareUnread(),
+        onFilterSelected = onFilterSelected,
+    )
+    NotificationSummaryRow(
+        selectedFilter = selectedFilter,
+        notificationCount = notifications.size,
+        unreadCount = state?.unreadCount ?: notifications.size,
+        specialCareNotificationCount = state?.specialCareNotificationCount ?: notifications.count { it.isSpecialCare },
+        specialCareUnreadCount = state?.specialCareUnreadCount ?: notifications.countSpecialCareUnread(),
+        isLoading = state?.isLoading == true,
+        isMarkingAllRead = state?.isMarkingAllRead == true,
+        onRefresh = onRefresh,
+        onMarkAllAsRead = onMarkAllAsRead,
+    )
+    HhhlDivider()
+    LazyColumn {
+        state?.message?.let { message ->
+            item(contentType = "notification-status") {
+                NotificationStatusRow(text = message)
             }
-            if (state?.isLoading == true && notifications.isEmpty()) {
-                item { NotificationStatusRow(text = "正在加载通知...", loading = true) }
+        }
+        if (selectedFilter == NotificationFilter.SpecialCare) {
+            item(contentType = "notification-special-care-help") {
+                NotificationStatusRow(
+                    text = specialCareHelperText(
+                        isLoading = state?.isLoading == true,
+                        notificationCount = notifications.size,
+                    ),
+                )
             }
-            state?.errorMessage?.let { message ->
-                item {
-                    NotificationStatusRow(
-                        text = message,
-                        actionText = "重试",
-                        onAction = onRefresh,
-                    )
-                }
+        }
+        if (state?.isLoading == true && notifications.isEmpty()) {
+            item(contentType = "notification-status") {
+                NotificationStatusRow(
+                    text = if (selectedFilter == NotificationFilter.SpecialCare) {
+                        "正在整理特别关心通知..."
+                    } else {
+                        "正在加载通知..."
+                    },
+                    loading = true,
+                )
             }
-            if (state != null && !state.isLoading && notifications.isEmpty() && state.errorMessage == null) {
-                item { NotificationStatusRow(text = "暂时没有通知") }
+        }
+        state?.errorMessage?.let { message ->
+            item(contentType = "notification-status") {
+                NotificationStatusRow(
+                    text = message,
+                    actionText = "重试",
+                    onAction = onRefresh,
+                )
             }
-            items(notifications, key = { it.id }) { notification ->
-                val rowClick = {
-                    when (val target = notification.navigationTarget) {
-                        is NotificationNavigationTarget.NoteDetail -> onOpenNote(target.noteId)
-                        is NotificationNavigationTarget.UserProfile -> onOpenUser(target.userId)
-                        NotificationNavigationTarget.Chat -> onOpenChat()
-                        null -> Unit
-                    }
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { rowClick() }
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    NotificationTypeBadge(type = notification.type)
-                    Avatar(
-                        initial = notification.actor.avatarInitial,
-                        avatarUrl = notification.actor.avatarUrl,
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        InlineRichText(
-                            text = notificationLineText(notification),
-                            style = MaterialTheme.typography.bodyMedium,
-                            onOpenUrl = onOpenUrl,
-                            onOpenMention = onOpenMention,
-                            onOpenHashtag = onOpenHashtag,
-                        )
-                        if (notification.hasNotePreview) {
-                            InlineRichText(
-                                text = notification.notePreviewText.orEmpty(),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = LocalHhhlColors.current.subtleText,
-                                onOpenUrl = onOpenUrl,
-                                onOpenMention = onOpenMention,
-                                onOpenHashtag = onOpenHashtag,
-                            )
-                        }
-                        Text(
-                            notification.createdAtLabel,
-                            color = LocalHhhlColors.current.subtleText,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        if (notification.canActOnFollowRequest) {
-                            val actorId = notification.actor.id
-                            val pending = actorId in pendingFollowRequestUserIds
-                            NotificationActionRow(
-                                primaryLabel = if (pending) "处理中" else "接受",
-                                primaryEnabled = !pending,
-                                onPrimaryClick = { onAcceptFollowRequest(actorId) },
-                                secondaryLabel = "拒绝",
-                                secondaryEnabled = !pending,
-                                onSecondaryClick = { onRejectFollowRequest(actorId) },
-                            )
-                        } else if (notification.canOpenChat) {
-                            Text(
-                                text = "点按进入聊天",
-                                color = LocalHhhlColors.current.subtleText,
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                    }
-                }
-                HhhlDivider()
+        }
+        if (state != null && !state.isLoading && notifications.isEmpty() && state.errorMessage == null) {
+            item(contentType = "notification-status") {
+                NotificationStatusRow(text = notificationEmptyText(selectedFilter))
             }
-            if (state != null && notifications.isNotEmpty() && !state.endReached) {
-                item {
-                    NotificationStatusRow(
-                        text = if (state.isLoadingMore) "正在加载更多..." else "加载更多",
-                        loading = state.isLoadingMore,
-                        onAction = if (state.isLoadingMore) null else onLoadMore,
-                    )
-                }
+        }
+        items(
+            items = notifications,
+            key = { it.id },
+            contentType = { "notification-row" },
+        ) { notification ->
+            NotificationRow(
+                notification = notification,
+                pendingFollowRequestUserIds = pendingFollowRequestUserIds,
+                onOpenNote = onOpenNote,
+                onOpenUser = onOpenUser,
+                onOpenUrl = onOpenUrl,
+                onOpenMention = onOpenMention,
+                onOpenHashtag = onOpenHashtag,
+                onMarkNotificationRead = onMarkNotificationRead,
+                onAcceptFollowRequest = onAcceptFollowRequest,
+                onRejectFollowRequest = onRejectFollowRequest,
+                onOpenChat = onOpenChat,
+                onOpenChatUser = onOpenChatUser,
+            )
+        }
+        if (state != null && notifications.isNotEmpty() && state.isLoadingMore) {
+            item(contentType = "notification-status") {
+                NotificationStatusRow(
+                    text = "正在加载更多...",
+                    loading = state.isLoadingMore,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NotificationRow(
+    notification: NotificationItem,
+    pendingFollowRequestUserIds: Set<String>,
+    onOpenNote: (String) -> Unit,
+    onOpenUser: (String) -> Unit,
+    onOpenUrl: (String) -> Unit,
+    onOpenMention: (String) -> Unit,
+    onOpenHashtag: (String) -> Unit,
+    onMarkNotificationRead: (String) -> Unit,
+    onAcceptFollowRequest: (String) -> Unit,
+    onRejectFollowRequest: (String) -> Unit,
+    onOpenChat: () -> Unit,
+    onOpenChatUser: (String, String?) -> Unit,
+) {
+    val rowClick = {
+        onMarkNotificationRead(notification.id)
+        when (val target = notification.navigationTarget) {
+            is NotificationNavigationTarget.NoteDetail -> onOpenNote(target.noteId)
+            is NotificationNavigationTarget.UserProfile -> onOpenUser(target.userId)
+            is NotificationNavigationTarget.ChatUser -> onOpenChatUser(target.userId, target.messageId)
+            NotificationNavigationTarget.Chat -> onOpenChat()
+            null -> Unit
+        }
+    }
+    val createdAtLabel = notification.createdAtLabel.ifBlank { "刚刚" }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { rowClick() }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        NotificationTypeBadge(type = notification.type)
+        Avatar(
+            initial = notification.actor.avatarInitial,
+            avatarUrl = notification.actor.avatarUrl,
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            InlineRichText(
+                text = notificationLineText(notification),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (notification.isRead) {
+                    LocalHhhlColors.current.subtleText
+                } else {
+                    MaterialTheme.colorScheme.onBackground
+                },
+                onOpenUrl = onOpenUrl,
+                onOpenMention = onOpenMention,
+                onOpenHashtag = onOpenHashtag,
+            )
+            if (notification.hasNotePreview) {
+                InlineRichText(
+                    text = notification.notePreviewText.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LocalHhhlColors.current.subtleText,
+                    onOpenUrl = onOpenUrl,
+                    onOpenMention = onOpenMention,
+                    onOpenHashtag = onOpenHashtag,
+                )
+            }
+            Text(
+                if (notification.isRead) "$createdAtLabel · 已读" else createdAtLabel,
+                color = LocalHhhlColors.current.subtleText,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (notification.canActOnFollowRequest) {
+                val actorId = notification.actor.id
+                val pending = actorId in pendingFollowRequestUserIds
+                NotificationActionRow(
+                    primaryLabel = if (pending) "处理中" else "接受",
+                    primaryEnabled = !pending,
+                    onPrimaryClick = { onAcceptFollowRequest(actorId) },
+                    secondaryLabel = "拒绝",
+                    secondaryEnabled = !pending,
+                    onSecondaryClick = { onRejectFollowRequest(actorId) },
+                )
+            } else if (notification.canOpenChat) {
+                Text(
+                    text = "点按进入聊天",
+                    color = LocalHhhlColors.current.subtleText,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+    }
+    HhhlDivider()
+}
+
+@Composable
+private fun AnnouncementNotificationContent(
+    state: AnnouncementUiState?,
+    announcements: List<Announcement>,
+    onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
+    onOpenAnnouncement: (String) -> Unit,
+) {
+    val listState = rememberLazyListState()
+
+    AutoLoadMoreEffect(
+        listState = listState,
+        itemCount = announcements.size,
+        isLoadingMore = state?.isLoadingMore == true || state?.endReached == true,
+        onLoadMore = onLoadMore,
+    )
+
+    AnnouncementSummaryRow(
+        announcementCount = announcements.size,
+        unreadCount = announcements.count { !it.isRead },
+        isLoading = state?.isLoading == true,
+        onRefresh = onRefresh,
+    )
+    HhhlDivider()
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        state = listState,
+    ) {
+        state?.errorMessage?.let { message ->
+            item(contentType = "announcement-status") {
+                NotificationStatusRow(
+                    text = message,
+                    actionText = "重试",
+                    onAction = onRefresh,
+                )
+            }
+        }
+        if (state?.isLoading == true && announcements.isEmpty()) {
+            item(contentType = "announcement-status") {
+                NotificationStatusRow(text = "正在加载公告...", loading = true)
+            }
+        }
+        if (state != null && !state.isLoading && announcements.isEmpty() && state.errorMessage == null) {
+            item(contentType = "announcement-status") {
+                NotificationStatusRow(text = "还没有公告")
+            }
+        }
+        items(
+            items = announcements,
+            key = { it.id },
+            contentType = { "announcement-row" },
+        ) { announcement ->
+            AnnouncementRow(
+                announcement = announcement,
+                onOpenAnnouncement = onOpenAnnouncement,
+            )
+        }
+        if (state != null && announcements.isNotEmpty() && state.isLoadingMore) {
+            item(contentType = "announcement-status") {
+                NotificationStatusRow(
+                    text = "正在加载更多...",
+                    loading = state.isLoadingMore,
+                )
             }
         }
     }
@@ -173,19 +466,21 @@ fun NotificationsScreen(
 @Composable
 private fun NotificationPrimaryFilterRow(
     selectedFilter: NotificationFilter,
+    specialCareUnreadCount: Int,
     onFilterSelected: (NotificationFilter) -> Unit,
 ) {
-    FlowRow(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         notificationVisiblePrimaryFilters().forEach { filter ->
-            NotificationFilterChip(
-                filter = filter,
+            HhhlFilterPill(
                 selected = filter == selectedFilter,
+                label = notificationFilterLabel(filter, specialCareUnreadCount),
                 onClick = { onFilterSelected(filter) },
             )
         }
@@ -197,6 +492,8 @@ private fun NotificationSummaryRow(
     selectedFilter: NotificationFilter,
     notificationCount: Int,
     unreadCount: Int,
+    specialCareNotificationCount: Int,
+    specialCareUnreadCount: Int,
     isLoading: Boolean,
     isMarkingAllRead: Boolean,
     onRefresh: () -> Unit,
@@ -204,13 +501,16 @@ private fun NotificationSummaryRow(
 ) {
     val stateText = when {
         isLoading -> "加载中"
+        selectedFilter == NotificationFilter.SpecialCare && specialCareUnreadCount > 0 ->
+            "${specialCareUnreadCount} 条未读 / ${specialCareNotificationCount} 条特别关心"
+        selectedFilter == NotificationFilter.SpecialCare -> "${specialCareNotificationCount} 条特别关心"
         unreadCount > 0 -> "${unreadCount} 条未读 / ${notificationCount} 条"
         else -> "${notificationCount} 条通知"
     }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp),
+            .padding(horizontal = 14.dp, vertical = 5.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -227,8 +527,9 @@ private fun NotificationSummaryRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            HhhlActionChip(
-                label = if (isLoading) "同步中" else "刷新",
+            HhhlIconActionButton(
+                icon = Icons.Filled.Refresh,
+                contentDescription = if (isLoading) "同步中" else "刷新",
                 emphasized = true,
                 enabled = !isLoading,
                 onClick = onRefresh,
@@ -254,40 +555,6 @@ fun notificationSummaryActions(
     ),
 )
 
-@Composable
-private fun NotificationFilterChip(
-    filter: NotificationFilter,
-    selected: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                else LocalHhhlColors.current.inputBackground,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = filter.label,
-            color = if (selected) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onBackground
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
 fun notificationPrimaryFilters(): List<NotificationFilter> = listOf(
     NotificationFilter.All,
     NotificationFilter.Mentions,
@@ -311,6 +578,40 @@ private fun notificationOverflowActions(
             onClick = { onFilterSelected(filter) },
         )
     }
+}
+
+fun notificationFilterLabel(
+    filter: NotificationFilter,
+    specialCareUnreadCount: Int,
+): String {
+    return if (filter == NotificationFilter.SpecialCare && specialCareUnreadCount > 0) {
+        "${filter.label} $specialCareUnreadCount"
+    } else {
+        filter.label
+    }
+}
+
+fun notificationEmptyText(selectedFilter: NotificationFilter): String {
+    return if (selectedFilter == NotificationFilter.SpecialCare) {
+        "还没有特别关心通知；特别关心用户发布新帖子或发来聊天消息后，会在这里显示。"
+    } else {
+        "暂时没有通知"
+    }
+}
+
+fun specialCareHelperText(
+    isLoading: Boolean,
+    notificationCount: Int,
+): String {
+    return when {
+        isLoading -> "正在同步本地特别关心提醒"
+        notificationCount > 0 -> "这里汇总特别关心用户的新帖子和聊天消息，点按可跳转到对应内容。"
+        else -> "特别关心通知来自本地特别关心用户集合，不需要额外服务器接口。"
+    }
+}
+
+private fun List<NotificationItem>.countSpecialCareUnread(): Int {
+    return count { it.isSpecialCare && !it.isRead }
 }
 
 @Composable
@@ -401,42 +702,19 @@ private fun NotificationStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
+    )
 }
 
 val NotificationItem.canActOnFollowRequest: Boolean
     get() = type == NotificationType.FollowRequestReceived
 
 val NotificationItem.canOpenChat: Boolean
-    get() = type == NotificationType.ChatRoomInvitation || !chatRoomId.isNullOrBlank()
+    get() = type == NotificationType.ChatRoomInvitation || !chatRoomId.isNullOrBlank() || !chatUserId.isNullOrBlank()
 
 val NotificationItem.hasNotePreview: Boolean
     get() = !notePreviewText.isNullOrBlank()
@@ -446,12 +724,23 @@ sealed interface NotificationNavigationTarget {
 
     data class UserProfile(val userId: String) : NotificationNavigationTarget
 
+    data class ChatUser(
+        val userId: String,
+        val messageId: String? = null,
+    ) : NotificationNavigationTarget
+
     data object Chat : NotificationNavigationTarget
 }
 
 val NotificationItem.navigationTarget: NotificationNavigationTarget?
     get() {
         noteId?.takeIf { it.isNotBlank() }?.let { return NotificationNavigationTarget.NoteDetail(it) }
+        chatUserId?.takeIf { it.isNotBlank() }?.let {
+            return NotificationNavigationTarget.ChatUser(
+                userId = it,
+                messageId = chatMessageId?.takeIf { messageId -> messageId.isNotBlank() },
+            )
+        }
         if (type == NotificationType.ChatRoomInvitation || !chatRoomId.isNullOrBlank()) {
             return NotificationNavigationTarget.Chat
         }

@@ -145,6 +145,23 @@ class SharkeyNoteActionApiTest {
     }
 
     @Test
+    fun mutesNoteFromThreadMutingCreateEndpoint() = runTest {
+        val api = SharkeyNoteActionApi(
+            client = testClient { request ->
+                assertEndpoint(request, "/api/notes/thread-muting/create")
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""noteId":"note-1""""))
+                respondOk()
+            },
+        )
+
+        assertIs<NoteActionApiResult.Success>(
+            api.muteNote("token-123", "note-1"),
+        )
+    }
+
+    @Test
     fun mapsUnauthorizedActionResponse() = runTest {
         val api = SharkeyNoteActionApi(
             client = testClient {

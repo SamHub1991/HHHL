@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -22,11 +21,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import cc.hhhl.client.ui.component.HhhlTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,7 +35,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.Antenna
 import cc.hhhl.client.model.AntennaDraft
 import cc.hhhl.client.model.Note
@@ -48,6 +44,9 @@ import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlStatusRow
+import cc.hhhl.client.ui.component.HhhlIconActionButton
+import cc.hhhl.client.ui.component.HhhlInlinePanel
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTextInput
@@ -88,9 +87,9 @@ fun AntennaScreen(
     canDeleteAuthor: (String) -> Boolean = { false },
     noteRowDensity: NoteRowDensity = NoteRowDensity.Comfortable,
 ) {
-    val antennas = state?.antennas ?: fakeAntennas()
+    val antennas = state?.antennas.orEmpty()
     val selectedAntenna = state?.selectedAntenna ?: antennas.firstOrNull()
-    val notes = state?.notes ?: FakeData.timeline
+    val notes = state?.notes.orEmpty()
     val listState = rememberLazyListState()
     var editorMode by remember { mutableStateOf<AntennaEditorMode?>(null) }
     var deleteDialogOpen by remember { mutableStateOf(false) }
@@ -136,19 +135,21 @@ fun AntennaScreen(
             isLoadingNotes = state?.isLoadingNotes == true,
         )
         HhhlDivider()
-        AntennaPickerRow(
-            antennas = antennas,
-            selectedAntenna = selectedAntenna,
-            isLoading = state?.isLoadingAntennas == true,
-            onSelectAntenna = onSelectAntenna,
-        )
-        HhhlDivider()
+        if (antennas.isNotEmpty()) {
+            AntennaPickerRow(
+                antennas = antennas,
+                selectedAntenna = selectedAntenna,
+                isLoading = state?.isLoadingAntennas == true,
+                onSelectAntenna = onSelectAntenna,
+            )
+            HhhlDivider()
+        }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item {
+                item(contentType = "antenna-status") {
                     AntennaStatusRow(
                         text = message,
                         actionText = "重试",
@@ -157,16 +158,20 @@ fun AntennaScreen(
                 }
             }
             if (state?.isLoadingAntennas == true && antennas.isEmpty()) {
-                item { AntennaStatusRow(text = "正在加载天线...", loading = true) }
+                item(contentType = "antenna-status") {
+                    AntennaStatusRow(text = "正在加载天线...", loading = true)
+                }
             }
             if (state != null && !state.isLoadingAntennas && antennas.isEmpty() && state.errorMessage == null) {
-                item { AntennaStatusRow(text = "还没有天线") }
+                item(contentType = "antenna-status") { AntennaStatusRow(text = "还没有天线") }
             }
             if (state?.isLoadingNotes == true && notes.isEmpty()) {
-                item { AntennaStatusRow(text = "正在加载天线动态...", loading = true) }
+                item(contentType = "antenna-status") {
+                    AntennaStatusRow(text = "正在加载天线动态...", loading = true)
+                }
             }
             selectedAntenna?.let { antenna ->
-                item {
+                item(contentType = "antenna-header") {
                     AntennaHeaderRow(
                         antenna = antenna,
                         isMutating = state?.isMutatingAntenna == true,
@@ -176,7 +181,7 @@ fun AntennaScreen(
                 }
             }
             state?.notesErrorMessage?.let { message ->
-                item {
+                item(contentType = "antenna-status") {
                     AntennaStatusRow(
                         text = message,
                         actionText = "重试",
@@ -191,9 +196,13 @@ fun AntennaScreen(
                 notes.isEmpty() &&
                 state.notesErrorMessage == null
             ) {
-                item { AntennaStatusRow(text = "这条天线还没有动态") }
+                item(contentType = "antenna-status") { AntennaStatusRow(text = "这条天线还没有动态") }
             }
-            items(notes, key = { "antenna-note-${it.id}" }) { note ->
+            items(
+                items = notes,
+                key = { "antenna-note-${it.id}" },
+                contentType = { "antenna-note" },
+            ) { note ->
                 NoteRow(
                     note = note,
                     onClick = onOpenNote,
@@ -218,12 +227,11 @@ fun AntennaScreen(
                     density = noteRowDensity,
                 )
             }
-            if (state != null && notes.isNotEmpty() && !state.endReached) {
-                item {
+            if (state != null && notes.isNotEmpty() && state.isLoadingMore) {
+                item(contentType = "antenna-status") {
                     AntennaStatusRow(
-                        text = if (state.isLoadingMore) "正在加载更多..." else "加载更多",
+                        text = "正在加载更多...",
                         loading = state.isLoadingMore,
-                        onAction = if (state.isLoadingMore) null else onLoadMore,
                     )
                 }
             }
@@ -312,21 +320,13 @@ private fun AntennaCreateButton(
     isMutating: Boolean,
     onClick: () -> Unit,
 ) {
-    IconButton(
+    HhhlIconActionButton(
+        icon = Icons.Filled.Add,
+        contentDescription = if (isMutating) "正在新建天线" else "新建天线",
         onClick = onClick,
         enabled = !isMutating,
-        modifier = Modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Add,
-            contentDescription = if (isMutating) "正在新建天线" else "新建天线",
-            tint = if (isMutating) LocalHhhlColors.current.subtleText else MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
-        )
-    }
+        emphasized = true,
+    )
 }
 
 fun antennaSummaryActions(
@@ -355,43 +355,43 @@ private fun AntennaHeaderRow(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Row(
+    HhhlInlinePanel(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.64f))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = antenna.name.ifBlank { "未命名天线" },
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = antenna.name.ifBlank { "未命名天线" },
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "${antenna.sourceLabel} · ${antenna.keywordPreview}",
+                    color = LocalHhhlColors.current.subtleText,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            HhhlActionChip(
+                label = if (isMutating) "处理中" else "编辑",
+                enabled = !isMutating,
+                onClick = onEdit,
             )
-            Text(
-                text = "${antenna.sourceLabel} · ${antenna.keywordPreview}",
-                color = LocalHhhlColors.current.subtleText,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            HhhlOverflowMenu(
+                enabled = !isMutating,
+                actions = antennaHeaderActions(
+                    isMutating = isMutating,
+                    onDelete = onDelete,
+                ),
             )
         }
-        HhhlActionChip(
-            label = if (isMutating) "处理中" else "编辑",
-            enabled = !isMutating,
-            onClick = onEdit,
-        )
-        HhhlOverflowMenu(
-            enabled = !isMutating,
-            actions = antennaHeaderActions(
-                isMutating = isMutating,
-                onDelete = onDelete,
-            ),
-        )
     }
     HhhlDivider()
 }
@@ -481,7 +481,7 @@ private fun AntennaEditorDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            HhhlTextButton(
                 onClick = {
                     onSubmit(
                         AntennaDraft(
@@ -508,7 +508,7 @@ private fun AntennaEditorDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isMutating) {
+            HhhlTextButton(onClick = onDismiss, enabled = !isMutating) {
                 Text("取消")
             }
         },
@@ -557,12 +557,12 @@ private fun DeleteAntennaDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onDelete, enabled = !isMutating) {
+            HhhlTextButton(onClick = onDelete, enabled = !isMutating, destructive = true) {
                 Text(if (isMutating) "删除中" else "删除")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isMutating) {
+            HhhlTextButton(onClick = onDismiss, enabled = !isMutating) {
                 Text("取消")
             }
         },
@@ -583,8 +583,8 @@ private fun AntennaPickerRow(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (isLoading) {
-            item {
+        if (isLoading && antennas.isNotEmpty()) {
+            item(contentType = "antenna-picker-status") {
                 Row(
                     modifier = Modifier.padding(horizontal = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -599,7 +599,11 @@ private fun AntennaPickerRow(
                 }
             }
         }
-        items(antennas, key = { it.id }) { antenna ->
+        items(
+            items = antennas,
+            key = { it.id },
+            contentType = { "antenna-picker" },
+        ) { antenna ->
             val active = selectedAntenna?.id == antenna.id
             AntennaPickerChip(
                 antenna = antenna,
@@ -670,35 +674,12 @@ private fun AntennaStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
+    )
 }
 
 private val Antenna.sourceLabel: String
@@ -735,27 +716,4 @@ private fun String.toKeywordGroups(): List<List<String>> {
                 .takeIf { it.isNotEmpty() }
         }
         .toList()
-}
-
-private fun fakeAntennas(): List<Antenna> {
-    return listOf(
-        Antenna(
-            id = "antenna-agi",
-            name = "AGI",
-            source = "all",
-            keywords = listOf(listOf("AGI"), listOf("LLM")),
-            excludeKeywords = emptyList(),
-            userListId = null,
-            users = emptyList(),
-            caseSensitive = false,
-            localOnly = false,
-            excludeBots = false,
-            withReplies = false,
-            withFile = false,
-            isActive = true,
-            hasUnreadNote = true,
-            notify = false,
-            excludeNotesInSensitiveChannel = true,
-        ),
-    )
 }

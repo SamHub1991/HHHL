@@ -67,4 +67,13 @@ class ChatStreamingApiTest {
 
         assertNull(event)
     }
+
+    @Test
+    fun transportUnauthorizedDetectionOnlyAcceptsExplicitAuthFailures() {
+        assertEquals(true, "HTTP 401 Unauthorized".isUnauthorizedStreamingTransportError())
+        assertEquals(true, "Invalid token".isUnauthorizedStreamingTransportError())
+        assertEquals(false, "HTTP 403 Forbidden".isUnauthorizedStreamingTransportError())
+        assertEquals(false, "authentication handshake failed".isUnauthorizedStreamingTransportError())
+        assertEquals(false, "connection reset by peer".isUnauthorizedStreamingTransportError())
+    }
 }

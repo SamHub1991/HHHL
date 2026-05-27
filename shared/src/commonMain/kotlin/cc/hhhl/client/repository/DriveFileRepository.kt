@@ -1,6 +1,7 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.DriveFileApi
+import cc.hhhl.client.api.DriveFileDetailsResult
 import cc.hhhl.client.api.DriveFileListResult
 import cc.hhhl.client.api.DriveFileMutationResult
 import cc.hhhl.client.api.DriveFileSort
@@ -10,6 +11,7 @@ import cc.hhhl.client.api.DriveFolderListResult
 import cc.hhhl.client.api.DriveFolderMutationResult
 import cc.hhhl.client.api.SharkeyDriveFileApi
 import cc.hhhl.client.model.DriveFile
+import cc.hhhl.client.model.DriveFileDetails
 import cc.hhhl.client.model.DriveFolder
 
 open class DriveFileRepository(
@@ -128,6 +130,35 @@ open class DriveFileRepository(
         }
     }
 
+    open suspend fun moveFile(
+        fileId: String,
+        folderId: String?,
+    ): DriveManagementRepositoryResult {
+        val cleanFileId = fileId.trim()
+        if (cleanFileId.isEmpty()) {
+            return DriveManagementRepositoryResult.ValidationError("文件 ID 不能为空")
+        }
+
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return DriveManagementRepositoryResult.Unauthorized
+
+        return when (
+            val result = api.moveFile(
+                token = token,
+                fileId = cleanFileId,
+                folderId = folderId?.trim()?.takeIf { it.isNotEmpty() },
+            )
+        ) {
+            is DriveFileMutationResult.Success -> DriveManagementRepositoryResult.FileUpdated(result.file)
+            DriveFileMutationResult.Deleted -> DriveManagementRepositoryResult.FileDeleted(cleanFileId)
+            DriveFileMutationResult.Unauthorized -> DriveManagementRepositoryResult.Unauthorized
+            is DriveFileMutationResult.NetworkError -> {
+                DriveManagementRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is DriveFileMutationResult.ServerError -> DriveManagementRepositoryResult.Error(result.message)
+        }
+    }
+
     open suspend fun deleteFile(fileId: String): DriveManagementRepositoryResult {
         val cleanFileId = fileId.trim()
         if (cleanFileId.isEmpty()) {
@@ -229,6 +260,24 @@ open class DriveFileRepository(
         }
     }
 
+    open suspend fun loadFileDetails(fileId: String): DriveFileDetailsRepositoryResult {
+        val cleanFileId = fileId.trim()
+        if (cleanFileId.isEmpty()) {
+            return DriveFileDetailsRepositoryResult.Error("请选择文件")
+        }
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return DriveFileDetailsRepositoryResult.Unauthorized
+
+        return when (val result = api.loadFileDetails(token, cleanFileId)) {
+            is DriveFileDetailsResult.Success -> DriveFileDetailsRepositoryResult.Success(result.details)
+            DriveFileDetailsResult.Unauthorized -> DriveFileDetailsRepositoryResult.Unauthorized
+            is DriveFileDetailsResult.NetworkError -> {
+                DriveFileDetailsRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is DriveFileDetailsResult.ServerError -> DriveFileDetailsRepositoryResult.Error(result.message)
+        }
+    }
+
     private suspend fun loadFolders(
         currentFolders: List<DriveFolder>,
         folderId: String?,
@@ -248,7 +297,7 @@ open class DriveFileRepository(
             )
         ) {
             is DriveFolderListResult.Success -> DriveFoldersRepositoryResult.Success(
-                folders = (currentFolders + result.folders).distinctBy { it.id },
+                folders = currentFolders.appendDistinctBy(result.folders) { it.id },
                 endReached = result.folders.isEmpty(),
             )
             DriveFolderListResult.Unauthorized -> DriveFoldersRepositoryResult.Unauthorized
@@ -281,7 +330,7 @@ open class DriveFileRepository(
             )
         ) {
             is DriveFileListResult.Success -> DriveFilesRepositoryResult.Success(
-                files = (currentFiles + result.files).distinctBy { it.id },
+                files = currentFiles.appendDistinctBy(result.files) { it.id },
                 endReached = result.files.isEmpty(),
             )
             DriveFileListResult.Unauthorized -> DriveFilesRepositoryResult.Unauthorized
@@ -353,4 +402,12 @@ sealed interface DriveFoldersRepositoryResult {
     data object Unauthorized : DriveFoldersRepositoryResult
 
     data class Error(val message: String) : DriveFoldersRepositoryResult
+}
+
+sealed interface DriveFileDetailsRepositoryResult {
+    data class Success(val details: DriveFileDetails) : DriveFileDetailsRepositoryResult
+
+    data object Unauthorized : DriveFileDetailsRepositoryResult
+
+    data class Error(val message: String) : DriveFileDetailsRepositoryResult
 }

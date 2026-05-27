@@ -1,6 +1,7 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.Flash
+import cc.hhhl.client.model.FlashDraft
 import cc.hhhl.client.model.FlashListKind
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -38,6 +39,22 @@ interface FlashApi {
     ): FlashActionResult
 
     suspend fun unlikeFlash(
+        token: String,
+        flashId: String,
+    ): FlashActionResult
+
+    suspend fun createFlash(
+        token: String,
+        draft: FlashDraft,
+    ): FlashMutationResult
+
+    suspend fun updateFlash(
+        token: String,
+        flashId: String,
+        draft: FlashDraft,
+    ): FlashMutationResult
+
+    suspend fun deleteFlash(
         token: String,
         flashId: String,
     ): FlashActionResult
@@ -82,6 +99,19 @@ sealed interface FlashActionResult {
     data class NetworkError(val message: String) : FlashActionResult
 }
 
+sealed interface FlashMutationResult {
+    data class Success(val flash: Flash) : FlashMutationResult
+
+    data object Unauthorized : FlashMutationResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : FlashMutationResult
+
+    data class NetworkError(val message: String) : FlashMutationResult
+}
+
 class SharkeyFlashApi(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val client: HttpClient = defaultFlashClient(),
@@ -122,6 +152,8 @@ class SharkeyFlashApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return FlashLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> FlashLoadResult.Success(
                     flashes = if (kind == FlashListKind.Liked) {
@@ -161,6 +193,8 @@ class SharkeyFlashApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return FlashShowResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> FlashShowResult.Success(response.body<FlashDto>().toDomainFlash())
                 HttpStatusCode.Unauthorized -> FlashShowResult.Unauthorized
@@ -190,6 +224,94 @@ class SharkeyFlashApi(
         return postFlashAction(token, flashId, "unlike")
     }
 
+    override suspend fun createFlash(
+        token: String,
+        draft: FlashDraft,
+    ): FlashMutationResult {
+        val cleanToken = token.trim()
+        val cleanDraft = draft.trimmed
+        if (cleanToken.isEmpty()) return FlashMutationResult.Unauthorized
+        cleanDraft.validationMessage()?.let {
+            return FlashMutationResult.ServerError(HttpStatusCode.BadRequest.value, it)
+        }
+
+        return postFlashMutation(
+            endpoint = "create",
+            body = FlashCreateRequest(
+                i = cleanToken,
+                title = cleanDraft.title,
+                summary = cleanDraft.summary,
+                script = cleanDraft.script,
+                visibility = cleanDraft.visibility,
+                permissions = cleanDraft.permissions,
+            ),
+        )
+    }
+
+    override suspend fun updateFlash(
+        token: String,
+        flashId: String,
+        draft: FlashDraft,
+    ): FlashMutationResult {
+        val cleanToken = token.trim()
+        val cleanFlashId = flashId.trim()
+        val cleanDraft = draft.trimmed
+        if (cleanToken.isEmpty()) return FlashMutationResult.Unauthorized
+        if (cleanFlashId.isEmpty()) {
+            return FlashMutationResult.ServerError(HttpStatusCode.BadRequest.value, "无法读取 Play")
+        }
+        cleanDraft.validationMessage()?.let {
+            return FlashMutationResult.ServerError(HttpStatusCode.BadRequest.value, it)
+        }
+
+        return postFlashMutation(
+            endpoint = "update",
+            body = FlashUpdateRequest(
+                i = cleanToken,
+                flashId = cleanFlashId,
+                title = cleanDraft.title,
+                summary = cleanDraft.summary,
+                script = cleanDraft.script,
+                visibility = cleanDraft.visibility,
+                permissions = cleanDraft.permissions,
+            ),
+        )
+    }
+
+    override suspend fun deleteFlash(
+        token: String,
+        flashId: String,
+    ): FlashActionResult {
+        return postFlashAction(token, flashId, "delete")
+    }
+
+    private suspend fun postFlashMutation(
+        endpoint: String,
+        body: Any,
+    ): FlashMutationResult {
+        return try {
+            val response = client.post(apiUrl("flash", endpoint)) {
+                contentType(ContentType.Application.Json)
+                setBody(body)
+            }
+
+            if (response.isSharkeyUnauthorized()) return FlashMutationResult.Unauthorized
+
+            when (response.status) {
+                HttpStatusCode.OK -> FlashMutationResult.Success(response.body<FlashDto>().toDomainFlash())
+                HttpStatusCode.Unauthorized -> FlashMutationResult.Unauthorized
+                else -> FlashMutationResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            FlashMutationResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
     private suspend fun postFlashAction(
         token: String,
         flashId: String,
@@ -213,7 +335,7 @@ class SharkeyFlashApi(
 
             when {
                 response.status.value in 200..299 -> FlashActionResult.Success
-                response.status == HttpStatusCode.Unauthorized -> FlashActionResult.Unauthorized
+                response.isSharkeyUnauthorized() -> FlashActionResult.Unauthorized
                 else -> FlashActionResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
@@ -258,6 +380,27 @@ private data class FlashActionRequest(
 )
 
 @Serializable
+private data class FlashCreateRequest(
+    val i: String,
+    val title: String,
+    val summary: String,
+    val script: String,
+    val visibility: String,
+    val permissions: List<String> = emptyList(),
+)
+
+@Serializable
+private data class FlashUpdateRequest(
+    val i: String,
+    val flashId: String,
+    val title: String,
+    val summary: String,
+    val script: String,
+    val visibility: String,
+    val permissions: List<String> = emptyList(),
+)
+
+@Serializable
 private data class FlashLikeDto(
     val id: String,
     val flash: FlashDto,
@@ -274,6 +417,7 @@ private data class FlashDto(
     val summary: String = "",
     val script: String = "",
     val visibility: String = "",
+    val permissions: List<String> = emptyList(),
     val likedCount: Int? = null,
     val isLiked: Boolean = false,
 ) {
@@ -284,6 +428,7 @@ private data class FlashDto(
             summary = summary,
             script = script,
             visibility = visibility,
+            permissions = permissions,
             author = user.toDomainUser(),
             userId = userId,
             likedCount = likedCount ?: 0,
@@ -308,6 +453,14 @@ private suspend fun HttpResponse.apiErrorMessage(): String? {
     return runCatching { sharkeyApiErrorMessage() }.getOrNull()
 }
 
+private fun FlashDraft.validationMessage(): String? {
+    return when {
+        title.isBlank() -> "请输入标题"
+        script.isBlank() -> "请输入脚本"
+        visibility !in setOf("public", "private") -> "不支持的可见性"
+        else -> null
+    }
+}
 
 private fun defaultFlashClient(): HttpClient {
     return HttpClient {

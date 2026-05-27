@@ -7,6 +7,7 @@ import cc.hhhl.client.model.User
 import cc.hhhl.client.repository.DiscoverRepository
 import cc.hhhl.client.repository.DiscoverRepositoryResult
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -25,19 +26,37 @@ enum class DiscoverSearchOrigin(val label: String, val apiValue: String) {
     Remote("远程", "remote"),
 }
 
+enum class DiscoverSearchOperator(val label: String) {
+    AllWords("全部词"),
+    AnyWord("任一词"),
+    ExactPhrase("精确短语"),
+}
+
 data class DiscoverAdvancedFilters(
+    val operator: DiscoverSearchOperator = DiscoverSearchOperator.AllWords,
     val origin: DiscoverSearchOrigin = DiscoverSearchOrigin.Combined,
     val username: String = "",
+    val userId: String = "",
     val domain: String = "",
+    val channelId: String = "",
     val sinceDate: String = "",
     val untilDate: String = "",
+    val excludeWords: String = "",
+    val withFiles: Boolean = false,
+    val includeReplies: Boolean = true,
 ) {
     val isActive: Boolean
-        get() = origin != DiscoverSearchOrigin.Combined ||
+        get() = operator != DiscoverSearchOperator.AllWords ||
+            origin != DiscoverSearchOrigin.Combined ||
             username.isNotBlank() ||
+            userId.isNotBlank() ||
             domain.isNotBlank() ||
+            channelId.isNotBlank() ||
             sinceDate.isNotBlank() ||
-            untilDate.isNotBlank()
+            untilDate.isNotBlank() ||
+            excludeWords.isNotBlank() ||
+            withFiles ||
+            !includeReplies
 }
 
 data class DiscoverUiState(
@@ -45,17 +64,24 @@ data class DiscoverUiState(
     val selectedMode: DiscoverSearchMode = DiscoverSearchMode.Notes,
     val filters: DiscoverAdvancedFilters = DiscoverAdvancedFilters(),
     val notes: List<Note> = emptyList(),
+    val nextNotesUntilId: String? = null,
     val users: List<User> = emptyList(),
     val trends: List<TrendingHashtag> = emptyList(),
+    val isRefreshingTrends: Boolean = false,
+    val trendErrorMessage: String? = null,
     val federationInstances: List<FederationInstance> = emptyList(),
+    val selectedFederationInstance: FederationInstance? = null,
     val isSearching: Boolean = false,
     val isLoadingMore: Boolean = false,
+    val isLoadingFederationDetail: Boolean = false,
+    val federationActionHost: String? = null,
     val endReached: Boolean = false,
     val canSearchNotes: Boolean = true,
     val canTrend: Boolean = false,
     val canViewFederation: Boolean = false,
     val hasSearched: Boolean = false,
     val errorMessage: String? = null,
+    val federationDetailMessage: String? = null,
     val requiresRelogin: Boolean = false,
 )
 
@@ -66,6 +92,68 @@ class DiscoverStateHolder(
     private val mutableState = MutableStateFlow(DiscoverUiState())
     val state: StateFlow<DiscoverUiState> = mutableState
 
+    fun refreshTrendsQuietly() {
+        val current = state.value
+        if (!current.canTrend || current.isRefreshingTrends) return
+        if (current.selectedMode == DiscoverSearchMode.Trends && current.isSearching) return
+
+        mutableState.update {
+            it.copy(
+                isRefreshingTrends = true,
+                trendErrorMessage = null,
+            )
+        }
+
+        scope.launch {
+            try {
+                when (val result = repository.loadTrends()) {
+                    is DiscoverRepositoryResult.TrendSuccess -> mutableState.update {
+                        it.copy(
+                            trends = result.trends,
+                            isRefreshingTrends = false,
+                            trendErrorMessage = null,
+                            errorMessage = if (it.selectedMode == DiscoverSearchMode.Trends) null else it.errorMessage,
+                            requiresRelogin = false,
+                        )
+                    }
+                    DiscoverRepositoryResult.Unauthorized -> mutableState.update {
+                        it.copy(
+                            isRefreshingTrends = false,
+                            trendErrorMessage = "登录已失效，请重新登录",
+                            requiresRelogin = true,
+                        )
+                    }
+                    is DiscoverRepositoryResult.Error -> mutableState.update {
+                        it.copy(
+                            isRefreshingTrends = false,
+                            trendErrorMessage = result.message,
+                            errorMessage = if (it.selectedMode == DiscoverSearchMode.Trends) result.message else it.errorMessage,
+                            requiresRelogin = false,
+                        )
+                    }
+                    else -> mutableState.update {
+                        it.copy(isRefreshingTrends = false)
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                mutableState.update {
+                    it.copy(
+                        isRefreshingTrends = false,
+                        trendErrorMessage = error.toDiscoverErrorMessage(),
+                        errorMessage = if (it.selectedMode == DiscoverSearchMode.Trends) {
+                            error.toDiscoverErrorMessage()
+                        } else {
+                            it.errorMessage
+                        },
+                        requiresRelogin = false,
+                    )
+                }
+            }
+        }
+    }
+
     fun updateQuery(query: String) {
         mutableState.update {
             if (it.query == query) {
@@ -74,8 +162,10 @@ class DiscoverStateHolder(
                 it.copy(
                     query = query,
                     notes = emptyList(),
+                    nextNotesUntilId = null,
                     users = emptyList(),
                     federationInstances = emptyList(),
+                    selectedFederationInstance = null,
                     endReached = false,
                     hasSearched = false,
                     errorMessage = null,
@@ -90,8 +180,10 @@ class DiscoverStateHolder(
             it.copy(
                 filters = filters,
                 notes = emptyList(),
+                nextNotesUntilId = null,
                 users = emptyList(),
                 federationInstances = emptyList(),
+                selectedFederationInstance = null,
                 endReached = false,
                 hasSearched = false,
                 errorMessage = null,
@@ -110,11 +202,13 @@ class DiscoverStateHolder(
         mutableState.update {
             it.copy(
                 query = "#$cleanTag",
-                selectedMode = if (it.canSearchNotes) DiscoverSearchMode.Notes else DiscoverSearchMode.Users,
+                selectedMode = DiscoverSearchMode.Notes,
                 notes = emptyList(),
+                nextNotesUntilId = null,
                 users = emptyList(),
                 trends = emptyList(),
                 federationInstances = emptyList(),
+                selectedFederationInstance = null,
                 endReached = false,
                 hasSearched = false,
                 errorMessage = null,
@@ -132,6 +226,7 @@ class DiscoverStateHolder(
                 query = cleanUsername,
                 selectedMode = DiscoverSearchMode.Users,
                 notes = emptyList(),
+                nextNotesUntilId = null,
                 users = emptyList(),
                 trends = emptyList(),
                 federationInstances = emptyList(),
@@ -160,6 +255,7 @@ class DiscoverStateHolder(
                 it.copy(
                     selectedMode = DiscoverSearchMode.Users,
                     notes = emptyList(),
+                    nextNotesUntilId = null,
                     endReached = false,
                     canSearchNotes = false,
                     canTrend = canTrend,
@@ -212,7 +308,11 @@ class DiscoverStateHolder(
         }
         if (mode == DiscoverSearchMode.Trends && !state.value.canTrend) {
             mutableState.update {
-                it.copy(errorMessage = "实例未启用趋势", requiresRelogin = false)
+                it.copy(
+                    errorMessage = "实例未启用趋势",
+                    trendErrorMessage = "实例未启用趋势",
+                    requiresRelogin = false,
+                )
             }
             return
         }
@@ -227,6 +327,7 @@ class DiscoverStateHolder(
             it.copy(
                 selectedMode = mode,
                 notes = emptyList(),
+                nextNotesUntilId = null,
                 users = emptyList(),
                 trends = emptyList(),
                 federationInstances = emptyList(),
@@ -243,29 +344,38 @@ class DiscoverStateHolder(
     }
 
     fun search() {
-        val query = state.value.query
-        if (state.value.isSearching) return
-        if (state.value.selectedMode == DiscoverSearchMode.Notes && !state.value.canSearchNotes) {
+        val current = state.value
+        val query = current.query
+        val filters = current.filters
+        val selectedMode = current.selectedMode
+        if (current.isSearching) return
+        if (
+            selectedMode == DiscoverSearchMode.Notes &&
+            !current.canSearchNotes &&
+            query.toSingleHashtagQuery() == null
+        ) {
             mutableState.update {
                 it.copy(
                     hasSearched = true,
                     notes = emptyList(),
+                    nextNotesUntilId = null,
                     errorMessage = "实例未启用帖子搜索",
                 )
             }
             return
         }
-        if (state.value.selectedMode == DiscoverSearchMode.Trends && !state.value.canTrend) {
+        if (selectedMode == DiscoverSearchMode.Trends && !current.canTrend) {
             mutableState.update {
                 it.copy(
                     hasSearched = true,
                     trends = emptyList(),
                     errorMessage = "实例未启用趋势",
+                    trendErrorMessage = "实例未启用趋势",
                 )
             }
             return
         }
-        if (state.value.selectedMode == DiscoverSearchMode.Federation && !state.value.canViewFederation) {
+        if (selectedMode == DiscoverSearchMode.Federation && !current.canViewFederation) {
             mutableState.update {
                 it.copy(
                     hasSearched = true,
@@ -281,21 +391,33 @@ class DiscoverStateHolder(
                 isSearching = true,
                 hasSearched = true,
                 endReached = false,
+                nextNotesUntilId = null,
+                selectedFederationInstance = null,
+                federationDetailMessage = null,
                 errorMessage = null,
                 requiresRelogin = false,
             )
         }
 
         scope.launch {
-            applyResult(
-                result = when (state.value.selectedMode) {
-                    DiscoverSearchMode.Notes -> repository.search(query, state.value.filters)
-                    DiscoverSearchMode.Users -> repository.searchUsers(query, state.value.filters)
-                    DiscoverSearchMode.Trends -> repository.loadTrends()
-                    DiscoverSearchMode.Federation -> repository.loadFederation(emptyList(), state.value.filters)
-                },
-                loadingMore = false,
-            )
+            try {
+                applyResult(
+                    result = when (selectedMode) {
+                        DiscoverSearchMode.Notes -> repository.search(query, filters)
+                        DiscoverSearchMode.Users -> repository.searchUsers(query, filters)
+                        DiscoverSearchMode.Trends -> repository.loadTrends()
+                        DiscoverSearchMode.Federation -> repository.loadFederation(emptyList(), filters)
+                    },
+                    loadingMore = false,
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                applyResult(
+                    result = DiscoverRepositoryResult.Error(error.toDiscoverErrorMessage()),
+                    loadingMore = false,
+                )
+            }
         }
     }
 
@@ -307,7 +429,8 @@ class DiscoverStateHolder(
             current.selectedMode == DiscoverSearchMode.Users ||
             current.selectedMode == DiscoverSearchMode.Trends ||
             current.endReached ||
-            (current.selectedMode == DiscoverSearchMode.Notes && (current.notes.isEmpty() || !current.canSearchNotes)) ||
+            (current.selectedMode == DiscoverSearchMode.Notes && !current.canSearchNotes) ||
+            (current.selectedMode == DiscoverSearchMode.Notes && current.notes.isEmpty() && current.nextNotesUntilId == null) ||
             (current.selectedMode == DiscoverSearchMode.Federation && !current.canViewFederation)
         ) {
             return
@@ -318,17 +441,104 @@ class DiscoverStateHolder(
         }
 
         scope.launch {
-            applyResult(
-                result = when (current.selectedMode) {
-                    DiscoverSearchMode.Federation -> repository.loadFederation(
-                        current.federationInstances,
-                        current.filters,
-                    )
-                    else -> repository.loadMore(current.query, current.notes, current.filters)
-                },
-                loadingMore = true,
+            try {
+                applyResult(
+                    result = when (current.selectedMode) {
+                        DiscoverSearchMode.Federation -> repository.loadFederation(
+                            current.federationInstances,
+                            current.filters,
+                        )
+                        else -> repository.loadMore(
+                            query = current.query,
+                            currentNotes = current.notes,
+                            filters = current.filters,
+                            untilId = current.nextNotesUntilId,
+                        )
+                    },
+                    loadingMore = true,
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                applyResult(
+                    result = DiscoverRepositoryResult.Error(error.toDiscoverErrorMessage()),
+                    loadingMore = true,
+                )
+            }
+        }
+    }
+
+    fun openFederationInstance(instance: FederationInstance) {
+        mutableState.update {
+            it.copy(
+                selectedFederationInstance = instance,
+                isLoadingFederationDetail = true,
+                federationDetailMessage = null,
+                errorMessage = null,
+                requiresRelogin = false,
             )
         }
+
+        scope.launch {
+            when (val result = repository.loadFederationInstance(instance.host)) {
+                is DiscoverRepositoryResult.FederationInstanceSuccess -> mutableState.update {
+                    it.copy(
+                        selectedFederationInstance = result.instance,
+                        federationInstances = it.federationInstances.replaceFederationInstance(result.instance),
+                        isLoadingFederationDetail = false,
+                        federationDetailMessage = null,
+                        requiresRelogin = false,
+                    )
+                }
+                DiscoverRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(
+                        isLoadingFederationDetail = false,
+                        federationDetailMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is DiscoverRepositoryResult.Error -> mutableState.update {
+                    it.copy(
+                        isLoadingFederationDetail = false,
+                        federationDetailMessage = result.message,
+                        requiresRelogin = false,
+                    )
+                }
+                else -> mutableState.update {
+                    it.copy(isLoadingFederationDetail = false)
+                }
+            }
+        }
+    }
+
+    fun closeFederationInstance() {
+        mutableState.update {
+            it.copy(
+                selectedFederationInstance = null,
+                isLoadingFederationDetail = false,
+                federationActionHost = null,
+                federationDetailMessage = null,
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    fun toggleFederationSilence(host: String) {
+        val instance = state.value.findFederationInstance(host) ?: return
+        updateFederationInstance(
+            host = instance.host,
+            isSilenced = !instance.isSilenced,
+            isSuspended = instance.isSuspended || instance.isBlocked,
+        )
+    }
+
+    fun toggleFederationBlock(host: String) {
+        val instance = state.value.findFederationInstance(host) ?: return
+        updateFederationInstance(
+            host = instance.host,
+            isSilenced = instance.isSilenced,
+            isSuspended = !(instance.isSuspended || instance.isBlocked),
+        )
     }
 
     fun applyNoteMutation(mutation: NoteLocalMutation) {
@@ -348,6 +558,7 @@ class DiscoverStateHolder(
             is DiscoverRepositoryResult.Success -> mutableState.update {
                 it.copy(
                     notes = result.notes,
+                    nextNotesUntilId = result.nextUntilId,
                     users = emptyList(),
                     trends = emptyList(),
                     federationInstances = emptyList(),
@@ -362,6 +573,7 @@ class DiscoverStateHolder(
                 it.copy(
                     users = result.users,
                     notes = emptyList(),
+                    nextNotesUntilId = null,
                     trends = emptyList(),
                     federationInstances = emptyList(),
                     isSearching = false,
@@ -375,8 +587,11 @@ class DiscoverStateHolder(
                 it.copy(
                     trends = result.trends,
                     notes = emptyList(),
+                    nextNotesUntilId = null,
                     users = emptyList(),
                     federationInstances = emptyList(),
+                    isRefreshingTrends = false,
+                    trendErrorMessage = null,
                     isSearching = false,
                     isLoadingMore = false,
                     endReached = true,
@@ -388,12 +603,33 @@ class DiscoverStateHolder(
                 it.copy(
                     federationInstances = result.instances,
                     notes = emptyList(),
+                    nextNotesUntilId = null,
                     users = emptyList(),
                     trends = emptyList(),
                     isSearching = false,
                     isLoadingMore = false,
                     endReached = result.endReached,
                     errorMessage = null,
+                    requiresRelogin = false,
+                )
+            }
+            is DiscoverRepositoryResult.FederationInstanceSuccess -> mutableState.update {
+                it.copy(
+                    selectedFederationInstance = result.instance,
+                    federationInstances = it.federationInstances.replaceFederationInstance(result.instance),
+                    isSearching = false,
+                    isLoadingMore = false,
+                    isLoadingFederationDetail = false,
+                    federationDetailMessage = null,
+                    requiresRelogin = false,
+                )
+            }
+            DiscoverRepositoryResult.FederationActionSuccess -> mutableState.update {
+                it.copy(
+                    isSearching = false,
+                    isLoadingMore = false,
+                    federationActionHost = null,
+                    federationDetailMessage = "联邦设置已更新",
                     requiresRelogin = false,
                 )
             }
@@ -415,4 +651,83 @@ class DiscoverStateHolder(
             }
         }
     }
+
+    private fun updateFederationInstance(
+        host: String,
+        isSilenced: Boolean,
+        isSuspended: Boolean,
+    ) {
+        if (state.value.federationActionHost != null) return
+        mutableState.update {
+            it.copy(
+                federationActionHost = host,
+                federationDetailMessage = null,
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+
+        scope.launch {
+            when (val result = repository.updateFederationInstance(host, isSilenced, isSuspended)) {
+                DiscoverRepositoryResult.FederationActionSuccess -> {
+                    val current = state.value.findFederationInstance(host)
+                    val updated = current?.copy(
+                        isSilenced = isSilenced,
+                        isSuspended = isSuspended,
+                        isBlocked = if (isSuspended) current.isBlocked else false,
+                    )
+                    mutableState.update {
+                        it.copy(
+                            federationInstances = if (updated == null) {
+                                it.federationInstances
+                            } else {
+                                it.federationInstances.replaceFederationInstance(updated)
+                            },
+                            selectedFederationInstance = updated ?: it.selectedFederationInstance,
+                            federationActionHost = null,
+                            federationDetailMessage = "联邦设置已更新",
+                            requiresRelogin = false,
+                        )
+                    }
+                }
+                DiscoverRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(
+                        federationActionHost = null,
+                        federationDetailMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is DiscoverRepositoryResult.Error -> mutableState.update {
+                    it.copy(
+                        federationActionHost = null,
+                        federationDetailMessage = result.message,
+                        requiresRelogin = false,
+                    )
+                }
+                else -> mutableState.update { it.copy(federationActionHost = null) }
+            }
+        }
+    }
+}
+
+private fun Throwable.toDiscoverErrorMessage(): String {
+    return message?.takeIf { it.isNotBlank() } ?: "搜索失败，请稍后重试"
+}
+
+private fun String.toSingleHashtagQuery(): String? {
+    val cleanValue = trim()
+    if (!cleanValue.startsWith("#") || cleanValue.any { it.isWhitespace() }) return null
+    return cleanValue.removePrefix("#").takeIf { it.isNotBlank() }
+}
+
+private fun DiscoverUiState.findFederationInstance(host: String): FederationInstance? {
+    return selectedFederationInstance?.takeIf { it.host == host }
+        ?: federationInstances.firstOrNull { it.host == host }
+}
+
+private fun List<FederationInstance>.replaceFederationInstance(
+    instance: FederationInstance,
+): List<FederationInstance> {
+    val index = indexOfFirst { it.id == instance.id || it.host == instance.host }
+    return if (index == -1) this else toMutableList().also { it[index] = instance }
 }

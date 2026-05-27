@@ -1,5 +1,8 @@
 package cc.hhhl.client.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class InstanceMeta(
     val name: String,
     val description: String,
@@ -13,6 +16,7 @@ data class InstanceMeta(
     val capabilities: InstanceCapabilities = InstanceCapabilities(),
 )
 
+@Immutable
 data class InstanceCapabilities(
     val miauthEnabled: Boolean = true,
     val localTimelineAvailable: Boolean = true,

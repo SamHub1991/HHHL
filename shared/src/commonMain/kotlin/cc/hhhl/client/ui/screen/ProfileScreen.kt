@@ -1,40 +1,68 @@
 package cc.hhhl.client.ui.screen
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.RssFeed
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import cc.hhhl.client.ui.component.HhhlTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.vector.ImageVector
 import coil3.compose.AsyncImage
 import cc.hhhl.client.api.USER_PROFILE_DESCRIPTION_MAX_LENGTH
 import cc.hhhl.client.api.USER_PROFILE_NAME_MAX_LENGTH
 import cc.hhhl.client.display.TimelineDensity
-import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.InstanceCapabilities
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.User
@@ -43,11 +71,14 @@ import cc.hhhl.client.state.UserProfileUiState
 import cc.hhhl.client.theme.HhhlThemePreset
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.Avatar
+import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
+import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
 import cc.hhhl.client.ui.component.MediaPreviewSession
@@ -55,6 +86,15 @@ import cc.hhhl.client.ui.component.NoteRow
 import cc.hhhl.client.ui.component.NoteRowDensity
 import cc.hhhl.client.ui.component.ThemePicker
 import cc.hhhl.client.ui.component.TimelineDensityPicker
+
+internal val ProfileQuickActionsHorizontalPadding = 16.dp
+internal val ProfileQuickActionsCardInnerPadding = 10.dp
+internal val ProfilePrimaryShortcutTileHeight = 96.dp
+internal val ProfileWorkspaceShortcutTileHeight = 58.dp
+internal val ProfileShortcutTileCornerRadius = 14.dp
+internal val ProfileShortcutIconContainerSize = 32.dp
+internal val ProfileShortcutIconSize = 17.dp
+private const val ProfileDefaultBannerImageUrl = "https://dc.hhhl.cc/client-assets/icon.png"
 
 @Composable
 fun ProfileScreen(
@@ -91,11 +131,16 @@ fun ProfileScreen(
     onMuteToggle: () -> Unit = {},
     onBlockToggle: () -> Unit = {},
     onReportUser: () -> Unit = {},
+    onOpenChatWithUser: (User) -> Unit = {},
+    isSpecialCareUser: (String) -> Boolean = { false },
+    onToggleSpecialCareUser: ((String) -> Boolean)? = null,
     onUpdateProfile: (String, String) -> Unit = { _, _ -> },
+    onChangeBanner: (() -> Unit)? = null,
     onOpenSocial: (UserSocialKind) -> Unit = {},
     onOpenDrive: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onOpenRelationshipManagement: () -> Unit = {},
+    onOpenAchievements: () -> Unit = {},
     onOpenFavoriteNotes: () -> Unit = {},
     onOpenLists: () -> Unit = {},
     onOpenFollowRequests: () -> Unit = {},
@@ -106,14 +151,18 @@ fun ProfileScreen(
     onOpenGallery: () -> Unit = {},
     onOpenFlash: () -> Unit = {},
     onOpenAnnouncements: () -> Unit = {},
+    onOpenProfileNotes: () -> Unit = {},
     onThemeSelected: (HhhlThemePreset) -> Unit = {},
     onTimelineDensitySelected: (TimelineDensity) -> Unit = {},
     onClearMessage: () -> Unit = {},
     onLogout: () -> Unit = {},
 ) {
-    val user = state?.user ?: if (state == null) FakeData.me else null
+    val user = state?.user
     var profileEditorOpen by remember(user?.id) { mutableStateOf(false) }
     var profileEditSubmitted by remember(user?.id) { mutableStateOf(false) }
+    val profileTimelineNotes = remember(user?.pinnedNotes, state?.notes) {
+        filteredProfileTimelineNotes(user, state?.notes.orEmpty())
+    }
 
     LaunchedEffect(state?.isProfileSaving, state?.profileEditErrorMessage) {
         if (
@@ -139,10 +188,12 @@ fun ProfileScreen(
         }
         LazyColumn {
             if (state?.isLoading == true && user == null) {
-                item { ProfileStatusRow(text = "正在加载资料...", loading = true) }
+                item(contentType = "profile-status") {
+                    ProfileStatusRow(text = "正在加载资料...", loading = true)
+                }
             }
             state?.errorMessage?.let { message ->
-                item {
+                item(contentType = "profile-status") {
                     ProfileStatusRow(
                         text = message,
                         actionText = "重试",
@@ -151,9 +202,9 @@ fun ProfileScreen(
                 }
             }
             state?.message?.let { message ->
-                item { ProfileStatusRow(text = message) }
+                item(contentType = "profile-status") { ProfileStatusRow(text = message) }
             }
-            item {
+            item(contentType = "profile-header") {
                 if (user != null) {
                     Column(
                         modifier = Modifier
@@ -166,16 +217,23 @@ fun ProfileScreen(
                             isOwnProfile = isOwnProfile,
                             isMuted = state?.relationship?.isMuted == true,
                             isBlocking = state?.relationship?.isBlocking == true,
+                            isSpecialCare = isSpecialCareUser(user.id),
                             isChanging = state?.isRelationshipChanging == true,
                             isProfileSaving = state?.isProfileSaving == true,
+                            canChangeBanner = isOwnProfile && onChangeBanner != null,
                             onFollowToggle = onFollowToggle,
                             onMuteToggle = onMuteToggle,
                             onBlockToggle = onBlockToggle,
                             onReportUser = onReportUser,
+                            onOpenChatWithUser = { onOpenChatWithUser(user) },
+                            onToggleSpecialCare = onToggleSpecialCareUser?.let { toggle ->
+                                { toggle(user.id) }
+                            },
                             onEditProfile = {
                                 onClearMessage()
                                 profileEditorOpen = true
                             },
+                            onChangeBanner = onChangeBanner,
                         )
                         if (user.bio.isNotBlank()) {
                             Text(
@@ -193,12 +251,15 @@ fun ProfileScreen(
                                 capabilities = capabilities,
                                 selectedTheme = selectedTheme,
                                 selectedTimelineDensity = selectedTimelineDensity,
+                                profilePostsText = profilePostsShortcutText(user, state),
                                 onRefresh = onRefresh,
+                                onOpenProfileNotes = onOpenProfileNotes,
                                 onOpenDrive = onOpenDrive,
                                 onOpenSettings = onOpenSettings,
                                 onOpenFlash = onOpenFlash,
                                 onOpenAnnouncements = onOpenAnnouncements,
                                 onOpenRelationshipManagement = onOpenRelationshipManagement,
+                                onOpenAchievements = onOpenAchievements,
                                 onOpenFavoriteNotes = onOpenFavoriteNotes,
                                 onOpenFollowRequests = onOpenFollowRequests,
                                 onOpenLists = onOpenLists,
@@ -216,100 +277,35 @@ fun ProfileScreen(
                     HhhlDivider()
                 }
             }
-            if (state == null) {
-                items(FakeData.timeline, key = { "profile-${it.id}" }) { note ->
-                    NoteRow(
-                        note = note,
-                        onClick = onOpenNote,
-                        onOpenUser = onOpenUser,
-                        onOpenMedia = onOpenMedia,
-                        onOpenMediaPreview = onOpenMediaPreview,
-                        onOpenMention = onOpenMention,
-                        onOpenHashtag = onOpenHashtag,
-                        onVotePoll = onVotePoll,
-                        density = noteRowDensity,
-                    )
-                }
-            } else if (user != null) {
-                if (user.pinnedNotes.isNotEmpty()) {
-                    item { ProfileStatusRow(text = "置顶") }
-                    items(user.pinnedNotes, key = { "profile-pinned-${it.id}" }) { note ->
-                        NoteRow(
-                            note = note,
-                            onClick = onOpenNote,
-                            onOpenUser = onOpenUser,
-                            onReply = onReply,
-                            onRenote = onRenote,
-                            onQuote = onQuote,
-                            onReact = onReact,
-                            onDeleteReaction = onDeleteReaction,
-                            onFavorite = onFavorite,
-                            onAddToClip = onAddToClip,
-                            onDelete = onDelete,
-                            onOpenMedia = onOpenMedia,
-                            onOpenMediaPreview = onOpenMediaPreview,
-                            onOpenMention = onOpenMention,
-                            onOpenHashtag = onOpenHashtag,
-                            onVotePoll = onVotePoll,
-                            reactionOptions = reactionOptions,
-                            recentReactions = recentReactions,
-                            isActionPending = isActionPending(note.id),
-                            canDelete = canDeleteAuthor(note.author.id),
-                            density = noteRowDensity,
-                        )
-                    }
-                }
-                if (state.isLoadingNotes && state.notes.isEmpty()) {
-                    item { ProfileStatusRow(text = "正在加载帖子...", loading = true) }
-                }
-                state.notesErrorMessage?.let { message ->
-                    item {
-                        ProfileStatusRow(
-                            text = message,
-                            actionText = "重试",
-                            onAction = onRefresh,
-                        )
-                    }
-                }
-                if (!state.isLoadingNotes && state.notes.isEmpty() && state.notesErrorMessage == null) {
-                    item { ProfileStatusRow(text = "还没有帖子") }
-                }
-                val pinnedNoteIds = user.pinnedNotes.map { it.id }.toSet()
-                val timelineNotes = state.notes.filterNot { it.id in pinnedNoteIds }
-                items(timelineNotes, key = { "profile-note-${it.id}" }) { note ->
-                    NoteRow(
-                        note = note,
-                        onClick = onOpenNote,
-                        onOpenUser = onOpenUser,
-                        onReply = onReply,
-                        onRenote = onRenote,
-                        onQuote = onQuote,
-                        onReact = onReact,
-                        onDeleteReaction = onDeleteReaction,
-                        onFavorite = onFavorite,
-                        onAddToClip = onAddToClip,
-                        onDelete = onDelete,
-                        onOpenMedia = onOpenMedia,
-                        onOpenMediaPreview = onOpenMediaPreview,
-                        onOpenMention = onOpenMention,
-                        onOpenHashtag = onOpenHashtag,
-                        onVotePoll = onVotePoll,
-                        reactionOptions = reactionOptions,
-                        recentReactions = recentReactions,
-                        isActionPending = isActionPending(note.id),
-                        canDelete = canDeleteAuthor(note.author.id),
-                        density = noteRowDensity,
-                    )
-                }
-                if (state.notes.isNotEmpty()) {
-                    item {
-                        ProfileStatusRow(
-                            text = if (state.isLoadingMoreNotes) "正在加载更多..." else "加载更多",
-                            loading = state.isLoadingMoreNotes,
-                            onAction = if (state.isLoadingMoreNotes) null else onLoadMoreNotes,
-                        )
-                    }
-                }
+            if (!isOwnProfile) {
+                profileNoteItems(
+                    state = state,
+                    user = user,
+                    timelineNotes = profileTimelineNotes,
+                    onRefresh = onRefresh,
+                    onLoadMoreNotes = onLoadMoreNotes,
+                    onOpenNote = onOpenNote,
+                    onOpenUser = onOpenUser,
+                    onReply = onReply,
+                    onRenote = onRenote,
+                    onQuote = onQuote,
+                    onReact = onReact,
+                    onDeleteReaction = onDeleteReaction,
+                    onFavorite = onFavorite,
+                    onAddToClip = onAddToClip,
+                    onDelete = onDelete,
+                    onOpenMedia = onOpenMedia,
+                    onOpenMediaPreview = onOpenMediaPreview,
+                    onOpenMention = onOpenMention,
+                    onOpenHashtag = onOpenHashtag,
+                    onVotePoll = onVotePoll,
+                    reactionOptions = reactionOptions,
+                    recentReactions = recentReactions,
+                    isActionPending = isActionPending,
+                    canDeleteAuthor = canDeleteAuthor,
+                    noteRowDensity = noteRowDensity,
+                    showProfileLoadingWhenUserMissing = false,
+                )
             }
         }
     }
@@ -326,12 +322,317 @@ fun ProfileScreen(
             onSubmit = { name, description ->
                 profileEditSubmitted = true
                 onUpdateProfile(name, description)
-                if (state == null) {
-                    profileEditorOpen = false
-                    profileEditSubmitted = false
-                }
             },
         )
+    }
+}
+
+@Composable
+fun ProfileNotesScreen(
+    state: UserProfileUiState? = null,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit = {},
+    onLoadMoreNotes: () -> Unit = {},
+    onOpenNote: (String) -> Unit = {},
+    onOpenUser: (String) -> Unit = {},
+    onReply: (String) -> Unit = {},
+    onRenote: (String) -> Unit = {},
+    onQuote: (String) -> Unit = {},
+    onReact: (String, String) -> Unit = { _, _ -> },
+    onDeleteReaction: (String, String) -> Unit = { _, _ -> },
+    onFavorite: (String) -> Unit = {},
+    onAddToClip: ((Note) -> Unit)? = null,
+    onDelete: (String) -> Unit = {},
+    onOpenMedia: (String) -> Unit = {},
+    onOpenMediaPreview: ((MediaPreviewSession) -> Unit)? = null,
+    onOpenMention: (String) -> Unit = {},
+    onOpenHashtag: (String) -> Unit = {},
+    onVotePoll: (String, Int) -> Unit = { _, _ -> },
+    reactionOptions: List<String> = emptyList(),
+    recentReactions: List<String> = emptyList(),
+    isActionPending: (String) -> Boolean = { false },
+    canDeleteAuthor: (String) -> Boolean = { false },
+    noteRowDensity: NoteRowDensity = NoteRowDensity.Comfortable,
+) {
+    val user = state?.user
+    val profileTimelineNotes = remember(user?.pinnedNotes, state?.notes) {
+        filteredProfileTimelineNotes(user, state?.notes.orEmpty())
+    }
+    val listState = rememberLazyListState()
+    var lastAutoLoadNoteCount by remember(user?.id) { mutableStateOf(0) }
+
+    AutoLoadMoreEffect(
+        listState = listState,
+        itemCount = profileTimelineNotes.size,
+        isLoadingMore = state?.isLoadingMoreNotes == true || profileTimelineNotes.isEmpty(),
+        onLoadMore = {
+            if (profileTimelineNotes.size != lastAutoLoadNoteCount) {
+                lastAutoLoadNoteCount = profileTimelineNotes.size
+                onLoadMoreNotes()
+            }
+        },
+    )
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        HhhlTopBar(
+            title = "我的帖子",
+            supportingText = profilePostsScreenText(user, state),
+            navigation = { HhhlBackButton(onClick = onBack) },
+            action = {
+                HhhlIconActionButton(
+                    icon = Icons.Filled.Refresh,
+                    contentDescription = if (state?.isLoadingNotes == true) "同步中" else "刷新帖子",
+                    emphasized = true,
+                    enabled = state?.isLoadingNotes != true,
+                    onClick = onRefresh,
+                )
+            },
+        )
+        HhhlDivider()
+        LazyColumn(state = listState) {
+            profileNoteItems(
+                state = state,
+                user = user,
+                timelineNotes = profileTimelineNotes,
+                onRefresh = onRefresh,
+                onLoadMoreNotes = onLoadMoreNotes,
+                onOpenNote = onOpenNote,
+                onOpenUser = onOpenUser,
+                onReply = onReply,
+                onRenote = onRenote,
+                onQuote = onQuote,
+                onReact = onReact,
+                onDeleteReaction = onDeleteReaction,
+                onFavorite = onFavorite,
+                onAddToClip = onAddToClip,
+                onDelete = onDelete,
+                onOpenMedia = onOpenMedia,
+                onOpenMediaPreview = onOpenMediaPreview,
+                onOpenMention = onOpenMention,
+                onOpenHashtag = onOpenHashtag,
+                onVotePoll = onVotePoll,
+                reactionOptions = reactionOptions,
+                recentReactions = recentReactions,
+                isActionPending = isActionPending,
+                canDeleteAuthor = canDeleteAuthor,
+                noteRowDensity = noteRowDensity,
+                showProfileLoadingWhenUserMissing = true,
+            )
+        }
+    }
+}
+
+private fun LazyListScope.profileNoteItems(
+    state: UserProfileUiState?,
+    user: User?,
+    timelineNotes: List<Note>,
+    onRefresh: () -> Unit,
+    onLoadMoreNotes: () -> Unit,
+    onOpenNote: (String) -> Unit,
+    onOpenUser: (String) -> Unit,
+    onReply: (String) -> Unit,
+    onRenote: (String) -> Unit,
+    onQuote: (String) -> Unit,
+    onReact: (String, String) -> Unit,
+    onDeleteReaction: (String, String) -> Unit,
+    onFavorite: (String) -> Unit,
+    onAddToClip: ((Note) -> Unit)?,
+    onDelete: (String) -> Unit,
+    onOpenMedia: (String) -> Unit,
+    onOpenMediaPreview: ((MediaPreviewSession) -> Unit)?,
+    onOpenMention: (String) -> Unit,
+    onOpenHashtag: (String) -> Unit,
+    onVotePoll: (String, Int) -> Unit,
+    reactionOptions: List<String>,
+    recentReactions: List<String>,
+    isActionPending: (String) -> Boolean,
+    canDeleteAuthor: (String) -> Boolean,
+    noteRowDensity: NoteRowDensity,
+    showProfileLoadingWhenUserMissing: Boolean,
+) {
+    if (state == null) {
+        if (showProfileLoadingWhenUserMissing) {
+            item(contentType = "profile-status") { ProfileStatusRow(text = "正在加载资料...", loading = true) }
+        }
+        return
+    }
+
+    if (user == null) {
+        if (showProfileLoadingWhenUserMissing) {
+            item(contentType = "profile-status") { ProfileStatusRow(text = "正在加载资料...", loading = true) }
+        }
+        return
+    }
+
+    val hasPinnedNotes = user.pinnedNotes.isNotEmpty()
+    if (hasPinnedNotes) {
+        item(contentType = "profile-status") { ProfileStatusRow(text = "置顶") }
+        items(
+            items = user.pinnedNotes,
+            key = { "profile-pinned-${it.id}" },
+            contentType = { "profile-pinned-note" },
+        ) { note ->
+            ProfileNoteRow(
+                note = note,
+                onOpenNote = onOpenNote,
+                onOpenUser = onOpenUser,
+                onReply = onReply,
+                onRenote = onRenote,
+                onQuote = onQuote,
+                onReact = onReact,
+                onDeleteReaction = onDeleteReaction,
+                onFavorite = onFavorite,
+                onAddToClip = onAddToClip,
+                onDelete = onDelete,
+                onOpenMedia = onOpenMedia,
+                onOpenMediaPreview = onOpenMediaPreview,
+                onOpenMention = onOpenMention,
+                onOpenHashtag = onOpenHashtag,
+                onVotePoll = onVotePoll,
+                reactionOptions = reactionOptions,
+                recentReactions = recentReactions,
+                isActionPending = isActionPending,
+                canDeleteAuthor = canDeleteAuthor,
+                noteRowDensity = noteRowDensity,
+            )
+        }
+    }
+    if (state.isLoadingNotes && state.notes.isEmpty()) {
+        item(contentType = "profile-status") { ProfileStatusRow(text = "正在加载帖子...", loading = true) }
+    }
+    state.notesErrorMessage?.let { message ->
+        item(contentType = "profile-status") {
+            ProfileStatusRow(
+                text = message,
+                actionText = "重试",
+                onAction = onRefresh,
+            )
+        }
+    }
+    if (!state.isLoadingNotes && state.notes.isEmpty() && !hasPinnedNotes && state.notesErrorMessage == null) {
+        item(contentType = "profile-status") { ProfileStatusRow(text = "还没有帖子") }
+    }
+    items(
+        items = timelineNotes,
+        key = { "profile-note-${it.id}" },
+        contentType = { "profile-note" },
+    ) { note ->
+        ProfileNoteRow(
+            note = note,
+            onOpenNote = onOpenNote,
+            onOpenUser = onOpenUser,
+            onReply = onReply,
+            onRenote = onRenote,
+            onQuote = onQuote,
+            onReact = onReact,
+            onDeleteReaction = onDeleteReaction,
+            onFavorite = onFavorite,
+            onAddToClip = onAddToClip,
+            onDelete = onDelete,
+            onOpenMedia = onOpenMedia,
+            onOpenMediaPreview = onOpenMediaPreview,
+            onOpenMention = onOpenMention,
+            onOpenHashtag = onOpenHashtag,
+            onVotePoll = onVotePoll,
+            reactionOptions = reactionOptions,
+            recentReactions = recentReactions,
+            isActionPending = isActionPending,
+            canDeleteAuthor = canDeleteAuthor,
+            noteRowDensity = noteRowDensity,
+        )
+    }
+    if (state.notes.isNotEmpty() && state.isLoadingMoreNotes) {
+        item(contentType = "profile-status") {
+            ProfileStatusRow(
+                text = "正在加载更多...",
+                loading = true,
+            )
+        }
+    }
+}
+
+private fun filteredProfileTimelineNotes(
+    user: User?,
+    notes: List<Note>,
+): List<Note> {
+    if (user == null || notes.isEmpty() || user.pinnedNotes.isEmpty()) return notes
+    val pinnedNoteIds = user.pinnedNotes.mapTo(HashSet(user.pinnedNotes.size)) { it.id }
+    val filtered = notes.filterNot { it.id in pinnedNoteIds }
+    return if (filtered.size == notes.size) notes else filtered
+}
+
+@Composable
+private fun ProfileNoteRow(
+    note: Note,
+    onOpenNote: (String) -> Unit,
+    onOpenUser: (String) -> Unit,
+    onReply: (String) -> Unit,
+    onRenote: (String) -> Unit,
+    onQuote: (String) -> Unit,
+    onReact: (String, String) -> Unit,
+    onDeleteReaction: (String, String) -> Unit,
+    onFavorite: (String) -> Unit,
+    onAddToClip: ((Note) -> Unit)?,
+    onDelete: (String) -> Unit,
+    onOpenMedia: (String) -> Unit,
+    onOpenMediaPreview: ((MediaPreviewSession) -> Unit)?,
+    onOpenMention: (String) -> Unit,
+    onOpenHashtag: (String) -> Unit,
+    onVotePoll: (String, Int) -> Unit,
+    reactionOptions: List<String>,
+    recentReactions: List<String>,
+    isActionPending: (String) -> Boolean,
+    canDeleteAuthor: (String) -> Boolean,
+    noteRowDensity: NoteRowDensity,
+) {
+    NoteRow(
+        note = note,
+        onClick = onOpenNote,
+        onOpenUser = onOpenUser,
+        onReply = onReply,
+        onRenote = onRenote,
+        onQuote = onQuote,
+        onReact = onReact,
+        onDeleteReaction = onDeleteReaction,
+        onFavorite = onFavorite,
+        onAddToClip = onAddToClip,
+        onDelete = onDelete,
+        onOpenMedia = onOpenMedia,
+        onOpenMediaPreview = onOpenMediaPreview,
+        onOpenMention = onOpenMention,
+        onOpenHashtag = onOpenHashtag,
+        onVotePoll = onVotePoll,
+        reactionOptions = reactionOptions,
+        recentReactions = recentReactions,
+        isActionPending = isActionPending(note.id),
+        canDelete = canDeleteAuthor(note.author.id),
+        density = noteRowDensity,
+    )
+}
+
+private fun profilePostsShortcutText(
+    user: User?,
+    state: UserProfileUiState?,
+): String {
+    return when {
+        state?.isLoadingNotes == true && state.notes.isEmpty() -> "正在同步帖子"
+        state?.notesErrorMessage != null -> "同步失败，点按进入重试"
+        user == null -> "查看发布内容"
+        user.notesCount > 0 -> "${user.notesCount} 条帖子"
+        else -> "查看发布内容"
+    }
+}
+
+private fun profilePostsScreenText(
+    user: User?,
+    state: UserProfileUiState?,
+): String {
+    return when {
+        state?.isLoadingNotes == true && state.notes.isEmpty() -> "正在同步帖子"
+        state?.notesErrorMessage != null -> "同步失败"
+        user == null -> "发布内容"
+        user.notesCount > 0 -> "${user.notesCount} 条帖子"
+        else -> "发布内容"
     }
 }
 
@@ -341,16 +642,26 @@ private fun ProfileHeaderIdentity(
     isOwnProfile: Boolean,
     isMuted: Boolean,
     isBlocking: Boolean,
+    isSpecialCare: Boolean,
     isChanging: Boolean,
     isProfileSaving: Boolean,
+    canChangeBanner: Boolean,
     onFollowToggle: () -> Unit,
     onMuteToggle: () -> Unit,
     onBlockToggle: () -> Unit,
     onReportUser: () -> Unit,
+    onOpenChatWithUser: () -> Unit,
+    onToggleSpecialCare: (() -> Unit)?,
     onEditProfile: () -> Unit,
+    onChangeBanner: (() -> Unit)?,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        ProfileBanner(bannerUrl = user.bannerUrl)
+        ProfileBanner(
+            bannerUrl = user.bannerUrl,
+            canChangeBanner = canChangeBanner,
+            isChangingBanner = isProfileSaving,
+            onChangeBanner = onChangeBanner,
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -382,23 +693,46 @@ private fun ProfileHeaderIdentity(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (!isOwnProfile && onToggleSpecialCare != null) {
+                    HhhlActionChip(
+                        label = userSocialSpecialCareActionLabel(isSpecialCare),
+                        emphasized = isSpecialCare,
+                        enabled = !isChanging,
+                        onClick = onToggleSpecialCare,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                if (!isOwnProfile && isSpecialCare) {
+                    Text(
+                        text = "特别关心提醒已开启",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             if (!isOwnProfile) {
                 ProfileRelationshipActions(
                     isFollowing = user.isFollowing,
                     isMuted = isMuted,
                     isBlocking = isBlocking,
+                    isSpecialCare = isSpecialCare,
                     isChanging = isChanging,
                     onFollowToggle = onFollowToggle,
                     onMuteToggle = onMuteToggle,
                     onBlockToggle = onBlockToggle,
                     onReportUser = onReportUser,
+                    onOpenChatWithUser = onOpenChatWithUser,
+                    onToggleSpecialCare = onToggleSpecialCare,
                 )
             } else {
                 HhhlActionChip(
-                    label = if (isProfileSaving) "保存中" else "编辑",
+                    label = if (isProfileSaving) "保存中" else "编辑资料",
                     enabled = !isProfileSaving,
                     onClick = onEditProfile,
+                    modifier = Modifier.padding(start = 4.dp),
                 )
             }
         }
@@ -481,7 +815,7 @@ private fun ProfileEditDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            HhhlTextButton(
                 onClick = { onSubmit(cleanName, cleanDescription) },
                 enabled = canSubmit,
             ) {
@@ -489,7 +823,7 @@ private fun ProfileEditDialog(
             }
         },
         dismissButton = {
-            TextButton(
+            HhhlTextButton(
                 onClick = onDismiss,
                 enabled = !isSaving,
             ) {
@@ -548,12 +882,15 @@ private fun ProfileQuickActions(
     capabilities: InstanceCapabilities,
     selectedTheme: HhhlThemePreset,
     selectedTimelineDensity: TimelineDensity,
+    profilePostsText: String,
     onRefresh: () -> Unit,
+    onOpenProfileNotes: () -> Unit,
     onOpenDrive: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenFlash: () -> Unit,
     onOpenAnnouncements: () -> Unit,
     onOpenRelationshipManagement: () -> Unit,
+    onOpenAchievements: () -> Unit,
     onOpenFavoriteNotes: () -> Unit,
     onOpenFollowRequests: () -> Unit,
     onOpenLists: () -> Unit,
@@ -566,13 +903,18 @@ private fun ProfileQuickActions(
     onTimelineDensitySelected: (TimelineDensity) -> Unit,
     onLogout: () -> Unit,
 ) {
-    val primaryActions = profilePrimaryActions(capabilities)
-    val accountActions = profileAccountMenuActions(
-        onOpenFavoriteNotes = onOpenFavoriteNotes,
-        onOpenFollowRequests = onOpenFollowRequests,
+    var appearanceDialogOpen by remember { mutableStateOf(false) }
+    var logoutDialogOpen by remember { mutableStateOf(false) }
+    val primaryShortcuts = profilePrimaryShortcuts(
+        profilePostsText = profilePostsText,
+        onOpenProfileNotes = onOpenProfileNotes,
+        onOpenDrive = onOpenDrive,
+        onOpenSettings = onOpenSettings,
     )
-    val workspaceActions = profileWorkspaceMenuActions(
+    val workspaceShortcuts = profileWorkspaceShortcuts(
         capabilities = capabilities,
+        onOpenFavoriteNotes = onOpenFavoriteNotes,
+        onOpenAchievements = onOpenAchievements,
         onOpenLists = onOpenLists,
         onOpenClips = onOpenClips,
         onOpenAntennas = onOpenAntennas,
@@ -580,85 +922,449 @@ private fun ProfileQuickActions(
         onOpenPages = onOpenPages,
         onOpenGallery = onOpenGallery,
     )
-    FlowRow(
+    val moreActions = profileMoreMenuActions(
+        selectedTheme = selectedTheme,
+        selectedTimelineDensity = selectedTimelineDensity,
+        onRefresh = onRefresh,
+        onOpenFollowRequests = onOpenFollowRequests,
+        onOpenRelationshipManagement = onOpenRelationshipManagement,
+        onOpenFlash = onOpenFlash,
+        onOpenAnnouncements = onOpenAnnouncements,
+        onOpenAppearance = { appearanceDialogOpen = true },
+        onLogout = { logoutDialogOpen = true },
+    )
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = ProfileQuickActionsHorizontalPadding)
+            .padding(vertical = ProfileQuickActionsCardInnerPadding),
+        verticalArrangement = Arrangement.spacedBy(11.dp),
     ) {
-        primaryActions.forEach { action ->
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(
+                    text = "快捷入口",
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
             HhhlActionChip(
-                label = action.label,
-                emphasized = action.emphasized,
-                onClick = when (action.key) {
-                    ProfileActionKey.Refresh -> onRefresh
-                    ProfileActionKey.Drive -> onOpenDrive
-                    ProfileActionKey.Settings -> onOpenSettings
-                    else -> onRefresh
-                },
+                label = "刷新",
+                emphasized = true,
+                onClick = onRefresh,
+                modifier = Modifier.widthIn(max = 80.dp),
+            )
+            HhhlOverflowMenu(
+                actions = moreActions,
+                label = "更多入口",
             )
         }
-        HhhlOverflowMenu(
-            actions = accountActions,
-            label = "打开账号内容",
-        )
-        HhhlOverflowMenu(
-            actions = workspaceActions,
-            label = "打开工作区",
-        )
-        ProfileToolMenu(
+
+        ProfileShortcutGrid(primaryShortcuts, columns = 3, compact = false)
+        ProfileShortcutGroupLabel("工作区")
+        ProfileShortcutGrid(workspaceShortcuts, columns = 2, compact = true)
+    }
+
+    if (appearanceDialogOpen) {
+        ProfileAppearanceDialog(
             selectedTheme = selectedTheme,
             selectedTimelineDensity = selectedTimelineDensity,
             onThemeSelected = onThemeSelected,
             onTimelineDensitySelected = onTimelineDensitySelected,
-            onOpenFlash = onOpenFlash,
-            onOpenAnnouncements = onOpenAnnouncements,
-            onOpenRelationshipManagement = onOpenRelationshipManagement,
-            onLogout = onLogout,
+            onDismiss = { appearanceDialogOpen = false },
+        )
+    }
+
+    if (logoutDialogOpen) {
+        AlertDialog(
+            onDismissRequest = { logoutDialogOpen = false },
+            title = { Text("退出登录") },
+            text = {
+                Text(
+                    text = "退出后需要重新授权才能继续使用当前账号。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                HhhlTextButton(
+                    onClick = {
+                        logoutDialogOpen = false
+                        onLogout()
+                    },
+                    destructive = true,
+                ) {
+                    Text("退出登录")
+                }
+            },
+            dismissButton = {
+                HhhlTextButton(onClick = { logoutDialogOpen = false }) {
+                    Text("取消")
+                }
+            },
         )
     }
 }
 
-private fun profileAccountMenuActions(
-    onOpenFavoriteNotes: () -> Unit,
-    onOpenFollowRequests: () -> Unit,
-): List<HhhlOverflowMenuAction> {
-    return profileAccountActions().mapNotNull { action ->
-        val onClick = when (action.key) {
-            ProfileActionKey.FavoriteNotes -> onOpenFavoriteNotes
-            ProfileActionKey.FollowRequests -> onOpenFollowRequests
-            else -> null
-        } ?: return@mapNotNull null
-        HhhlOverflowMenuAction(action.label, onClick = onClick)
-    }
+private data class ProfileShortcut(
+    val title: String,
+    val supportingText: String,
+    val icon: ImageVector,
+    val onClick: () -> Unit,
+)
+
+private fun profilePrimaryShortcuts(
+    profilePostsText: String,
+    onOpenProfileNotes: () -> Unit,
+    onOpenDrive: () -> Unit,
+    onOpenSettings: () -> Unit,
+): List<ProfileShortcut> = buildList {
+    add(
+        ProfileShortcut(
+            title = "帖子",
+            supportingText = profilePostsText,
+            icon = Icons.AutoMirrored.Filled.Article,
+            onClick = onOpenProfileNotes,
+        ),
+    )
+    add(
+        ProfileShortcut(
+            title = "Drive",
+            supportingText = "文件",
+            icon = Icons.Filled.Folder,
+            onClick = onOpenDrive,
+        ),
+    )
+    add(
+        ProfileShortcut(
+            title = "设置",
+            supportingText = "偏好",
+            icon = Icons.Filled.Settings,
+            onClick = onOpenSettings,
+        ),
+    )
 }
 
-private fun profileWorkspaceMenuActions(
+private fun profileWorkspaceShortcuts(
     capabilities: InstanceCapabilities,
+    onOpenFavoriteNotes: () -> Unit,
+    onOpenAchievements: () -> Unit,
     onOpenLists: () -> Unit,
     onOpenClips: () -> Unit,
     onOpenAntennas: () -> Unit,
     onOpenChannels: () -> Unit,
     onOpenPages: () -> Unit,
     onOpenGallery: () -> Unit,
-): List<HhhlOverflowMenuAction> {
-    return profileWorkspaceActions(capabilities).mapNotNull { action ->
-        val onClick = when (action.key) {
-            ProfileActionKey.UserLists -> onOpenLists
-            ProfileActionKey.Clips -> onOpenClips
-            ProfileActionKey.Antennas -> onOpenAntennas
-            ProfileActionKey.Channels -> onOpenChannels
-            ProfileActionKey.Pages -> onOpenPages
-            ProfileActionKey.Gallery -> onOpenGallery
-            else -> null
-        } ?: return@mapNotNull null
-        HhhlOverflowMenuAction(action.label, onClick = onClick)
+): List<ProfileShortcut> = buildList {
+    add(
+        ProfileShortcut(
+            title = "收藏",
+            supportingText = "帖子",
+            icon = Icons.Filled.Bookmark,
+            onClick = onOpenFavoriteNotes,
+        ),
+    )
+    add(
+        ProfileShortcut(
+            title = "成就",
+            supportingText = "奖杯",
+            icon = Icons.Filled.EmojiEvents,
+            onClick = onOpenAchievements,
+        ),
+    )
+    if (capabilities.canUseUserLists) {
+        add(
+            ProfileShortcut(
+                title = "列表",
+                supportingText = "上限 ${capabilities.userListLimit}",
+                icon = Icons.AutoMirrored.Filled.List,
+                onClick = onOpenLists,
+            ),
+        )
     }
+    if (capabilities.canUseClips) {
+        add(
+            ProfileShortcut(
+                title = "剪辑",
+                supportingText = "上限 ${capabilities.clipLimit}",
+                icon = Icons.Filled.Crop,
+                onClick = onOpenClips,
+            ),
+        )
+    }
+    if (capabilities.canUseAntennas) {
+        add(
+            ProfileShortcut(
+                title = "天线",
+                supportingText = "上限 ${capabilities.antennaLimit}",
+                icon = Icons.Filled.RssFeed,
+                onClick = onOpenAntennas,
+            ),
+        )
+    }
+    add(
+        ProfileShortcut(
+            title = "频道",
+            supportingText = "内容管理",
+            icon = Icons.Filled.Forum,
+            onClick = onOpenChannels,
+        ),
+    )
+    add(
+        ProfileShortcut(
+            title = "页面",
+            supportingText = "个人页面",
+            icon = Icons.AutoMirrored.Filled.Article,
+            onClick = onOpenPages,
+        ),
+    )
+    add(
+        ProfileShortcut(
+            title = "图库",
+            supportingText = "图片内容",
+            icon = Icons.Filled.Image,
+            onClick = onOpenGallery,
+        ),
+    )
+}
+
+@Composable
+private fun ProfileShortcutGrid(
+    shortcuts: List<ProfileShortcut>,
+    columns: Int,
+    compact: Boolean,
+) {
+    val spacing = if (compact) 8.dp else 10.dp
+
+    Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+        shortcuts.chunked(columns).forEach { rowShortcuts ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(spacing),
+            ) {
+                rowShortcuts.forEach { shortcut ->
+                    ProfileShortcutTile(
+                        shortcut = shortcut,
+                        compact = compact,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                repeat(columns - rowShortcuts.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileShortcutGroupLabel(label: String) {
+    Text(
+        text = label,
+        color = LocalHhhlColors.current.subtleText,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 2.dp, start = 2.dp),
+    )
+}
+
+@Composable
+private fun ProfileShortcutTile(
+    shortcut: ProfileShortcut,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalHhhlColors.current
+    val tileShape = RoundedCornerShape(ProfileShortcutTileCornerRadius)
+    val iconContainerShape = RoundedCornerShape(10.dp)
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val tileBrush = Brush.verticalGradient(
+        colors = if (compact) {
+            listOf(
+                colors.inputBackground.copy(alpha = 0.34f),
+                MaterialTheme.colorScheme.surface.copy(alpha = 0.30f),
+            )
+        } else {
+            listOf(
+                colors.cardBackground.copy(alpha = 0.98f),
+                MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            )
+        },
+    )
+    val iconBrush = Brush.verticalGradient(
+        colors = listOf(
+            MaterialTheme.colorScheme.primary.copy(alpha = if (compact) 0.06f else 0.10f),
+            colors.inputBackground.copy(alpha = if (compact) 0.34f else 0.58f),
+        ),
+    )
+    val tileBorderColor by animateColorAsState(
+        targetValue = if (pressed) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+        } else {
+            colors.divider.copy(alpha = if (compact) 0.18f else 0.30f)
+        },
+        label = "profile-shortcut-border",
+    )
+    val pressedOverlayColor by animateColorAsState(
+        targetValue = if (pressed) {
+            MaterialTheme.colorScheme.primary.copy(alpha = if (compact) 0.05f else 0.08f)
+        } else {
+            colors.inputBackground.copy(alpha = 0f)
+        },
+        label = "profile-shortcut-overlay",
+    )
+    val tileModifier = modifier
+        .height(if (compact) ProfileWorkspaceShortcutTileHeight else ProfilePrimaryShortcutTileHeight)
+        .shadow(if (compact) 0.dp else 0.25.dp, tileShape, clip = false)
+        .clip(tileShape)
+        .background(tileBrush)
+        .background(pressedOverlayColor)
+        .border(
+            width = 1.dp,
+            color = tileBorderColor,
+            shape = tileShape,
+        )
+        .clickable(
+            interactionSource = interactionSource,
+            indication = null,
+            onClick = shortcut.onClick,
+        )
+
+    if (compact) {
+        Row(
+            modifier = tileModifier
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(ProfileShortcutIconContainerSize)
+                    .clip(iconContainerShape)
+                    .background(iconBrush),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = shortcut.icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(ProfileShortcutIconSize),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = shortcut.title,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                )
+                Text(
+                    text = shortcut.supportingText,
+                    color = colors.subtleText,
+                    style = MaterialTheme.typography.labelSmall.copy(lineHeight = 16.sp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                )
+            }
+        }
+        return
+    }
+
+    Column(
+        modifier = tileModifier
+            .padding(
+                horizontal = 10.dp,
+                vertical = 10.dp,
+            ),
+        verticalArrangement = Arrangement.spacedBy(7.dp, Alignment.Top),
+        horizontalAlignment = Alignment.Start,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(ProfileShortcutIconContainerSize)
+                .clip(iconContainerShape)
+                .background(iconBrush)
+                .border(1.dp, colors.divider.copy(alpha = 0.12f), iconContainerShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = shortcut.icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(ProfileShortcutIconSize),
+            )
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalAlignment = Alignment.Start,
+        ) {
+            Text(
+                text = shortcut.title,
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                softWrap = false,
+            )
+            Text(
+                text = shortcut.supportingText,
+                color = colors.subtleText,
+                style = MaterialTheme.typography.labelSmall.copy(lineHeight = 16.sp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                softWrap = false,
+            )
+        }
+    }
+}
+
+private fun profileMoreMenuActions(
+    selectedTheme: HhhlThemePreset,
+    selectedTimelineDensity: TimelineDensity,
+    onRefresh: () -> Unit,
+    onOpenFollowRequests: () -> Unit,
+    onOpenRelationshipManagement: () -> Unit,
+    onOpenFlash: () -> Unit,
+    onOpenAnnouncements: () -> Unit,
+    onOpenAppearance: () -> Unit,
+    onLogout: () -> Unit,
+): List<HhhlOverflowMenuAction> {
+    return listOf(
+        HhhlOverflowMenuAction("刷新资料", onClick = onRefresh),
+        HhhlOverflowMenuAction("关注请求", onClick = onOpenFollowRequests),
+        HhhlOverflowMenuAction("关系管理", onClick = onOpenRelationshipManagement),
+        HhhlOverflowMenuAction(
+            "外观 · ${profileAppearanceSummaryLabel(selectedTheme, selectedTimelineDensity)}",
+            onClick = onOpenAppearance,
+        ),
+        HhhlOverflowMenuAction("Flash", onClick = onOpenFlash),
+        HhhlOverflowMenuAction("公告", onClick = onOpenAnnouncements),
+        HhhlOverflowMenuAction("退出登录", destructive = true, onClick = onLogout),
+    )
 }
 
 private enum class ProfileActionKey {
     Refresh,
+    ProfileNotes,
     Drive,
     Settings,
     FavoriteNotes,
@@ -669,6 +1375,11 @@ private enum class ProfileActionKey {
     Channels,
     Pages,
     Gallery,
+    RelationshipManagement,
+    Appearance,
+    Flash,
+    Announcements,
+    Logout,
 }
 
 private data class ProfileAction(
@@ -679,7 +1390,7 @@ private data class ProfileAction(
 
 private fun profilePrimaryActions(capabilities: InstanceCapabilities): List<ProfileAction> {
     return buildList {
-        add(ProfileAction(ProfileActionKey.Refresh, "刷新资料", emphasized = true))
+        add(ProfileAction(ProfileActionKey.ProfileNotes, "帖子", emphasized = true))
         add(ProfileAction(ProfileActionKey.Drive, "Drive"))
         add(ProfileAction(ProfileActionKey.Settings, "设置"))
     }
@@ -688,7 +1399,8 @@ private fun profilePrimaryActions(capabilities: InstanceCapabilities): List<Prof
 private fun profileAccountActions(): List<ProfileAction> {
     return buildList {
         add(ProfileAction(ProfileActionKey.FavoriteNotes, "收藏"))
-        add(ProfileAction(ProfileActionKey.FollowRequests, "请求"))
+        add(ProfileAction(ProfileActionKey.FollowRequests, "关注请求"))
+        add(ProfileAction(ProfileActionKey.RelationshipManagement, "关系管理"))
     }
 }
 
@@ -730,11 +1442,14 @@ private fun ProfileRelationshipActions(
     isFollowing: Boolean,
     isMuted: Boolean,
     isBlocking: Boolean,
+    isSpecialCare: Boolean,
     isChanging: Boolean,
     onFollowToggle: () -> Unit,
     onMuteToggle: () -> Unit,
     onBlockToggle: () -> Unit,
     onReportUser: () -> Unit,
+    onOpenChatWithUser: () -> Unit,
+    onToggleSpecialCare: (() -> Unit)?,
 ) {
     var blockDialogOpen by remember { mutableStateOf(false) }
     var reportDialogOpen by remember { mutableStateOf(false) }
@@ -753,24 +1468,43 @@ private fun ProfileRelationshipActions(
             enabled = !isChanging,
             onClick = onFollowToggle,
         )
+        HhhlIconActionButton(
+            icon = Icons.AutoMirrored.Filled.Send,
+            contentDescription = "发送消息",
+            onClick = onOpenChatWithUser,
+        )
         HhhlOverflowMenu(
             enabled = !isChanging,
-            actions = listOf(
-                HhhlOverflowMenuAction(
-                    label = if (isMuted) "取消静音" else "静音",
-                    onClick = onMuteToggle,
-                ),
-                HhhlOverflowMenuAction(
-                    label = if (isBlocking) "取消拉黑" else "拉黑",
-                    destructive = !isBlocking,
-                    onClick = { blockDialogOpen = true },
-                ),
-                HhhlOverflowMenuAction(
-                    label = "举报用户",
-                    destructive = true,
-                    onClick = { reportDialogOpen = true },
-                ),
-            ),
+            actions = buildList {
+                onToggleSpecialCare?.let {
+                    add(
+                        HhhlOverflowMenuAction(
+                            label = userSocialSpecialCareActionLabel(isSpecialCare),
+                            onClick = it,
+                        ),
+                    )
+                }
+                add(
+                    HhhlOverflowMenuAction(
+                        label = if (isMuted) "取消静音" else "静音",
+                        onClick = onMuteToggle,
+                    ),
+                )
+                add(
+                    HhhlOverflowMenuAction(
+                        label = if (isBlocking) "取消拉黑" else "拉黑",
+                        destructive = !isBlocking,
+                        onClick = { blockDialogOpen = true },
+                    ),
+                )
+                add(
+                    HhhlOverflowMenuAction(
+                        label = "举报用户",
+                        destructive = true,
+                        onClick = { reportDialogOpen = true },
+                    ),
+                )
+            },
         )
     }
 
@@ -790,18 +1524,19 @@ private fun ProfileRelationshipActions(
                 )
             },
             confirmButton = {
-                TextButton(
+                HhhlTextButton(
                     onClick = {
                         onBlockToggle()
                         blockDialogOpen = false
                     },
                     enabled = !isChanging,
+                    destructive = !isBlocking,
                 ) {
                     Text(if (isChanging) "处理中" else if (isBlocking) "取消拉黑" else "拉黑")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { blockDialogOpen = false }, enabled = !isChanging) {
+                HhhlTextButton(onClick = { blockDialogOpen = false }, enabled = !isChanging) {
                     Text("取消")
                 }
             },
@@ -820,103 +1555,24 @@ private fun ProfileRelationshipActions(
                 )
             },
             confirmButton = {
-                TextButton(
+                HhhlTextButton(
                     onClick = {
                         onReportUser()
                         reportDialogOpen = false
                     },
                     enabled = !isChanging,
+                    destructive = true,
                 ) {
                     Text(if (isChanging) "处理中" else "举报")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { reportDialogOpen = false }, enabled = !isChanging) {
+                HhhlTextButton(onClick = { reportDialogOpen = false }, enabled = !isChanging) {
                     Text("取消")
                 }
             },
         )
     }
-}
-
-@Composable
-private fun ProfileToolMenu(
-    selectedTheme: HhhlThemePreset,
-    selectedTimelineDensity: TimelineDensity,
-    onThemeSelected: (HhhlThemePreset) -> Unit,
-    onTimelineDensitySelected: (TimelineDensity) -> Unit,
-    onOpenFlash: () -> Unit,
-    onOpenAnnouncements: () -> Unit,
-    onOpenRelationshipManagement: () -> Unit,
-    onLogout: () -> Unit,
-) {
-    var appearanceDialogOpen by remember { mutableStateOf(false) }
-    var logoutDialogOpen by remember { mutableStateOf(false) }
-    HhhlOverflowMenu(
-        actions = profileToolActions(
-            onOpenAppearance = { appearanceDialogOpen = true },
-            onOpenFlash = onOpenFlash,
-            onOpenAnnouncements = onOpenAnnouncements,
-            onOpenRelationshipManagement = onOpenRelationshipManagement,
-            onLogout = { logoutDialogOpen = true },
-        ),
-        label = "打开更多个人工具",
-    )
-
-    if (appearanceDialogOpen) {
-        ProfileAppearanceDialog(
-            selectedTheme = selectedTheme,
-            selectedTimelineDensity = selectedTimelineDensity,
-            onThemeSelected = onThemeSelected,
-            onTimelineDensitySelected = onTimelineDensitySelected,
-            onDismiss = { appearanceDialogOpen = false },
-        )
-    }
-
-    if (logoutDialogOpen) {
-        AlertDialog(
-            onDismissRequest = { logoutDialogOpen = false },
-            title = { Text("退出登录") },
-            text = {
-                Text(
-                    text = "退出后需要重新授权才能继续使用当前账号。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        logoutDialogOpen = false
-                        onLogout()
-                    },
-                ) {
-                    Text("退出登录")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { logoutDialogOpen = false }) {
-                    Text("取消")
-                }
-            },
-        )
-    }
-}
-
-private fun profileToolActions(
-    onOpenAppearance: () -> Unit,
-    onOpenFlash: () -> Unit,
-    onOpenAnnouncements: () -> Unit,
-    onOpenRelationshipManagement: () -> Unit,
-    onLogout: () -> Unit,
-): List<HhhlOverflowMenuAction> {
-    return listOf(
-        HhhlOverflowMenuAction("外观", onClick = onOpenAppearance),
-        HhhlOverflowMenuAction("Play", onClick = onOpenFlash),
-        HhhlOverflowMenuAction("公告", onClick = onOpenAnnouncements),
-        HhhlOverflowMenuAction("关系管理", onClick = onOpenRelationshipManagement),
-        HhhlOverflowMenuAction("退出登录", destructive = true, onClick = onLogout),
-    )
 }
 
 @Composable
@@ -939,7 +1595,7 @@ private fun ProfileAppearanceDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            HhhlTextButton(onClick = onDismiss) {
                 Text("完成")
             }
         },
@@ -984,24 +1640,58 @@ fun profileAppearanceActionLabels(): List<String> {
 }
 
 fun profileToolActionLabels(): List<String> {
-    return listOf("外观", "Play", "公告", "关系管理", "退出登录")
+    return listOf("刷新资料", "外观", "Flash", "公告", "退出登录")
 }
 
 @Composable
-private fun ProfileBanner(bannerUrl: String?) {
+private fun ProfileBanner(
+    bannerUrl: String?,
+    canChangeBanner: Boolean,
+    isChangingBanner: Boolean,
+    onChangeBanner: (() -> Unit)?,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(96.dp)
-            .background(LocalHhhlColors.current.mediaBackground),
+            .background(LocalHhhlColors.current.mediaBackground)
+            .clickable(
+                enabled = canChangeBanner && onChangeBanner != null && !isChangingBanner,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = { onChangeBanner?.invoke() },
+            ),
     ) {
-        bannerUrl?.let { url ->
-            AsyncImage(
-                model = url,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
+        AsyncImage(
+            model = bannerUrl?.takeIf { it.isNotBlank() } ?: ProfileDefaultBannerImageUrl,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (bannerUrl.isNullOrBlank()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                LocalHhhlColors.current.cardBackground.copy(alpha = 0.18f),
+                                LocalHhhlColors.current.mediaBackground.copy(alpha = 0.54f),
+                            ),
+                        ),
+                    ),
             )
+        }
+        if (isChangingBanner) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background.copy(alpha = 0.42f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator()
+            }
         }
     }
 }
@@ -1013,33 +1703,10 @@ private fun ProfileStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
-        }
-        Text(
-            text = actionText ?: text,
-            color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondary
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
-        )
-        if (actionText != null) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-    HhhlDivider()
+    HhhlStatusRow(
+        text = text,
+        loading = loading,
+        actionText = actionText,
+        onAction = onAction,
+    )
 }

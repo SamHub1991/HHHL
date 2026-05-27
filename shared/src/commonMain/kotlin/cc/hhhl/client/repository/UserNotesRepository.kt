@@ -34,7 +34,7 @@ open class UserNotesRepository(
 
         return when (val result = api.loadUserNotes(token, userId, DEFAULT_PAGE_SIZE, untilId)) {
             is UserNotesLoadResult.Success -> UserNotesRepositoryResult.Success(
-                notes = (currentNotes + result.notes).distinctBy { it.id },
+                notes = currentNotes.appendDistinctBy(result.notes) { it.id },
             )
             UserNotesLoadResult.Unauthorized -> UserNotesRepositoryResult.Unauthorized
             is UserNotesLoadResult.NetworkError -> {

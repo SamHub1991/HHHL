@@ -86,6 +86,8 @@ class SharkeyFollowRequestApi(
                 )
             }
 
+            if (response.isSharkeyUnauthorized()) return FollowRequestLoadResult.Unauthorized
+
             when (response.status) {
                 HttpStatusCode.OK -> FollowRequestLoadResult.Success(
                     response.body<List<FollowRequestDto>>().map { it.toDomainRequest() },
@@ -140,7 +142,7 @@ class SharkeyFollowRequestApi(
 
             when {
                 response.status.value in 200..299 -> FollowRequestActionResult.Success
-                response.status == HttpStatusCode.Unauthorized -> FollowRequestActionResult.Unauthorized
+                response.isSharkeyUnauthorized() -> FollowRequestActionResult.Unauthorized
                 else -> FollowRequestActionResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",

@@ -1,6 +1,7 @@
 package cc.hhhl.client.state
 
 import cc.hhhl.client.model.FlashListKind
+import cc.hhhl.client.model.FlashDraft
 import cc.hhhl.client.repository.FlashActionRepositoryResult
 import cc.hhhl.client.repository.FlashRepository
 import cc.hhhl.client.repository.FlashRepositoryResult
@@ -181,6 +182,58 @@ class FlashStateHolderTest {
         assertEquals(null, holder.state.value.selectedFlash)
     }
 
+    @Test
+    fun saveCreateDraftAddsFlashAndSelectsMine() = runTest {
+        val created = sampleFlash("flash-new")
+        val calls = mutableListOf<FlashDraft>()
+        val holder = FlashStateHolder(
+            repository = fakeRepository(
+                flashesResult = FlashesRepositoryResult.Success(emptyList()),
+                flashResult = FlashRepositoryResult.Success(created),
+                onCreateFlash = { calls.add(it) },
+            ),
+            scope = TestScope(testScheduler),
+        )
+        val draft = FlashDraft(title = "新 Play", script = "Ui:render([])")
+
+        holder.startCreatingFlash()
+        holder.updateDraft(draft)
+        holder.saveDraft()
+        advanceUntilIdle()
+
+        assertEquals(listOf(draft), calls)
+        assertEquals(FlashListKind.Mine, holder.state.value.selectedKind)
+        assertEquals(created, holder.state.value.selectedFlash)
+        assertEquals(listOf(created), holder.state.value.flashes)
+        assertEquals(null, holder.state.value.draftMode)
+    }
+
+    @Test
+    fun deleteSelectedFlashRemovesItFromListAndDetail() = runTest {
+        val flash = sampleFlash("flash-1")
+        val calls = mutableListOf<String>()
+        val holder = FlashStateHolder(
+            repository = fakeRepository(
+                flashesResult = FlashesRepositoryResult.Success(listOf(flash)),
+                flashResult = FlashRepositoryResult.Success(flash),
+                actionResult = FlashActionRepositoryResult.Success,
+                onDeleteFlash = { calls.add(it) },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshFlashes()
+        advanceUntilIdle()
+        holder.openFlash(flash.id)
+        advanceUntilIdle()
+        holder.deleteSelectedFlash()
+        advanceUntilIdle()
+
+        assertEquals(listOf(flash.id), calls)
+        assertEquals(emptyList(), holder.state.value.flashes)
+        assertEquals(null, holder.state.value.selectedFlash)
+    }
+
     private fun fakeRepository(
         flashesResult: FlashesRepositoryResult,
         flashResult: FlashRepositoryResult = FlashRepositoryResult.Success(sampleFlash("flash-1")),
@@ -189,6 +242,9 @@ class FlashStateHolderTest {
         onShowFlash: (String) -> Unit = {},
         onLikeFlash: (String) -> Unit = {},
         onUnlikeFlash: (String) -> Unit = {},
+        onCreateFlash: (FlashDraft) -> Unit = {},
+        onUpdateFlash: (String, FlashDraft) -> Unit = { _, _ -> },
+        onDeleteFlash: (String) -> Unit = {},
     ): FlashRepository {
         return sequenceRepository(
             flashesResults = listOf(flashesResult),
@@ -198,6 +254,9 @@ class FlashStateHolderTest {
             onShowFlash = onShowFlash,
             onLikeFlash = onLikeFlash,
             onUnlikeFlash = onUnlikeFlash,
+            onCreateFlash = onCreateFlash,
+            onUpdateFlash = onUpdateFlash,
+            onDeleteFlash = onDeleteFlash,
         )
     }
 
@@ -209,6 +268,9 @@ class FlashStateHolderTest {
         onShowFlash: (String) -> Unit = {},
         onLikeFlash: (String) -> Unit = {},
         onUnlikeFlash: (String) -> Unit = {},
+        onCreateFlash: (FlashDraft) -> Unit = {},
+        onUpdateFlash: (String, FlashDraft) -> Unit = { _, _ -> },
+        onDeleteFlash: (String) -> Unit = {},
     ): FlashRepository {
         var flashResultIndex = 0
         return object : FlashRepository(
@@ -244,6 +306,28 @@ class FlashStateHolderTest {
                 ): cc.hhhl.client.api.FlashActionResult {
                     return cc.hhhl.client.api.FlashActionResult.Success
                 }
+
+                override suspend fun createFlash(
+                    token: String,
+                    draft: FlashDraft,
+                ): cc.hhhl.client.api.FlashMutationResult {
+                    return cc.hhhl.client.api.FlashMutationResult.Success(sampleFlash("flash-1"))
+                }
+
+                override suspend fun updateFlash(
+                    token: String,
+                    flashId: String,
+                    draft: FlashDraft,
+                ): cc.hhhl.client.api.FlashMutationResult {
+                    return cc.hhhl.client.api.FlashMutationResult.Success(sampleFlash("flash-1"))
+                }
+
+                override suspend fun deleteFlash(
+                    token: String,
+                    flashId: String,
+                ): cc.hhhl.client.api.FlashActionResult {
+                    return cc.hhhl.client.api.FlashActionResult.Success
+                }
             },
         ) {
             override suspend fun refreshFlashes(kind: FlashListKind): FlashesRepositoryResult {
@@ -265,6 +349,24 @@ class FlashStateHolderTest {
 
             override suspend fun unlikeFlash(flashId: String): FlashActionRepositoryResult {
                 onUnlikeFlash(flashId)
+                return actionResult
+            }
+
+            override suspend fun createFlash(draft: FlashDraft): FlashRepositoryResult {
+                onCreateFlash(draft)
+                return flashResult
+            }
+
+            override suspend fun updateFlash(
+                flashId: String,
+                draft: FlashDraft,
+            ): FlashRepositoryResult {
+                onUpdateFlash(flashId, draft)
+                return flashResult
+            }
+
+            override suspend fun deleteFlash(flashId: String): FlashActionRepositoryResult {
+                onDeleteFlash(flashId)
                 return actionResult
             }
         }

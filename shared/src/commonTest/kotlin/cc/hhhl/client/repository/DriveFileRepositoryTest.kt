@@ -1,6 +1,7 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.DriveFileApi
+import cc.hhhl.client.api.DriveFileDetailsResult
 import cc.hhhl.client.api.DriveFileListResult
 import cc.hhhl.client.api.DriveFileSort
 import cc.hhhl.client.api.DriveFileUpload
@@ -9,7 +10,10 @@ import cc.hhhl.client.api.DriveFolderListResult
 import cc.hhhl.client.api.DriveFileMutationResult
 import cc.hhhl.client.api.DriveFolderMutationResult
 import cc.hhhl.client.model.DriveFile
+import cc.hhhl.client.model.DriveFileDetails
 import cc.hhhl.client.model.DriveFolder
+import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.User
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -161,6 +165,31 @@ class DriveFileRepositoryTest {
     }
 
     @Test
+    fun moveFileUsesTokenAndTargetFolder() = runTest {
+        val updated = sampleFile("file-1").copy(folderId = "folder-2")
+        val calls = mutableListOf<FileUpdateCall>()
+        val repository = DriveFileRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                fileUpdateCalls = calls,
+                fileMutationResult = DriveFileMutationResult.Success(updated),
+                result = DriveFileUploadResult.Success(sampleFile()),
+            ),
+        )
+
+        val result = repository.moveFile(
+            fileId = " file-1 ",
+            folderId = " folder-2 ",
+        )
+
+        assertEquals(
+            listOf(FileUpdateCall("token-123", "file-1", null, null, null, "folder-2")),
+            calls,
+        )
+        assertEquals(DriveManagementRepositoryResult.FileUpdated(updated), result)
+    }
+
+    @Test
     fun deleteFileUsesToken() = runTest {
         val calls = mutableListOf<String>()
         val repository = DriveFileRepository(
@@ -304,6 +333,36 @@ class DriveFileRepositoryTest {
         assertEquals(DriveFileRepositoryResult.Error("Drive 空间不足，无法上传文件"), result)
     }
 
+    @Test
+    fun loadFileDetailsUsesTokenAndReturnsDetails() = runTest {
+        val file = sampleFile("file-1")
+        val details = DriveFileDetails(
+            file = file,
+            attachedNotes = listOf(
+                Note(
+                    id = "note-1",
+                    author = User("user-1", "Alice", "alice", "A"),
+                    text = "hello",
+                    createdAtLabel = "2026-05-27 23:49",
+                ),
+            ),
+        )
+        val calls = mutableListOf<String>()
+        val repository = DriveFileRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                result = DriveFileUploadResult.Success(sampleFile()),
+                fileDetailsResult = DriveFileDetailsResult.Success(details),
+                fileDetailsCalls = calls,
+            ),
+        )
+
+        val result = repository.loadFileDetails("file-1")
+
+        assertEquals(listOf("token-123:file-1"), calls)
+        assertEquals(DriveFileDetailsRepositoryResult.Success(details), result)
+    }
+
     private fun fakeApi(
         calls: MutableList<ApiCall> = mutableListOf(),
         listCalls: MutableList<ListCall> = mutableListOf(),
@@ -313,11 +372,13 @@ class DriveFileRepositoryTest {
         folderCreateCalls: MutableList<FolderCreateCall> = mutableListOf(),
         folderUpdateCalls: MutableList<FolderUpdateCall> = mutableListOf(),
         deleteFolderCalls: MutableList<String> = mutableListOf(),
+        fileDetailsCalls: MutableList<String> = mutableListOf(),
         result: DriveFileUploadResult,
         listResult: DriveFileListResult = DriveFileListResult.Success(emptyList()),
         folderResult: DriveFolderListResult = DriveFolderListResult.Success(emptyList()),
         fileMutationResult: DriveFileMutationResult = DriveFileMutationResult.Success(sampleFile()),
         folderMutationResult: DriveFolderMutationResult = DriveFolderMutationResult.Success(sampleFolder("folder-1")),
+        fileDetailsResult: DriveFileDetailsResult = DriveFileDetailsResult.Success(DriveFileDetails(sampleFile())),
         onCall: () -> Unit = {},
         onListCall: () -> Unit = {},
     ): DriveFileApi {
@@ -401,6 +462,14 @@ class DriveFileRepositoryTest {
             ): DriveFolderMutationResult {
                 deleteFolderCalls.add("$token:$folderId")
                 return folderMutationResult
+            }
+
+            override suspend fun loadFileDetails(
+                token: String,
+                fileId: String,
+            ): DriveFileDetailsResult {
+                fileDetailsCalls.add("$token:$fileId")
+                return fileDetailsResult
             }
         }
     }

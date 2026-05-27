@@ -35,12 +35,13 @@ Deferred features:
 
 ## UX Direction
 
-The UI should feel like a quiet native mobile app, not a website wrapper. It should be sparse, fast, and list-driven.
+The UI should feel like a modern native mobile social client, not a website wrapper. The current style baseline is maintained in `docs/ui-style-guide.md`: X-like feeds, Apple-like app chrome and controls, and Telegram-like chat.
 
 Visual rules:
 - No card-heavy feed.
 - No nested cards.
-- No decorative gradients, hero areas, large rounded panels, or marketing-style layouts.
+- No hero areas or marketing-style layouts.
+- Rounded controls, subtle floating navigation, and chat bubbles are allowed when they follow the shared style guide.
 - Use system background colors, simple typography, thin dividers, and compact spacing.
 - Use avatar, text hierarchy, and action icons to carry the interface.
 - Keep information density high enough for repeated daily use, but avoid cramped text.
