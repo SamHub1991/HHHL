@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="sharedpref" path="hhhl_automation" />
+        <include domain="sharedpref" path="hhhl_theme" />
+        <include domain="sharedpref" path="hhhl_display_preferences" />
+        <include domain="sharedpref" path="hhhl_special_care" />
+        <include domain="sharedpref" path="hhhl_recent_reactions" />
+        <include domain="sharedpref" path="hhhl_chat_unread" />
+        <include domain="sharedpref" path="hhhl_chat_message_cache" />
+        <include domain="sharedpref" path="hhhl_notification_cache" />
+        <include domain="sharedpref" path="hhhl_notification_reads" />
+        <include domain="sharedpref" path="hhhl_background_notifications" />
+        <include domain="sharedpref" path="hhhl_compose_draft" />
+        <include domain="sharedpref" path="hhhl_timeline_cache" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="sharedpref" path="hhhl_automation" />
+        <include domain="sharedpref" path="hhhl_theme" />
+        <include domain="sharedpref" path="hhhl_display_preferences" />
+        <include domain="sharedpref" path="hhhl_special_care" />
+        <include domain="sharedpref" path="hhhl_recent_reactions" />
+        <include domain="sharedpref" path="hhhl_chat_unread" />
+        <include domain="sharedpref" path="hhhl_chat_message_cache" />
+        <include domain="sharedpref" path="hhhl_notification_cache" />
+        <include domain="sharedpref" path="hhhl_notification_reads" />
+        <include domain="sharedpref" path="hhhl_background_notifications" />
+        <include domain="sharedpref" path="hhhl_compose_draft" />
+        <include domain="sharedpref" path="hhhl_timeline_cache" />
+    </device-transfer>
+</data-extraction-rules>

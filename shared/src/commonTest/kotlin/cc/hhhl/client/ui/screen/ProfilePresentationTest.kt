@@ -67,6 +67,7 @@ class ProfilePresentationTest {
         assertEquals(
             listOf(
                 "主题",
+                "高级自定义主题",
                 "信息流密度",
                 "账号资料",
                 "双重验证",

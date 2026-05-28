@@ -1,9 +1,14 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.InstanceMetaApi
+import cc.hhhl.client.api.InstanceAuxiliaryLoadResult
 import cc.hhhl.client.api.InstanceMetaLoadResult
+import cc.hhhl.client.model.InstanceEndpointInfo
 import cc.hhhl.client.model.InstanceCapabilities
 import cc.hhhl.client.model.InstanceMeta
+import cc.hhhl.client.model.InstanceOnlineUsers
+import cc.hhhl.client.model.InstanceServerInfo
+import cc.hhhl.client.model.InstanceStats
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -47,6 +52,23 @@ class InstanceMetaRepositoryTest {
     private fun fakeApi(result: InstanceMetaLoadResult): InstanceMetaApi {
         return object : InstanceMetaApi {
             override suspend fun loadMeta(): InstanceMetaLoadResult = result
+
+            override suspend fun ping(): InstanceAuxiliaryLoadResult<Long> = InstanceAuxiliaryLoadResult.Unavailable
+
+            override suspend fun loadEndpoints(): InstanceAuxiliaryLoadResult<List<String>> =
+                InstanceAuxiliaryLoadResult.Unavailable
+
+            override suspend fun loadEndpointInfo(endpoint: String): InstanceAuxiliaryLoadResult<InstanceEndpointInfo?> =
+                InstanceAuxiliaryLoadResult.Unavailable
+
+            override suspend fun loadStats(): InstanceAuxiliaryLoadResult<InstanceStats> =
+                InstanceAuxiliaryLoadResult.Unavailable
+
+            override suspend fun loadOnlineUsers(): InstanceAuxiliaryLoadResult<InstanceOnlineUsers> =
+                InstanceAuxiliaryLoadResult.Unavailable
+
+            override suspend fun loadServerInfo(): InstanceAuxiliaryLoadResult<InstanceServerInfo> =
+                InstanceAuxiliaryLoadResult.Unavailable
         }
     }
 
@@ -70,4 +92,3 @@ class InstanceMetaRepositoryTest {
         )
     }
 }
-

@@ -72,7 +72,7 @@ fun AchievementScreen(
         HhhlDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             state.errorMessage?.let { message ->
-                item(contentType = "achievement-status") {
+                item(key = "achievement-error", contentType = "achievement-status") {
                     AchievementStatusRow(
                         text = message,
                         actionText = "重试",
@@ -81,12 +81,12 @@ fun AchievementScreen(
                 }
             }
             if (state.isLoading && state.achievements.isEmpty()) {
-                item(contentType = "achievement-status") {
+                item(key = "achievement-loading", contentType = "achievement-status") {
                     AchievementStatusRow(text = "正在加载成就...", loading = true)
                 }
             }
             if (!state.isLoading && state.achievements.isEmpty() && state.errorMessage == null) {
-                item(contentType = "achievement-status") {
+                item(key = "achievement-empty", contentType = "achievement-status") {
                     AchievementStatusRow(text = "暂无成就数据")
                 }
             }
@@ -109,6 +109,7 @@ private fun AchievementSummaryRow(
     isLoading: Boolean,
     onRefresh: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val percent = if (totalCount == 0) 0 else unlockedCount * 100 / totalCount
     Row(
         modifier = Modifier
@@ -119,7 +120,7 @@ private fun AchievementSummaryRow(
     ) {
         Text(
             text = "$unlockedCount 个已解锁 · $percent%",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -138,14 +139,15 @@ private fun AchievementSummaryRow(
 
 @Composable
 private fun AchievementRow(achievement: Achievement) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(
                 if (achievement.isUnlocked) {
-                    MaterialTheme.colorScheme.background
+                    colors.pageBackground
                 } else {
-                    LocalHhhlColors.current.inputBackground.copy(alpha = 0.45f)
+                    colors.buttonBackground.copy(alpha = 0.45f)
                 },
             )
             .padding(horizontal = 16.dp, vertical = 14.dp),
@@ -163,7 +165,7 @@ private fun AchievementRow(achievement: Achievement) {
             ) {
                 Text(
                     text = if (achievement.isUnlocked) achievement.title else "???",
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
@@ -179,7 +181,7 @@ private fun AchievementRow(achievement: Achievement) {
             }
             Text(
                 text = if (achievement.isUnlocked) achievement.description else "未解锁",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -187,7 +189,7 @@ private fun AchievementRow(achievement: Achievement) {
             if (achievement.isUnlocked && achievement.unlockedAtLabel.isNotBlank()) {
                 Text(
                     text = achievement.unlockedAtLabel,
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -197,6 +199,7 @@ private fun AchievementRow(achievement: Achievement) {
 
 @Composable
 private fun AchievementIcon(achievement: Achievement) {
+    val colors = LocalHhhlColors.current
     Box(
         modifier = Modifier
             .size(52.dp)
@@ -214,7 +217,7 @@ private fun AchievementIcon(achievement: Achievement) {
             Icon(
                 imageVector = Icons.Filled.Star,
                 contentDescription = null,
-                tint = LocalHhhlColors.current.subtleText,
+                tint = colors.textMuted,
                 modifier = Modifier.size(24.dp),
             )
         }
@@ -238,10 +241,10 @@ private fun AchievementStatusRow(
 
 @Composable
 private fun Achievement.rankColor() = when (rank) {
-    AchievementRank.Bronze -> MaterialTheme.colorScheme.tertiary
-    AchievementRank.Silver -> MaterialTheme.colorScheme.secondary
-    AchievementRank.Gold -> MaterialTheme.colorScheme.primary
-    AchievementRank.Platinum -> MaterialTheme.colorScheme.error
+    AchievementRank.Bronze -> LocalHhhlColors.current.rankBronze
+    AchievementRank.Silver -> LocalHhhlColors.current.rankSilver
+    AchievementRank.Gold -> LocalHhhlColors.current.rankGold
+    AchievementRank.Platinum -> LocalHhhlColors.current.rankPlatinum
 }
 
 private const val ACHIEVEMENT_VIEW_MILESTONE_DELAY_MS = 180_000L

@@ -21,6 +21,12 @@ interface NoteActionApi {
         reaction: String,
     ): NoteActionApiResult
 
+    suspend fun likeNote(
+        token: String,
+        noteId: String,
+        override: String? = null,
+    ): NoteActionApiResult
+
     suspend fun deleteReaction(
         token: String,
         noteId: String,
@@ -47,6 +53,11 @@ interface NoteActionApi {
         noteId: String,
     ): NoteActionApiResult
 
+    suspend fun deleteRenote(
+        token: String,
+        noteId: String,
+    ): NoteActionApiResult
+
     suspend fun deleteNote(
         token: String,
         noteId: String,
@@ -62,6 +73,21 @@ interface NoteActionApi {
     suspend fun muteNote(
         token: String,
         noteId: String,
+    ): NoteActionApiResult
+
+    suspend fun unmuteNote(
+        token: String,
+        noteId: String,
+    ): NoteActionApiResult
+
+    suspend fun muteRenotes(
+        token: String,
+        userId: String,
+    ): NoteActionApiResult
+
+    suspend fun unmuteRenotes(
+        token: String,
+        userId: String,
     ): NoteActionApiResult
 }
 
@@ -90,6 +116,21 @@ class SharkeyNoteActionApi(
         return postAction(
             endpoint = arrayOf("notes", "reactions", "create"),
             body = ReactionRequest(i = token.trim(), noteId = noteId.trim(), reaction = reaction),
+        )
+    }
+
+    override suspend fun likeNote(
+        token: String,
+        noteId: String,
+        override: String?,
+    ): NoteActionApiResult {
+        return postAction(
+            endpoint = arrayOf("notes", "like"),
+            body = NoteLikeRequest(
+                i = token.trim(),
+                noteId = noteId.trim(),
+                override = override?.trim()?.takeIf { it.isNotEmpty() },
+            ),
         )
     }
 
@@ -144,6 +185,16 @@ class SharkeyNoteActionApi(
         )
     }
 
+    override suspend fun deleteRenote(
+        token: String,
+        noteId: String,
+    ): NoteActionApiResult {
+        return postAction(
+            endpoint = arrayOf("notes", "unrenote"),
+            body = NoteIdRequest(i = token.trim(), noteId = noteId.trim()),
+        )
+    }
+
     override suspend fun deleteNote(
         token: String,
         noteId: String,
@@ -179,6 +230,36 @@ class SharkeyNoteActionApi(
         return postAction(
             endpoint = arrayOf("notes", "thread-muting", "create"),
             body = NoteIdRequest(i = token.trim(), noteId = noteId.trim()),
+        )
+    }
+
+    override suspend fun unmuteNote(
+        token: String,
+        noteId: String,
+    ): NoteActionApiResult {
+        return postAction(
+            endpoint = arrayOf("notes", "thread-muting", "delete"),
+            body = NoteIdRequest(i = token.trim(), noteId = noteId.trim()),
+        )
+    }
+
+    override suspend fun muteRenotes(
+        token: String,
+        userId: String,
+    ): NoteActionApiResult {
+        return postAction(
+            endpoint = arrayOf("renote-mute", "create"),
+            body = UserIdRequest(i = token.trim(), userId = userId.trim()),
+        )
+    }
+
+    override suspend fun unmuteRenotes(
+        token: String,
+        userId: String,
+    ): NoteActionApiResult {
+        return postAction(
+            endpoint = arrayOf("renote-mute", "delete"),
+            body = UserIdRequest(i = token.trim(), userId = userId.trim()),
         )
     }
 
@@ -231,9 +312,22 @@ private data class ReactionRequest(
 )
 
 @Serializable
+private data class NoteLikeRequest(
+    val i: String,
+    val noteId: String,
+    val override: String? = null,
+)
+
+@Serializable
 private data class NoteIdRequest(
     val i: String,
     val noteId: String,
+)
+
+@Serializable
+private data class UserIdRequest(
+    val i: String,
+    val userId: String,
 )
 
 @Serializable

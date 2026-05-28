@@ -5,13 +5,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import cc.hhhl.client.theme.LocalHhhlColors
 
 @Composable
 fun HhhlStatusRow(
@@ -21,31 +23,37 @@ fun HhhlStatusRow(
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp)
+            HhhlProgressIndicator(strokeWidth = 2.dp)
         }
         Text(
             text = actionText ?: text,
             color = if (onAction != null) {
-                MaterialTheme.colorScheme.primary
+                colors.accent
             } else {
-                MaterialTheme.colorScheme.secondary
+                colors.textSecondary
             },
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (onAction != null) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = if (onAction != null) Modifier.clickable { onAction() } else Modifier,
         )
         if (actionText != null) {
             Text(
                 text = text,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
+                color = colors.textMuted,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

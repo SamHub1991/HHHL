@@ -13,14 +13,31 @@ data class MediaPreviewItem(
     val previewUrl: String?,
     val isImage: Boolean,
     val isSensitive: Boolean,
-)
+) {
+    companion object {
+        val Empty = MediaPreviewItem(
+            id = "",
+            label = "附件",
+            type = "",
+            typeLabel = "文件",
+            typeBadge = "FILE",
+            openUrl = "",
+            previewUrl = null,
+            isImage = false,
+            isSensitive = false,
+        )
+    }
+}
 
 data class MediaPreviewSession(
     val items: List<MediaPreviewItem>,
     val selectedIndex: Int,
 ) {
+    val currentOrNull: MediaPreviewItem?
+        get() = items.getOrNull(selectedIndex) ?: items.firstOrNull()
+
     val current: MediaPreviewItem
-        get() = items[selectedIndex]
+        get() = currentOrNull ?: MediaPreviewItem.Empty
 
     val canGoPrevious: Boolean
         get() = selectedIndex > 0
@@ -28,9 +45,15 @@ data class MediaPreviewSession(
     val canGoNext: Boolean
         get() = selectedIndex < items.lastIndex
 
-    fun previous(): MediaPreviewSession = copy(selectedIndex = (selectedIndex - 1).coerceAtLeast(0))
+    fun previous(): MediaPreviewSession {
+        if (items.isEmpty()) return copy(selectedIndex = 0)
+        return copy(selectedIndex = (selectedIndex - 1).coerceAtLeast(0))
+    }
 
-    fun next(): MediaPreviewSession = copy(selectedIndex = (selectedIndex + 1).coerceAtMost(items.lastIndex))
+    fun next(): MediaPreviewSession {
+        if (items.isEmpty()) return copy(selectedIndex = 0)
+        return copy(selectedIndex = (selectedIndex + 1).coerceAtMost(items.lastIndex))
+    }
 }
 
 fun mediaPreviewItem(media: NoteMedia): MediaPreviewItem {
@@ -54,7 +77,7 @@ fun mediaPreviewItem(media: NoteMedia): MediaPreviewItem {
         openUrl = openUrl,
         previewUrl = when {
             media.isSensitive -> null
-            isImage -> media.thumbnailUrl?.takeIf { it.isNotBlank() } ?: media.url?.takeIf { it.isNotBlank() }
+            isImage -> media.url?.takeIf { it.isNotBlank() } ?: media.thumbnailUrl?.takeIf { it.isNotBlank() }
             media.type.startsWith("video/") -> media.thumbnailUrl?.takeIf { it.isNotBlank() }
             else -> null
         },
@@ -84,7 +107,7 @@ fun mediaPreviewItem(file: DriveFile): MediaPreviewItem {
         openUrl = openUrl,
         previewUrl = when {
             file.isSensitive -> null
-            isImage -> file.thumbnailUrl?.takeIf { it.isNotBlank() } ?: file.url?.takeIf { it.isNotBlank() }
+            isImage -> file.url?.takeIf { it.isNotBlank() } ?: file.thumbnailUrl?.takeIf { it.isNotBlank() }
             file.type.startsWith("video/") -> file.thumbnailUrl?.takeIf { it.isNotBlank() }
             else -> null
         },

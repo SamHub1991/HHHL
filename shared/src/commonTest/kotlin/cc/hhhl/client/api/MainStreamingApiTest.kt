@@ -24,6 +24,26 @@ class MainStreamingApiTest {
     }
 
     @Test
+    fun parsesMainNotificationEventAsUnreadNotification() {
+        val event = parseSharkeyMainStreamingEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "main",
+                "type": "notification",
+                "body": {
+                  "id": "notification-1"
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(MainStreamingEvent.UnreadNotification, event)
+    }
+
+    @Test
     fun parsesMainNewChatMessageEvent() {
         val event = parseSharkeyMainStreamingEvent(
             """
@@ -32,6 +52,24 @@ class MainStreamingApiTest {
               "body": {
                 "id": "main",
                 "type": "newChatMessage",
+                "body": {}
+              }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(MainStreamingEvent.NewChatMessage, event)
+    }
+
+    @Test
+    fun parsesMainChatMessageAliasEvent() {
+        val event = parseSharkeyMainStreamingEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "main",
+                "type": "chatMessage",
                 "body": {}
               }
             }

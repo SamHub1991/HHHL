@@ -48,6 +48,7 @@ class NoteActionStateHolder(
     val state: StateFlow<NoteActionUiState> = mutableState
     private var defaultReaction = NoteActionRequest.DEFAULT_REACTION
     private var customReactionOptions = emptyList<String>()
+    private var reactionOptionsRequestId = 0
 
     fun restoreRecentReactions() {
         mutableState.update {
@@ -66,6 +67,7 @@ class NoteActionStateHolder(
     fun loadReactionOptions() {
         val repository = emojiRepository ?: return
         if (state.value.isLoadingReactionOptions) return
+        val requestId = ++reactionOptionsRequestId
 
         mutableState.update {
             it.copy(
@@ -78,8 +80,9 @@ class NoteActionStateHolder(
         scope.launch {
             when (val result = repository.loadReactionOptions()) {
                 is EmojiRepositoryResult.Success -> {
-                    customReactionOptions = result.reactionOptions
                     mutableState.update {
+                        if (requestId != reactionOptionsRequestId) return@update it
+                        customReactionOptions = result.reactionOptions
                         it.copy(
                             reactionOptions = defaultReactionOptions(defaultReaction, customReactionOptions),
                             customEmojiUrls = result.emojiUrls,
@@ -91,6 +94,7 @@ class NoteActionStateHolder(
                     }
                 }
                 is EmojiRepositoryResult.Error -> mutableState.update {
+                    if (requestId != reactionOptionsRequestId) return@update it
                     it.copy(
                         reactionOptions = defaultReactionOptions(defaultReaction, customReactionOptions),
                         isLoadingReactionOptions = false,

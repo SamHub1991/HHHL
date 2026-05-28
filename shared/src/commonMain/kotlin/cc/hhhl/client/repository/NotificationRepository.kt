@@ -35,11 +35,36 @@ open class NotificationRepository(
     }
 
     open suspend fun markAllAsRead(): NotificationRepositoryResult {
+        return performAction(successResult = NotificationRepositoryResult.AllRead) { token -> api.markAllAsRead(token) }
+    }
+
+    open suspend fun flush(): NotificationRepositoryResult {
+        return performAction(successResult = NotificationRepositoryResult.AllRead) { token -> api.flush(token) }
+    }
+
+    open suspend fun createNotification(
+        body: String,
+        header: String? = null,
+        icon: String? = null,
+    ): NotificationRepositoryResult {
+        return performAction(successResult = NotificationRepositoryResult.ActionSuccess) {
+            token -> api.createNotification(token, body = body, header = header, icon = icon)
+        }
+    }
+
+    open suspend fun sendTestNotification(): NotificationRepositoryResult {
+        return performAction(successResult = NotificationRepositoryResult.ActionSuccess) { token -> api.sendTestNotification(token) }
+    }
+
+    private suspend fun performAction(
+        successResult: NotificationRepositoryResult,
+        action: suspend (String) -> NotificationActionResult,
+    ): NotificationRepositoryResult {
         val token = tokenProvider()?.takeIf { it.isNotBlank() }
             ?: return NotificationRepositoryResult.Unauthorized
 
-        return when (val result = api.markAllAsRead(token)) {
-            NotificationActionResult.Success -> NotificationRepositoryResult.AllRead
+        return when (val result = action(token)) {
+            NotificationActionResult.Success -> successResult
             NotificationActionResult.Unauthorized -> NotificationRepositoryResult.Unauthorized
             is NotificationActionResult.NetworkError -> {
                 NotificationRepositoryResult.Error("无法连接服务器：${result.message}")
@@ -89,6 +114,8 @@ internal fun mergeNotificationPage(
 }
 
 sealed interface NotificationRepositoryResult {
+    data object ActionSuccess : NotificationRepositoryResult
+
     data object AllRead : NotificationRepositoryResult
 
     data class Success(

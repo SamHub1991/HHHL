@@ -27,9 +27,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -310,6 +312,28 @@ class ComposeStateHolderTest {
     }
 
     @Test
+    fun resetDraftInvalidatesPendingMediaUploadResult() = runTest {
+        val pending = CompletableDeferred<DriveFileRepositoryResult>()
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            driveFileRepository = fakeDriveRepository(uploadResultProvider = { pending.await() }),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.uploadMedia(sampleUpload())
+        runCurrent()
+        assertTrue(holder.state.value.isUploadingMedia)
+
+        holder.resetDraft()
+        pending.complete(DriveFileRepositoryResult.Success(sampleDriveFile()))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isUploadingMedia)
+        assertEquals(emptyList(), holder.state.value.draft.fileIds)
+        assertEquals(emptyList(), holder.state.value.attachedFiles)
+    }
+
+    @Test
     fun removeFileIdAlsoRemovesAttachedFileMetadata() = runTest {
         val holder = ComposeStateHolder(
             repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
@@ -431,6 +455,29 @@ class ComposeStateHolderTest {
     }
 
     @Test
+    fun changingVisibleUsersInvalidatesPendingMentionResolution() = runTest {
+        val pending = CompletableDeferred<UserProfileRepositoryResult>()
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            userProfileRepository = fakeUserProfileRepository { pending.await() },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateVisibility(NoteVisibility.Specified)
+        holder.updateVisibleUserIds("@alice")
+        holder.resolveVisibleUserMentions()
+        runCurrent()
+        assertTrue(holder.state.value.isResolvingVisibleUsers)
+
+        holder.updateVisibleUserIds("user-2")
+        pending.complete(UserProfileRepositoryResult.Success(FakeData.me.copy(id = "user-1")))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isResolvingVisibleUsers)
+        assertEquals(listOf("user-2"), holder.state.value.draft.visibleUserIds)
+    }
+
+    @Test
     fun sendWithVisibleMentionsResolvesUsersBeforeRepositoryCall() = runTest {
         val sentDrafts = mutableListOf<ComposeDraft>()
         val holder = ComposeStateHolder(
@@ -455,6 +502,31 @@ class ComposeStateHolderTest {
         assertEquals(listOf(listOf("user-alice", "user-2")), sentDrafts.map { it.visibleUserIds })
         assertEquals("note-created", holder.state.value.createdNoteId)
         assertEquals(null as String?, holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun sendSuccessDoesNotClearDraftEditedWhileSendWasPending() = runTest {
+        val pending = CompletableDeferred<ComposeRepositoryResult>()
+        val store = memoryDraftStore()
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(resultProvider = { pending.await() }),
+            draftStore = store,
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateText("first")
+        holder.send()
+        runCurrent()
+        assertTrue(holder.state.value.isSending)
+
+        holder.updateText("second")
+        pending.complete(ComposeRepositoryResult.Success("note-created"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isSending)
+        assertEquals("second", holder.state.value.draft.text)
+        assertEquals("second", store.savedDraft?.text)
+        assertEquals("note-created", holder.state.value.createdNoteId)
     }
 
     @Test
@@ -849,6 +921,11 @@ class ComposeStateHolderTest {
     private fun fakeRepository(
         result: ComposeRepositoryResult,
         onSend: (ComposeDraft) -> Unit = {},
+    ): ComposeRepository = fakeRepository(resultProvider = { result }, onSend = onSend)
+
+    private fun fakeRepository(
+        resultProvider: suspend () -> ComposeRepositoryResult,
+        onSend: (ComposeDraft) -> Unit = {},
     ): ComposeRepository {
         return object : ComposeRepository(
             tokenProvider = { "token-123" },
@@ -872,7 +949,7 @@ class ComposeStateHolderTest {
         ) {
             override suspend fun send(draft: ComposeDraft): ComposeRepositoryResult {
                 onSend(draft)
-                return result
+                return resultProvider()
             }
         }
     }
@@ -888,7 +965,7 @@ class ComposeStateHolderTest {
     )
 
     private fun fakeDriveRepository(
-        uploadResultProvider: () -> DriveFileRepositoryResult,
+        uploadResultProvider: suspend () -> DriveFileRepositoryResult,
         updateFileResult: DriveManagementRepositoryResult = DriveManagementRepositoryResult.FileUpdated(sampleDriveFile()),
         onUpdateFile: (comment: String?, isSensitive: Boolean?) -> Unit = { _, _ -> },
     ): DriveFileRepository {
@@ -992,7 +1069,7 @@ class ComposeStateHolderTest {
     }
 
     private fun fakeUserProfileRepository(
-        onResolve: (String) -> UserProfileRepositoryResult,
+        onResolve: suspend (String) -> UserProfileRepositoryResult,
     ): UserProfileRepository {
         return object : UserProfileRepository(
             tokenProvider = { "token-123" },

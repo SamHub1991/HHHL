@@ -72,6 +72,14 @@ interface DriveFileApi {
         showAll: Boolean = false,
     ): DriveFileListResult
 
+    suspend fun loadStream(
+        token: String,
+        limit: Int,
+        untilId: String? = null,
+        type: String? = null,
+    ): DriveFileListResult =
+        DriveFileListResult.ServerError(501, "Drive 最近文件接口未实现")
+
     suspend fun loadFolders(
         token: String,
         folderId: String?,
@@ -325,6 +333,43 @@ class SharkeyDriveFileApi(
                 else -> DriveFileListResult.ServerError(
                     statusCode = response.status.value,
                     message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            DriveFileListResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun loadStream(
+        token: String,
+        limit: Int,
+        untilId: String?,
+        type: String?,
+    ): DriveFileListResult {
+        val cleanToken = token.trim()
+        if (cleanToken.isEmpty()) return DriveFileListResult.Unauthorized
+        return try {
+            val response = client.post(apiUrl("drive", "stream")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    DriveStreamRequest(
+                        i = cleanToken,
+                        limit = limit.coerceIn(1, 100),
+                        untilId = untilId?.takeIf { it.isNotBlank() },
+                        type = type?.takeIf { it.isNotBlank() },
+                    ),
+                )
+            }
+            when {
+                response.status == HttpStatusCode.OK -> DriveFileListResult.Success(
+                    response.body<List<DriveFileDto>>().map { it.toDomainFile() },
+                )
+                response.isSharkeyUnauthorized() -> DriveFileListResult.Unauthorized
+                else -> DriveFileListResult.ServerError(
+                    response.status.value,
+                    response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
                 )
             }
         } catch (error: CancellationException) {
@@ -709,6 +754,14 @@ private data class DriveFilesRequest(
     val sort: String,
     val searchQuery: String = "",
     val showAll: Boolean,
+)
+
+@Serializable
+private data class DriveStreamRequest(
+    val i: String,
+    val limit: Int,
+    val untilId: String? = null,
+    val type: String? = null,
 )
 
 @Serializable

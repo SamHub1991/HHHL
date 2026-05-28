@@ -30,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,14 +43,16 @@ import cc.hhhl.client.state.TimelineUiState
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlAnimatedSegmentedControl
 import cc.hhhl.client.ui.component.HhhlIconActionButton
+import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
-import cc.hhhl.client.ui.component.HhhlSegmentedControl
-import cc.hhhl.client.ui.component.HhhlSegmentedItem
 import cc.hhhl.client.ui.component.HhhlStatusRow
+import cc.hhhl.client.ui.component.LocalBlockedNoteAuthorIds
 import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.NoteRow
 import cc.hhhl.client.ui.component.NoteRowDensity
+import cc.hhhl.client.ui.component.isHiddenByBlockedAuthor
 
 @Composable
 fun TimelineScreen(
@@ -91,10 +92,10 @@ fun TimelineScreen(
     onCompose: () -> Unit = {},
     onSearch: () -> Unit = {},
 ) {
-    val kinds = availableTimelineKinds(capabilities)
+    val availableKinds = availableTimelineKinds(capabilities)
     val selectedKind = state?.selectedKind ?: TimelineKind.Home
-    val visibleSelectedKind = selectedKind.takeIf { it in kinds } ?: TimelineKind.Home
-    val visibleKinds = kinds
+    val visibleSelectedKind = selectedKind.takeIf { it in availableKinds } ?: TimelineKind.Home
+    val visibleKinds = timelineVisibleKinds(availableKinds, visibleSelectedKind)
     val hasTrendTab = capabilities.canTrend
     val showTrends = isTrendSelected && hasTrendTab
     val selectedTabState = state?.tabs?.get(visibleSelectedKind)
@@ -102,8 +103,12 @@ fun TimelineScreen(
     val fallbackListState = rememberLazyListState()
     val listState = listStates[visibleSelectedKind] ?: fallbackListState
     val trendListState = rememberLazyListState()
-    val timelineThreadItems = remember(selectedTabState.notes) {
-        timelineThreadItems(selectedTabState.notes)
+    val blockedNoteAuthorIds = LocalBlockedNoteAuthorIds.current
+    val visibleNotes = remember(selectedTabState.notes, blockedNoteAuthorIds) {
+        selectedTabState.notes.filterNot { note -> note.isHiddenByBlockedAuthor(blockedNoteAuthorIds) }
+    }
+    val timelineThreadItems = remember(visibleNotes) {
+        timelineThreadItems(visibleNotes)
     }
 
     if (!showTrends) {
@@ -136,7 +141,8 @@ fun TimelineScreen(
             )
         }
         TimelineTabStrip(
-            kinds = visibleKinds,
+            availableKinds = availableKinds,
+            visibleKinds = visibleKinds,
             selectedKind = visibleSelectedKind,
             showTrends = showTrends,
             hasTrendTab = hasTrendTab,
@@ -184,7 +190,7 @@ fun TimelineScreen(
                 modifier = Modifier.fillMaxSize(),
                 state = listState,
             ) {
-                if (selectedTabState.isLoading && selectedTabState.notes.isEmpty()) {
+                if (selectedTabState.isLoading && visibleNotes.isEmpty()) {
                     item(key = "timeline-notes-loading-${visibleSelectedKind.name}", contentType = "timeline-status") {
                         TimelineStatusRow(text = "正在加载时间线...", loading = true)
                     }
@@ -198,7 +204,7 @@ fun TimelineScreen(
                         )
                     }
                 }
-                if (!selectedTabState.isLoading && selectedTabState.notes.isEmpty() && selectedTabState.errorMessage == null) {
+                if (!selectedTabState.isLoading && visibleNotes.isEmpty() && selectedTabState.errorMessage == null) {
                     item(key = "timeline-notes-empty-${visibleSelectedKind.name}", contentType = "timeline-status") {
                         TimelineStatusRow(text = "这里还没有内容")
                     }
@@ -244,37 +250,52 @@ fun TimelineScreen(
 
 @Composable
 private fun TimelineTabStrip(
-    kinds: List<TimelineKind>,
+    availableKinds: List<TimelineKind>,
+    visibleKinds: List<TimelineKind>,
     selectedKind: TimelineKind,
     showTrends: Boolean,
     hasTrendTab: Boolean,
     onTimelineSelected: (TimelineKind) -> Unit,
     onTrendSelected: () -> Unit,
 ) {
+    val overflowActions = timelineOverflowActions(
+        availableKinds = availableKinds,
+        selectedKind = selectedKind,
+        onTimelineSelected = onTimelineSelected,
+    )
     val tabs = buildList {
-        addAll(kinds.map { TimelineTabItem(label = it.label, kind = it) })
+        addAll(visibleKinds.map { TimelineTabItem(label = it.label, kind = it) })
         if (hasTrendTab) add(TimelineTabItem(label = "趋势", kind = null))
     }
 
-    HhhlSegmentedControl(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        tabs.forEach { tab ->
+        val selectedTabIndex = tabs.indexOfFirst { tab ->
             val isTrend = tab.kind == null
-            HhhlSegmentedItem(
-                label = tab.label,
-                selected = if (isTrend) showTrends else !showTrends && selectedKind == tab.kind,
-                modifier = Modifier.weight(1f),
-                onClick = {
-                    val kind = tab.kind
-                    if (kind == null) {
-                        onTrendSelected()
-                    } else {
-                        onTimelineSelected(kind)
-                    }
-                },
+            if (isTrend) showTrends else !showTrends && selectedKind == tab.kind
+        }.coerceAtLeast(0)
+        HhhlAnimatedSegmentedControl(
+            labels = tabs.map { it.label },
+            selectedIndex = selectedTabIndex,
+            onSelected = { index ->
+                val kind = tabs.getOrNull(index)?.kind
+                if (kind == null) {
+                    onTrendSelected()
+                } else {
+                    onTimelineSelected(kind)
+                }
+            },
+            modifier = Modifier.weight(1f),
+        )
+        if (overflowActions.isNotEmpty()) {
+            HhhlOverflowMenu(
+                actions = overflowActions,
+                label = "更多时间线",
             )
         }
     }
@@ -293,6 +314,7 @@ private fun TimelineSummaryRow(
     onCompose: () -> Unit,
     onSearch: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -310,7 +332,7 @@ private fun TimelineSummaryRow(
                     selectedTabState.notes.isEmpty() -> "${selectedKind.label} · 暂无内容"
                     else -> "${selectedKind.label} · ${selectedTabState.notes.size} 条"
                 },
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
@@ -345,6 +367,7 @@ private fun TimelineTrendSummaryRow(
     onCompose: () -> Unit,
     onSearch: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -361,7 +384,7 @@ private fun TimelineTrendSummaryRow(
                     isRefreshing && trendCount == 0 -> "趋势 · 加载中"
                     else -> "趋势 · $trendCount 个"
                 },
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
@@ -393,6 +416,7 @@ private fun TimelineTrendRow(
     trend: TrendingHashtag,
     onOpenHashtag: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -407,14 +431,14 @@ private fun TimelineTrendRow(
         ) {
             Text(
                 text = "#${trend.tag}",
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = "${trend.usersCount} 人正在使用",
-                color = MaterialTheme.colorScheme.secondary,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -422,7 +446,7 @@ private fun TimelineTrendRow(
         }
         Text(
             text = trendChartSummary(trend),
-            color = MaterialTheme.colorScheme.primary,
+            color = colors.accent,
             style = MaterialTheme.typography.labelMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -449,6 +473,8 @@ fun availableTimelineKinds(capabilities: InstanceCapabilities): List<TimelineKin
         if (capabilities.localTimelineAvailable) add(TimelineKind.Local)
         if (capabilities.globalTimelineAvailable) add(TimelineKind.Global)
         if (capabilities.bubbleTimelineAvailable) add(TimelineKind.Bubble)
+        add(TimelineKind.Featured)
+        add(TimelineKind.Mentions)
     }
 }
 
@@ -551,9 +577,8 @@ private fun TimelineThreadNoteRow(
     content: @Composable () -> Unit,
 ) {
     val presentation = timelineThreadPresentation(item.depth)
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val secondaryColor = MaterialTheme.colorScheme.secondary
-    val dividerColor = LocalHhhlColors.current.divider
+    val colors = LocalHhhlColors.current
+    val treeLineColor = colors.noteTreeLine
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -569,9 +594,9 @@ private fun TimelineThreadNoteRow(
                         val x = 1.dp.toPx() + index * (strokeWidth + railSpacing)
                         drawLine(
                             color = when {
-                                presentation.isDepthCollapsed -> secondaryColor.copy(alpha = 0.10f)
-                                isActiveRail -> primaryColor.copy(alpha = 0.16f)
-                                else -> dividerColor.copy(alpha = 0.58f)
+                                presentation.isDepthCollapsed -> treeLineColor.copy(alpha = 0.18f)
+                                isActiveRail -> treeLineColor.copy(alpha = 0.78f)
+                                else -> treeLineColor.copy(alpha = 0.46f)
                             },
                             start = Offset(x, railTopInset),
                             end = Offset(x, size.height - railBottomInset),

@@ -59,7 +59,14 @@ interface SettingsApi {
 
     suspend fun loadApiTokens(token: String): SettingsCapabilityResult
 
+    suspend fun loadInvites(token: String): SettingsCapabilityResult
+
     suspend fun loadSharedAccess(token: String): SettingsCapabilityResult
+
+    suspend fun loginSharedAccess(
+        token: String,
+        grantId: String,
+    ): SettingsSharedAccessLoginResult
 
     suspend fun loadWebhooks(token: String): SettingsCapabilityResult
 
@@ -78,6 +85,13 @@ interface SettingsApi {
     suspend fun revokeApiToken(
         token: String,
         tokenId: String,
+    ): SettingsManagementMutationResult
+
+    suspend fun createInvite(token: String): SettingsManagementMutationResult
+
+    suspend fun deleteInvite(
+        token: String,
+        inviteId: String,
     ): SettingsManagementMutationResult
 
     suspend fun deleteWebhook(
@@ -173,6 +187,22 @@ sealed interface SettingsWebhookDetailResult {
     data class NetworkError(val message: String) : SettingsWebhookDetailResult
 }
 
+sealed interface SettingsSharedAccessLoginResult {
+    data class Success(
+        val userId: String,
+        val token: String,
+    ) : SettingsSharedAccessLoginResult
+
+    data object Unauthorized : SettingsSharedAccessLoginResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : SettingsSharedAccessLoginResult
+
+    data class NetworkError(val message: String) : SettingsSharedAccessLoginResult
+}
+
 class SharkeySettingsApi(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val client: HttpClient = defaultSettingsClient(),
@@ -211,6 +241,16 @@ class SharkeySettingsApi(
         )
     }
 
+    override suspend fun loadInvites(token: String): SettingsCapabilityResult {
+        return when (val list = loadCapabilityCount(token = token, endpoint = arrayOf("invite", "list"))) {
+            is SettingsCapabilityResult.Count -> when (val limit = loadInviteLimitValue(token)) {
+                null -> list
+                else -> list.copy(active = limit)
+            }
+            else -> list
+        }
+    }
+
     override suspend fun loadSharedAccess(token: String): SettingsCapabilityResult {
         return loadCapabilityCount(
             token = token,
@@ -219,6 +259,62 @@ class SharkeySettingsApi(
                 put("limit", JsonPrimitive(100))
             },
         )
+    }
+
+    override suspend fun loginSharedAccess(
+        token: String,
+        grantId: String,
+    ): SettingsSharedAccessLoginResult {
+        val cleanToken = token.trim()
+        val cleanGrantId = grantId.trim()
+        if (cleanToken.isEmpty()) return SettingsSharedAccessLoginResult.Unauthorized
+        if (cleanGrantId.isEmpty()) {
+            return SettingsSharedAccessLoginResult.ServerError(
+                statusCode = HttpStatusCode.BadRequest.value,
+                message = "共享访问 ID 不能为空",
+            )
+        }
+
+        return try {
+            val response = client.post(apiUrl("i", "shared-access", "login")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    buildJsonObject {
+                        put("i", JsonPrimitive(cleanToken))
+                        put("grantId", JsonPrimitive(cleanGrantId))
+                    },
+                )
+            }
+
+            if (response.isSharkeyUnauthorized()) return SettingsSharedAccessLoginResult.Unauthorized
+            when (response.status) {
+                HttpStatusCode.OK -> {
+                    val payload = response.body<JsonObject>()
+                    val userId = payload["userId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val sharedToken = payload["token"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    if (userId.isBlank() || sharedToken.isBlank()) {
+                        SettingsSharedAccessLoginResult.ServerError(
+                            statusCode = HttpStatusCode.InternalServerError.value,
+                            message = "服务器未返回完整的共享访问登录信息",
+                        )
+                    } else {
+                        SettingsSharedAccessLoginResult.Success(
+                            userId = userId,
+                            token = sharedToken,
+                        )
+                    }
+                }
+                HttpStatusCode.Unauthorized -> SettingsSharedAccessLoginResult.Unauthorized
+                else -> SettingsSharedAccessLoginResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            SettingsSharedAccessLoginResult.NetworkError(error.message ?: "网络请求失败")
+        }
     }
 
     override suspend fun loadWebhooks(token: String): SettingsCapabilityResult {
@@ -335,10 +431,15 @@ class SharkeySettingsApi(
         return try {
             when (key) {
                 SettingsManagementSectionKey.ApiTokens -> loadApiTokensSection(cleanToken)
+                SettingsManagementSectionKey.Invites -> loadInvitesSection(cleanToken)
                 SettingsManagementSectionKey.SharedAccess -> loadSharedAccessSection(cleanToken)
                 SettingsManagementSectionKey.AuthorizedApps -> loadAuthorizedAppsSection(cleanToken)
                 SettingsManagementSectionKey.Webhooks -> loadWebhooksSection(cleanToken)
                 SettingsManagementSectionKey.SigninHistory -> loadSigninHistorySection(cleanToken)
+                SettingsManagementSectionKey.AvatarDecorations -> SettingsManagementSectionResult.ServerError(
+                    statusCode = HttpStatusCode.BadRequest.value,
+                    message = "头像挂件由头像挂件接口加载",
+                )
             }
         } catch (error: CancellationException) {
             throw error
@@ -388,6 +489,39 @@ class SharkeySettingsApi(
         }
     }
 
+    override suspend fun createInvite(token: String): SettingsManagementMutationResult {
+        val cleanToken = token.trim()
+        if (cleanToken.isEmpty()) return SettingsManagementMutationResult.Unauthorized
+
+        return postSimpleMutation(
+            endpoint = arrayOf("invite", "create"),
+            body = buildJsonObject { put("i", JsonPrimitive(cleanToken)) },
+        )
+    }
+
+    override suspend fun deleteInvite(
+        token: String,
+        inviteId: String,
+    ): SettingsManagementMutationResult {
+        val cleanToken = token.trim()
+        val cleanInviteId = inviteId.trim()
+        if (cleanToken.isEmpty()) return SettingsManagementMutationResult.Unauthorized
+        if (cleanInviteId.isEmpty()) {
+            return SettingsManagementMutationResult.ServerError(
+                statusCode = HttpStatusCode.BadRequest.value,
+                message = "邀请码 ID 不能为空",
+            )
+        }
+
+        return postSimpleMutation(
+            endpoint = arrayOf("invite", "delete"),
+            body = buildJsonObject {
+                put("i", JsonPrimitive(cleanToken))
+                put("inviteId", JsonPrimitive(cleanInviteId))
+            },
+        )
+    }
+
     override suspend fun deleteWebhook(
         token: String,
         webhookId: String,
@@ -411,6 +545,32 @@ class SharkeySettingsApi(
                         put("webhookId", JsonPrimitive(cleanWebhookId))
                     },
                 )
+            }
+
+            if (response.isSharkeyUnauthorized()) return SettingsManagementMutationResult.Unauthorized
+            when (response.status) {
+                HttpStatusCode.OK,
+                HttpStatusCode.NoContent -> SettingsManagementMutationResult.Success
+                else -> SettingsManagementMutationResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            SettingsManagementMutationResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    private suspend fun postSimpleMutation(
+        endpoint: Array<String>,
+        body: JsonElement,
+    ): SettingsManagementMutationResult {
+        return try {
+            val response = client.post(apiUrl(*endpoint)) {
+                contentType(ContentType.Application.Json)
+                setBody(body)
             }
 
             if (response.isSharkeyUnauthorized()) return SettingsManagementMutationResult.Unauthorized
@@ -764,6 +924,68 @@ class SharkeySettingsApi(
         )
     }
 
+    private suspend fun loadInvitesSection(token: String): SettingsManagementSectionResult {
+        val response = postManagementRequest(
+            endpoint = arrayOf("invite", "list"),
+            body = buildJsonObject { put("i", JsonPrimitive(token)) },
+        ) ?: return SettingsManagementSectionResult.Unauthorized
+
+        val items = response.body<JsonArray>().map { element ->
+            val obj = element.jsonObject
+            val usedBy = obj["usedBy"]?.jsonObject
+            val usedAt = obj["usedAt"]?.jsonPrimitive?.contentOrNull
+            val expiresAt = obj["expiresAt"]?.jsonPrimitive?.contentOrNull
+            val code = obj["code"]?.jsonPrimitive?.contentOrNull
+                ?: obj["inviteCode"]?.jsonPrimitive?.contentOrNull
+                ?: obj["token"]?.jsonPrimitive?.contentOrNull
+                ?: obj["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            SettingsManagementItem(
+                id = obj["id"]?.jsonPrimitive?.contentOrNull ?: code,
+                title = code.ifBlank { "邀请码" },
+                subtitle = usedBy?.settingsDisplayUserName()?.takeIf { it.isNotBlank() }?.let { "已由 $it 使用" }
+                    ?: "未使用",
+                meta = buildList {
+                    obj["createdAt"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let {
+                        add("创建于 ${it.toLocalCompactDateLabel(displayTimeZone)}")
+                    }
+                    usedAt?.takeIf { it.isNotBlank() }?.let {
+                        add("使用于 ${it.toLocalCompactDateLabel(displayTimeZone)}")
+                    }
+                    expiresAt?.takeIf { it.isNotBlank() }?.let {
+                        add("过期 ${it.toLocalCompactDateLabel(displayTimeZone)}")
+                    }
+                }.joinToString(" · "),
+                badges = listOf(if (usedAt.isNullOrBlank() && usedBy == null) "可用" else "已使用"),
+                actions = if (usedAt.isNullOrBlank()) {
+                    listOf(
+                        SettingsManagementItemAction(
+                            type = SettingsManagementAction.DeleteInvite,
+                            label = "删除",
+                            enabled = true,
+                            destructive = true,
+                        ),
+                    )
+                } else {
+                    emptyList()
+                },
+            )
+        }
+
+        val remaining = loadInviteLimitValue(token)
+        return SettingsManagementSectionResult.Success(
+            SettingsManagementSection(
+                key = SettingsManagementSectionKey.Invites,
+                title = "邀请码",
+                description = buildList {
+                    add("创建和管理当前账号的邀请码")
+                    remaining?.let { add("剩余额度 $it") }
+                }.joinToString(" · "),
+                items = items,
+                supportsPrimaryAction = remaining == null || remaining > 0,
+            ),
+        )
+    }
+
     private suspend fun loadSharedAccessSection(token: String): SettingsManagementSectionResult {
         val response = postManagementRequest(
             endpoint = arrayOf("i", "shared-access", "list"),
@@ -783,6 +1005,13 @@ class SharkeySettingsApi(
                 meta = obj["permissions"]?.jsonArray?.size?.let { "$it 项权限" }.orEmpty(),
                 permissions = obj["permissions"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty(),
                 badges = listOfNotNull(obj["rank"]?.jsonPrimitive?.contentOrNull?.toRankLabel()),
+                actions = listOf(
+                    SettingsManagementItemAction(
+                        type = SettingsManagementAction.LoginSharedAccess,
+                        label = "进入",
+                        enabled = true,
+                    ),
+                ),
             )
         }
 
@@ -953,6 +1182,24 @@ class SharkeySettingsApi(
         return response
     }
 
+    private suspend fun loadInviteLimitValue(token: String): Int? {
+        return runCatching {
+            val response = postManagementRequest(
+                endpoint = arrayOf("invite", "limit"),
+                body = buildJsonObject { put("i", JsonPrimitive(token)) },
+            ) ?: return null
+            val element = response.body<JsonElement>()
+            when (element) {
+                is JsonPrimitive -> element.intOrNull
+                is JsonObject -> element["remaining"]?.jsonPrimitive?.intOrNull
+                    ?: element["limit"]?.jsonPrimitive?.intOrNull
+                    ?: element["count"]?.jsonPrimitive?.intOrNull
+                    ?: element["available"]?.jsonPrimitive?.intOrNull
+                else -> null
+            }
+        }.getOrNull()
+    }
+
     private fun apiUrl(vararg endpoint: String): String {
         return URLBuilder(baseUrl.trim().trimEnd('/'))
             .appendPathSegments("api", *endpoint)
@@ -1082,11 +1329,13 @@ private data class SettingsAccountDto(
 private fun List<String>.toMutedWordPayload(): List<List<String>> {
     return mapNotNull { phrase ->
         phrase.trim()
-            .split(Regex("\\s+"))
+            .split(settingsWhitespaceRegex)
             .mapNotNull { it.trim().takeIf(String::isNotBlank) }
             .takeIf { it.isNotEmpty() }
     }
 }
+
+private val settingsWhitespaceRegex = Regex("\\s+")
 
 private fun JsonElement?.toMutedWordLines(): List<String> {
     val array = this as? JsonArray ?: return emptyList()

@@ -35,6 +35,7 @@ class UserListStateHolder(
 ) {
     private val mutableState = MutableStateFlow(UserListUiState())
     val state: StateFlow<UserListUiState> = mutableState
+    private var timelineRequestId = 0
 
     fun refreshLists() {
         if (state.value.isLoadingLists) return
@@ -100,10 +101,13 @@ class UserListStateHolder(
             )
         }
 
+        val requestId = nextTimelineRequestId()
         scope.launch {
             applyTimelineResult(
                 result = repository.refreshTimeline(list.id),
                 loadingMore = false,
+                listId = list.id,
+                requestId = requestId,
             )
         }
     }
@@ -134,10 +138,13 @@ class UserListStateHolder(
             )
         }
 
+        val requestId = nextTimelineRequestId()
         scope.launch {
             applyTimelineResult(
                 result = repository.loadMoreTimeline(listId, current.notes),
                 loadingMore = true,
+                listId = listId,
+                requestId = requestId,
             )
         }
     }
@@ -383,10 +390,13 @@ class UserListStateHolder(
             )
         }
 
+        val requestId = nextTimelineRequestId()
         scope.launch {
             applyTimelineResult(
                 result = repository.refreshTimeline(listId),
                 loadingMore = false,
+                listId = listId,
+                requestId = requestId,
             )
         }
     }
@@ -394,7 +404,10 @@ class UserListStateHolder(
     private fun applyTimelineResult(
         result: UserListTimelineRepositoryResult,
         loadingMore: Boolean,
+        listId: String,
+        requestId: Int,
     ) {
+        if (!isCurrentTimelineRequest(listId, requestId)) return
         when (result) {
             is UserListTimelineRepositoryResult.Success -> mutableState.update {
                 it.copy(
@@ -423,5 +436,17 @@ class UserListStateHolder(
                 )
             }
         }
+    }
+
+    private fun nextTimelineRequestId(): Int {
+        timelineRequestId += 1
+        return timelineRequestId
+    }
+
+    private fun isCurrentTimelineRequest(
+        listId: String,
+        requestId: Int,
+    ): Boolean {
+        return requestId == timelineRequestId && state.value.selectedList?.id == listId
     }
 }

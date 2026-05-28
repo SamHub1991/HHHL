@@ -1,6 +1,7 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.UserProfileApi
+import cc.hhhl.client.api.UserAvailabilityResult
 import cc.hhhl.client.api.UserProfileLoadResult
 import cc.hhhl.client.api.UserProfileUpdateDraft
 import cc.hhhl.client.api.UserProfileUpdateResult
@@ -147,11 +148,51 @@ class UserProfileRepositoryTest {
         assertEquals(0, calls)
     }
 
+    @Test
+    fun checkUsernameAvailabilityTrimsInput() = runTest {
+        val availabilityCalls = mutableListOf<AvailabilityCall>()
+        val repository = UserProfileRepository(
+            tokenProvider = { "token-123" },
+            userIdProvider = { "user-1" },
+            api = fakeApi(
+                result = UserProfileLoadResult.Success(FakeData.me),
+                availabilityCalls = availabilityCalls,
+                availabilityResult = UserAvailabilityResult.Success(available = true),
+            ),
+        )
+
+        val result = repository.checkUsernameAvailable(" @alice ")
+
+        assertEquals(UserProfileAvailabilityRepositoryResult.Success(available = true), result)
+        assertEquals(listOf(AvailabilityCall("username", "alice")), availabilityCalls)
+    }
+
+    @Test
+    fun checkEmailAvailabilityMapsReason() = runTest {
+        val availabilityCalls = mutableListOf<AvailabilityCall>()
+        val repository = UserProfileRepository(
+            tokenProvider = { "token-123" },
+            userIdProvider = { "user-1" },
+            api = fakeApi(
+                result = UserProfileLoadResult.Success(FakeData.me),
+                availabilityCalls = availabilityCalls,
+                availabilityResult = UserAvailabilityResult.Success(available = false, reason = "used"),
+            ),
+        )
+
+        val result = repository.checkEmailAddressAvailable(" alice@example.com ")
+
+        assertEquals(UserProfileAvailabilityRepositoryResult.Success(available = false, reason = "used"), result)
+        assertEquals(listOf(AvailabilityCall("email", "alice@example.com")), availabilityCalls)
+    }
+
     private fun fakeApi(
         calls: MutableList<ApiCall> = mutableListOf(),
         result: UserProfileLoadResult,
         updateResult: UserProfileUpdateResult = UserProfileUpdateResult.Success(FakeData.me),
         updates: MutableList<UpdateCall> = mutableListOf(),
+        availabilityCalls: MutableList<AvailabilityCall> = mutableListOf(),
+        availabilityResult: UserAvailabilityResult = UserAvailabilityResult.Success(available = true),
         onCall: () -> Unit = {},
     ): UserProfileApi {
         return object : UserProfileApi {
@@ -181,6 +222,18 @@ class UserProfileRepositoryTest {
                 updates.add(UpdateCall(token, draft.name.orEmpty(), draft.description))
                 return updateResult
             }
+
+            override suspend fun checkUsernameAvailable(username: String): UserAvailabilityResult {
+                onCall()
+                availabilityCalls.add(AvailabilityCall("username", username))
+                return availabilityResult
+            }
+
+            override suspend fun checkEmailAddressAvailable(emailAddress: String): UserAvailabilityResult {
+                onCall()
+                availabilityCalls.add(AvailabilityCall("email", emailAddress))
+                return availabilityResult
+            }
         }
     }
 
@@ -193,5 +246,10 @@ class UserProfileRepositoryTest {
         val token: String,
         val name: String,
         val description: String,
+    )
+
+    private data class AvailabilityCall(
+        val type: String,
+        val value: String,
     )
 }

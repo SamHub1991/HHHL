@@ -34,6 +34,7 @@ class AntennaStateHolder(
 ) {
     private val mutableState = MutableStateFlow(AntennaUiState())
     val state: StateFlow<AntennaUiState> = mutableState
+    private var notesRequestId = 0
 
     fun refreshAntennas() {
         if (state.value.isLoadingAntennas) return
@@ -99,10 +100,13 @@ class AntennaStateHolder(
             )
         }
 
+        val requestId = nextNotesRequestId()
         scope.launch {
             applyNotesResult(
                 result = repository.refreshNotes(antenna.id),
                 loadingMore = false,
+                antennaId = antenna.id,
+                requestId = requestId,
             )
         }
     }
@@ -133,10 +137,13 @@ class AntennaStateHolder(
             )
         }
 
+        val requestId = nextNotesRequestId()
         scope.launch {
             applyNotesResult(
                 result = repository.loadMoreNotes(antennaId, current.notes),
                 loadingMore = true,
+                antennaId = antennaId,
+                requestId = requestId,
             )
         }
     }
@@ -310,10 +317,13 @@ class AntennaStateHolder(
             )
         }
 
+        val requestId = nextNotesRequestId()
         scope.launch {
             applyNotesResult(
                 result = repository.refreshNotes(antennaId),
                 loadingMore = false,
+                antennaId = antennaId,
+                requestId = requestId,
             )
         }
     }
@@ -321,7 +331,10 @@ class AntennaStateHolder(
     private fun applyNotesResult(
         result: AntennaNotesRepositoryResult,
         loadingMore: Boolean,
+        antennaId: String,
+        requestId: Int,
     ) {
+        if (!isCurrentNotesRequest(antennaId, requestId)) return
         when (result) {
             is AntennaNotesRepositoryResult.Success -> mutableState.update {
                 it.copy(
@@ -350,5 +363,17 @@ class AntennaStateHolder(
                 )
             }
         }
+    }
+
+    private fun nextNotesRequestId(): Int {
+        notesRequestId += 1
+        return notesRequestId
+    }
+
+    private fun isCurrentNotesRequest(
+        antennaId: String,
+        requestId: Int,
+    ): Boolean {
+        return requestId == notesRequestId && state.value.selectedAntenna?.id == antennaId
     }
 }

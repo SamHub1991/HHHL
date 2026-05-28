@@ -1,5 +1,7 @@
 package cc.hhhl.client.ui.screen
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -7,7 +9,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
@@ -41,14 +43,9 @@ import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material.icons.outlined.Share
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -58,9 +55,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,6 +66,7 @@ import cc.hhhl.client.display.NotificationBadgeMode
 import cc.hhhl.client.display.TimelineDensity
 import cc.hhhl.client.auth.AccountSession
 import cc.hhhl.client.model.SettingsManagementSectionKey
+import cc.hhhl.client.model.InstanceMeta
 import cc.hhhl.client.state.SettingsGroup
 import cc.hhhl.client.state.SettingsItem
 import cc.hhhl.client.state.SettingsItemKey
@@ -79,21 +76,26 @@ import cc.hhhl.client.theme.HhhlCustomTheme
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.theme.toColorOrNull
 import cc.hhhl.client.ui.component.HhhlActionChip
-import cc.hhhl.client.ui.component.HhhlDropdownMenuMaxHeight
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlDropdownMenu
 import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlInlinePanel
+import cc.hhhl.client.ui.component.HhhlDropdownMenuItem
 import cc.hhhl.client.ui.component.HhhlSectionHeader
 import cc.hhhl.client.ui.component.HhhlStatusRow
+import cc.hhhl.client.ui.component.HhhlSwitch
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
 import cc.hhhl.client.ui.component.ThemePicker
 import cc.hhhl.client.ui.component.TimelineDensityPicker
+import cc.hhhl.client.ui.component.hhhlReadableOnControlColor
 
 @Composable
 fun SettingsScreen(
     state: SettingsUiState,
+    instanceMeta: InstanceMeta? = null,
+    isInstanceMetaLoading: Boolean = false,
     onBack: () -> Unit,
     onThemeSelected: (HhhlThemePreset) -> Unit,
     customTheme: HhhlCustomTheme = HhhlCustomTheme(),
@@ -108,7 +110,9 @@ fun SettingsScreen(
     onNotificationBadgeModeSelected: (NotificationBadgeMode) -> Unit,
     onBackgroundNotificationsChanged: (Boolean) -> Unit = {},
     onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit = {},
+    onCheckForUpdates: (((String) -> Unit) -> Unit) = { report -> report("当前平台暂不支持应用内更新") },
     onClearChatMessageCache: () -> Unit = {},
+    onOpenThemeCustomization: () -> Unit = {},
     accounts: List<AccountSession> = emptyList(),
     currentAccountId: String? = null,
     onSwitchAccount: (String) -> Unit = {},
@@ -130,6 +134,8 @@ fun SettingsScreen(
     onOpenWebSettings: (SettingsItemKey) -> Unit = {},
     onOpenManagement: (SettingsManagementSectionKey) -> Unit = {},
 ) {
+    var updateStatus by remember { mutableStateOf<String?>(null) }
+    var isCheckingUpdate by remember { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxSize()) {
         HhhlTopBar(
             title = "设置",
@@ -149,7 +155,7 @@ fun SettingsScreen(
                     ) {
                         Text(
                             text = "账号",
-                            color = LocalHhhlColors.current.subtleText,
+                            color = LocalHhhlColors.current.textMuted,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -161,6 +167,14 @@ fun SettingsScreen(
                             onAddAccount = onAddAccount,
                         )
                     }
+                }
+            }
+            if (instanceMeta != null || isInstanceMetaLoading) {
+                item(key = "instance-overview", contentType = "instance-overview") {
+                    InstanceOverviewPanel(
+                        meta = instanceMeta,
+                        isLoading = isInstanceMetaLoading,
+                    )
                 }
             }
             if (state.errorMessage != null || state.isRemoteLoading) {
@@ -197,6 +211,7 @@ fun SettingsScreen(
                         onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
                         onSpecialCareBackgroundNotificationsChanged = onSpecialCareBackgroundNotificationsChanged,
                         onClearChatMessageCache = onClearChatMessageCache,
+                        onOpenThemeCustomization = onOpenThemeCustomization,
                         onPrivacyToggle = onPrivacyToggle,
                         onNotificationTypeToggle = onNotificationTypeToggle,
                         onMutedWordDraftChanged = onMutedWordDraftChanged,
@@ -215,7 +230,205 @@ fun SettingsScreen(
                     HhhlDivider()
                 }
             }
+            item(key = "settings-app-update", contentType = "settings-app-update") {
+                SettingsAppUpdatePanel(
+                    status = updateStatus,
+                    isChecking = isCheckingUpdate,
+                    onCheck = {
+                        if (isCheckingUpdate) return@SettingsAppUpdatePanel
+                        isCheckingUpdate = true
+                        updateStatus = "正在检查 GitHub Release"
+                        onCheckForUpdates { message ->
+                            updateStatus = message
+                            isCheckingUpdate = false
+                        }
+                    },
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun SettingsAppUpdatePanel(
+    status: String?,
+    isChecking: Boolean,
+    onCheck: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    HhhlInlinePanel(
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+        emphasized = true,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(colors.buttonSelectedBackground)
+                    .border(1.dp, colors.focusRing.copy(alpha = 0.24f), RoundedCornerShape(11.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Sync,
+                    contentDescription = null,
+                    tint = hhhlReadableOnControlColor(colors.buttonSelectedBackground, colors.accent),
+                    modifier = Modifier.size(17.dp),
+                )
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "软件更新",
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = status ?: "从 GitHub Release 检查新版 APK，覆盖安装会保留缓存和本地数据",
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            HhhlActionChip(
+                label = if (isChecking) "检查中" else "获取更新",
+                emphasized = true,
+                enabled = !isChecking,
+                onClick = onCheck,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InstanceOverviewPanel(
+    meta: InstanceMeta?,
+    isLoading: Boolean,
+) {
+    val colors = LocalHhhlColors.current
+    HhhlInlinePanel(
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        emphasized = true,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = meta?.name?.takeIf { it.isNotBlank() } ?: "实例信息",
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = meta?.version?.takeIf { it.isNotBlank() }?.let { "Sharkey $it" }
+                        ?: if (isLoading) "正在同步站点概况" else "站点概况",
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            meta?.onlineUsers?.let { online ->
+                HhhlActionChip(
+                    label = "在线 ${formatCompactCount(online.countAcrossNetwork.coerceAtLeast(online.count))}",
+                    emphasized = true,
+                    enabled = false,
+                    onClick = {},
+                )
+            }
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            meta?.stats?.let { stats ->
+                InstanceStatChip("帖子", formatCompactCount(stats.notesCount))
+                InstanceStatChip("用户", formatCompactCount(stats.usersCount))
+                InstanceStatChip("反应", formatCompactCount(stats.reactionsCount))
+                if (stats.instances > 0) InstanceStatChip("实例", formatCompactCount(stats.instances))
+                val driveUsage = stats.driveUsageLocal + stats.driveUsageRemote
+                if (driveUsage > 0) InstanceStatChip("网盘", formatBytes(driveUsage))
+            }
+            meta?.serverInfo?.takeIf { it.cpuCores > 0 || it.storageTotal > 0 || it.memoryTotal > 0 }?.let { server ->
+                if (server.cpuCores > 0) InstanceStatChip("CPU", "${server.cpuCores} 核")
+                if (server.memoryTotal > 0) InstanceStatChip("内存", formatBytes(server.memoryTotal))
+                if (server.storageTotal > 0) InstanceStatChip("存储", "${formatBytes(server.storageUsed)} / ${formatBytes(server.storageTotal)}")
+            }
+        }
+    }
+}
+
+@Composable
+private fun InstanceStatChip(
+    label: String,
+    value: String,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(colors.inputBackground)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            color = colors.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+        )
+        Text(
+            text = value,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
+    }
+}
+
+private fun formatCompactCount(value: Long): String {
+    return when {
+        value >= 100_000_000 -> "${value / 100_000_000}亿"
+        value >= 10_000 -> {
+            val scaled = value / 1_000
+            "${scaled / 10}.${scaled % 10}万"
+        }
+        else -> value.toString()
+    }
+}
+
+private fun formatCompactCount(value: Int): String = formatCompactCount(value.toLong())
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val units = listOf("B", "KB", "MB", "GB", "TB")
+    var value = bytes.toDouble()
+    var unitIndex = 0
+    while (value >= 1024.0 && unitIndex < units.lastIndex) {
+        value /= 1024.0
+        unitIndex += 1
+    }
+    return if (value >= 10 || unitIndex == 0) {
+        "${value.toInt()} ${units[unitIndex]}"
+    } else {
+        "${(value * 10).toInt() / 10.0} ${units[unitIndex]}"
     }
 }
 
@@ -242,6 +455,7 @@ private fun SettingsRow(
     onBackgroundNotificationsChanged: (Boolean) -> Unit,
     onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit,
     onClearChatMessageCache: () -> Unit,
+    onOpenThemeCustomization: () -> Unit,
     onPrivacyToggle: (SettingsItemKey, Boolean) -> Unit,
     onNotificationTypeToggle: (String, Boolean) -> Unit,
     onMutedWordDraftChanged: (String) -> Unit,
@@ -257,6 +471,7 @@ private fun SettingsRow(
     onOpenWebSettings: (SettingsItemKey) -> Unit,
     onOpenManagement: (SettingsManagementSectionKey) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val webManagementPath = settingsWebManagementPath(item.key)
     val nativeManagementKey = settingsManagementSectionKey(item.key)
     Row(
@@ -269,6 +484,9 @@ private fun SettingsRow(
                     }
                     nativeManagementKey != null -> {
                         Modifier.clickable(enabled = item.enabled) { onOpenManagement(nativeManagementKey) }
+                    }
+                    item.key == SettingsItemKey.AdvancedTheme -> {
+                        Modifier.clickable(enabled = item.enabled, onClick = onOpenThemeCustomization)
                     }
                     webManagementPath != null -> {
                         Modifier.clickable(enabled = item.enabled) { onOpenWebSettings(item.key) }
@@ -288,9 +506,9 @@ private fun SettingsRow(
             Text(
                 text = item.label,
                 color = if (item.enabled) {
-                    MaterialTheme.colorScheme.onBackground
+                    colors.textPrimary
                 } else {
-                    LocalHhhlColors.current.subtleText
+                    colors.textMuted
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
@@ -305,12 +523,7 @@ private fun SettingsRow(
                 )
                 SettingsItemKey.AdvancedTheme -> AdvancedThemeEditor(
                     customTheme = customTheme,
-                    onCustomThemeChanged = onCustomThemeChanged,
-                    onReset = onResetCustomTheme,
-                    onPickGlobalBackgroundImage = onPickGlobalBackgroundImage,
-                    onClearGlobalBackgroundImage = onClearGlobalBackgroundImage,
-                    onPickChatBackgroundImage = onPickChatBackgroundImage,
-                    onClearChatBackgroundImage = onClearChatBackgroundImage,
+                    onOpen = onOpenThemeCustomization,
                 )
                 SettingsItemKey.TimelineDensity -> TimelineDensityPicker(
                     selectedDensity = state.selectedTimelineDensity,
@@ -395,7 +608,7 @@ private fun SettingsRow(
                 )
                 SettingsItemKey.AdminDashboard -> Text(
                     text = item.value.orEmpty(),
-                    color = MaterialTheme.colorScheme.primary,
+                    color = colors.accent,
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -403,7 +616,9 @@ private fun SettingsRow(
                 SettingsItemKey.TwoFactor,
                 SettingsItemKey.Passkeys,
                 SettingsItemKey.SigninHistory,
+                SettingsItemKey.AvatarDecorations,
                 SettingsItemKey.ApiTokens,
+                SettingsItemKey.Invites,
                 SettingsItemKey.SharedAccess,
                 SettingsItemKey.Webhooks,
                 SettingsItemKey.AuthorizedApps -> SettingsWebManagementLine(
@@ -416,7 +631,7 @@ private fun SettingsRow(
                 )
                 else -> Text(
                     text = item.value.orEmpty(),
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -429,174 +644,92 @@ private fun SettingsRow(
 @Composable
 private fun AdvancedThemeEditor(
     customTheme: HhhlCustomTheme,
-    onCustomThemeChanged: (HhhlCustomTheme) -> Unit,
-    onReset: () -> Unit,
-    onPickGlobalBackgroundImage: () -> Unit,
-    onClearGlobalBackgroundImage: () -> Unit,
-    onPickChatBackgroundImage: () -> Unit,
-    onClearChatBackgroundImage: () -> Unit,
+    onOpen: () -> Unit,
 ) {
-    HhhlInlinePanel(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        ThemeSwatchGroup(
-            label = "强调色",
-            selectedHex = customTheme.accentColorHex,
-            swatches = accentThemeSwatches,
-            onSelected = { hex -> onCustomThemeChanged(customTheme.copy(accentColorHex = hex)) },
-        )
-        ThemeSwatchGroup(
-            label = "全局背景色",
-            selectedHex = customTheme.backgroundColorHex,
-            swatches = backgroundThemeSwatches,
-            onSelected = { hex -> onCustomThemeChanged(customTheme.copy(backgroundColorHex = hex)) },
-        )
-        ThemeSwatchGroup(
-            label = "聊天背景色",
-            selectedHex = customTheme.chatBackgroundColorHex,
-            swatches = chatBackgroundThemeSwatches,
-            onSelected = { hex -> onCustomThemeChanged(customTheme.copy(chatBackgroundColorHex = hex)) },
-        )
+        ThemeCompactPreview(customTheme = customTheme)
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val activeItems = customTheme.activeLabels()
             Text(
-                text = "全局背景图",
-                color = MaterialTheme.colorScheme.onBackground,
+                text = if (activeItems.isEmpty()) "颜色、背景图与界面层级" else activeItems.joinToString("、"),
+                color = LocalHhhlColors.current.textMuted,
                 style = MaterialTheme.typography.labelMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            HhhlActionChip(label = "选择", emphasized = true, onClick = onPickGlobalBackgroundImage)
-            HhhlActionChip(
-                label = "清除",
-                enabled = customTheme.globalBackgroundImageDataUri.isNotBlank(),
-                onClick = onClearGlobalBackgroundImage,
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "聊天背景图",
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.weight(1f),
-            )
-            HhhlActionChip(label = "选择", emphasized = true, onClick = onPickChatBackgroundImage)
-            HhhlActionChip(
-                label = "清除",
-                enabled = customTheme.chatBackgroundImageDataUri.isNotBlank(),
-                onClick = onClearChatBackgroundImage,
-            )
-        }
-        HhhlActionChip(
-            label = "恢复默认",
-            enabled = customTheme.enabled,
-            onClick = onReset,
-        )
-    }
-}
-
-@Composable
-private fun ThemeSwatchGroup(
-    label: String,
-    selectedHex: String,
-    swatches: List<ThemeColorSwatch>,
-    onSelected: (String) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            text = label,
-            color = LocalHhhlColors.current.subtleText,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            swatches.forEach { swatch ->
-                ThemeColorSwatchButton(
-                    swatch = swatch,
-                    selected = selectedHex.equals(swatch.hex, ignoreCase = true),
-                    onClick = { onSelected(swatch.hex) },
-                )
-            }
+            HhhlActionChip(label = "配置", emphasized = true, onClick = onOpen)
         }
     }
 }
 
 @Composable
-private fun ThemeColorSwatchButton(
-    swatch: ThemeColorSwatch,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val shape = RoundedCornerShape(999.dp)
-    Box(
-        modifier = Modifier
-            .size(32.dp)
-            .clip(shape)
-            .background(swatch.hex.toColorOrNull() ?: Color.Transparent)
-            .border(
-                width = if (selected) 3.dp else 1.dp,
-                color = if (selected) {
-                    MaterialTheme.colorScheme.onBackground
-                } else {
-                    LocalHhhlColors.current.divider.copy(alpha = 0.76f)
-                },
-                shape = shape,
+private fun ThemeCompactPreview(customTheme: HhhlCustomTheme) {
+    val colors = LocalHhhlColors.current
+    val accent = customTheme.accentColorHex.toColorOrNull() ?: colors.accent
+    val background = customTheme.backgroundColorHex.toColorOrNull() ?: colors.pageBackground
+    val card = customTheme.cardBackgroundColorHex.toColorOrNull() ?: colors.surface
+    Row(
+        horizontalArrangement = Arrangement.spacedBy((-8).dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        listOf(background, card, accent).forEachIndexed { index, color ->
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(color)
+                    .border(
+                        width = 1.dp,
+                        color = if (index == 2) accent.copy(alpha = 0.42f) else colors.border.copy(alpha = 0.62f),
+                        shape = RoundedCornerShape(10.dp),
+                    ),
             )
-            .clickable(onClick = onClick),
-    )
+        }
+    }
 }
 
-private data class ThemeColorSwatch(
-    val hex: String,
-)
-
-private val accentThemeSwatches = listOf(
-    "#1D9BF0",
-    "#007AFF",
-    "#00C7BE",
-    "#34C759",
-    "#7856FF",
-    "#F91880",
-    "#FF7A00",
-    "#8E8E93",
-).map(::ThemeColorSwatch)
-
-private val backgroundThemeSwatches = listOf(
-    "#F7F9FA",
-    "#F5F5F7",
-    "#FFFFFF",
-    "#F5F7F6",
-    "#FAFCF7",
-    "#15181D",
-    "#101010",
-    "#000000",
-).map(::ThemeColorSwatch)
-
-private val chatBackgroundThemeSwatches = listOf(
-    "#F7F9FA",
-    "#F2F6F8",
-    "#F5F5F7",
-    "#EEF6FF",
-    "#EFF7F4",
-    "#151B23",
-    "#101418",
-    "#000000",
-).map(::ThemeColorSwatch)
+private fun HhhlCustomTheme.activeLabels(): List<String> {
+    return buildList {
+        if (accentColorHex.isNotBlank() || accentSoftColorHex.isNotBlank()) add("强调色")
+        if (backgroundColorHex.isNotBlank()) add("全局背景")
+        if (surfaceColorHex.isNotBlank() || elevatedSurfaceColorHex.isNotBlank() || panelBackgroundColorHex.isNotBlank()) add("界面层级")
+        if (chatBackgroundColorHex.isNotBlank()) add("聊天背景")
+        if (inputBackgroundColorHex.isNotBlank()) add("输入框")
+        if (cardBackgroundColorHex.isNotBlank() || noteBackgroundColorHex.isNotBlank()) add("卡片")
+        if (primaryTextColorHex.isNotBlank() || secondaryTextColorHex.isNotBlank() || mutedTextColorHex.isNotBlank() || textInverseColorHex.isNotBlank()) add("文字")
+        if (dividerColorHex.isNotBlank() || borderColorHex.isNotBlank() || focusRingColorHex.isNotBlank() || inputBorderColorHex.isNotBlank() || inputFocusedBorderColorHex.isNotBlank()) add("线条")
+        if (mediaBackgroundColorHex.isNotBlank()) add("媒体")
+        if (avatarBackgroundColorHex.isNotBlank() || badgeBackgroundColorHex.isNotBlank() || unreadBadgeColorHex.isNotBlank()) add("标记")
+        if (successColorHex.isNotBlank() || warningColorHex.isNotBlank() || dangerColorHex.isNotBlank() || dangerTextColorHex.isNotBlank()) add("状态色")
+        if (toastBackgroundColorHex.isNotBlank() || toastTextColorHex.isNotBlank()) add("提示")
+        if (rankBronzeColorHex.isNotBlank() || rankSilverColorHex.isNotBlank() || rankGoldColorHex.isNotBlank() || rankPlatinumColorHex.isNotBlank()) add("成就色")
+        if (buttonBackgroundColorHex.isNotBlank() || buttonSelectedBackgroundColorHex.isNotBlank()) add("按钮")
+        if (chipBackgroundColorHex.isNotBlank() || chipSelectedBackgroundColorHex.isNotBlank()) add("标签")
+        if (topBarBackgroundColorHex.isNotBlank() || bottomNavBackgroundColorHex.isNotBlank() || bottomNavSelectedColorHex.isNotBlank()) add("导航")
+        if (incomingBubbleColorHex.isNotBlank() || outgoingBubbleColorHex.isNotBlank() || incomingBubbleTextColorHex.isNotBlank() || outgoingBubbleTextColorHex.isNotBlank() || chatBubbleBorderColorHex.isNotBlank() || chatMentionHighlightColorHex.isNotBlank()) add("气泡")
+        if (chatComposerBackgroundColorHex.isNotBlank()) add("输入栏")
+        if (noteActionBackgroundColorHex.isNotBlank() || noteReactionBackgroundColorHex.isNotBlank() || noteTreeLineColorHex.isNotBlank() || quoteBackgroundColorHex.isNotBlank()) add("帖子")
+        if (overlayScrimColorHex.isNotBlank() || shadowColorHex.isNotBlank()) add("遮罩/阴影")
+        if (globalBackgroundImageDataUri.isNotBlank()) add("全局图")
+        if (chatBackgroundImageDataUri.isNotBlank()) add("聊天图")
+    }
+}
 
 @Composable
 private fun SettingsCacheLine(
     text: String,
     onClear: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -604,7 +737,7 @@ private fun SettingsCacheLine(
     ) {
         Text(
             text = text,
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelMedium,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -625,6 +758,7 @@ private fun SettingsWebManagementLine(
     onOpen: () -> Unit,
     label: String = "网页版管理",
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -632,7 +766,7 @@ private fun SettingsWebManagementLine(
     ) {
         Text(
             text = text.ifBlank { "需要在网页版继续管理" },
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelMedium,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -665,6 +799,7 @@ private fun SettingsSwitchLine(
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -672,10 +807,10 @@ private fun SettingsSwitchLine(
     ) {
         Text(
             text = if (checked) "开启" else "关闭",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelMedium,
         )
-        Switch(
+        HhhlSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange,
             enabled = enabled,
@@ -693,6 +828,7 @@ private fun SettingsListEditor(
     onAdd: () -> Unit,
     onRemove: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     HhhlInlinePanel(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -721,7 +857,7 @@ private fun SettingsListEditor(
         if (values.isEmpty()) {
             Text(
                 text = "无",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelMedium,
             )
         } else {
@@ -733,7 +869,7 @@ private fun SettingsListEditor(
                 ) {
                     Text(
                         text = value,
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = colors.textPrimary,
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -750,7 +886,7 @@ private fun SettingsListEditor(
             if (values.size > 6) {
                 Text(
                     text = "+${values.size - 6}",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
@@ -775,24 +911,31 @@ private fun SettingsItemIcon(
     key: SettingsItemKey,
     enabled: Boolean,
 ) {
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
+    val containerColor = if (enabled) {
+        colors.buttonSelectedBackground
+    } else {
+        colors.buttonBackground.copy(alpha = if (isDarkSurface) 0.28f else 0.36f)
+    }
+    val borderColor = if (enabled) {
+        colors.focusRing.copy(alpha = if (isDarkSurface) 0.34f else 0.22f)
+    } else {
+        colors.border.copy(alpha = if (isDarkSurface) 0.20f else 0.16f)
+    }
     Box(
         modifier = Modifier
-            .size(34.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(
-                if (enabled) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-                } else {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.025f)
-                },
-            ),
+            .size(32.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(containerColor)
+            .border(1.dp, borderColor, RoundedCornerShape(11.dp)),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             imageVector = settingsItemIcon(key),
             contentDescription = null,
-            tint = if (enabled) MaterialTheme.colorScheme.primary else LocalHhhlColors.current.subtleText,
-            modifier = Modifier.size(18.dp),
+            tint = if (enabled) hhhlReadableOnControlColor(containerColor, colors.accent) else colors.textMuted,
+            modifier = Modifier.size(17.dp),
         )
     }
 }
@@ -807,6 +950,7 @@ private fun settingsItemIcon(key: SettingsItemKey): ImageVector {
         SettingsItemKey.TwoFactor -> Icons.Filled.Security
         SettingsItemKey.Passkeys -> Icons.Filled.VpnKey
         SettingsItemKey.SigninHistory -> Icons.Filled.History
+        SettingsItemKey.AvatarDecorations -> Icons.Filled.AutoAwesome
         SettingsItemKey.DefaultNoteVisibility -> Icons.Filled.Visibility
         SettingsItemKey.LockAccount -> Icons.Filled.Lock
         SettingsItemKey.AutoAcceptFollowed -> Icons.Outlined.PersonAdd
@@ -823,6 +967,7 @@ private fun settingsItemIcon(key: SettingsItemKey): ImageVector {
         SettingsItemKey.HardMutedWords -> Icons.Outlined.FilterList
         SettingsItemKey.MutedInstances -> Icons.Filled.Language
         SettingsItemKey.ApiTokens -> Icons.Filled.Key
+        SettingsItemKey.Invites -> Icons.Filled.CardGiftcard
         SettingsItemKey.SharedAccess -> Icons.Outlined.Share
         SettingsItemKey.Webhooks -> Icons.Outlined.Link
         SettingsItemKey.AuthorizedApps -> Icons.Filled.Apps
@@ -839,13 +984,14 @@ private fun <T> SettingsDropdownPicker(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
     val pickerBackground = if (isDarkSurface) {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.70f)
+        colors.surfaceElevated.copy(alpha = 0.70f)
     } else {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.68f)
+        colors.surfaceElevated.copy(alpha = 0.68f)
     }
-    val pickerBorder = MaterialTheme.colorScheme.primary.copy(alpha = if (isDarkSurface) 0.14f else 0.08f)
+    val pickerBorder = colors.focusRing.copy(alpha = if (isDarkSurface) 0.14f else 0.08f)
 
     Column(modifier = modifier) {
         Row(
@@ -864,7 +1010,7 @@ private fun <T> SettingsDropdownPicker(
         ) {
             Text(
                 text = selectedLabel,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -873,24 +1019,23 @@ private fun <T> SettingsDropdownPicker(
             )
             Text(
                 text = "更换",
-                color = MaterialTheme.colorScheme.primary,
+                color = colors.accent,
                 style = MaterialTheme.typography.labelMedium,
             )
         }
-        DropdownMenu(
+        HhhlDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            modifier = Modifier.heightIn(max = HhhlDropdownMenuMaxHeight),
         ) {
             options.forEach { option ->
-                DropdownMenuItem(
+                HhhlDropdownMenuItem(
                     text = {
                         Text(
                             text = optionLabel(option),
                             color = if (isSelected(option)) {
-                                MaterialTheme.colorScheme.primary
+                                colors.accent
                             } else {
-                                MaterialTheme.colorScheme.onBackground
+                                colors.textPrimary
                             },
                         )
                     },
@@ -918,8 +1063,10 @@ fun settingsWebManagementPath(key: SettingsItemKey): String? {
         SettingsItemKey.Passkeys -> "/settings/security"
         SettingsItemKey.SigninHistory -> "/settings/security#signin-history"
         SettingsItemKey.ApiTokens -> "/settings/api"
+        SettingsItemKey.Invites -> null
         SettingsItemKey.Webhooks -> "/settings/webhook"
         SettingsItemKey.AuthorizedApps -> "/settings/apps"
+        SettingsItemKey.AvatarDecorations -> null
         else -> null
     }
 }
@@ -927,10 +1074,12 @@ fun settingsWebManagementPath(key: SettingsItemKey): String? {
 fun settingsManagementSectionKey(key: SettingsItemKey): SettingsManagementSectionKey? {
     return when (key) {
         SettingsItemKey.ApiTokens -> SettingsManagementSectionKey.ApiTokens
+        SettingsItemKey.Invites -> SettingsManagementSectionKey.Invites
         SettingsItemKey.SharedAccess -> SettingsManagementSectionKey.SharedAccess
         SettingsItemKey.Webhooks -> SettingsManagementSectionKey.Webhooks
         SettingsItemKey.AuthorizedApps -> SettingsManagementSectionKey.AuthorizedApps
         SettingsItemKey.SigninHistory -> SettingsManagementSectionKey.SigninHistory
+        SettingsItemKey.AvatarDecorations -> SettingsManagementSectionKey.AvatarDecorations
         else -> null
     }
 }

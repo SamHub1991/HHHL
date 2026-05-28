@@ -12,9 +12,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -84,6 +86,36 @@ class GalleryStateHolderTest {
         assertFalse(holder.state.value.isLoadingDetail)
         assertEquals(post, holder.state.value.selectedPost)
         assertEquals(listOf("gallery-1"), calls)
+    }
+
+    @Test
+    fun openingAnotherPostInvalidatesOlderDetailResult() = runTest {
+        val first = CompletableDeferred<GalleryPostRepositoryResult>()
+        val second = CompletableDeferred<GalleryPostRepositoryResult>()
+        val firstPost = sampleGalleryPost("gallery-1")
+        val secondPost = sampleGalleryPost("gallery-2")
+        val holder = GalleryStateHolder(
+            repository = fakeRepository(
+                postsResult = GalleryPostsRepositoryResult.Success(emptyList()),
+                postResultProvider = { id -> if (id == "gallery-1") first.await() else second.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.openPost("gallery-1")
+        runCurrent()
+        holder.openPost("gallery-2")
+        runCurrent()
+        second.complete(GalleryPostRepositoryResult.Success(secondPost))
+        advanceUntilIdle()
+
+        assertEquals(secondPost, holder.state.value.selectedPost)
+        assertFalse(holder.state.value.isLoadingDetail)
+
+        first.complete(GalleryPostRepositoryResult.Success(firstPost))
+        advanceUntilIdle()
+
+        assertEquals(secondPost, holder.state.value.selectedPost)
     }
 
     @Test
@@ -228,6 +260,7 @@ class GalleryStateHolderTest {
         onShowPost: (String) -> Unit = {},
         onLikePost: (String) -> Unit = {},
         onUnlikePost: (String) -> Unit = {},
+        postResultProvider: suspend (String) -> GalleryPostRepositoryResult = { postResult },
     ): GalleryRepository {
         return sequenceRepository(
             postsResults = listOf(postsResult),
@@ -237,6 +270,7 @@ class GalleryStateHolderTest {
             onShowPost = onShowPost,
             onLikePost = onLikePost,
             onUnlikePost = onUnlikePost,
+            postResultProvider = postResultProvider,
         )
     }
 
@@ -248,6 +282,7 @@ class GalleryStateHolderTest {
         onShowPost: (String) -> Unit = {},
         onLikePost: (String) -> Unit = {},
         onUnlikePost: (String) -> Unit = {},
+        postResultProvider: suspend (String) -> GalleryPostRepositoryResult = { postResult },
     ): GalleryRepository {
         var postResultIndex = 0
         return object : GalleryRepository(
@@ -315,7 +350,7 @@ class GalleryStateHolderTest {
 
             override suspend fun showPost(postId: String): GalleryPostRepositoryResult {
                 onShowPost(postId)
-                return postResult
+                return postResultProvider(postId)
             }
 
             override suspend fun likePost(postId: String): GalleryActionRepositoryResult {

@@ -132,6 +132,34 @@ class UserRelationshipRepositoryTest {
     }
 
     @Test
+    fun updateAndInvalidateFollowingUseTokenAndUserId() = runTest {
+        val calls = mutableListOf<ApiCall>()
+        val repository = UserRelationshipRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(calls = calls, result = UserRelationshipResult.Success),
+        )
+
+        assertEquals(
+            UserRelationshipRepositoryResult.Success,
+            repository.updateFollowing("user-1", notify = "normal", withReplies = true),
+        )
+        assertEquals(UserRelationshipRepositoryResult.Success, repository.invalidateFollowing("user-1"))
+        assertEquals(
+            UserRelationshipRepositoryResult.Success,
+            repository.updateAllFollowing(notify = "none", withReplies = false),
+        )
+
+        assertEquals(
+            listOf(
+                ApiCall("updateFollowing:normal:true", "token-123", "user-1"),
+                ApiCall("invalidateFollowing", "token-123", "user-1"),
+                ApiCall("updateAllFollowing:none:false", "token-123", ""),
+            ),
+            calls,
+        )
+    }
+
+    @Test
     fun missingTokenReturnsUnauthorizedWithoutCallingApi() = runTest {
         var calls = 0
         val repository = UserRelationshipRepository(
@@ -205,6 +233,7 @@ class UserRelationshipRepositoryTest {
             override suspend fun follow(
                 token: String,
                 userId: String,
+                withReplies: Boolean?,
             ): UserRelationshipResult {
                 onCall()
                 calls.add(ApiCall("follow", token, userId))
@@ -217,6 +246,36 @@ class UserRelationshipRepositoryTest {
             ): UserRelationshipResult {
                 onCall()
                 calls.add(ApiCall("unfollow", token, userId))
+                return result
+            }
+
+            override suspend fun updateFollowing(
+                token: String,
+                userId: String,
+                notify: String?,
+                withReplies: Boolean?,
+            ): UserRelationshipResult {
+                onCall()
+                calls.add(ApiCall("updateFollowing:$notify:$withReplies", token, userId))
+                return result
+            }
+
+            override suspend fun updateAllFollowing(
+                token: String,
+                notify: String?,
+                withReplies: Boolean?,
+            ): UserRelationshipResult {
+                onCall()
+                calls.add(ApiCall("updateAllFollowing:$notify:$withReplies", token, ""))
+                return result
+            }
+
+            override suspend fun invalidateFollowing(
+                token: String,
+                userId: String,
+            ): UserRelationshipResult {
+                onCall()
+                calls.add(ApiCall("invalidateFollowing", token, userId))
                 return result
             }
 

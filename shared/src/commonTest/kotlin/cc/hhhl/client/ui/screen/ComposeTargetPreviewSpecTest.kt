@@ -3,6 +3,7 @@ package cc.hhhl.client.ui.screen
 import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.api.ComposeDraft
 import cc.hhhl.client.api.ComposePollDraft
+import cc.hhhl.client.api.ComposeScheduledNote
 import cc.hhhl.client.model.NoteVisibility
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,6 +36,44 @@ class ComposeTargetPreviewSpecTest {
         val preview = composeTargetPreview(note, ComposeTargetKind.Quote)
 
         assertEquals("${note.media.size} 个附件", preview?.body)
+    }
+
+    @Test
+    fun targetPreviewTruncatesRichTextWithoutCuttingMfmToken() {
+        val note = FakeData.timeline.first().copy(
+            text = "hello $[fg.color=ff0000 ${"red ".repeat(80)}] tail",
+            cw = null,
+        )
+
+        val preview = composeTargetPreview(note, ComposeTargetKind.Reply)
+
+        assertEquals(true, preview?.body?.endsWith("...") == true)
+        assertEquals(false, preview?.body?.contains("$[fg.color") == true)
+    }
+
+    @Test
+    fun targetPreviewNormalizesMfmMarkdownAndUnicodeEmoji() {
+        val note = FakeData.timeline.first().copy(
+            text = "$[x2 hello] [docs](https://dc.hhhl.cc) ${'$'}{unicode 1f44d}",
+            cw = null,
+        )
+
+        val preview = composeTargetPreview(note, ComposeTargetKind.Reply)
+
+        assertEquals("hello docs 👍", preview?.body)
+    }
+
+    @Test
+    fun scheduledNotePreviewNormalizesRichTextSyntax() {
+        val note = ComposeScheduledNote(
+            id = "scheduled-rich",
+            text = "$[x2 hello] [docs](https://dc.hhhl.cc) ${'$'}{unicode 1f44d}",
+            cw = null,
+            scheduledAt = null,
+            visibility = NoteVisibility.Public,
+        )
+
+        assertEquals("hello docs 👍", composeScheduledNotePreviewText(note))
     }
 
     @Test

@@ -139,6 +139,42 @@ class NotificationRepositoryTest {
         assertEquals(listOf(ApiCall("markAll", "token-123")), calls)
     }
 
+    @Test
+    fun sendTestNotificationUsesToken() = runTest {
+        val calls = mutableListOf<ApiCall>()
+        val repository = NotificationRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                calls = calls,
+                result = NotificationLoadResult.Success(emptyList()),
+                markAllResult = NotificationActionResult.Success,
+            ),
+        )
+
+        val result = repository.sendTestNotification()
+
+        assertEquals(NotificationRepositoryResult.ActionSuccess, result)
+        assertEquals(listOf(ApiCall("test", "token-123")), calls)
+    }
+
+    @Test
+    fun createNotificationUsesTokenAndBody() = runTest {
+        val calls = mutableListOf<ApiCall>()
+        val repository = NotificationRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                calls = calls,
+                result = NotificationLoadResult.Success(emptyList()),
+                markAllResult = NotificationActionResult.Success,
+            ),
+        )
+
+        val result = repository.createNotification(body = "回来看看新消息", header = "HHHL 提醒")
+
+        assertEquals(NotificationRepositoryResult.ActionSuccess, result)
+        assertEquals(listOf(ApiCall("create:回来看看新消息", "token-123")), calls)
+    }
+
     private fun fakeApi(
         calls: MutableList<ApiCall> = mutableListOf(),
         result: NotificationLoadResult,
@@ -159,6 +195,26 @@ class NotificationRepositoryTest {
 
             override suspend fun markAllAsRead(token: String): NotificationActionResult {
                 calls.add(ApiCall("markAll", token))
+                return markAllResult
+            }
+
+            override suspend fun flush(token: String): NotificationActionResult {
+                calls.add(ApiCall("flush", token))
+                return markAllResult
+            }
+
+            override suspend fun createNotification(
+                token: String,
+                body: String,
+                header: String?,
+                icon: String?,
+            ): NotificationActionResult {
+                calls.add(ApiCall("create:$body", token))
+                return markAllResult
+            }
+
+            override suspend fun sendTestNotification(token: String): NotificationActionResult {
+                calls.add(ApiCall("test", token))
                 return markAllResult
             }
         }

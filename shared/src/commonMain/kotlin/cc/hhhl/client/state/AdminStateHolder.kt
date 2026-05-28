@@ -49,9 +49,14 @@ class AdminStateHolder(
 ) {
     private val mutableState = MutableStateFlow(AdminDashboardUiState())
     val state: StateFlow<AdminDashboardUiState> = mutableState
+    private var overviewRequestId = 0
+    private var userSearchRequestId = 0
+    private var userRolesRequestId = 0
 
     fun refresh() {
         if (state.value.isLoading) return
+        val requestId = ++overviewRequestId
+        val userQuery = state.value.userQuery
 
         mutableState.update {
             it.copy(
@@ -64,8 +69,9 @@ class AdminStateHolder(
         }
 
         scope.launch {
-            when (val result = repository.overview(state.value.userQuery)) {
+            when (val result = repository.overview(userQuery)) {
                 is AdminRepositoryResult.Success -> mutableState.update {
+                    if (requestId != overviewRequestId) return@update it
                     it.copy(
                         users = result.value.users,
                         reports = result.value.reports,
@@ -79,6 +85,7 @@ class AdminStateHolder(
                     )
                 }
                 AdminRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != overviewRequestId) return@update it
                     it.copy(
                         isLoading = false,
                         isPermissionDenied = false,
@@ -87,6 +94,7 @@ class AdminStateHolder(
                     )
                 }
                 is AdminRepositoryResult.Error -> mutableState.update {
+                    if (requestId != overviewRequestId) return@update it
                     it.copy(
                         isLoading = false,
                         isPermissionDenied = result.isPermissionDenied,
@@ -103,15 +111,21 @@ class AdminStateHolder(
     }
 
     fun updateUserQuery(query: String) {
-        mutableState.update { it.copy(userQuery = query, requiresRelogin = false) }
+        userSearchRequestId += 1
+        mutableState.update {
+            it.copy(userQuery = query, isSearchingUsers = false, requiresRelogin = false)
+        }
     }
 
     fun searchUsers() {
         if (state.value.isSearchingUsers) return
+        val requestId = ++userSearchRequestId
+        val query = state.value.userQuery
         mutableState.update { it.copy(isSearchingUsers = true, errorMessage = null, requiresRelogin = false) }
         scope.launch {
-            when (val result = repository.searchUsers(state.value.userQuery)) {
+            when (val result = repository.searchUsers(query)) {
                 is AdminRepositoryResult.Success -> mutableState.update {
+                    if (requestId != userSearchRequestId || it.userQuery != query) return@update it
                     it.copy(
                         users = result.value,
                         isSearchingUsers = false,
@@ -120,6 +134,7 @@ class AdminStateHolder(
                     )
                 }
                 AdminRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != userSearchRequestId || it.userQuery != query) return@update it
                     it.copy(
                         isSearchingUsers = false,
                         isPermissionDenied = false,
@@ -128,6 +143,7 @@ class AdminStateHolder(
                     )
                 }
                 is AdminRepositoryResult.Error -> mutableState.update {
+                    if (requestId != userSearchRequestId || it.userQuery != query) return@update it
                     it.copy(
                         isSearchingUsers = false,
                         isPermissionDenied = result.isPermissionDenied,
@@ -141,6 +157,7 @@ class AdminStateHolder(
 
     fun loadUserRoles(userId: String) {
         if (userId.isBlank()) return
+        val requestId = ++userRolesRequestId
         mutableState.update {
             it.copy(
                 selectedUserId = userId,
@@ -152,6 +169,7 @@ class AdminStateHolder(
         scope.launch {
             when (val result = repository.loadUserRoles(userId)) {
                 is AdminRepositoryResult.Success -> mutableState.update {
+                    if (requestId != userRolesRequestId || it.selectedUserId != userId) return@update it
                     it.copy(
                         selectedUserRoles = result.value,
                         selectedUserId = userId,
@@ -160,6 +178,7 @@ class AdminStateHolder(
                     )
                 }
                 AdminRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != userRolesRequestId || it.selectedUserId != userId) return@update it
                     it.copy(
                         isPermissionDenied = false,
                         errorMessage = "登录已失效，请重新登录",
@@ -167,6 +186,7 @@ class AdminStateHolder(
                     )
                 }
                 is AdminRepositoryResult.Error -> mutableState.update {
+                    if (requestId != userRolesRequestId || it.selectedUserId != userId) return@update it
                     it.copy(
                         isPermissionDenied = result.isPermissionDenied,
                         errorMessage = if (result.isPermissionDenied) result.message else it.errorMessage,

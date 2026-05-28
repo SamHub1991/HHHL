@@ -9,6 +9,8 @@ enum class ChannelListKind(val label: String) {
     Owned("我的"),
 }
 
+const val ChannelDefaultColorHex = "#40c057"
+
 @Immutable
 data class Channel(
     val id: String,
@@ -43,7 +45,7 @@ data class Channel(
 data class ChannelDraft(
     val name: String,
     val description: String = "",
-    val color: String = "#40c057",
+    val color: String = ChannelDefaultColorHex,
     val bannerId: String? = null,
     val isArchived: Boolean = false,
     val isSensitive: Boolean = false,

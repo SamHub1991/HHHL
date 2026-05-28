@@ -43,12 +43,21 @@ class NotificationsPresentationTest {
     @Test
     fun notificationSummaryActionKeepsMarkAllReadAvailable() {
         val actions = notificationSummaryActions(
-            notificationCount = 3,
             isMarkingAllRead = false,
-            onMarkAllAsRead = {},
+            onSendTestNotification = {},
+            onSendReminderNotification = {},
         )
 
-        assertEquals(listOf("全部已读"), actions.map { it.label })
-        assertEquals(listOf(true), actions.map { it.enabled })
+        assertEquals(listOf("测试通知", "提醒自己"), actions.map { it.label })
+        assertEquals(listOf(true, true), actions.map { it.enabled })
+    }
+
+    @Test
+    fun notificationNotePreviewNormalizesLegacyRawRichText() {
+        assertEquals(
+            "CW docs 👍",
+            "$[fg.color=ff0000 CW] [docs](https://dc.hhhl.cc) ${'$'}{unicode 1f44d}"
+                .normalizeNotificationNotePreviewText(),
+        )
     }
 }

@@ -40,7 +40,7 @@ class InMemoryTimelineCache : TimelineCache {
 
     override suspend fun write(kind: TimelineKind, notes: List<Note>) {
         mutex.withLock {
-            snapshots[kind] = notes
+            snapshots[kind] = notes.take(MAX_TIMELINE_CACHE_NOTES_PER_KIND)
         }
     }
 }
@@ -282,6 +282,8 @@ private fun CachedNotePoll.toDomainPoll(): NotePoll {
 
 private fun Map<TimelineKind, List<Note>>.toCachedSnapshots(): Map<String, List<CachedNote>> {
     return entries.associate { entry ->
-        entry.key.name to entry.value.map { it.toCachedNote() }
+        entry.key.name to entry.value.take(MAX_TIMELINE_CACHE_NOTES_PER_KIND).map { it.toCachedNote() }
     }
 }
+
+private const val MAX_TIMELINE_CACHE_NOTES_PER_KIND = 120

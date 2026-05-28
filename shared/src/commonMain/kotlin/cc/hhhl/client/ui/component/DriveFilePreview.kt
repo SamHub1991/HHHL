@@ -64,11 +64,12 @@ fun DriveFilePreview(
 ) {
     val spec = driveFilePreviewSpec(file)
     var imageLoaded by remember(spec.previewUrl) { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
 
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(LocalHhhlColors.current.mediaBackground)
+            .background(colors.mediaBackground)
             .then(
                 spec.openUrl?.let { openUrl ->
                     Modifier.clickable { onOpenUrl(openUrl) }
@@ -89,7 +90,7 @@ fun DriveFilePreview(
         if (!imageLoaded) {
             Text(
                 text = spec.placeholderLabel,
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,

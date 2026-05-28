@@ -18,12 +18,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,7 +41,9 @@ import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
+import cc.hhhl.client.ui.component.HhhlCheckbox
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlProgressIndicator
 import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlInlinePanel
@@ -149,7 +149,7 @@ fun AntennaScreen(
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item(contentType = "antenna-status") {
+                item(key = "antenna-error", contentType = "antenna-status") {
                     AntennaStatusRow(
                         text = message,
                         actionText = "重试",
@@ -158,20 +158,20 @@ fun AntennaScreen(
                 }
             }
             if (state?.isLoadingAntennas == true && antennas.isEmpty()) {
-                item(contentType = "antenna-status") {
+                item(key = "antenna-loading", contentType = "antenna-status") {
                     AntennaStatusRow(text = "正在加载天线...", loading = true)
                 }
             }
             if (state != null && !state.isLoadingAntennas && antennas.isEmpty() && state.errorMessage == null) {
-                item(contentType = "antenna-status") { AntennaStatusRow(text = "还没有天线") }
+                item(key = "antenna-empty", contentType = "antenna-status") { AntennaStatusRow(text = "还没有天线") }
             }
             if (state?.isLoadingNotes == true && notes.isEmpty()) {
-                item(contentType = "antenna-status") {
+                item(key = "antenna-notes-loading-${selectedAntenna?.id.orEmpty()}", contentType = "antenna-status") {
                     AntennaStatusRow(text = "正在加载天线动态...", loading = true)
                 }
             }
             selectedAntenna?.let { antenna ->
-                item(contentType = "antenna-header") {
+                item(key = "antenna-header-${antenna.id}", contentType = "antenna-header") {
                     AntennaHeaderRow(
                         antenna = antenna,
                         isMutating = state?.isMutatingAntenna == true,
@@ -181,7 +181,7 @@ fun AntennaScreen(
                 }
             }
             state?.notesErrorMessage?.let { message ->
-                item(contentType = "antenna-status") {
+                item(key = "antenna-notes-error-${selectedAntenna?.id.orEmpty()}", contentType = "antenna-status") {
                     AntennaStatusRow(
                         text = message,
                         actionText = "重试",
@@ -196,7 +196,7 @@ fun AntennaScreen(
                 notes.isEmpty() &&
                 state.notesErrorMessage == null
             ) {
-                item(contentType = "antenna-status") { AntennaStatusRow(text = "这条天线还没有动态") }
+                item(key = "antenna-notes-empty-${selectedAntenna.id}", contentType = "antenna-status") { AntennaStatusRow(text = "这条天线还没有动态") }
             }
             items(
                 items = notes,
@@ -228,7 +228,7 @@ fun AntennaScreen(
                 )
             }
             if (state != null && notes.isNotEmpty() && state.isLoadingMore) {
-                item(contentType = "antenna-status") {
+                item(key = "antenna-loading-more-${selectedAntenna?.id.orEmpty()}", contentType = "antenna-status") {
                     AntennaStatusRow(
                         text = "正在加载更多...",
                         loading = state.isLoadingMore,
@@ -287,6 +287,7 @@ private fun AntennaSummaryRow(
     isLoadingAntennas: Boolean,
     isLoadingNotes: Boolean,
 ) {
+    val colors = LocalHhhlColors.current
     val titleText = listOfNotNull(
         selectedAntenna?.name?.ifBlank { "未命名天线" } ?: "未选择",
         selectedAntenna?.let { "${it.sourceLabel} · ${it.keywordPreview}" },
@@ -305,7 +306,7 @@ private fun AntennaSummaryRow(
     ) {
         Text(
             text = "$titleText · $stateText",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -355,6 +356,7 @@ private fun AntennaHeaderRow(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     HhhlInlinePanel(
         modifier = Modifier
             .fillMaxWidth()
@@ -367,13 +369,13 @@ private fun AntennaHeaderRow(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = antenna.name.ifBlank { "未命名天线" },
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     text = "${antenna.sourceLabel} · ${antenna.keywordPreview}",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -416,6 +418,7 @@ private fun AntennaEditorDialog(
     onDismiss: () -> Unit,
     onSubmit: (AntennaDraft) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     var name by remember(initialAntenna?.id) { mutableStateOf(initialAntenna?.name.orEmpty()) }
     var keywords by remember(initialAntenna?.id) {
         mutableStateOf(initialAntenna?.keywords?.toKeywordText().orEmpty())
@@ -429,7 +432,7 @@ private fun AntennaEditorDialog(
     var isActive by remember(initialAntenna?.id) { mutableStateOf(initialAntenna?.isActive != false) }
     val canSubmit = name.isNotBlank() && !isMutating
 
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
@@ -455,7 +458,7 @@ private fun AntennaEditorDialog(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = "来源",
-                        color = LocalHhhlColors.current.subtleText,
+                        color = colors.textMuted,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     FlowRow(
@@ -522,18 +525,19 @@ private fun AntennaCheckRow(
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(
+        HhhlCheckbox(
             checked = checked,
             onCheckedChange = onCheckedChange,
             enabled = enabled,
         )
         Text(
             text = text,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.bodyMedium,
         )
     }
@@ -546,13 +550,14 @@ private fun DeleteAntennaDialog(
     onDismiss: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    AlertDialog(
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("删除天线") },
         text = {
             Text(
                 text = "删除「${antenna.name.ifBlank { "未命名天线" }}」后，天线时间线会从列表移除。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
@@ -576,6 +581,7 @@ private fun AntennaPickerRow(
     isLoading: Boolean,
     onSelectAntenna: (Antenna) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
@@ -584,16 +590,16 @@ private fun AntennaPickerRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (isLoading && antennas.isNotEmpty()) {
-            item(contentType = "antenna-picker-status") {
+            item(key = "antenna-picker-loading", contentType = "antenna-picker-status") {
                 Row(
                     modifier = Modifier.padding(horizontal = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    CircularProgressIndicator(strokeWidth = 2.dp)
+                    HhhlProgressIndicator(strokeWidth = 2.dp)
                     Text(
                         text = "加载中",
-                        color = LocalHhhlColors.current.subtleText,
+                        color = colors.textMuted,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -620,13 +626,15 @@ private fun AntennaPickerChip(
     active: Boolean,
     onClick: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
+    val shape = RoundedCornerShape(14.dp)
     Box(
         modifier = Modifier
             .widthIn(min = 132.dp, max = 220.dp)
-            .clip(MaterialTheme.shapes.medium)
+            .clip(shape)
             .background(
-                if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                else LocalHhhlColors.current.inputBackground,
+                if (active) colors.buttonSelectedBackground
+                else colors.buttonBackground,
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -639,9 +647,9 @@ private fun AntennaPickerChip(
                 Text(
                     text = antenna.name.ifBlank { "未命名天线" },
                     color = if (active) {
-                        MaterialTheme.colorScheme.primary
+                        colors.accent
                     } else {
-                        MaterialTheme.colorScheme.onBackground
+                        colors.textPrimary
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
@@ -651,14 +659,14 @@ private fun AntennaPickerChip(
                 if (antenna.hasUnreadNote) {
                     Text(
                         text = "新",
-                        color = MaterialTheme.colorScheme.error,
+                        color = colors.danger,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
             }
             Text(
                 text = "${antenna.sourceLabel} · ${antenna.keywordPreview}",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -711,9 +719,11 @@ private fun List<List<String>>.toKeywordText(): String {
 private fun String.toKeywordGroups(): List<List<String>> {
     return lineSequence()
         .mapNotNull { line ->
-            line.split(Regex("\\s+"))
+            line.split(antennaWhitespaceRegex)
                 .mapNotNull { it.trim().takeIf(String::isNotBlank) }
                 .takeIf { it.isNotEmpty() }
         }
         .toList()
 }
+
+private val antennaWhitespaceRegex = Regex("\\s+")

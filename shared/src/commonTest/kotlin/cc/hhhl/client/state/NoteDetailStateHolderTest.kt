@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -76,6 +77,37 @@ class NoteDetailStateHolderTest {
 
         assertFalse(holder.state.value.isLoadingMoreReplies)
         assertEquals(listOf(first, second), holder.state.value.replies)
+    }
+
+    @Test
+    fun loadingAnotherNoteInvalidatesPendingLoadMoreReplies() = runTest {
+        val firstReply = FakeData.timeline[1].copy(id = "reply-1")
+        val staleMoreResult = CompletableDeferred<NoteRepliesRepositoryResult>()
+        val holder = NoteDetailStateHolder(
+            repository = sequenceRepository(
+                NoteDetailRepositoryResult.Success(FakeData.timeline[0].copy(id = "note-1")),
+                NoteDetailRepositoryResult.Success(FakeData.timeline[2].copy(id = "note-2")),
+            ),
+            repliesRepository = fakeRepliesRepository(
+                refreshResult = NoteRepliesRepositoryResult.Success(listOf(firstReply)),
+                loadMoreResult = staleMoreResult,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.load("note-1")
+        advanceUntilIdle()
+        holder.loadMoreReplies()
+        assertTrue(holder.state.value.isLoadingMoreReplies)
+
+        holder.load("note-2")
+        assertFalse(holder.state.value.isLoadingMoreReplies)
+        staleMoreResult.complete(NoteRepliesRepositoryResult.Success(listOf(firstReply, FakeData.timeline[3])))
+        advanceUntilIdle()
+
+        assertEquals("note-2", holder.state.value.noteId)
+        assertFalse(holder.state.value.isLoadingMoreReplies)
+        assertEquals(listOf(firstReply), holder.state.value.replies)
     }
 
     @Test
@@ -274,6 +306,51 @@ class NoteDetailStateHolderTest {
                 currentReplies: List<Note>,
             ): NoteRepliesRepositoryResult {
                 return loadMoreResult
+            }
+
+            override suspend fun loadChildren(
+                noteId: String,
+                currentChildren: List<Note>,
+            ): NoteRepliesRepositoryResult {
+                onLoadChildren(noteId)
+                return childResult
+            }
+        }
+    }
+
+    private fun fakeRepliesRepository(
+        refreshResult: NoteRepliesRepositoryResult,
+        loadMoreResult: CompletableDeferred<NoteRepliesRepositoryResult>,
+        childResult: NoteRepliesRepositoryResult = NoteRepliesRepositoryResult.Success(emptyList()),
+        onLoadChildren: (String) -> Unit = {},
+    ): NoteRepliesRepository {
+        return object : NoteRepliesRepository(
+            tokenProvider = { "token-123" },
+            api = object : NoteRepliesApi {
+                override suspend fun loadReplies(
+                    token: String,
+                    noteId: String,
+                    limit: Int,
+                    untilId: String?,
+                ): NoteRepliesLoadResult = NoteRepliesLoadResult.Success(emptyList())
+
+                override suspend fun loadChildren(
+                    token: String,
+                    noteId: String,
+                    limit: Int,
+                    untilId: String?,
+                ): NoteRepliesLoadResult = NoteRepliesLoadResult.Success(emptyList())
+            },
+        ) {
+            override suspend fun refresh(noteId: String): NoteRepliesRepositoryResult {
+                return refreshResult
+            }
+
+            override suspend fun loadMore(
+                noteId: String,
+                currentReplies: List<Note>,
+            ): NoteRepliesRepositoryResult {
+                return loadMoreResult.await()
             }
 
             override suspend fun loadChildren(

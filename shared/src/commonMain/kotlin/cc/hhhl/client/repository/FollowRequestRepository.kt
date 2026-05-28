@@ -14,6 +14,10 @@ open class FollowRequestRepository(
         return loadRequests(currentRequests = emptyList(), untilId = null)
     }
 
+    open suspend fun refreshSent(): FollowRequestsRepositoryResult {
+        return loadSentRequests(currentRequests = emptyList(), untilId = null)
+    }
+
     open suspend fun loadMore(currentRequests: List<FollowRequest>): FollowRequestsRepositoryResult {
         return loadRequests(
             currentRequests = currentRequests,
@@ -29,6 +33,10 @@ open class FollowRequestRepository(
         return performAction(userId) { token, cleanUserId -> api.reject(token, cleanUserId) }
     }
 
+    open suspend fun cancel(userId: String): FollowRequestActionRepositoryResult {
+        return performAction(userId) { token, cleanUserId -> api.cancel(token, cleanUserId) }
+    }
+
     private suspend fun loadRequests(
         currentRequests: List<FollowRequest>,
         untilId: String?,
@@ -37,6 +45,25 @@ open class FollowRequestRepository(
             ?: return FollowRequestsRepositoryResult.Unauthorized
 
         return when (val result = api.loadReceived(token = token, limit = PAGE_SIZE, untilId = untilId)) {
+            is FollowRequestLoadResult.Success -> FollowRequestsRepositoryResult.Success(
+                requests = currentRequests.appendDistinctBy(result.requests) { it.id },
+            )
+            FollowRequestLoadResult.Unauthorized -> FollowRequestsRepositoryResult.Unauthorized
+            is FollowRequestLoadResult.NetworkError -> {
+                FollowRequestsRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is FollowRequestLoadResult.ServerError -> FollowRequestsRepositoryResult.Error(result.message)
+        }
+    }
+
+    private suspend fun loadSentRequests(
+        currentRequests: List<FollowRequest>,
+        untilId: String?,
+    ): FollowRequestsRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return FollowRequestsRepositoryResult.Unauthorized
+
+        return when (val result = api.loadSent(token = token, limit = PAGE_SIZE, untilId = untilId)) {
             is FollowRequestLoadResult.Success -> FollowRequestsRepositoryResult.Success(
                 requests = currentRequests.appendDistinctBy(result.requests) { it.id },
             )

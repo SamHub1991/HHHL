@@ -166,9 +166,12 @@ internal fun parseSharkeyMainStreamingEvent(
     }
     if (channelId.isNotBlank() && channelId != MAIN_STREAM_ID) return null
     return when (eventType) {
+        "notification" -> MainStreamingEvent.UnreadNotification
         "unreadNotification" -> MainStreamingEvent.UnreadNotification
         "readAllNotifications" -> MainStreamingEvent.ReadAllNotifications
+        "readAllUnreadNotifications" -> MainStreamingEvent.ReadAllNotifications
         "newChatMessage" -> MainStreamingEvent.NewChatMessage
+        "chatMessage" -> MainStreamingEvent.NewChatMessage
         else -> null
     }
 }
@@ -205,6 +208,8 @@ private val TimelineKind.streamingStreamId: String
         TimelineKind.Local -> "timeline-local"
         TimelineKind.Global -> "timeline-global"
         TimelineKind.Bubble -> "timeline-bubble"
+        TimelineKind.Featured -> "timeline-featured"
+        TimelineKind.Mentions -> "timeline-mentions"
     }
 
 private fun String.toTimelineKindOrNull(): TimelineKind? {

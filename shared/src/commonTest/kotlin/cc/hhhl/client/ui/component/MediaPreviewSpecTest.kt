@@ -88,6 +88,28 @@ class MediaPreviewSpecTest {
         assertTrue(session.current.isImage)
     }
 
+    @Test
+    fun mediaPreviewSessionCurrentFallsBackSafelyWhenIndexIsInvalid() {
+        val item = mediaPreviewItem(
+            noteMedia(
+                id = "image-1",
+                description = "第一张",
+                type = "image/webp",
+                url = "https://dc.hhhl.cc/files/one.webp",
+                thumbnailUrl = null,
+            ),
+        )
+
+        val outOfBounds = MediaPreviewSession(items = listOf(item), selectedIndex = 8)
+        val empty = MediaPreviewSession(items = emptyList(), selectedIndex = 0)
+
+        assertEquals(item, outOfBounds.currentOrNull)
+        assertEquals(item, outOfBounds.current)
+        assertNull(empty.currentOrNull)
+        assertEquals("", empty.current.id)
+        assertEquals("FILE", empty.current.typeBadge)
+    }
+
     private fun noteMedia(
         id: String,
         description: String,

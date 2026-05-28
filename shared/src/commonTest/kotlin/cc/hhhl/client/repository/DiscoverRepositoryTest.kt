@@ -2,14 +2,18 @@ package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.DiscoverApi
 import cc.hhhl.client.api.DiscoverFederationActionResult
+import cc.hhhl.client.api.DiscoverFederationFollowResult
 import cc.hhhl.client.api.DiscoverFederationInstanceResult
 import cc.hhhl.client.api.DiscoverFederationResult
+import cc.hhhl.client.api.DiscoverFederationStatsResult
 import cc.hhhl.client.api.DiscoverNoteSearchOptions
 import cc.hhhl.client.api.DiscoverSearchResult
 import cc.hhhl.client.api.DiscoverTrendResult
 import cc.hhhl.client.api.DiscoverUserSearchResult
 import cc.hhhl.client.fake.FakeData
+import cc.hhhl.client.model.FederationFollow
 import cc.hhhl.client.model.FederationInstance
+import cc.hhhl.client.model.FederationStats
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.model.User
@@ -362,6 +366,30 @@ class DiscoverRepositoryTest {
     }
 
     @Test
+    fun hashtagDiscoveryDoesNotRequireToken() = runTest {
+        val trend = TrendingHashtag(tag = "AI", chart = emptyList(), usersCount = 0)
+        val calls = mutableListOf<ApiCall>()
+        val repository = DiscoverRepository(
+            tokenProvider = { null },
+            api = fakeApi(
+                calls = calls,
+                trendResult = DiscoverTrendResult.Success(listOf(trend)),
+            ),
+        )
+
+        assertEquals(DiscoverRepositoryResult.TrendSuccess(listOf(trend)), repository.searchHashtags("#AI"))
+        assertEquals(DiscoverRepositoryResult.TrendSuccess(listOf(trend)), repository.loadHashtags())
+
+        assertEquals(
+            listOf(
+                ApiCall("hashtags-search", "", "AI", null, null, null),
+                ApiCall("hashtags-list", "", "", "0", null, null),
+            ),
+            calls,
+        )
+    }
+
+    @Test
     fun loadFederationDoesNotRequireTokenAndUsesOffset() = runTest {
         val first = sampleFederationInstance("instance-1")
         val second = sampleFederationInstance("instance-2")
@@ -462,6 +490,8 @@ class DiscoverRepositoryTest {
         trendResult: DiscoverTrendResult = DiscoverTrendResult.Success(emptyList()),
         federationResult: DiscoverFederationResult = DiscoverFederationResult.Success(emptyList()),
         federationInstanceResult: DiscoverFederationInstanceResult = DiscoverFederationInstanceResult.Unavailable,
+        federationFollowResult: DiscoverFederationFollowResult = DiscoverFederationFollowResult.Success(emptyList()),
+        federationStatsResult: DiscoverFederationStatsResult = DiscoverFederationStatsResult.Success(sampleFederationStats()),
         federationActionResult: DiscoverFederationActionResult = DiscoverFederationActionResult.Unavailable,
         noteOptions: MutableList<DiscoverNoteSearchOptions> = mutableListOf(),
         onCall: () -> Unit = {},
@@ -510,6 +540,28 @@ class DiscoverRepositoryTest {
                 return trendResult
             }
 
+            override suspend fun searchHashtags(
+                token: String,
+                query: String,
+                limit: Int,
+                offset: Int,
+            ): DiscoverTrendResult {
+                onCall()
+                calls.add(ApiCall("hashtags-search", token, query, null, null, null))
+                return trendResult
+            }
+
+            override suspend fun loadHashtags(
+                token: String,
+                limit: Int,
+                offset: Int,
+                sort: String,
+            ): DiscoverTrendResult {
+                onCall()
+                calls.add(ApiCall("hashtags-list", token, "", offset.toString(), null, null))
+                return trendResult
+            }
+
             override suspend fun loadFederationInstances(
                 limit: Int,
                 offset: Int,
@@ -526,6 +578,46 @@ class DiscoverRepositoryTest {
                 return federationInstanceResult
             }
 
+            override suspend fun loadFederationFollowers(
+                host: String,
+                limit: Int,
+                untilId: String?,
+                includeFollower: Boolean,
+                includeFollowee: Boolean,
+            ): DiscoverFederationFollowResult {
+                onCall()
+                calls.add(ApiCall("federation-followers", null, "", untilId, null, host))
+                return federationFollowResult
+            }
+
+            override suspend fun loadFederationFollowing(
+                host: String,
+                limit: Int,
+                untilId: String?,
+                includeFollower: Boolean,
+                includeFollowee: Boolean,
+            ): DiscoverFederationFollowResult {
+                onCall()
+                calls.add(ApiCall("federation-following", null, "", untilId, null, host))
+                return federationFollowResult
+            }
+
+            override suspend fun loadFederationUsers(
+                host: String,
+                limit: Int,
+                untilId: String?,
+            ): DiscoverUserSearchResult {
+                onCall()
+                calls.add(ApiCall("federation-users", null, "", untilId, null, host))
+                return userResult
+            }
+
+            override suspend fun loadFederationStats(limit: Int): DiscoverFederationStatsResult {
+                onCall()
+                calls.add(ApiCall("federation-stats", null, "", limit.toString(), null, null))
+                return federationStatsResult
+            }
+
             override suspend fun updateFederationInstance(
                 token: String,
                 host: String,
@@ -534,6 +626,15 @@ class DiscoverRepositoryTest {
             ): DiscoverFederationActionResult {
                 onCall()
                 calls.add(ApiCall("federation-update", token, "", null, null, host))
+                return federationActionResult
+            }
+
+            override suspend fun updateRemoteUser(
+                token: String,
+                userId: String,
+            ): DiscoverFederationActionResult {
+                onCall()
+                calls.add(ApiCall("federation-update-user", token, userId, null, null, null))
                 return federationActionResult
             }
         }
@@ -554,6 +655,15 @@ class DiscoverRepositoryTest {
             isSuspended = false,
             isBlocked = false,
             isSilenced = false,
+        )
+    }
+
+    private fun sampleFederationStats(): FederationStats {
+        return FederationStats(
+            topSubInstances = listOf(sampleFederationInstance("sub-1")),
+            otherFollowersCount = 7,
+            topPubInstances = listOf(sampleFederationInstance("pub-1")),
+            otherFollowingCount = 9,
         )
     }
 

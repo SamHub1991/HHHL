@@ -1,6 +1,7 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.ChatRoom
+import cc.hhhl.client.model.ChatRoomInvitation
 import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageReference
@@ -32,6 +33,25 @@ interface ChatApi {
         limit: Int,
         untilId: String? = null,
     ): ChatRoomLoadResult
+
+    suspend fun loadOwnedRooms(
+        token: String,
+        limit: Int,
+        untilId: String? = null,
+    ): ChatRoomLoadResult
+
+    suspend fun loadInvitationInbox(
+        token: String,
+        limit: Int,
+        untilId: String? = null,
+    ): ChatRoomInvitationLoadResult
+
+    suspend fun loadInvitationOutbox(
+        token: String,
+        roomId: String,
+        limit: Int,
+        untilId: String? = null,
+    ): ChatRoomInvitationLoadResult
 
     suspend fun loadRoomMessages(
         token: String,
@@ -148,6 +168,11 @@ interface ChatApi {
         roomId: String,
         muted: Boolean,
     ): ChatRoomActionResult
+
+    suspend fun ignoreRoomInvitation(
+        token: String,
+        roomId: String,
+    ): ChatRoomActionResult
 }
 
 sealed interface ChatRoomLoadResult {
@@ -187,6 +212,19 @@ sealed interface ChatRoomMemberLoadResult {
     ) : ChatRoomMemberLoadResult
 
     data class NetworkError(val message: String) : ChatRoomMemberLoadResult
+}
+
+sealed interface ChatRoomInvitationLoadResult {
+    data class Success(val invitations: List<ChatRoomInvitation>) : ChatRoomInvitationLoadResult
+
+    data object Unauthorized : ChatRoomInvitationLoadResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : ChatRoomInvitationLoadResult
+
+    data class NetworkError(val message: String) : ChatRoomInvitationLoadResult
 }
 
 sealed interface ChatUserHistoryLoadResult {
@@ -276,11 +314,72 @@ class SharkeyChatApi(
         limit: Int,
         untilId: String?,
     ): ChatRoomLoadResult {
+        return loadRoomList(
+            endpoint = listOf("chat", "rooms", "joining"),
+            token = token,
+            limit = limit,
+            untilId = untilId,
+            membershipResponse = true,
+            applyUnreadFallback = true,
+        )
+    }
+
+    override suspend fun loadOwnedRooms(
+        token: String,
+        limit: Int,
+        untilId: String?,
+    ): ChatRoomLoadResult {
+        return loadRoomList(
+            endpoint = listOf("chat", "rooms", "owned"),
+            token = token,
+            limit = limit,
+            untilId = untilId,
+            membershipResponse = false,
+            applyUnreadFallback = false,
+        )
+    }
+
+    override suspend fun loadInvitationInbox(
+        token: String,
+        limit: Int,
+        untilId: String?,
+    ): ChatRoomInvitationLoadResult {
+        return loadInvitations(
+            endpoint = listOf("chat", "rooms", "invitations", "inbox"),
+            token = token,
+            limit = limit,
+            untilId = untilId,
+        )
+    }
+
+    override suspend fun loadInvitationOutbox(
+        token: String,
+        roomId: String,
+        limit: Int,
+        untilId: String?,
+    ): ChatRoomInvitationLoadResult {
+        return loadInvitations(
+            endpoint = listOf("chat", "rooms", "invitations", "outbox"),
+            token = token,
+            roomId = roomId,
+            limit = limit,
+            untilId = untilId,
+        )
+    }
+
+    private suspend fun loadRoomList(
+        endpoint: List<String>,
+        token: String,
+        limit: Int,
+        untilId: String?,
+        membershipResponse: Boolean,
+        applyUnreadFallback: Boolean,
+    ): ChatRoomLoadResult {
         val cleanToken = token.trim()
         if (cleanToken.isEmpty()) return ChatRoomLoadResult.Unauthorized
 
         return try {
-            val response = client.post(apiUrl("chat", "rooms", "joining")) {
+            val response = client.post(apiUrl(*endpoint.toTypedArray())) {
                 contentType(ContentType.Application.Json)
                 setBody(
                     ChatJoiningRoomsRequest(
@@ -294,8 +393,14 @@ class SharkeyChatApi(
             if (response.isSharkeyUnauthorized()) return ChatRoomLoadResult.Unauthorized
             when (response.status) {
                 HttpStatusCode.OK -> {
-                    val rooms = response.body<List<ChatRoomMembershipDto>>().map { it.toDomainRoom() }
-                    ChatRoomLoadResult.Success(rooms.withHistoryUnreadFallback(cleanToken))
+                    val rooms = if (membershipResponse) {
+                        response.body<List<ChatRoomMembershipDto>>().map { it.toDomainRoom() }
+                    } else {
+                        response.body<List<ChatRoomDto>>().map { it.toDomainRoom() }
+                    }
+                    ChatRoomLoadResult.Success(
+                        if (applyUnreadFallback) rooms.withHistoryUnreadFallback(cleanToken) else rooms,
+                    )
                 }
                 HttpStatusCode.Unauthorized -> ChatRoomLoadResult.Unauthorized
                 else -> ChatRoomLoadResult.ServerError(
@@ -307,6 +412,48 @@ class SharkeyChatApi(
             throw error
         } catch (error: Throwable) {
             ChatRoomLoadResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    private suspend fun loadInvitations(
+        endpoint: List<String>,
+        token: String,
+        roomId: String? = null,
+        limit: Int,
+        untilId: String?,
+    ): ChatRoomInvitationLoadResult {
+        val cleanToken = token.trim()
+        val cleanRoomId = roomId?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanToken.isEmpty()) return ChatRoomInvitationLoadResult.Unauthorized
+
+        return try {
+            val response = client.post(apiUrl(*endpoint.toTypedArray())) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    ChatJoiningRoomsRequest(
+                        i = cleanToken,
+                        roomId = cleanRoomId,
+                        limit = limit.coerceIn(1, 100),
+                        untilId = untilId?.takeIf { it.isNotBlank() },
+                    ),
+                )
+            }
+
+            if (response.isSharkeyUnauthorized()) return ChatRoomInvitationLoadResult.Unauthorized
+            when (response.status) {
+                HttpStatusCode.OK -> ChatRoomInvitationLoadResult.Success(
+                    response.body<List<ChatRoomInvitationDto>>().mapNotNull { it.toDomainInvitation() },
+                )
+                HttpStatusCode.Unauthorized -> ChatRoomInvitationLoadResult.Unauthorized
+                else -> ChatRoomInvitationLoadResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            ChatRoomInvitationLoadResult.NetworkError(error.message ?: "网络请求失败")
         }
     }
 
@@ -886,6 +1033,23 @@ class SharkeyChatApi(
         )
     }
 
+    override suspend fun ignoreRoomInvitation(
+        token: String,
+        roomId: String,
+    ): ChatRoomActionResult {
+        return sendRoomAction(
+            endpoint = listOf("chat", "rooms", "invitations", "ignore"),
+            request = ChatRoomIdRequest(i = token.trim(), roomId = roomId.trim()),
+            validate = {
+                when {
+                    token.trim().isEmpty() -> ChatRoomActionResult.Unauthorized
+                    roomId.trim().isEmpty() -> ChatRoomActionResult.ServerError(400, "请选择聊天室")
+                    else -> null
+                }
+            },
+        )
+    }
+
     private suspend fun sendMessageReaction(
         endpoint: String,
         token: String,
@@ -1036,6 +1200,7 @@ class SharkeyChatApi(
 @Serializable
 private data class ChatJoiningRoomsRequest(
     val i: String,
+    val roomId: String? = null,
     val limit: Int,
     val untilId: String? = null,
 )
@@ -1221,6 +1386,40 @@ private data class ChatRoomMembershipDto(
             latestMessage?.createdAt,
             latestMessageAt,
         ).firstOrNull { !it.isNullOrBlank() }.orEmpty()
+    }
+}
+
+@Serializable
+private data class ChatRoomInvitationDto(
+    val id: String,
+    val createdAt: String = "",
+    val room: ChatRoomDto? = null,
+    val roomId: String = "",
+    val inviter: ChatUserDto? = null,
+    val inviterId: String = "",
+    val user: ChatUserDto? = null,
+    val userId: String = "",
+) {
+    fun toDomainInvitation(): ChatRoomInvitation? {
+        val domainRoom = room?.toDomainRoom() ?: roomId.takeIf { it.isNotBlank() }?.let { id ->
+            ChatRoom(
+                id = id,
+                membershipId = id,
+                name = "聊天室",
+                description = "",
+                joinMode = "",
+                memberCount = 0,
+                isMuted = false,
+                owner = systemUser,
+            )
+        } ?: return null
+        val inviteUser = inviter?.toDomainUser() ?: user?.toDomainUser()
+        return ChatRoomInvitation(
+            id = id.ifBlank { "${domainRoom.id}:${inviterId.ifBlank { userId }}" },
+            room = domainRoom,
+            inviter = inviteUser,
+            createdAtLabel = createdAt.toLocalCompactDateLabel(),
+        )
     }
 }
 
@@ -1430,6 +1629,7 @@ private data class ChatUserDto(
     val name: String? = null,
     val avatarUrl: String? = null,
     val avatarDecorations: List<ChatAvatarDecorationDto> = emptyList(),
+    val onlineStatus: String = "unknown",
 ) {
     fun toDomainUser(): User {
         val displayName = name?.takeIf { it.isNotBlank() } ?: username
@@ -1440,6 +1640,7 @@ private data class ChatUserDto(
             avatarInitial = displayName.avatarInitial(),
             avatarUrl = avatarUrl?.takeIf { it.isNotBlank() },
             avatarDecorations = avatarDecorations.mapNotNull { it.toDomainDecoration() },
+            onlineStatus = onlineStatus.ifBlank { "unknown" },
         )
     }
 }

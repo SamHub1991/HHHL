@@ -6,6 +6,7 @@ import cc.hhhl.client.api.ChatMessageDeleteResult
 import cc.hhhl.client.api.ChatMessageLoadResult
 import cc.hhhl.client.api.ChatMessageReactionResult
 import cc.hhhl.client.api.ChatRoomActionResult
+import cc.hhhl.client.api.ChatRoomInvitationLoadResult
 import cc.hhhl.client.api.ChatRoomMemberLoadResult
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.api.ChatRoomLoadResult
@@ -13,7 +14,9 @@ import cc.hhhl.client.api.ChatRoomMutationResult
 import cc.hhhl.client.api.ChatUserHistoryLoadResult
 import cc.hhhl.client.cache.InMemoryChatMessageCache
 import cc.hhhl.client.model.ChatMessage
+import cc.hhhl.client.model.CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX
 import cc.hhhl.client.model.ChatMessageReaction
+import cc.hhhl.client.model.ChatRoomInvitation
 import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.ChatRoom
 import cc.hhhl.client.model.DriveFile
@@ -585,6 +588,28 @@ class ChatRepositoryTest {
     }
 
     @Test
+    fun loadMoreMembersIgnoresInferredActiveMemberCursor() = runTest {
+        val first = sampleMember("membership-member-1")
+        val active = sampleMember(
+            membershipId = "${CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX}room-1:user-active",
+            userId = "user-active",
+        )
+        val calls = mutableListOf<MemberCall>()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                memberCalls = calls,
+                memberResult = ChatRoomMemberLoadResult.Success(emptyList()),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        repository.loadMoreMembers("room-1", listOf(first, active))
+
+        assertEquals(listOf(MemberCall("token-123", "room-1", "membership-member-1")), calls)
+    }
+
+    @Test
     fun missingTokenReturnsUnauthorizedWithoutCallingMemberApi() = runTest {
         var calls = 0
         val repository = ChatRepository(
@@ -599,6 +624,88 @@ class ChatRepositoryTest {
 
         assertIs<ChatRoomMemberRepositoryResult.Unauthorized>(repository.refreshMembers("room-1"))
         assertEquals(0, calls)
+    }
+
+    @Test
+    fun refreshInvitationOutboxLoadsOwnedRoomsThenAggregatesInvitationsByRoom() = runTest {
+        val ownedRoomCalls = mutableListOf<String>()
+        val outboxCalls = mutableListOf<String>()
+        val roomA = sampleRoom("room-a", "membership-a")
+        val roomB = sampleRoom("room-b", "membership-b")
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = object : ChatApi {
+                override suspend fun loadJoiningRooms(token: String, limit: Int, untilId: String?) =
+                    ChatRoomLoadResult.Success(emptyList())
+
+                override suspend fun loadOwnedRooms(token: String, limit: Int, untilId: String?): ChatRoomLoadResult {
+                    ownedRoomCalls += token
+                    return ChatRoomLoadResult.Success(listOf(roomA, roomB))
+                }
+
+                override suspend fun loadInvitationInbox(token: String, limit: Int, untilId: String?) =
+                    ChatRoomInvitationLoadResult.Success(emptyList())
+
+                override suspend fun loadInvitationOutbox(
+                    token: String,
+                    roomId: String,
+                    limit: Int,
+                    untilId: String?,
+                ): ChatRoomInvitationLoadResult {
+                    outboxCalls += roomId
+                    return ChatRoomInvitationLoadResult.Success(
+                        listOf(
+                            ChatRoomInvitation(
+                                id = "invite-$roomId",
+                                room = sampleRoom(roomId, roomId),
+                                inviter = User("user-$roomId", "User $roomId", "user$roomId", "U"),
+                            ),
+                        ),
+                    )
+                }
+
+                override suspend fun loadRoomMessages(token: String, roomId: String, limit: Int, untilId: String?) =
+                    ChatMessageLoadResult.Success(emptyList())
+                override suspend fun loadRoomMembers(token: String, roomId: String, limit: Int, untilId: String?) =
+                    ChatRoomMemberLoadResult.Success(emptyList())
+                override suspend fun showRoom(token: String, roomId: String) =
+                    ChatRoomMutationResult.Success(sampleRoom(roomId, roomId))
+                override suspend fun loadUserHistory(token: String, limit: Int) =
+                    ChatUserHistoryLoadResult.Success(emptyList())
+                override suspend fun loadUserMessages(token: String, userId: String, limit: Int, untilId: String?) =
+                    ChatMessageLoadResult.Success(emptyList())
+                override suspend fun searchMessages(token: String, query: String, limit: Int, untilId: String?, roomId: String?, userId: String?) =
+                    ChatMessageLoadResult.Success(emptyList())
+                override suspend fun createRoom(token: String, name: String, description: String) =
+                    ChatRoomMutationResult.Success(sampleRoom("room-created", "membership-created"))
+                override suspend fun createRoomMessage(token: String, roomId: String, text: String, fileId: String?, fileIds: List<String>, replyId: String?, quoteId: String?) =
+                    ChatMessageCreateResult.Success(sampleMessage("created"))
+                override suspend fun createUserMessage(token: String, userId: String, text: String, fileId: String?, replyId: String?, quoteId: String?) =
+                    ChatMessageCreateResult.Success(sampleMessage("created"))
+                override suspend fun reactToMessage(token: String, messageId: String, reaction: String) =
+                    ChatMessageReactionResult.Success
+                override suspend fun unreactToMessage(token: String, messageId: String, reaction: String) =
+                    ChatMessageReactionResult.Success
+                override suspend fun deleteMessage(token: String, messageId: String) =
+                    ChatMessageDeleteResult.Success
+                override suspend fun updateRoom(token: String, roomId: String, name: String, description: String) =
+                    ChatRoomMutationResult.Success(sampleRoom(roomId, roomId))
+                override suspend fun inviteRoomMember(token: String, roomId: String, userId: String) =
+                    ChatRoomActionResult.Success
+                override suspend fun joinRoom(token: String, roomId: String) = ChatRoomActionResult.Success
+                override suspend fun leaveRoom(token: String, roomId: String) = ChatRoomActionResult.Success
+                override suspend fun deleteRoom(token: String, roomId: String) = ChatRoomActionResult.Success
+                override suspend fun muteRoom(token: String, roomId: String, muted: Boolean) = ChatRoomActionResult.Success
+                override suspend fun ignoreRoomInvitation(token: String, roomId: String) = ChatRoomActionResult.Success
+            },
+        )
+
+        val result = repository.refreshInvitationOutbox()
+
+        assertIs<ChatRoomInvitationRepositoryResult.Success>(result)
+        assertEquals(listOf("token-123"), ownedRoomCalls)
+        assertEquals(listOf("room-a", "room-b"), outboxCalls)
+        assertEquals(listOf("invite-room-a", "invite-room-b"), result.invitations.map { it.id })
     }
 
     private fun fakeApi(
@@ -633,6 +740,25 @@ class ChatRepositoryTest {
                 calls.add(ApiCall(token, untilId))
                 return result
             }
+
+            override suspend fun loadOwnedRooms(
+                token: String,
+                limit: Int,
+                untilId: String?,
+            ): ChatRoomLoadResult = result
+
+            override suspend fun loadInvitationInbox(
+                token: String,
+                limit: Int,
+                untilId: String?,
+            ): ChatRoomInvitationLoadResult = ChatRoomInvitationLoadResult.Success(emptyList())
+
+            override suspend fun loadInvitationOutbox(
+                token: String,
+                roomId: String,
+                limit: Int,
+                untilId: String?,
+            ): ChatRoomInvitationLoadResult = ChatRoomInvitationLoadResult.Success(emptyList())
 
             override suspend fun loadRoomMessages(
                 token: String,
@@ -762,6 +888,11 @@ class ChatRepositoryTest {
                 token: String,
                 roomId: String,
                 muted: Boolean,
+            ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+            override suspend fun ignoreRoomInvitation(
+                token: String,
+                roomId: String,
             ): ChatRoomActionResult = ChatRoomActionResult.Success
 
             override suspend fun loadRoomMembers(

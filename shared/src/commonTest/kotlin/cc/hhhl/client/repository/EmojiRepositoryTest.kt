@@ -1,6 +1,7 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.EmojiApi
+import cc.hhhl.client.api.EmojiDetailLoadResult
 import cc.hhhl.client.api.EmojiLoadResult
 import cc.hhhl.client.model.CustomEmoji
 import kotlin.test.Test
@@ -43,10 +44,58 @@ class EmojiRepositoryTest {
         assertEquals("temporarily unavailable", result.message)
     }
 
-    private fun fakeApi(result: EmojiLoadResult): EmojiApi {
+    @Test
+    fun loadReactionOptionsCapsExcessiveLimit() = runTest {
+        val repository = EmojiRepository(
+            api = fakeApi(
+                EmojiLoadResult.Success(
+                    (0 until 1_050).map { index -> sampleEmoji("emoji$index") },
+                ),
+            ),
+        )
+
+        val result = repository.loadReactionOptions(limit = Int.MAX_VALUE)
+
+        assertIs<EmojiRepositoryResult.Success>(result)
+        assertEquals(1_000, result.reactionOptions.size)
+    }
+
+    @Test
+    fun loadEmojiMapsSingleEmojiResult() = runTest {
+        val emoji = sampleEmoji("blobcat")
+        val repository = EmojiRepository(
+            api = fakeApi(
+                result = EmojiLoadResult.Success(emptyList()),
+                detailResult = EmojiDetailLoadResult.Success(emoji),
+            ),
+        )
+
+        assertEquals(EmojiSingleRepositoryResult.Success(emoji), repository.loadEmoji("blobcat"))
+    }
+
+    @Test
+    fun loadEmojiMapsNotFound() = runTest {
+        val repository = EmojiRepository(
+            api = fakeApi(
+                result = EmojiLoadResult.Success(emptyList()),
+                detailResult = EmojiDetailLoadResult.NotFound,
+            ),
+        )
+
+        assertEquals(EmojiSingleRepositoryResult.NotFound, repository.loadEmoji("missing"))
+    }
+
+    private fun fakeApi(
+        result: EmojiLoadResult,
+        detailResult: EmojiDetailLoadResult = EmojiDetailLoadResult.NotFound,
+    ): EmojiApi {
         return object : EmojiApi {
             override suspend fun loadEmojis(): EmojiLoadResult {
                 return result
+            }
+
+            override suspend fun loadEmoji(name: String): EmojiDetailLoadResult {
+                return detailResult
             }
         }
     }

@@ -58,7 +58,7 @@ object NoopChatMessageCache : ChatMessageCache {
 }
 
 class InMemoryChatMessageCache : ChatMessageCache {
-    private val snapshots = mutableMapOf<ChatMessageCacheKey, List<ChatMessage>>()
+    private val snapshots = LinkedHashMap<ChatMessageCacheKey, List<ChatMessage>>()
     private val completeKeys = mutableSetOf<ChatMessageCacheKey>()
     private val mutex = Mutex()
 
@@ -76,7 +76,9 @@ class InMemoryChatMessageCache : ChatMessageCache {
 
     override suspend fun write(key: ChatMessageCacheKey, messages: List<ChatMessage>) {
         mutex.withLock {
-            snapshots[key] = messages
+            snapshots.remove(key)
+            snapshots[key] = messages.takeLast(MAX_CHAT_CACHE_MESSAGES_PER_CONVERSATION)
+            trimChatCacheLocked()
         }
     }
 
@@ -88,7 +90,7 @@ class InMemoryChatMessageCache : ChatMessageCache {
 
     override suspend fun markComplete(key: ChatMessageCacheKey) {
         mutex.withLock {
-            completeKeys.add(key)
+            if (key in snapshots) completeKeys.add(key)
         }
     }
 
@@ -106,6 +108,14 @@ class InMemoryChatMessageCache : ChatMessageCache {
             completeKeys.removeAll { it.accountId == accountId }
         }
     }
+
+    private fun trimChatCacheLocked() {
+        while (snapshots.size > MAX_CHAT_CACHE_CONVERSATIONS) {
+            val oldestKey = snapshots.keys.firstOrNull() ?: return
+            snapshots.remove(oldestKey)
+            completeKeys.remove(oldestKey)
+        }
+    }
 }
 
 object ChatMessageCacheCodec {
@@ -118,7 +128,9 @@ object ChatMessageCacheCodec {
         return json.encodeToString(
             ChatMessageCacheEnvelope(
                 snapshots = snapshots.mapKeys { (key, _) -> key.storageKey }
-                    .mapValues { (_, messages) -> messages.map { it.toCachedMessage() } },
+                    .mapValues { (_, messages) ->
+                        messages.takeLast(MAX_CHAT_CACHE_MESSAGES_PER_CONVERSATION).map { it.toCachedMessage() }
+                    },
             ),
         )
     }
@@ -130,7 +142,8 @@ object ChatMessageCacheCodec {
                 .snapshots
                 .mapNotNull { (key, messages) ->
                     key.toChatMessageCacheKey()?.let { cacheKey ->
-                        cacheKey to messages.map { it.toDomainMessage() }
+                        cacheKey to messages.takeLast(MAX_CHAT_CACHE_MESSAGES_PER_CONVERSATION)
+                            .map { it.toDomainMessage() }
                     }
                 }
                 .toMap()
@@ -410,3 +423,5 @@ private fun CachedChatDriveFile.toDomainDriveFile(): DriveFile {
 }
 
 private const val KEY_SEPARATOR = "|"
+private const val MAX_CHAT_CACHE_CONVERSATIONS = 64
+private const val MAX_CHAT_CACHE_MESSAGES_PER_CONVERSATION = 500

@@ -282,7 +282,18 @@ class LoginStateHolder(
                 return@launch
             }
 
-            val currentAccount = accounts.currentAccount() ?: accounts.maxByOrNull { it.lastUsed }!!
+            val currentAccount = accounts.currentAccount() ?: accounts.maxByOrNull { it.lastUsed }
+            if (currentAccount == null) {
+                mutableState.update {
+                    it.copy(
+                        isLoading = false,
+                        statusMessage = null,
+                        accounts = emptyList(),
+                        currentAccountId = null,
+                    )
+                }
+                return@launch
+            }
             when (val result = authenticator.verifyToken(currentAccount.token)) {
                 is AuthResult.Success -> {
                     val updatedAccounts = upsertCurrentAccount(
@@ -426,6 +437,40 @@ class LoginStateHolder(
         }
     }
 
+    fun importSessionToken(token: String, userIdHint: String? = null) {
+        val cleanToken = token.trim()
+        if (cleanToken.isEmpty()) return
+        val hintedId = userIdHint?.trim().orEmpty()
+        val accountId = if (hintedId.isNotEmpty()) {
+            "${DefaultAccountHost}:$hintedId"
+        } else {
+            legacyAccountSessionId(cleanToken)
+        }
+        val importedAccount = AccountSession(
+            id = accountId,
+            user = null,
+            token = cleanToken,
+            host = DefaultAccountHost,
+            lastUsed = nowProvider(),
+            current = false,
+        )
+
+        scope.launch {
+            val updatedAccounts = normalizeAccounts(
+                state.value.accounts.filterNot { it.id == accountId || it.token == cleanToken } + importedAccount,
+                preferredCurrentId = state.value.currentAccountId,
+            )
+            val saveError = saveAccounts(updatedAccounts)
+            mutableState.update {
+                it.copy(
+                    accounts = updatedAccounts,
+                    errorMessage = saveError,
+                )
+            }
+            switchAccount(accountId)
+        }
+    }
+
     fun removeAccount(accountId: String) {
         scope.launch {
             removeAccount(accountId, null)
@@ -510,7 +555,8 @@ class LoginStateHolder(
 
         val currentId = preferredCurrentId
             ?: cleanAccounts.firstOrNull { it.current }?.id
-            ?: cleanAccounts.maxByOrNull { it.lastUsed }!!.id
+            ?: cleanAccounts.maxByOrNull { it.lastUsed }?.id
+            ?: return emptyList()
         return cleanAccounts.map { it.copy(current = it.id == currentId) }
     }
 }

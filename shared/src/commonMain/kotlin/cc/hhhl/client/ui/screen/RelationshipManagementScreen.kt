@@ -14,10 +14,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +54,7 @@ fun RelationshipManagementScreen(
     onTabSelected: (RelationshipManagementTab) -> Unit = {},
     onOpenUser: (String) -> Unit = {},
     onRemoveRelationship: (String) -> Unit = {},
+    onUpdateAllFollowing: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val entries = state.visibleEntries
@@ -74,7 +75,9 @@ fun RelationshipManagementScreen(
                 HhhlOverflowMenu(
                     actions = relationshipManagementTopActions(
                         isLoading = state.isLoading,
+                        isMutating = state.isMutating,
                         onRefresh = onRefresh,
+                        onUpdateAllFollowing = onUpdateAllFollowing,
                     ),
                 )
             },
@@ -82,8 +85,10 @@ fun RelationshipManagementScreen(
         HhhlDivider()
         RelationshipManagementTabs(
             selectedTab = state.selectedTab,
-            mutedCount = state.mutedUsers.size,
+            specialCareCount = state.specialCareUsers.size,
             blockedCount = state.blockedUsers.size,
+            mutedCount = state.mutedUsers.size,
+            renoteMutedCount = state.renoteMutedUsers.size,
             onTabSelected = onTabSelected,
         )
         HhhlDivider()
@@ -100,10 +105,10 @@ fun RelationshipManagementScreen(
             state = listState,
         ) {
             state.message?.let { message ->
-                item(contentType = "relationship-status") { RelationshipManagementStatusRow(text = message) }
+                item(key = "relationship-message", contentType = "relationship-status") { RelationshipManagementStatusRow(text = message) }
             }
             state.errorMessage?.let { message ->
-                item(contentType = "relationship-status") {
+                item(key = "relationship-error", contentType = "relationship-status") {
                     RelationshipManagementStatusRow(
                         text = message,
                         actionText = "重试",
@@ -112,12 +117,12 @@ fun RelationshipManagementScreen(
                 }
             }
             if (state.isLoading && entries.isEmpty()) {
-                item(contentType = "relationship-status") {
+                item(key = "relationship-loading", contentType = "relationship-status") {
                     RelationshipManagementStatusRow(text = "加载中...", loading = true)
                 }
             }
             if (!state.isLoading && entries.isEmpty() && state.errorMessage == null) {
-                item(contentType = "relationship-status") {
+                item(key = "relationship-empty-${state.selectedTab.name}", contentType = "relationship-status") {
                     RelationshipManagementStatusRow(text = relationshipManagementEmptyText(state.selectedTab))
                 }
             }
@@ -135,7 +140,7 @@ fun RelationshipManagementScreen(
                 )
             }
             if (entries.isNotEmpty() && state.isLoadingMore) {
-                item(contentType = "relationship-status") {
+                item(key = "relationship-loading-more", contentType = "relationship-status") {
                     RelationshipManagementStatusRow(
                         text = "正在加载更多...",
                         loading = state.isLoadingMore,
@@ -149,8 +154,10 @@ fun RelationshipManagementScreen(
 @Composable
 private fun RelationshipManagementTabs(
     selectedTab: RelationshipManagementTab,
-    mutedCount: Int,
+    specialCareCount: Int,
     blockedCount: Int,
+    mutedCount: Int,
+    renoteMutedCount: Int,
     onTabSelected: (RelationshipManagementTab) -> Unit,
 ) {
     HhhlSegmentedControl(
@@ -159,15 +166,27 @@ private fun RelationshipManagementTabs(
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
         HhhlSegmentedItem(
-            label = relationshipManagementTabLabel(RelationshipManagementTab.Muted, mutedCount),
-            selected = selectedTab == RelationshipManagementTab.Muted,
-            onClick = { onTabSelected(RelationshipManagementTab.Muted) },
+            label = relationshipManagementTabLabel(RelationshipManagementTab.SpecialCare, specialCareCount),
+            selected = selectedTab == RelationshipManagementTab.SpecialCare,
+            onClick = { onTabSelected(RelationshipManagementTab.SpecialCare) },
             modifier = Modifier.weight(1f),
         )
         HhhlSegmentedItem(
             label = relationshipManagementTabLabel(RelationshipManagementTab.Blocked, blockedCount),
             selected = selectedTab == RelationshipManagementTab.Blocked,
             onClick = { onTabSelected(RelationshipManagementTab.Blocked) },
+            modifier = Modifier.weight(1f),
+        )
+        HhhlSegmentedItem(
+            label = relationshipManagementTabLabel(RelationshipManagementTab.Muted, mutedCount),
+            selected = selectedTab == RelationshipManagementTab.Muted,
+            onClick = { onTabSelected(RelationshipManagementTab.Muted) },
+            modifier = Modifier.weight(1f),
+        )
+        HhhlSegmentedItem(
+            label = relationshipManagementTabLabel(RelationshipManagementTab.RenoteMuted, renoteMutedCount),
+            selected = selectedTab == RelationshipManagementTab.RenoteMuted,
+            onClick = { onTabSelected(RelationshipManagementTab.RenoteMuted) },
             modifier = Modifier.weight(1f),
         )
     }
@@ -181,6 +200,7 @@ private fun RelationshipManagementSummaryRow(
     isMutating: Boolean,
     onRefresh: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -194,13 +214,13 @@ private fun RelationshipManagementSummaryRow(
         ) {
             Text(
                 text = selectedTab.label,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 text = relationshipManagementSummaryText(selectedTab, count, isLoading, isMutating),
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -226,6 +246,7 @@ private fun RelationshipManagementRow(
     onRemoveRelationship: (String) -> Unit,
 ) {
     var confirmOpen by remember { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -244,7 +265,7 @@ private fun RelationshipManagementRow(
         ) {
             Text(
                 text = entry.user.displayName,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -252,7 +273,7 @@ private fun RelationshipManagementRow(
             )
             Text(
                 text = relationshipManagementUserMeta(entry),
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -291,13 +312,14 @@ private fun RelationshipManagementRemoveDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(relationshipManagementRemoveLabel(tab)) },
         text = {
             Text(
                 text = "将「${displayName.ifBlank { "该用户" }}」从${tab.label}列表移除。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
@@ -342,15 +364,19 @@ fun relationshipManagementSummaryText(
 
 fun relationshipManagementEmptyText(tab: RelationshipManagementTab): String {
     return when (tab) {
+        RelationshipManagementTab.SpecialCare -> "暂无特别关心用户"
+        RelationshipManagementTab.Blocked -> "暂无屏蔽用户"
         RelationshipManagementTab.Muted -> "暂无静音用户"
-        RelationshipManagementTab.Blocked -> "暂无拉黑用户"
+        RelationshipManagementTab.RenoteMuted -> "暂无转发静音用户"
     }
 }
 
 fun relationshipManagementRemoveLabel(tab: RelationshipManagementTab): String {
     return when (tab) {
+        RelationshipManagementTab.SpecialCare -> "取消特别关心"
+        RelationshipManagementTab.Blocked -> "取消屏蔽"
         RelationshipManagementTab.Muted -> "取消静音"
-        RelationshipManagementTab.Blocked -> "取消拉黑"
+        RelationshipManagementTab.RenoteMuted -> "刷新关注"
     }
 }
 
@@ -363,13 +389,20 @@ fun relationshipManagementUserMeta(entry: UserRelationshipListEntry): String {
 
 fun relationshipManagementTopActions(
     isLoading: Boolean,
+    isMutating: Boolean,
     onRefresh: () -> Unit,
+    onUpdateAllFollowing: () -> Unit,
 ): List<HhhlOverflowMenuAction> {
     return listOf(
         HhhlOverflowMenuAction(
             label = if (isLoading) "同步中" else "刷新列表",
             enabled = !isLoading,
             onClick = onRefresh,
+        ),
+        HhhlOverflowMenuAction(
+            label = if (isMutating) "刷新关注中" else "刷新全部关注",
+            enabled = !isMutating,
+            onClick = onUpdateAllFollowing,
         ),
     )
 }
@@ -383,7 +416,6 @@ fun relationshipManagementRowActions(
         HhhlOverflowMenuAction("查看资料", onClick = onOpenUser),
         HhhlOverflowMenuAction(
             label = relationshipManagementRemoveLabel(tab),
-            destructive = tab == RelationshipManagementTab.Blocked,
             onClick = onRemove,
         ),
     )

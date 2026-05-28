@@ -85,7 +85,7 @@ class SharkeyNotificationApiTest {
         assertEquals("对你的帖子做出了反应 👍", reaction.text)
         assertEquals("2026-05-25 08:12", reaction.createdAtLabel)
         assertEquals("note-1", reaction.noteId)
-        assertEquals("这是一条被互动的动态内容", reaction.notePreviewText)
+        assertEquals("这是一条 CW", reaction.notePreviewText)
 
         val follow = result.notifications[1]
         assertEquals(NotificationType.Follow, follow.type)
@@ -204,9 +204,7 @@ class SharkeyNotificationApiTest {
             client = testClient { request ->
                 assertEquals("https://dc.hhhl.cc/api/notifications/mark-all-as-read", request.url.toString())
                 assertEquals(HttpMethod.Post, request.method)
-                assertEquals(ContentType.Application.Json, request.body.contentType)
-                val body = (request.body as TextContent).text
-                assertTrue(body.contains(""""i":"token-123""""))
+                assertEquals("Bearer token-123", request.headers[HttpHeaders.Authorization])
                 respond(
                     content = "",
                     status = HttpStatusCode.NoContent,
@@ -215,6 +213,60 @@ class SharkeyNotificationApiTest {
         )
 
         assertIs<NotificationActionResult.Success>(api.markAllAsRead("token-123"))
+    }
+
+    @Test
+    fun flushesNotificationsWithoutJsonPayload() = runTest {
+        val api = SharkeyNotificationApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notifications/flush", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals("Bearer token-123", request.headers[HttpHeaders.Authorization])
+                respond(content = "", status = HttpStatusCode.NoContent)
+            },
+        )
+
+        assertIs<NotificationActionResult.Success>(api.flush("token-123"))
+    }
+
+    @Test
+    fun createsNotificationWithBodyAndOptionalHeader() = runTest {
+        val api = SharkeyNotificationApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notifications/create", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains("\"i\":\"token-123\""))
+                assertTrue(body.contains("\"body\":\"回来看看新消息\""))
+                assertTrue(body.contains("\"header\":\"HHHL 提醒\""))
+                respond(content = "", status = HttpStatusCode.NoContent)
+            },
+        )
+
+        assertIs<NotificationActionResult.Success>(
+            api.createNotification(
+                token = "token-123",
+                body = "回来看看新消息",
+                header = "HHHL 提醒",
+            ),
+        )
+    }
+
+    @Test
+    fun sendsTestNotificationWithoutExtraPayload() = runTest {
+        val api = SharkeyNotificationApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notifications/test-notification", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals("Bearer token-123", request.headers[HttpHeaders.Authorization])
+                respond(content = "", status = HttpStatusCode.NoContent)
+            },
+        )
+
+        assertIs<NotificationActionResult.Success>(api.sendTestNotification("token-123"))
     }
 
     private fun MockRequestHandleScope.respondRichNotificationArray(): HttpResponseData {
@@ -309,7 +361,8 @@ class SharkeyNotificationApiTest {
                     },
                     "note": {
                       "id": "note-1",
-                      "text": "这是一条被互动的动态内容"
+                      "text": "这是一条被互动的动态内容",
+                      "cw": "这是一条 CW"
                     }
                   },
                   {

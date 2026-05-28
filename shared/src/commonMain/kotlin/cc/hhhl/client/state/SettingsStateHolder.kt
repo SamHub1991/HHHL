@@ -18,6 +18,7 @@ import cc.hhhl.client.repository.SettingsManagementMutationRepositoryResult
 import cc.hhhl.client.repository.SettingsManagementRepositoryResult
 import cc.hhhl.client.repository.SettingsRepository
 import cc.hhhl.client.repository.SettingsRepositoryResult
+import cc.hhhl.client.repository.SettingsSharedAccessLoginRepositoryResult
 import cc.hhhl.client.repository.SettingsWebhookDetailRepositoryResult
 import cc.hhhl.client.theme.HhhlCustomTheme
 import cc.hhhl.client.theme.HhhlThemePreset
@@ -87,6 +88,7 @@ enum class SettingsItemKey {
     TwoFactor,
     Passkeys,
     SigninHistory,
+    AvatarDecorations,
     DefaultNoteVisibility,
     LockAccount,
     AutoAcceptFollowed,
@@ -103,6 +105,7 @@ enum class SettingsItemKey {
     HardMutedWords,
     MutedInstances,
     ApiTokens,
+    Invites,
     SharedAccess,
     Webhooks,
     AuthorizedApps,
@@ -111,9 +114,13 @@ enum class SettingsItemKey {
 class SettingsStateHolder(
     private val repository: SettingsRepository = SettingsRepository(),
     private val scope: CoroutineScope? = null,
+    private val onSharedAccessLogin: (token: String, userId: String) -> Unit = { _, _ -> },
 ) {
     private val mutableState = MutableStateFlow(SettingsUiState(groups = repository.groups()))
     val state: StateFlow<SettingsUiState> = mutableState
+    private var remoteRequestId = 0
+    private var managementRequestId = 0
+    private var webhookRequestId = 0
 
     fun sync(
         selectedTheme: HhhlThemePreset,
@@ -147,6 +154,7 @@ class SettingsStateHolder(
     fun refreshRemote() {
         val launchScope = scope ?: return
         if (state.value.isRemoteLoading) return
+        val requestId = ++remoteRequestId
 
         mutableState.update {
             it.copy(
@@ -159,6 +167,7 @@ class SettingsStateHolder(
         launchScope.launch {
             when (val result = repository.loadRemotePreferences()) {
                 is SettingsRepositoryResult.Success -> mutableState.update {
+                    if (requestId != remoteRequestId) return@update it
                     it.copy(
                         remotePreferences = result.preferences,
                         isRemoteLoading = false,
@@ -167,6 +176,7 @@ class SettingsStateHolder(
                     ).withGroups()
                 }
                 SettingsRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != remoteRequestId) return@update it
                     it.copy(
                         isRemoteLoading = false,
                         errorMessage = "登录已失效，请重新登录",
@@ -174,6 +184,7 @@ class SettingsStateHolder(
                     ).withGroups()
                 }
                 is SettingsRepositoryResult.Error -> mutableState.update {
+                    if (requestId != remoteRequestId) return@update it
                     it.copy(
                         isRemoteLoading = false,
                         errorMessage = result.message,
@@ -258,6 +269,8 @@ class SettingsStateHolder(
         preserveMessage: String? = null,
     ) {
         val launchScope = scope ?: return
+        val requestId = ++managementRequestId
+        webhookRequestId += 1
         mutableState.update {
             it.copy(
                 openedManagementKey = key,
@@ -273,6 +286,7 @@ class SettingsStateHolder(
         launchScope.launch {
             when (val result = repository.loadManagementSection(key)) {
                 is SettingsManagementRepositoryResult.Success -> mutableState.update {
+                    if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                     it.copy(
                         openedManagementKey = key,
                         managementSection = result.section,
@@ -283,6 +297,7 @@ class SettingsStateHolder(
                     ).withGroups()
                 }
                 SettingsManagementRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                     it.copy(
                         isManagementLoading = false,
                         managementMessage = "登录已失效，请重新登录",
@@ -290,6 +305,7 @@ class SettingsStateHolder(
                     ).withGroups()
                 }
                 is SettingsManagementRepositoryResult.Error -> mutableState.update {
+                    if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                     it.copy(
                         isManagementLoading = false,
                         managementMessage = result.message,
@@ -301,6 +317,8 @@ class SettingsStateHolder(
     }
 
     fun closeManagement() {
+        managementRequestId += 1
+        webhookRequestId += 1
         mutableState.update {
             it.copy(
                 openedManagementKey = null,
@@ -322,6 +340,7 @@ class SettingsStateHolder(
         val launchScope = scope ?: return
         if (state.value.openedManagementKey != SettingsManagementSectionKey.Webhooks) return
         if (state.value.isWebhookEditorLoading || state.value.isManagementMutating) return
+        val requestId = ++webhookRequestId
 
         mutableState.update {
             it.copy(
@@ -335,6 +354,10 @@ class SettingsStateHolder(
         launchScope.launch {
             when (val result = repository.loadWebhook(webhookId)) {
                 is SettingsWebhookDetailRepositoryResult.Success -> mutableState.update {
+                    if (
+                        requestId != webhookRequestId ||
+                        it.openedManagementKey != SettingsManagementSectionKey.Webhooks
+                    ) return@update it
                     it.copy(
                         editingWebhook = result.webhook,
                         isWebhookEditorLoading = false,
@@ -343,6 +366,10 @@ class SettingsStateHolder(
                     ).withGroups()
                 }
                 SettingsWebhookDetailRepositoryResult.Unauthorized -> mutableState.update {
+                    if (
+                        requestId != webhookRequestId ||
+                        it.openedManagementKey != SettingsManagementSectionKey.Webhooks
+                    ) return@update it
                     it.copy(
                         editingWebhook = null,
                         isWebhookEditorLoading = false,
@@ -351,6 +378,10 @@ class SettingsStateHolder(
                     ).withGroups()
                 }
                 is SettingsWebhookDetailRepositoryResult.Error -> mutableState.update {
+                    if (
+                        requestId != webhookRequestId ||
+                        it.openedManagementKey != SettingsManagementSectionKey.Webhooks
+                    ) return@update it
                     it.copy(
                         editingWebhook = null,
                         isWebhookEditorLoading = false,
@@ -363,6 +394,7 @@ class SettingsStateHolder(
     }
 
     fun closeWebhookEditor() {
+        webhookRequestId += 1
         mutableState.update {
             it.copy(
                 editingWebhook = null,
@@ -389,8 +421,43 @@ class SettingsStateHolder(
         }
 
         launchScope.launch {
+            if (action == SettingsManagementAction.LoginSharedAccess) {
+                when (val result = repository.loginSharedAccess(itemId)) {
+                    is SettingsSharedAccessLoginRepositoryResult.Success -> {
+                        onSharedAccessLogin(result.token, result.userId)
+                        val successMessage = "共享访问已导入，正在切换账号"
+                        mutableState.update {
+                            it.copy(
+                                isManagementMutating = false,
+                                managementMessage = successMessage,
+                                requiresRelogin = false,
+                            ).withGroups()
+                        }
+                        openManagement(key, preserveMessage = successMessage)
+                    }
+                    SettingsSharedAccessLoginRepositoryResult.Unauthorized -> mutableState.update {
+                        it.copy(
+                            isManagementMutating = false,
+                            managementMessage = "登录已失效，请重新登录",
+                            requiresRelogin = true,
+                        ).withGroups()
+                    }
+                    is SettingsSharedAccessLoginRepositoryResult.Error -> mutableState.update {
+                        it.copy(
+                            isManagementMutating = false,
+                            managementMessage = result.message,
+                            requiresRelogin = false,
+                        ).withGroups()
+                    }
+                }
+                return@launch
+            }
+
             val result = when (action) {
                 SettingsManagementAction.RevokeToken -> repository.revokeApiToken(itemId)
+                SettingsManagementAction.CreateInvite -> repository.createInvite()
+                SettingsManagementAction.DeleteInvite -> repository.deleteInvite(itemId)
+                SettingsManagementAction.LoginSharedAccess -> SettingsManagementMutationRepositoryResult.Error("共享访问登录未执行")
                 SettingsManagementAction.EditWebhook -> SettingsManagementMutationRepositoryResult.Error("请在编辑表单中保存 Webhook")
                 SettingsManagementAction.EnableWebhook -> repository.updateWebhookActive(itemId, true)
                 SettingsManagementAction.DisableWebhook -> repository.updateWebhookActive(itemId, false)
@@ -401,6 +468,9 @@ class SettingsStateHolder(
                 SettingsManagementMutationRepositoryResult.Success -> {
                     val successMessage = when (action) {
                         SettingsManagementAction.RevokeToken -> "操作已完成"
+                        SettingsManagementAction.CreateInvite -> "邀请码已创建"
+                        SettingsManagementAction.DeleteInvite -> "邀请码已删除"
+                        SettingsManagementAction.LoginSharedAccess -> "请通过授权登录管理共享访问"
                         SettingsManagementAction.EditWebhook -> "Webhook 已更新"
                         SettingsManagementAction.EnableWebhook -> "Webhook 已启用"
                         SettingsManagementAction.DisableWebhook -> "Webhook 已停用"

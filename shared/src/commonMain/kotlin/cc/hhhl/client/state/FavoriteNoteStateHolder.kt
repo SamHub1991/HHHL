@@ -1,6 +1,7 @@
 package cc.hhhl.client.state
 
 import cc.hhhl.client.model.FavoriteNote
+import cc.hhhl.client.model.Note
 import cc.hhhl.client.repository.FavoriteNoteRepository
 import cc.hhhl.client.repository.FavoriteNotesRepositoryResult
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +25,7 @@ class FavoriteNoteStateHolder(
 ) {
     private val mutableState = MutableStateFlow(FavoriteNoteUiState())
     val state: StateFlow<FavoriteNoteUiState> = mutableState
+    private var listRequestId = 0
 
     fun refresh() {
         if (state.value.isLoading) return
@@ -32,8 +34,9 @@ class FavoriteNoteStateHolder(
             it.copy(isLoading = true, errorMessage = null, requiresRelogin = false)
         }
 
+        val requestId = nextListRequestId()
         scope.launch {
-            applyResult(repository.refresh(), loadingMore = false)
+            applyResult(repository.refresh(), loadingMore = false, requestId = requestId)
         }
     }
 
@@ -45,8 +48,9 @@ class FavoriteNoteStateHolder(
             it.copy(isLoadingMore = true, errorMessage = null, requiresRelogin = false)
         }
 
+        val requestId = nextListRequestId()
         scope.launch {
-            applyResult(repository.loadMore(current.favorites), loadingMore = true)
+            applyResult(repository.loadMore(current.favorites), loadingMore = true, requestId = requestId)
         }
     }
 
@@ -69,10 +73,27 @@ class FavoriteNoteStateHolder(
         }
     }
 
+    fun addLocalFavorite(note: Note) {
+        if (note.id.isBlank()) return
+        mutableState.update { current ->
+            val favorite = FavoriteNote(
+                id = "local-${note.id}",
+                createdAtLabel = "刚刚",
+                note = note.copy(isFavorited = true),
+            )
+            current.copy(
+                favorites = listOf(favorite) + current.favorites.filterNot { it.note.id == note.id },
+                requiresRelogin = false,
+            )
+        }
+    }
+
     private fun applyResult(
         result: FavoriteNotesRepositoryResult,
         loadingMore: Boolean,
+        requestId: Int,
     ) {
+        if (requestId != listRequestId) return
         when (result) {
             is FavoriteNotesRepositoryResult.Success -> mutableState.update {
                 it.copy(
@@ -101,5 +122,10 @@ class FavoriteNoteStateHolder(
                 )
             }
         }
+    }
+
+    private fun nextListRequestId(): Int {
+        listRequestId += 1
+        return listRequestId
     }
 }

@@ -18,7 +18,7 @@ fun HhhlSectionHeader(
 ) {
     Text(
         text = label,
-        color = LocalHhhlColors.current.subtleText,
+        color = LocalHhhlColors.current.textMuted,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
         maxLines = 1,

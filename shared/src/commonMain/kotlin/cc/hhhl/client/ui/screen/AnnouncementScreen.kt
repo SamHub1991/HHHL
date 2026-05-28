@@ -14,10 +14,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,12 +25,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.model.Announcement
 import cc.hhhl.client.repository.AnnouncementDraft
 import cc.hhhl.client.state.AnnouncementUiState
+import cc.hhhl.client.theme.HhhlColors
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
@@ -42,6 +44,7 @@ import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
+import cc.hhhl.client.ui.component.InlineRichText
 
 @Composable
 fun AnnouncementScreen(
@@ -165,7 +168,7 @@ fun AnnouncementScreen(
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item(contentType = "announcement-status") {
+                item(key = "announcement-error", contentType = "announcement-status") {
                     AnnouncementStatusRow(
                         text = message,
                         actionText = "重试",
@@ -174,12 +177,12 @@ fun AnnouncementScreen(
                 }
             }
             if (state?.isLoading == true && announcements.isEmpty()) {
-                item(contentType = "announcement-status") {
+                item(key = "announcement-loading", contentType = "announcement-status") {
                     AnnouncementStatusRow(text = "正在加载公告...", loading = true)
                 }
             }
             if (state != null && !state.isLoading && announcements.isEmpty() && state.errorMessage == null) {
-                item(contentType = "announcement-status") { AnnouncementStatusRow(text = "还没有公告") }
+                item(key = "announcement-empty", contentType = "announcement-status") { AnnouncementStatusRow(text = "还没有公告") }
             }
             items(
                 items = announcements,
@@ -192,7 +195,7 @@ fun AnnouncementScreen(
                 )
             }
             if (state != null && announcements.isNotEmpty() && state.isLoadingMore) {
-                item(contentType = "announcement-status") {
+                item(key = "announcement-loading-more", contentType = "announcement-status") {
                     AnnouncementStatusRow(
                         text = "正在加载更多...",
                         loading = state.isLoadingMore,
@@ -255,10 +258,10 @@ private fun AnnouncementManagementView(
             state = listState,
         ) {
             state.adminActionMessage?.let { message ->
-                item(contentType = "announcement-admin-status") { AnnouncementStatusRow(text = message) }
+                item(key = "announcement-admin-message", contentType = "announcement-admin-status") { AnnouncementStatusRow(text = message) }
             }
             state.adminErrorMessage?.let { message ->
-                item(contentType = "announcement-admin-status") {
+                item(key = "announcement-admin-error", contentType = "announcement-admin-status") {
                     AnnouncementStatusRow(
                         text = message,
                         actionText = "重试",
@@ -267,12 +270,12 @@ private fun AnnouncementManagementView(
                 }
             }
             if (state.isLoadingAdmin && announcements.isEmpty()) {
-                item(contentType = "announcement-admin-status") {
+                item(key = "announcement-admin-loading", contentType = "announcement-admin-status") {
                     AnnouncementStatusRow(text = "正在加载公告管理列表...", loading = true)
                 }
             }
             if (!state.isLoadingAdmin && announcements.isEmpty() && state.adminErrorMessage == null) {
-                item(contentType = "announcement-admin-status") { AnnouncementStatusRow(text = "还没有公告") }
+                item(key = "announcement-admin-empty", contentType = "announcement-admin-status") { AnnouncementStatusRow(text = "还没有公告") }
             }
             items(
                 items = announcements,
@@ -297,6 +300,7 @@ private fun AnnouncementManagementRow(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -306,7 +310,7 @@ private fun AnnouncementManagementRow(
     ) {
         Text(
             text = announcementIcon(announcement.icon),
-            color = MaterialTheme.colorScheme.primary,
+            color = announcementIconColor(announcement.icon, colors),
             style = MaterialTheme.typography.titleMedium,
         )
         Column(
@@ -315,22 +319,21 @@ private fun AnnouncementManagementRow(
         ) {
             Text(
                 text = announcement.title.ifBlank { "公告" },
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
+            InlineRichText(
                 text = announcement.text,
-                color = MaterialTheme.colorScheme.secondary,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                maxChars = 320,
             )
             Text(
                 text = "${announcement.iconLabel} · ${announcement.displayLabel} · ${announcement.createdAtLabel}",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -371,6 +374,7 @@ internal fun AnnouncementSummaryRow(
     isLoading: Boolean,
     onRefresh: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val countText = if (announcementCount == 0) "暂无公告" else "${announcementCount} 条公告"
     val stateText = when {
         isLoading -> "加载中"
@@ -386,7 +390,7 @@ internal fun AnnouncementSummaryRow(
     ) {
         Text(
             text = "$countText · $stateText",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -413,6 +417,7 @@ internal fun AnnouncementRow(
     announcement: Announcement,
     onOpenAnnouncement: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -423,7 +428,7 @@ internal fun AnnouncementRow(
     ) {
         Text(
             text = announcementIcon(announcement.icon),
-            color = MaterialTheme.colorScheme.primary,
+            color = announcementIconColor(announcement.icon, colors),
             style = MaterialTheme.typography.titleMedium,
         )
         Column(
@@ -436,7 +441,7 @@ internal fun AnnouncementRow(
             ) {
                 Text(
                     text = announcement.title.ifBlank { "公告" },
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -446,21 +451,20 @@ internal fun AnnouncementRow(
                 if (!announcement.isRead) {
                     Text(
                         text = "未读",
-                        color = MaterialTheme.colorScheme.primary,
+                        color = colors.accent,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
             }
-            Text(
+            InlineRichText(
                 text = announcement.text,
-                color = MaterialTheme.colorScheme.secondary,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                maxChars = 320,
             )
             Text(
                 text = "${announcement.displayLabel} · ${announcement.createdAtLabel}",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -502,17 +506,18 @@ internal fun AnnouncementDetailView(
         HhhlDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             if (isLoading) {
-                item(contentType = "announcement-detail-status") {
+                item(key = "announcement-detail-loading", contentType = "announcement-detail-status") {
                     AnnouncementStatusRow(text = "正在加载公告...", loading = true)
                 }
             }
             errorMessage?.let { message ->
-                item(contentType = "announcement-detail-status") { AnnouncementStatusRow(text = message) }
+                item(key = "announcement-detail-error", contentType = "announcement-detail-status") { AnnouncementStatusRow(text = message) }
             }
             actionErrorMessage?.let { message ->
-                item(contentType = "announcement-detail-status") { AnnouncementStatusRow(text = message) }
+                item(key = "announcement-detail-action-error", contentType = "announcement-detail-status") { AnnouncementStatusRow(text = message) }
             }
-            item(contentType = "announcement-detail") {
+            item(key = "announcement-detail-${announcement.id}", contentType = "announcement-detail") {
+                val colors = LocalHhhlColors.current
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -521,24 +526,24 @@ internal fun AnnouncementDetailView(
                 ) {
                     Text(
                         text = announcement.title.ifBlank { "公告" },
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = colors.textPrimary,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
                         text = "${announcement.iconLabel} · ${announcement.displayLabel} · ${announcement.createdAtLabel}",
-                        color = LocalHhhlColors.current.subtleText,
+                        color = colors.textMuted,
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    Text(
+                    InlineRichText(
                         text = announcement.text,
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = colors.textPrimary,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     announcement.imageUrl?.takeIf { it.isNotBlank() }?.let { imageUrl ->
                         Text(
                             text = imageUrl,
-                            color = MaterialTheme.colorScheme.secondary,
+                            color = colors.textSecondary,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -573,7 +578,7 @@ private fun AnnouncementEditorDialog(
     }
     val canSubmit = announcementTitle.isNotBlank() && text.isNotBlank() && !isMutating
 
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
@@ -645,10 +650,11 @@ private fun AnnouncementOptionChips(
     enabled: Boolean,
     onSelected: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = label,
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.bodyMedium,
         )
         FlowRow(
@@ -674,13 +680,13 @@ private fun DeleteAnnouncementDialog(
     onDismiss: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("删除公告") },
         text = {
             Text(
                 text = "删除「${announcement.title.ifBlank { "公告" }}」后，用户侧公告列表会同步移除。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = LocalHhhlColors.current.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
@@ -718,6 +724,15 @@ private fun announcementIcon(icon: String): String {
         "error" -> "×"
         "success" -> "✓"
         else -> "i"
+    }
+}
+
+private fun announcementIconColor(icon: String, colors: HhhlColors): Color {
+    return when (icon) {
+        "warning" -> colors.warning
+        "error" -> colors.danger
+        "success" -> colors.success
+        else -> colors.accent
     }
 }
 

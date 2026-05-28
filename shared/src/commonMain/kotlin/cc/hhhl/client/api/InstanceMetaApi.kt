@@ -1,7 +1,12 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.InstanceCapabilities
+import cc.hhhl.client.model.InstanceEndpointInfo
+import cc.hhhl.client.model.InstanceEndpointParam
 import cc.hhhl.client.model.InstanceMeta
+import cc.hhhl.client.model.InstanceOnlineUsers
+import cc.hhhl.client.model.InstanceServerInfo
+import cc.hhhl.client.model.InstanceStats
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -20,6 +25,18 @@ import kotlinx.serialization.json.Json
 
 interface InstanceMetaApi {
     suspend fun loadMeta(): InstanceMetaLoadResult
+
+    suspend fun ping(): InstanceAuxiliaryLoadResult<Long>
+
+    suspend fun loadEndpoints(): InstanceAuxiliaryLoadResult<List<String>>
+
+    suspend fun loadEndpointInfo(endpoint: String): InstanceAuxiliaryLoadResult<InstanceEndpointInfo?>
+
+    suspend fun loadStats(): InstanceAuxiliaryLoadResult<InstanceStats>
+
+    suspend fun loadOnlineUsers(): InstanceAuxiliaryLoadResult<InstanceOnlineUsers>
+
+    suspend fun loadServerInfo(): InstanceAuxiliaryLoadResult<InstanceServerInfo>
 }
 
 sealed interface InstanceMetaLoadResult {
@@ -31,6 +48,12 @@ sealed interface InstanceMetaLoadResult {
     ) : InstanceMetaLoadResult
 
     data class NetworkError(val message: String) : InstanceMetaLoadResult
+}
+
+sealed interface InstanceAuxiliaryLoadResult<out T> {
+    data class Success<T>(val value: T) : InstanceAuxiliaryLoadResult<T>
+
+    data object Unavailable : InstanceAuxiliaryLoadResult<Nothing>
 }
 
 class SharkeyInstanceMetaApi(
@@ -60,6 +83,64 @@ class SharkeyInstanceMetaApi(
         }
     }
 
+    override suspend fun ping(): InstanceAuxiliaryLoadResult<Long> {
+        return loadAuxiliary("ping") { response -> response.body<InstancePingDto>().pong }
+    }
+
+    override suspend fun loadEndpoints(): InstanceAuxiliaryLoadResult<List<String>> {
+        return loadAuxiliary("endpoints") { response -> response.body<List<String>>() }
+    }
+
+    override suspend fun loadEndpointInfo(endpoint: String): InstanceAuxiliaryLoadResult<InstanceEndpointInfo?> {
+        return try {
+            val response = client.post(apiUrl("endpoint")) {
+                contentType(ContentType.Application.Json)
+                setBody(EndpointInfoRequest(endpoint = endpoint))
+            }
+            if (response.status == HttpStatusCode.OK) {
+                InstanceAuxiliaryLoadResult.Success(response.body<EndpointInfoDto?>()?.toDomain())
+            } else {
+                InstanceAuxiliaryLoadResult.Unavailable
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            InstanceAuxiliaryLoadResult.Unavailable
+        }
+    }
+
+    override suspend fun loadStats(): InstanceAuxiliaryLoadResult<InstanceStats> {
+        return loadAuxiliary("stats") { response -> response.body<InstanceStatsDto>().toDomainStats() }
+    }
+
+    override suspend fun loadOnlineUsers(): InstanceAuxiliaryLoadResult<InstanceOnlineUsers> {
+        return loadAuxiliary("get-online-users-count") { response ->
+            response.body<InstanceOnlineUsersDto>().toDomainOnlineUsers()
+        }
+    }
+
+    override suspend fun loadServerInfo(): InstanceAuxiliaryLoadResult<InstanceServerInfo> {
+        return loadAuxiliary("server-info") { response -> response.body<InstanceServerInfoDto>().toDomainServerInfo() }
+    }
+
+    private suspend fun <T> loadAuxiliary(
+        endpoint: String,
+        decode: suspend (HttpResponse) -> T,
+    ): InstanceAuxiliaryLoadResult<T> {
+        return try {
+            val response = client.post(apiUrl(endpoint))
+            if (response.status == HttpStatusCode.OK) {
+                InstanceAuxiliaryLoadResult.Success(decode(response))
+            } else {
+                InstanceAuxiliaryLoadResult.Unavailable
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            InstanceAuxiliaryLoadResult.Unavailable
+        }
+    }
+
     private fun apiUrl(vararg endpoint: String): String {
         return URLBuilder(baseUrl.trim().trimEnd('/'))
             .appendPathSegments("api", *endpoint)
@@ -73,6 +154,38 @@ class SharkeyInstanceMetaApi(
 
 @Serializable
 private class InstanceMetaRequest
+
+@Serializable
+private data class EndpointInfoRequest(
+    val endpoint: String,
+)
+
+@Serializable
+private data class InstancePingDto(
+    val pong: Long = 0,
+)
+
+@Serializable
+private data class EndpointInfoDto(
+    val params: List<EndpointParamDto> = emptyList(),
+) {
+    fun toDomain(): InstanceEndpointInfo {
+        return InstanceEndpointInfo(
+            params = params.map { param ->
+                InstanceEndpointParam(
+                    name = param.name,
+                    type = param.type,
+                )
+            },
+        )
+    }
+}
+
+@Serializable
+private data class EndpointParamDto(
+    val name: String = "",
+    val type: String = "",
+)
 
 @Serializable
 private data class InstanceMetaDto(
@@ -143,6 +256,80 @@ private data class InstancePoliciesDto(
 @Serializable
 private data class InstanceFeaturesDto(
     val miauth: Boolean = true,
+)
+
+@Serializable
+private data class InstanceStatsDto(
+    val notesCount: Long = 0,
+    val originalNotesCount: Long = 0,
+    val usersCount: Long = 0,
+    val originalUsersCount: Long = 0,
+    val reactionsCount: Long = 0,
+    val instances: Long = 0,
+    val driveUsageLocal: Long = 0,
+    val driveUsageRemote: Long = 0,
+) {
+    fun toDomainStats(): InstanceStats {
+        return InstanceStats(
+            notesCount = notesCount,
+            originalNotesCount = originalNotesCount,
+            usersCount = usersCount,
+            originalUsersCount = originalUsersCount,
+            reactionsCount = reactionsCount,
+            instances = instances,
+            driveUsageLocal = driveUsageLocal,
+            driveUsageRemote = driveUsageRemote,
+        )
+    }
+}
+
+@Serializable
+private data class InstanceOnlineUsersDto(
+    val count: Int = 0,
+    val countAcrossNetwork: Int = 0,
+) {
+    fun toDomainOnlineUsers(): InstanceOnlineUsers {
+        return InstanceOnlineUsers(
+            count = count,
+            countAcrossNetwork = countAcrossNetwork,
+        )
+    }
+}
+
+@Serializable
+private data class InstanceServerInfoDto(
+    val machine: String = "",
+    val cpu: InstanceCpuInfoDto = InstanceCpuInfoDto(),
+    val mem: InstanceMemoryInfoDto = InstanceMemoryInfoDto(),
+    val fs: InstanceFileSystemInfoDto = InstanceFileSystemInfoDto(),
+) {
+    fun toDomainServerInfo(): InstanceServerInfo {
+        return InstanceServerInfo(
+            machine = machine.takeIf { it.isNotBlank() && it != "?" }.orEmpty(),
+            cpuModel = cpu.model.takeIf { it.isNotBlank() && it != "?" }.orEmpty(),
+            cpuCores = cpu.cores,
+            memoryTotal = mem.total,
+            storageTotal = fs.total,
+            storageUsed = fs.used,
+        )
+    }
+}
+
+@Serializable
+private data class InstanceCpuInfoDto(
+    val model: String = "",
+    val cores: Int = 0,
+)
+
+@Serializable
+private data class InstanceMemoryInfoDto(
+    val total: Long = 0,
+)
+
+@Serializable
+private data class InstanceFileSystemInfoDto(
+    val total: Long = 0,
+    val used: Long = 0,
 )
 
 @Serializable

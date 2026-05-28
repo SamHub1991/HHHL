@@ -5,6 +5,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -18,6 +19,9 @@ import kotlinx.serialization.json.Json
 
 interface EmojiApi {
     suspend fun loadEmojis(): EmojiLoadResult
+
+    suspend fun loadEmoji(name: String): EmojiDetailLoadResult =
+        EmojiDetailLoadResult.NotFound
 }
 
 sealed interface EmojiLoadResult {
@@ -31,6 +35,19 @@ sealed interface EmojiLoadResult {
     data class NetworkError(val message: String) : EmojiLoadResult
 }
 
+sealed interface EmojiDetailLoadResult {
+    data class Success(val emoji: CustomEmoji) : EmojiDetailLoadResult
+
+    data object NotFound : EmojiDetailLoadResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : EmojiDetailLoadResult
+
+    data class NetworkError(val message: String) : EmojiDetailLoadResult
+}
+
 class SharkeyEmojiApi(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val client: HttpClient = defaultEmojiClient(),
@@ -38,7 +55,6 @@ class SharkeyEmojiApi(
     override suspend fun loadEmojis(): EmojiLoadResult {
         return try {
             val response = client.post(apiUrl("emojis")) {
-                contentType(ContentType.Application.Json)
             }
 
             when (response.status) {
@@ -57,6 +73,31 @@ class SharkeyEmojiApi(
         }
     }
 
+    override suspend fun loadEmoji(name: String): EmojiDetailLoadResult {
+        val cleanName = name.trim().trim(':')
+        if (cleanName.isEmpty()) return EmojiDetailLoadResult.ServerError(400, "表情名称不能为空")
+
+        return try {
+            val response = client.post(apiUrl("emoji")) {
+                contentType(ContentType.Application.Json)
+                setBody(EmojiShowRequest(name = cleanName))
+            }
+
+            when (response.status) {
+                HttpStatusCode.OK -> EmojiDetailLoadResult.Success(response.body<EmojiDto>().toDomainEmoji())
+                HttpStatusCode.NotFound -> EmojiDetailLoadResult.NotFound
+                else -> EmojiDetailLoadResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            EmojiDetailLoadResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
     private fun apiUrl(vararg endpoint: String): String {
         return URLBuilder(baseUrl.trim().trimEnd('/'))
             .appendPathSegments("api", *endpoint)
@@ -71,6 +112,11 @@ class SharkeyEmojiApi(
 @Serializable
 private data class EmojisResponse(
     val emojis: List<EmojiDto> = emptyList(),
+)
+
+@Serializable
+private data class EmojiShowRequest(
+    val name: String,
 )
 
 @Serializable

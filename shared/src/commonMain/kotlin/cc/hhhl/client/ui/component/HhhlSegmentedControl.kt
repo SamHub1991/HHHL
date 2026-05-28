@@ -1,25 +1,39 @@
 package cc.hhhl.client.ui.component
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.theme.LocalHhhlColors
 
@@ -28,17 +42,88 @@ fun HhhlSegmentedControl(
     modifier: Modifier = Modifier,
     content: @Composable RowScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(18.dp)
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = isHhhlDarkSurface()
+    val shape = RoundedCornerShape(17.dp)
     Row(
         modifier = modifier
             .clip(shape)
-            .background(hhhlNeutralControlContainerColor(selected = false))
-            .border(1.dp, hhhlNeutralControlBorderColor(selected = false), shape)
-            .padding(3.dp),
+            .background(hhhlNeutralControlContainerColor(selected = false).copy(alpha = if (isDarkSurface) 0.82f else 0.72f))
+            .border(1.dp, colors.border.copy(alpha = if (isDarkSurface) 0.28f else 0.22f), shape)
+            .padding(2.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.CenterVertically,
         content = content,
     )
+}
+
+@Composable
+fun HhhlAnimatedSegmentedControl(
+    labels: List<String>,
+    selectedIndex: Int,
+    onSelected: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    badgeCounts: List<Int> = emptyList(),
+) {
+    if (labels.isEmpty()) return
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = isHhhlDarkSurface()
+    val outerShape = RoundedCornerShape(18.dp)
+    val sliderShape = RoundedCornerShape(15.dp)
+    val itemHeight = scaledSegmentedControlHeight(34.dp)
+    val selectedContainerColor = hhhlNeutralControlContainerColor(selected = true)
+    val sliderContainerColor = selectedContainerColor.copy(alpha = if (isDarkSurface) 0.92f else 0.88f)
+    val safeSelectedIndex = selectedIndex.coerceIn(0, labels.lastIndex)
+
+    BoxWithConstraints(
+        modifier = modifier
+            .height(itemHeight + 4.dp)
+            .clip(outerShape)
+            .background(hhhlNeutralControlContainerColor(selected = false).copy(alpha = if (isDarkSurface) 0.82f else 0.72f))
+            .border(1.dp, colors.border.copy(alpha = if (isDarkSurface) 0.32f else 0.22f), outerShape)
+            .padding(2.dp),
+    ) {
+        val itemWidth = maxWidth / labels.size
+        val sliderOffset by animateDpAsState(
+            targetValue = itemWidth * safeSelectedIndex,
+            animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
+            label = "hhhl-segmented-slider-offset",
+        )
+
+        Box(
+            modifier = Modifier
+                .offset(x = sliderOffset)
+                .width(itemWidth)
+                .fillMaxHeight()
+                .shadow(
+                    elevation = if (isDarkSurface) 0.dp else 1.dp,
+                    shape = sliderShape,
+                    clip = false,
+                )
+                .clip(sliderShape)
+                .background(sliderContainerColor)
+                .border(
+                    width = 1.dp,
+                    color = hhhlNeutralControlBorderColor(selected = true).copy(alpha = if (isDarkSurface) 0.34f else 0.22f),
+                    shape = sliderShape,
+                ),
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            labels.forEachIndexed { index, label ->
+                HhhlAnimatedSegmentedItem(
+                    label = label,
+                    selected = index == safeSelectedIndex,
+                    badgeCount = badgeCounts.getOrNull(index) ?: 0,
+                    onClick = { onSelected(index) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -50,23 +135,26 @@ fun HhhlSegmentedItem(
     badgeCount: Int = 0,
     selectedUsesPrimary: Boolean = false,
 ) {
+    val colors = LocalHhhlColors.current
+    val itemHeight = scaledSegmentedControlHeight(34.dp)
+    val selectedContainerColor = hhhlNeutralControlContainerColor(selected = true)
     val selectedColor = if (selectedUsesPrimary) {
-        MaterialTheme.colorScheme.primary
+        hhhlReadableOnControlColor(selectedContainerColor, colors.accent)
     } else {
-        MaterialTheme.colorScheme.onBackground
+        hhhlReadableOnControlColor(selectedContainerColor, colors.textPrimary)
     }
     Row(
         modifier = modifier
-            .height(34.dp)
-            .clip(RoundedCornerShape(15.dp))
-            .background(
-                if (selected) hhhlNeutralControlContainerColor(selected = true)
-                else Color.Transparent,
+            .height(itemHeight)
+            .clip(RoundedCornerShape(14.dp))
+            .then(
+                if (selected) Modifier.background(selectedContainerColor)
+                else Modifier.background(Color.Transparent),
             )
             .border(
                 width = 1.dp,
                 color = if (selected) hhhlNeutralControlBorderColor(selected = true) else Color.Transparent,
-                shape = RoundedCornerShape(15.dp),
+                shape = RoundedCornerShape(14.dp),
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp),
@@ -75,7 +163,7 @@ fun HhhlSegmentedItem(
     ) {
         Text(
             text = label,
-            color = if (selected) selectedColor else LocalHhhlColors.current.subtleText,
+            color = if (selected) selectedColor else colors.textMuted,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             maxLines = 1,
@@ -91,14 +179,17 @@ fun HhhlFilterPill(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    minWidth: androidx.compose.ui.unit.Dp = 58.dp,
+    minWidth: Dp = 58.dp,
 ) {
+    val colors = LocalHhhlColors.current
+    val itemHeight = scaledSegmentedControlHeight(32.dp)
+    val containerColor = hhhlNeutralControlContainerColor(selected = selected)
     Row(
         modifier = modifier
-            .height(32.dp)
+            .height(itemHeight)
             .widthIn(min = minWidth)
             .clip(RoundedCornerShape(16.dp))
-            .background(hhhlNeutralControlContainerColor(selected = selected))
+            .background(containerColor)
             .border(1.dp, hhhlNeutralControlBorderColor(selected = selected), RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 11.dp),
@@ -107,7 +198,7 @@ fun HhhlFilterPill(
     ) {
         Text(
             text = label,
-            color = if (selected) MaterialTheme.colorScheme.primary else LocalHhhlColors.current.subtleText,
+            color = if (selected) hhhlReadableOnControlColor(containerColor, colors.accent) else colors.textMuted,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             maxLines = 1,
@@ -117,29 +208,75 @@ fun HhhlFilterPill(
 }
 
 @Composable
+private fun HhhlAnimatedSegmentedItem(
+    label: String,
+    selected: Boolean,
+    badgeCount: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalHhhlColors.current
+    val itemHeight = scaledSegmentedControlHeight(34.dp)
+    val selectedContainerColor = hhhlNeutralControlContainerColor(selected = true)
+    val targetTextColor = if (selected) {
+        hhhlReadableOnControlColor(selectedContainerColor, colors.textPrimary)
+    } else {
+        colors.textMuted
+    }
+    val textColor = animateColorAsState(
+        targetValue = targetTextColor,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "hhhl-segmented-text-color",
+    )
+
+    Row(
+        modifier = modifier
+            .height(itemHeight)
+            .clip(RoundedCornerShape(15.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            color = textColor.value,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        HhhlControlBadge(count = badgeCount, selected = selected)
+    }
+}
+
+@Composable
 private fun HhhlControlBadge(
     count: Int,
     selected: Boolean,
 ) {
     if (count <= 0) return
+    val colors = LocalHhhlColors.current
+    val containerColor = if (selected) {
+        colors.accentSoft.copy(alpha = if (isHhhlDarkSurface()) 0.86f else 0.78f)
+    } else {
+        hhhlNeutralControlContainerColor(selected = false)
+    }
+    val fontScale = LocalDensity.current.fontScale.coerceIn(1f, 1.7f)
+    val badgeHeight = 18.dp + ((fontScale - 1f) * 8f).dp
+    val badgeMinWidth = 18.dp + ((fontScale - 1f) * 8f).dp
     val shape = RoundedCornerShape(9.dp)
     Row(
         modifier = Modifier
             .padding(start = 6.dp)
-            .height(18.dp)
-            .widthIn(min = 18.dp)
+            .height(badgeHeight)
+            .widthIn(min = badgeMinWidth)
             .clip(shape)
-            .background(
-                if (selected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = if (isHhhlDarkSurface()) 0.20f else 0.16f)
-                } else {
-                    hhhlNeutralControlContainerColor(selected = false)
-                },
-            )
+            .background(containerColor)
             .border(
                 width = 1.dp,
                 color = if (selected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = if (isHhhlDarkSurface()) 0.22f else 0.14f)
+                    colors.focusRing.copy(alpha = if (isHhhlDarkSurface()) 0.54f else 0.34f)
                 } else {
                     hhhlNeutralControlBorderColor(selected = false)
                 },
@@ -151,7 +288,7 @@ private fun HhhlControlBadge(
     ) {
         Text(
             text = if (count > 99) "99+" else count.toString(),
-            color = if (selected) MaterialTheme.colorScheme.primary else LocalHhhlColors.current.subtleText,
+            color = if (selected) hhhlReadableOnControlColor(containerColor, colors.accent) else colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -162,26 +299,32 @@ private fun HhhlControlBadge(
 @Composable
 fun hhhlNeutralControlContainerColor(selected: Boolean): Color {
     val isDarkSurface = isHhhlDarkSurface()
+    val colors = LocalHhhlColors.current
     return when {
-        selected && isDarkSurface -> MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
-        selected -> MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
-        isDarkSurface -> MaterialTheme.colorScheme.surface.copy(alpha = 0.42f)
-        else -> LocalHhhlColors.current.inputBackground.copy(alpha = 0.66f)
+        selected -> colors.buttonSelectedBackground
+        isDarkSurface -> colors.inputBackground.copy(alpha = 0.36f)
+        else -> colors.inputBackground.copy(alpha = 0.58f)
     }
 }
 
 @Composable
 fun hhhlNeutralControlBorderColor(selected: Boolean): Color {
     val isDarkSurface = isHhhlDarkSurface()
+    val colors = LocalHhhlColors.current
     return when {
-        selected && isDarkSurface -> Color.White.copy(alpha = 0.10f)
-        selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-        isDarkSurface -> Color.White.copy(alpha = 0.055f)
-        else -> LocalHhhlColors.current.divider.copy(alpha = 0.26f)
+        selected -> colors.focusRing.copy(alpha = if (isDarkSurface) 0.46f else 0.30f)
+        isDarkSurface -> colors.border.copy(alpha = 0.24f)
+        else -> colors.border.copy(alpha = 0.22f)
     }
 }
 
 @Composable
 private fun isHhhlDarkSurface(): Boolean {
-    return MaterialTheme.colorScheme.background.luminance() < 0.18f
+    return LocalHhhlColors.current.pageBackground.luminance() < 0.18f
+}
+
+@Composable
+private fun scaledSegmentedControlHeight(base: Dp): Dp {
+    val fontScale = LocalDensity.current.fontScale.coerceIn(1f, 1.7f)
+    return base + ((fontScale - 1f) * 12f).dp
 }

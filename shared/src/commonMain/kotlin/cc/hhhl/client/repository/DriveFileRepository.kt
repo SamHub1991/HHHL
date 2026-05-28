@@ -47,6 +47,17 @@ open class DriveFileRepository(
         )
     }
 
+    open suspend fun refreshStream(type: String? = null): DriveFilesRepositoryResult {
+        return loadStream(currentFiles = emptyList(), untilId = null, type = type)
+    }
+
+    open suspend fun loadMoreStream(
+        currentFiles: List<DriveFile>,
+        type: String? = null,
+    ): DriveFilesRepositoryResult {
+        return loadStream(currentFiles = currentFiles, untilId = currentFiles.lastOrNull()?.id, type = type)
+    }
+
     open suspend fun refreshFolders(
         folderId: String?,
         searchQuery: String,
@@ -337,6 +348,24 @@ open class DriveFileRepository(
             is DriveFileListResult.NetworkError -> {
                 DriveFilesRepositoryResult.Error("无法连接服务器：${result.message}")
             }
+            is DriveFileListResult.ServerError -> DriveFilesRepositoryResult.Error(result.message)
+        }
+    }
+
+    private suspend fun loadStream(
+        currentFiles: List<DriveFile>,
+        untilId: String?,
+        type: String?,
+    ): DriveFilesRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return DriveFilesRepositoryResult.Unauthorized
+        return when (val result = api.loadStream(token, DEFAULT_PAGE_SIZE, untilId, type)) {
+            is DriveFileListResult.Success -> DriveFilesRepositoryResult.Success(
+                files = currentFiles.appendDistinctBy(result.files) { it.id },
+                endReached = result.files.isEmpty(),
+            )
+            DriveFileListResult.Unauthorized -> DriveFilesRepositoryResult.Unauthorized
+            is DriveFileListResult.NetworkError -> DriveFilesRepositoryResult.Error("无法连接服务器：${result.message}")
             is DriveFileListResult.ServerError -> DriveFilesRepositoryResult.Error(result.message)
         }
     }

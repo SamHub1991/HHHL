@@ -28,7 +28,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,15 +49,15 @@ internal data class HhhlTopBarMetrics(
 )
 
 internal fun hhhlTopBarMetrics(): HhhlTopBarMetrics = HhhlTopBarMetrics(
-    containerHeight = 46,
+    containerHeight = 44,
     horizontalPadding = 10,
-    verticalPadding = 4,
-    slotMinSize = 34,
+    verticalPadding = 5,
+    slotMinSize = 32,
     titleHorizontalPadding = 4,
-    backButtonSize = 34,
-    backIconSize = 18,
-    panelCornerRadius = 22,
-    panelElevation = 6,
+    backButtonSize = 32,
+    backIconSize = 17,
+    panelCornerRadius = 18,
+    panelElevation = 3,
 )
 
 @Composable
@@ -67,18 +69,22 @@ fun HhhlTopBar(
     action: (@Composable () -> Unit)? = null,
 ) {
     val metrics = hhhlTopBarMetrics()
+    val colors = LocalHhhlColors.current
+    val fontScale = LocalDensity.current.fontScale.coerceIn(1f, 1.7f)
+    val containerHeight = metrics.containerHeight.dp + ((fontScale - 1f) * 18f).dp
     val shape = RoundedCornerShape(metrics.panelCornerRadius.dp)
-    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
+    val isDarkSurface = colors.surface.luminance() < 0.2f
     val borderColor = if (isDarkSurface) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+        colors.focusRing.copy(alpha = 0.36f)
     } else {
-        LocalHhhlColors.current.divider.copy(alpha = 0.40f)
+        colors.border.copy(alpha = 0.34f)
     }
-    val containerColor = if (isDarkSurface) {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
-    } else {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
-    }
+    val containerBrush = Brush.verticalGradient(
+        listOf(
+            colors.topBarBackground.copy(alpha = if (isDarkSurface) 0.92f else 0.96f),
+            colors.topBarBackground.copy(alpha = if (isDarkSurface) 0.82f else 0.88f),
+        ),
+    )
 
     Box(
         modifier = modifier
@@ -91,12 +97,18 @@ fun HhhlTopBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(metrics.containerHeight.dp)
-                .shadow(metrics.panelElevation.dp, shape, clip = false)
+                .height(containerHeight)
+                .shadow(
+                    elevation = metrics.panelElevation.dp,
+                    shape = shape,
+                    clip = false,
+                    ambientColor = colors.shadow,
+                    spotColor = colors.shadow,
+                )
                 .clip(shape)
-                .background(containerColor)
+                .background(containerBrush)
                 .border(1.dp, borderColor, shape)
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -133,10 +145,11 @@ private fun TopBarTitleBlock(
     supportingText: String?,
 ) {
     val cleanSupportingText = supportingText?.takeIf { it.isNotBlank() }
+    val colors = LocalHhhlColors.current
     if (cleanSupportingText == null) {
         Text(
             text = title,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -150,7 +163,7 @@ private fun TopBarTitleBlock(
     ) {
         Text(
             text = title,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -158,7 +171,7 @@ private fun TopBarTitleBlock(
         )
         Text(
             text = cleanSupportingText,
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -172,9 +185,10 @@ fun HhhlBackButton(
     label: String = "返回",
 ) {
     val metrics = hhhlTopBarMetrics()
+    val colors = LocalHhhlColors.current
     val interactionSource = remember { MutableInteractionSource() }
     val containerColor by animateColorAsState(
-        targetValue = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        targetValue = colors.buttonBackground,
         animationSpec = tween(durationMillis = 160),
         label = "back-button-container",
     )
@@ -186,12 +200,14 @@ fun HhhlBackButton(
                 elevation = HhhlIconActionIdleElevation,
                 shape = RoundedCornerShape(HhhlIconActionCornerRadius),
                 clip = false,
+                ambientColor = colors.shadow,
+                spotColor = colors.shadow,
             )
             .clip(RoundedCornerShape(HhhlIconActionCornerRadius))
             .background(containerColor)
             .border(
                 width = 1.dp,
-                color = LocalHhhlColors.current.divider.copy(alpha = 0.38f),
+                color = colors.border.copy(alpha = 0.30f),
                 shape = RoundedCornerShape(HhhlIconActionCornerRadius),
             )
             .clickable(
@@ -205,7 +221,7 @@ fun HhhlBackButton(
             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
             contentDescription = label,
             modifier = Modifier.size(metrics.backIconSize.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = hhhlReadableOnControlColor(containerColor, colors.textSecondary),
         )
     }
 }

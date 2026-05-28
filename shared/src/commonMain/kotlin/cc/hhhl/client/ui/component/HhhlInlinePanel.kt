@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
@@ -26,28 +27,39 @@ fun HhhlInlinePanel(
     horizontalAlignment: Alignment.Horizontal = Alignment.Start,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
-    val shape = RoundedCornerShape(10.dp)
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
+    val shape = RoundedCornerShape(12.dp)
     val containerColor = if (emphasized) {
-        MaterialTheme.colorScheme.primary.copy(alpha = if (isDarkSurface) 0.10f else 0.07f)
+        colors.chipSelectedBackground
     } else {
-        LocalHhhlColors.current.inputBackground.copy(alpha = if (isDarkSurface) 0.42f else 0.50f)
+        colors.inputBackground.copy(alpha = if (isDarkSurface) 0.40f else 0.52f)
     }
     val borderColor = when {
-        emphasized -> MaterialTheme.colorScheme.primary.copy(alpha = if (isDarkSurface) 0.22f else 0.14f)
-        isDarkSurface -> Color.White.copy(alpha = 0.07f)
-        else -> LocalHhhlColors.current.divider.copy(alpha = 0.36f)
+        emphasized -> colors.focusRing.copy(alpha = if (isDarkSurface) 0.46f else 0.30f)
+        else -> colors.border.copy(alpha = if (isDarkSurface) 0.32f else 0.28f)
     }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(containerColor)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        containerColor,
+                        containerColor.withMultipliedAlpha(if (isDarkSurface) 0.80f else 0.90f),
+                    ),
+                ),
+            )
             .border(1.dp, borderColor, shape)
             .padding(horizontal = 10.dp, vertical = 9.dp),
         verticalArrangement = verticalArrangement,
         horizontalAlignment = horizontalAlignment,
         content = content,
     )
+}
+
+private fun Color.withMultipliedAlpha(multiplier: Float): Color {
+    return copy(alpha = (alpha * multiplier).coerceIn(0f, 1f))
 }

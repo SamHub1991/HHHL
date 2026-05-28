@@ -35,7 +35,12 @@ class DiscoverPresentationTest {
     @Test
     fun visibleModesFollowInstanceCapabilities() {
         assertEquals(
-            listOf(DiscoverSearchMode.Notes, DiscoverSearchMode.Users),
+            listOf(
+                DiscoverSearchMode.Notes,
+                DiscoverSearchMode.Users,
+                DiscoverSearchMode.Hashtags,
+                DiscoverSearchMode.Roles,
+            ),
             discoverVisibleModes(
                 canSearchNotes = true,
                 canTrend = false,
@@ -43,7 +48,13 @@ class DiscoverPresentationTest {
             ),
         )
         assertEquals(
-            listOf(DiscoverSearchMode.Users, DiscoverSearchMode.Trends, DiscoverSearchMode.Federation),
+            listOf(
+                DiscoverSearchMode.Users,
+                DiscoverSearchMode.Hashtags,
+                DiscoverSearchMode.Roles,
+                DiscoverSearchMode.Trends,
+                DiscoverSearchMode.Federation,
+            ),
             discoverVisibleModes(
                 canSearchNotes = false,
                 canTrend = true,
@@ -57,6 +68,8 @@ class DiscoverPresentationTest {
         val visibleModes = listOf(
             DiscoverSearchMode.Notes,
             DiscoverSearchMode.Users,
+            DiscoverSearchMode.Hashtags,
+            DiscoverSearchMode.Roles,
             DiscoverSearchMode.Trends,
             DiscoverSearchMode.Federation,
         )
@@ -70,7 +83,7 @@ class DiscoverPresentationTest {
             primary,
         )
         assertEquals(
-            listOf(DiscoverSearchMode.Trends),
+            listOf(DiscoverSearchMode.Hashtags, DiscoverSearchMode.Roles, DiscoverSearchMode.Trends),
             discoverOverflowSearchModes(visibleModes, primary),
         )
     }
@@ -79,6 +92,8 @@ class DiscoverPresentationTest {
     fun searchCopyMatchesModeAndState() {
         assertEquals("搜索帖子、话题、关键词", discoverSearchPlaceholder(DiscoverSearchMode.Notes))
         assertEquals("搜索用户、@用户名", discoverSearchPlaceholder(DiscoverSearchMode.Users))
+        assertEquals("搜索话题、#标签", discoverSearchPlaceholder(DiscoverSearchMode.Hashtags))
+        assertEquals("查看站点角色", discoverSearchPlaceholder(DiscoverSearchMode.Roles))
         assertEquals("按实例域名筛选", discoverFederationFilterPlaceholder())
         assertEquals("搜索", discoverSearchActionLabel(isSearching = false))
         assertEquals("搜索中", discoverSearchActionLabel(isSearching = true))

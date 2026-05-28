@@ -1,6 +1,7 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.SharkeyTimelineApi
+import cc.hhhl.client.api.FollowingNotesListKind
 import cc.hhhl.client.api.TimelineApi
 import cc.hhhl.client.api.TimelineKind
 import cc.hhhl.client.api.TimelineLoadResult
@@ -34,6 +35,72 @@ open class TimelineRepository(
             currentNotes = currentNotes,
             untilId = currentNotes.lastOrNull()?.id,
         )
+    }
+
+    open suspend fun refreshMentions(): TimelineRepositoryResult = refresh(TimelineKind.Mentions)
+
+    open suspend fun loadMoreMentions(currentNotes: List<Note>): TimelineRepositoryResult =
+        loadMore(TimelineKind.Mentions, currentNotes)
+
+    open suspend fun loadPollRecommendations(
+        offset: Int = 0,
+        expired: Boolean = false,
+    ): TimelineRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return TimelineRepositoryResult.Unauthorized
+
+        return when (
+            val result = api.loadPollRecommendations(
+                token = token,
+                limit = DEFAULT_PAGE_SIZE,
+                offset = offset,
+                expired = expired,
+            )
+        ) {
+            is TimelineLoadResult.Success -> TimelineRepositoryResult.Success(
+                notes = result.notes,
+                endReached = result.notes.isEmpty(),
+            )
+            TimelineLoadResult.Unauthorized -> TimelineRepositoryResult.Unauthorized
+            is TimelineLoadResult.NetworkError -> TimelineRepositoryResult.Error("无法连接服务器：${result.message}")
+            is TimelineLoadResult.ServerError -> TimelineRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadFollowingNotes(
+        currentNotes: List<Note> = emptyList(),
+        untilId: String? = currentNotes.lastOrNull()?.id,
+        list: FollowingNotesListKind = FollowingNotesListKind.Following,
+        filesOnly: Boolean = false,
+        includeNonPublic: Boolean = false,
+        includeReplies: Boolean = false,
+        includeQuotes: Boolean = false,
+        includeBots: Boolean = true,
+    ): TimelineRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return TimelineRepositoryResult.Unauthorized
+
+        return when (
+            val result = api.loadFollowingNotes(
+                token = token,
+                limit = DEFAULT_PAGE_SIZE,
+                untilId = untilId,
+                list = list,
+                filesOnly = filesOnly,
+                includeNonPublic = includeNonPublic,
+                includeReplies = includeReplies,
+                includeQuotes = includeQuotes,
+                includeBots = includeBots,
+            )
+        ) {
+            is TimelineLoadResult.Success -> TimelineRepositoryResult.Success(
+                notes = currentNotes.appendDistinctBy(result.notes) { it.id },
+                endReached = result.notes.isEmpty(),
+            )
+            TimelineLoadResult.Unauthorized -> TimelineRepositoryResult.Unauthorized
+            is TimelineLoadResult.NetworkError -> TimelineRepositoryResult.Error("无法连接服务器：${result.message}")
+            is TimelineLoadResult.ServerError -> TimelineRepositoryResult.Error(result.message)
+        }
     }
 
     private suspend fun load(

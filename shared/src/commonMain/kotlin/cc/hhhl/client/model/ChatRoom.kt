@@ -2,6 +2,8 @@ package cc.hhhl.client.model
 
 import androidx.compose.runtime.Immutable
 
+const val CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX = "active:"
+
 @Immutable
 data class ChatRoom(
     val id: String,
@@ -23,4 +25,12 @@ data class ChatRoomMember(
     val roomId: String,
     val user: User,
     val joinedAtLabel: String,
+)
+
+@Immutable
+data class ChatRoomInvitation(
+    val id: String,
+    val room: ChatRoom,
+    val inviter: User? = null,
+    val createdAtLabel: String = "",
 )

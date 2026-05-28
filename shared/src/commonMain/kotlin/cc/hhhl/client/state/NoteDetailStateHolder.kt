@@ -1,10 +1,20 @@
 package cc.hhhl.client.state
 
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NoteReactionUser
+import cc.hhhl.client.model.NoteState
+import cc.hhhl.client.model.NoteTranslation
+import cc.hhhl.client.model.NoteVersion
+import cc.hhhl.client.repository.NoteDetailNotesRepositoryResult
 import cc.hhhl.client.repository.NoteDetailRepository
 import cc.hhhl.client.repository.NoteDetailRepositoryResult
+import cc.hhhl.client.repository.NoteReactionUsersRepositoryResult
 import cc.hhhl.client.repository.NoteRepliesRepository
 import cc.hhhl.client.repository.NoteRepliesRepositoryResult
+import cc.hhhl.client.repository.NoteStateRepositoryResult
+import cc.hhhl.client.repository.NoteSimpleActionRepositoryResult
+import cc.hhhl.client.repository.NoteTranslationRepositoryResult
+import cc.hhhl.client.repository.NoteVersionsRepositoryResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,6 +25,12 @@ data class NoteDetailUiState(
     val noteId: String? = null,
     val note: Note? = null,
     val replies: List<Note> = emptyList(),
+    val conversationNotes: List<Note> = emptyList(),
+    val renoteNotes: List<Note> = emptyList(),
+    val reactionUsers: List<NoteReactionUser> = emptyList(),
+    val versions: List<NoteVersion> = emptyList(),
+    val translation: NoteTranslation? = null,
+    val remoteState: NoteState? = null,
     val childRepliesByParentId: Map<String, List<Note>> = emptyMap(),
     val expandedReplyIds: Set<String> = emptySet(),
     val loadingChildReplyIds: Set<String> = emptySet(),
@@ -22,8 +38,15 @@ data class NoteDetailUiState(
     val isLoading: Boolean = false,
     val isLoadingReplies: Boolean = false,
     val isLoadingMoreReplies: Boolean = false,
+    val isLoadingConversation: Boolean = false,
+    val isLoadingRenotes: Boolean = false,
+    val isLoadingReactions: Boolean = false,
+    val isLoadingVersions: Boolean = false,
+    val isTranslating: Boolean = false,
+    val isRefreshingPollRecommendation: Boolean = false,
     val errorMessage: String? = null,
     val repliesErrorMessage: String? = null,
+    val detailActionMessage: String? = null,
     val requiresRelogin: Boolean = false,
 )
 
@@ -34,23 +57,40 @@ class NoteDetailStateHolder(
 ) {
     private val mutableState = MutableStateFlow(NoteDetailUiState())
     val state: StateFlow<NoteDetailUiState> = mutableState
+    private var repliesRequestId = 0
 
     fun load(noteId: String) {
         val current = state.value
         if (current.isLoading && current.noteId == noteId) return
+        nextRepliesRequestId()
 
         mutableState.update {
             it.copy(
                 noteId = noteId,
                 note = if (it.noteId == noteId) it.note else null,
                 replies = if (it.noteId == noteId) it.replies else emptyList(),
+                conversationNotes = if (it.noteId == noteId) it.conversationNotes else emptyList(),
+                renoteNotes = if (it.noteId == noteId) it.renoteNotes else emptyList(),
+                reactionUsers = if (it.noteId == noteId) it.reactionUsers else emptyList(),
+                versions = if (it.noteId == noteId) it.versions else emptyList(),
+                translation = if (it.noteId == noteId) it.translation else null,
+                remoteState = if (it.noteId == noteId) it.remoteState else null,
                 childRepliesByParentId = if (it.noteId == noteId) it.childRepliesByParentId else emptyMap(),
                 expandedReplyIds = if (it.noteId == noteId) it.expandedReplyIds else emptySet(),
                 loadingChildReplyIds = emptySet(),
                 childReplyErrors = if (it.noteId == noteId) it.childReplyErrors else emptyMap(),
                 isLoading = true,
+                isLoadingReplies = false,
+                isLoadingMoreReplies = false,
+                isLoadingConversation = false,
+                isLoadingRenotes = false,
+                isLoadingReactions = false,
+                isLoadingVersions = false,
+                isTranslating = false,
+                isRefreshingPollRecommendation = false,
                 errorMessage = null,
                 repliesErrorMessage = null,
+                detailActionMessage = null,
                 requiresRelogin = false,
             )
         }
@@ -58,7 +98,153 @@ class NoteDetailStateHolder(
         scope.launch {
             val shouldLoadReplies = applyResult(noteId, repository.load(noteId))
             if (shouldLoadReplies) {
+                refreshRemoteState(noteId)
                 refreshReplies(noteId)
+            }
+        }
+    }
+
+    fun loadConversation() {
+        val noteId = state.value.noteId ?: return
+        if (state.value.isLoadingConversation) return
+        mutableState.update {
+            it.copy(isLoadingConversation = true, detailActionMessage = null, requiresRelogin = false)
+        }
+        scope.launch {
+            applyNotesActionResult(
+                noteId = noteId,
+                result = repository.loadConversation(noteId),
+                successMessage = "已加载上下文",
+                update = { current, notes -> current.copy(conversationNotes = notes, isLoadingConversation = false) },
+                clearLoading = { current -> current.copy(isLoadingConversation = false) },
+            )
+        }
+    }
+
+    fun loadRenotes() {
+        val noteId = state.value.noteId ?: return
+        if (state.value.isLoadingRenotes) return
+        mutableState.update {
+            it.copy(isLoadingRenotes = true, detailActionMessage = null, requiresRelogin = false)
+        }
+        scope.launch {
+            applyNotesActionResult(
+                noteId = noteId,
+                result = repository.loadRenotes(noteId),
+                successMessage = "已加载转发",
+                update = { current, notes -> current.copy(renoteNotes = notes, isLoadingRenotes = false) },
+                clearLoading = { current -> current.copy(isLoadingRenotes = false) },
+            )
+        }
+    }
+
+    fun loadReactionUsers() {
+        val noteId = state.value.noteId ?: return
+        if (state.value.isLoadingReactions) return
+        mutableState.update {
+            it.copy(isLoadingReactions = true, detailActionMessage = null, requiresRelogin = false)
+        }
+        scope.launch {
+            val result = repository.loadReactionUsers(noteId)
+            if (state.value.noteId != noteId) return@launch
+            when (result) {
+                is NoteReactionUsersRepositoryResult.Success -> mutableState.update {
+                    it.copy(
+                        reactionUsers = result.users,
+                        isLoadingReactions = false,
+                        detailActionMessage = if (result.users.isEmpty()) "暂无反应用户" else "已加载反应用户",
+                        requiresRelogin = false,
+                    )
+                }
+                NoteReactionUsersRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(isLoadingReactions = false, detailActionMessage = "登录已失效，请重新登录", requiresRelogin = true)
+                }
+                is NoteReactionUsersRepositoryResult.Error -> mutableState.update {
+                    it.copy(isLoadingReactions = false, detailActionMessage = result.message, requiresRelogin = false)
+                }
+            }
+        }
+    }
+
+    fun translate() {
+        val noteId = state.value.noteId ?: return
+        if (state.value.isTranslating) return
+        mutableState.update {
+            it.copy(isTranslating = true, detailActionMessage = null, requiresRelogin = false)
+        }
+        scope.launch {
+            val result = repository.translate(noteId)
+            if (state.value.noteId != noteId) return@launch
+            when (result) {
+                is NoteTranslationRepositoryResult.Success -> mutableState.update {
+                    it.copy(
+                        translation = result.translation,
+                        isTranslating = false,
+                        detailActionMessage = "已翻译",
+                        requiresRelogin = false,
+                    )
+                }
+                NoteTranslationRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(isTranslating = false, detailActionMessage = "登录已失效，请重新登录", requiresRelogin = true)
+                }
+                is NoteTranslationRepositoryResult.Error -> mutableState.update {
+                    it.copy(isTranslating = false, detailActionMessage = result.message, requiresRelogin = false)
+                }
+            }
+        }
+    }
+
+    fun loadVersions() {
+        val noteId = state.value.noteId ?: return
+        if (state.value.isLoadingVersions) return
+        mutableState.update {
+            it.copy(isLoadingVersions = true, detailActionMessage = null, requiresRelogin = false)
+        }
+        scope.launch {
+            val result = repository.loadVersions(noteId)
+            if (state.value.noteId != noteId) return@launch
+            when (result) {
+                is NoteVersionsRepositoryResult.Success -> mutableState.update {
+                    it.copy(
+                        versions = result.versions,
+                        isLoadingVersions = false,
+                        detailActionMessage = if (result.versions.isEmpty()) "暂无编辑记录" else "已加载编辑记录",
+                        requiresRelogin = false,
+                    )
+                }
+                NoteVersionsRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(isLoadingVersions = false, detailActionMessage = "登录已失效，请重新登录", requiresRelogin = true)
+                }
+                is NoteVersionsRepositoryResult.Error -> mutableState.update {
+                    it.copy(isLoadingVersions = false, detailActionMessage = result.message, requiresRelogin = false)
+                }
+            }
+        }
+    }
+
+    fun refreshPollRecommendation() {
+        val noteId = state.value.noteId ?: return
+        if (state.value.isRefreshingPollRecommendation) return
+        mutableState.update {
+            it.copy(isRefreshingPollRecommendation = true, detailActionMessage = null, requiresRelogin = false)
+        }
+        scope.launch {
+            val result = repository.refreshPollRecommendation(noteId)
+            if (state.value.noteId != noteId) return@launch
+            when (result) {
+                NoteSimpleActionRepositoryResult.Success -> mutableState.update {
+                    it.copy(
+                        isRefreshingPollRecommendation = false,
+                        detailActionMessage = "已刷新投票推荐",
+                        requiresRelogin = false,
+                    )
+                }
+                NoteSimpleActionRepositoryResult.Unauthorized -> mutableState.update {
+                    it.copy(isRefreshingPollRecommendation = false, detailActionMessage = "登录已失效，请重新登录", requiresRelogin = true)
+                }
+                is NoteSimpleActionRepositoryResult.Error -> mutableState.update {
+                    it.copy(isRefreshingPollRecommendation = false, detailActionMessage = result.message, requiresRelogin = false)
+                }
             }
         }
     }
@@ -84,11 +270,13 @@ class NoteDetailStateHolder(
             )
         }
 
+        val requestId = nextRepliesRequestId()
         scope.launch {
             applyRepliesResult(
                 noteId = noteId,
                 result = repository.loadMore(noteId, current.replies),
                 loadingMore = true,
+                requestId = requestId,
             )
         }
     }
@@ -129,6 +317,7 @@ class NoteDetailStateHolder(
 
         scope.launch {
             applyChildRepliesResult(
+                noteId = current.noteId,
                 parentId = cleanParentId,
                 result = repository.loadChildren(cleanParentId),
             )
@@ -165,9 +354,11 @@ class NoteDetailStateHolder(
             )
         }
 
+        val noteId = current.noteId
         scope.launch {
             idsToLoad.forEach { parentId ->
                 applyChildRepliesResult(
+                    noteId = noteId,
                     parentId = parentId,
                     result = repository.loadChildren(parentId),
                 )
@@ -227,8 +418,47 @@ class NoteDetailStateHolder(
         return false
     }
 
+    private fun refreshRemoteState(noteId: String) {
+        scope.launch {
+            val result = repository.loadState(noteId)
+            if (state.value.noteId != noteId) return@launch
+            when (result) {
+                is NoteStateRepositoryResult.Success -> mutableState.update {
+                    it.copy(remoteState = result.state, requiresRelogin = false)
+                }
+                NoteStateRepositoryResult.Unauthorized -> mutableState.update { it.copy(requiresRelogin = true) }
+                is NoteStateRepositoryResult.Error -> Unit
+            }
+        }
+    }
+
+    private fun applyNotesActionResult(
+        noteId: String,
+        result: NoteDetailNotesRepositoryResult,
+        successMessage: String,
+        update: (NoteDetailUiState, List<Note>) -> NoteDetailUiState,
+        clearLoading: (NoteDetailUiState) -> NoteDetailUiState,
+    ) {
+        if (state.value.noteId != noteId) return
+        when (result) {
+            is NoteDetailNotesRepositoryResult.Success -> mutableState.update {
+                update(it, result.notes).copy(
+                    detailActionMessage = if (result.notes.isEmpty()) "暂无数据" else successMessage,
+                    requiresRelogin = false,
+                )
+            }
+            NoteDetailNotesRepositoryResult.Unauthorized -> mutableState.update {
+                clearLoading(it).copy(detailActionMessage = "登录已失效，请重新登录", requiresRelogin = true)
+            }
+            is NoteDetailNotesRepositoryResult.Error -> mutableState.update {
+                clearLoading(it).copy(detailActionMessage = result.message, requiresRelogin = false)
+            }
+        }
+    }
+
     private suspend fun refreshReplies(noteId: String) {
         val repository = repliesRepository ?: return
+        val requestId = nextRepliesRequestId()
 
         mutableState.update {
             it.copy(
@@ -242,6 +472,7 @@ class NoteDetailStateHolder(
             noteId = noteId,
             result = repository.refresh(noteId),
             loadingMore = false,
+            requestId = requestId,
         )
     }
 
@@ -249,8 +480,9 @@ class NoteDetailStateHolder(
         noteId: String,
         result: NoteRepliesRepositoryResult,
         loadingMore: Boolean,
+        requestId: Int,
     ) {
-        if (state.value.noteId != noteId) return
+        if (requestId != repliesRequestId || state.value.noteId != noteId) return
 
         when (result) {
             is NoteRepliesRepositoryResult.Success -> {
@@ -292,10 +524,17 @@ class NoteDetailStateHolder(
         }
     }
 
+    private fun nextRepliesRequestId(): Int {
+        repliesRequestId += 1
+        return repliesRequestId
+    }
+
     private fun applyChildRepliesResult(
+        noteId: String?,
         parentId: String,
         result: NoteRepliesRepositoryResult,
     ) {
+        if (state.value.noteId != noteId) return
         when (result) {
             is NoteRepliesRepositoryResult.Success -> mutableState.update {
                 it.copy(

@@ -67,9 +67,8 @@ class RealtimeNotificationService : Service() {
             runCatching {
                 MainStreamingRepository(tokenProvider = { token }).streamMain().collect { event ->
                     when (event) {
-                        MainStreamingEvent.UnreadNotification,
-                        MainStreamingEvent.NewChatMessage,
-                        -> BackgroundNotificationSyncer(applicationContext).sync()
+                        MainStreamingEvent.UnreadNotification -> BackgroundNotificationSyncer(applicationContext).sync()
+                        MainStreamingEvent.NewChatMessage -> syncRealtimeChatEvent()
                         is MainStreamingEvent.TimelineNote -> syncTimelineEvent(event)
                         MainStreamingEvent.Unauthorized -> unauthorized = true
                         MainStreamingEvent.ReadAllNotifications,
@@ -96,6 +95,13 @@ class RealtimeNotificationService : Service() {
         if (now - lastTimelineSyncAt < TIMELINE_SYNC_DEBOUNCE_MS) return
         lastTimelineSyncAt = now
         BackgroundNotificationSyncer(applicationContext).sync()
+    }
+
+    private suspend fun syncRealtimeChatEvent() {
+        val syncer = BackgroundNotificationSyncer(applicationContext)
+        syncer.sync(trigger = BackgroundNotificationSyncTrigger.RealtimeChat)
+        delay(CHAT_EVENT_RECHECK_DELAY_MS)
+        syncer.sync(trigger = BackgroundNotificationSyncTrigger.RealtimeChat)
     }
 
     private suspend fun publishSpecialCareTimelineNote(event: MainStreamingEvent.TimelineNote): Boolean {
@@ -185,6 +191,7 @@ class RealtimeNotificationService : Service() {
         private const val SERVICE_NOTIFICATION_ID = 1001
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val TIMELINE_SYNC_DEBOUNCE_MS = 2_000L
+        private const val CHAT_EVENT_RECHECK_DELAY_MS = 1_500L
         private const val MAX_REALTIME_SEEN_IDS = 200
 
         fun start(context: Context) {

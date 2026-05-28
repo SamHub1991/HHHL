@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,12 +37,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.model.FederationInstance
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.RoleSummary
 import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.state.DiscoverAdvancedFilters
 import cc.hhhl.client.state.DiscoverSearchOperator
@@ -53,6 +57,8 @@ import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlIconActionButtonIconSize
+import cc.hhhl.client.ui.component.HhhlIconActionButtonSize
 import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
@@ -60,9 +66,11 @@ import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlSegmentedControl
 import cc.hhhl.client.ui.component.HhhlSegmentedItem
 import cc.hhhl.client.ui.component.HhhlTextInput
+import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.NoteRow
 import cc.hhhl.client.ui.component.NoteRowDensity
+import cc.hhhl.client.presentation.notePreviewText
 
 @Composable
 fun DiscoverScreen(
@@ -97,12 +105,14 @@ fun DiscoverScreen(
     onCloseFederationInstanceDetails: () -> Unit = {},
     onToggleFederationSilence: (String) -> Unit = {},
     onToggleFederationBlock: (String) -> Unit = {},
+    onOpenRole: (String) -> Unit = {},
     reactionOptions: List<String> = emptyList(),
     recentReactions: List<String> = emptyList(),
     isActionPending: (String) -> Boolean = { false },
     canDeleteAuthor: (String) -> Boolean = { false },
     noteRowDensity: NoteRowDensity = NoteRowDensity.Comfortable,
 ) {
+    val colors = LocalHhhlColors.current
     val query = state?.query.orEmpty()
     val selectedMode = state?.selectedMode ?: DiscoverSearchMode.Notes
     var advancedFiltersExpanded by remember(selectedMode) { mutableStateOf(false) }
@@ -117,12 +127,18 @@ fun DiscoverScreen(
         (
             (state.selectedMode == DiscoverSearchMode.Notes && state.notes.isNotEmpty()) ||
                 (
+                    state.selectedMode == DiscoverSearchMode.Hashtags &&
+                        state.query.isBlank() &&
+                        state.trends.isNotEmpty()
+                    ) ||
+                (
                     state.selectedMode == DiscoverSearchMode.Federation &&
                         state.federationInstances.isNotEmpty()
                     )
             )
     val autoLoadItemCount = when (state?.selectedMode) {
         DiscoverSearchMode.Notes -> state.notes.size
+        DiscoverSearchMode.Hashtags -> state.trends.size
         DiscoverSearchMode.Federation -> state.federationInstances.size
         else -> 0
     }
@@ -137,7 +153,7 @@ fun DiscoverScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(colors.pageBackground),
     ) {
         DiscoverSearchHeader(
             query = query,
@@ -153,7 +169,7 @@ fun DiscoverScreen(
             onOpenFlash = onOpenFlash,
             onOpenAnnouncements = onOpenAnnouncements,
         )
-        if (selectedMode != DiscoverSearchMode.Trends) {
+        if (selectedMode != DiscoverSearchMode.Trends && selectedMode != DiscoverSearchMode.Hashtags && selectedMode != DiscoverSearchMode.Roles) {
             DiscoverFilterRow(
                 selectedMode = selectedMode,
                 filters = state?.filters ?: DiscoverAdvancedFilters(),
@@ -170,11 +186,11 @@ fun DiscoverScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background),
+                .background(colors.pageBackground),
             state = listState,
         ) {
             if (state == null) {
-                item(contentType = "discover-status") {
+                item(key = "discover-null", contentType = "discover-status") {
                     DiscoverStatusRow(text = "暂无结果")
                 }
             } else {
@@ -183,9 +199,10 @@ fun DiscoverScreen(
                     state.notes.isEmpty() &&
                     state.users.isEmpty() &&
                     state.trends.isEmpty() &&
+                    state.roles.isEmpty() &&
                     state.federationInstances.isEmpty()
                 ) {
-                    item(contentType = "discover-status") {
+                    item(key = "discover-loading-${state.selectedMode.name}", contentType = "discover-status") {
                         DiscoverStatusRow(
                             text = "加载中...",
                             loading = true,
@@ -193,11 +210,21 @@ fun DiscoverScreen(
                     }
                 }
                 state.errorMessage?.let { message ->
-                    item(contentType = "discover-status") {
+                    item(key = "discover-error-${state.selectedMode.name}", contentType = "discover-status") {
                         DiscoverStatusRow(
                             text = message,
                             actionText = "重试",
                             onAction = onSearch,
+                        )
+                    }
+                }
+                if (state.pinnedUsers.isNotEmpty() || state.isLoadingPinnedUsers || state.pinnedUsersMessage != null) {
+                    item(key = "discover-pinned-users", contentType = "discover-pinned-users") {
+                        PinnedUsersPanel(
+                            users = state.pinnedUsers,
+                            isLoading = state.isLoadingPinnedUsers,
+                            message = state.pinnedUsersMessage,
+                            onOpenUser = onOpenUser,
                         )
                     }
                 }
@@ -217,22 +244,63 @@ fun DiscoverScreen(
                         )
                     }
                 }
+                state.selectedHashtag?.let { hashtag ->
+                    item(
+                        key = "hashtag-detail-${hashtag.tag}",
+                        contentType = "discover-hashtag-detail",
+                    ) {
+                        HashtagDetailPanel(
+                            hashtag = hashtag,
+                            users = state.hashtagUsers,
+                            isLoadingUsers = state.isLoadingHashtagDetails,
+                            message = state.hashtagDetailMessage,
+                            onOpenUser = onOpenUser,
+                        )
+                    }
+                }
                 if (
                     state.hasSearched &&
                     !state.isSearching &&
                     state.notes.isEmpty() &&
                     state.users.isEmpty() &&
                     state.trends.isEmpty() &&
+                    state.roles.isEmpty() &&
                     state.federationInstances.isEmpty() &&
                     state.errorMessage == null
                 ) {
-                    item(contentType = "discover-status") {
+                    item(key = "discover-empty-${state.selectedMode.name}", contentType = "discover-status") {
                         DiscoverStatusRow(
                             text = when (state.selectedMode) {
                                 DiscoverSearchMode.Trends -> "暂无趋势"
                                 DiscoverSearchMode.Federation -> "暂无联邦实例"
+                                DiscoverSearchMode.Hashtags -> "暂无话题"
+                                DiscoverSearchMode.Roles -> "暂无角色"
                                 else -> "没有搜索结果"
                             },
+                        )
+                    }
+                }
+                items(
+                    items = state.roles,
+                    key = { "role-${it.id}" },
+                    contentType = { "discover-role" },
+                ) { role ->
+                    RoleRow(
+                        role = role,
+                        selected = state.selectedRole?.id == role.id,
+                        onOpen = { onOpenRole(role.id) },
+                    )
+                }
+                state.selectedRole?.let { role ->
+                    item(key = "role-detail-${role.id}", contentType = "discover-role-detail") {
+                        RoleDetailPanel(
+                            role = role,
+                            users = state.roleUsers,
+                            notes = state.roleNotes,
+                            isLoading = state.isLoadingRoleDetails,
+                            message = state.roleDetailMessage,
+                            onOpenUser = onOpenUser,
+                            onOpenNote = onOpenNote,
                         )
                     }
                 }
@@ -296,14 +364,14 @@ fun DiscoverScreen(
                     )
                 }
                 if (canLoadMore && state.isLoadingMore) {
-                    item(contentType = "discover-status") {
+                    item(key = "discover-loading-more-${state.selectedMode.name}", contentType = "discover-status") {
                         DiscoverStatusRow(
                             text = "正在加载更多...",
                             loading = true,
                         )
                     }
                 } else if (state.hasSearched && state.endReached && state.resultCount > 0) {
-                    item(contentType = "discover-status") {
+                    item(key = "discover-end-${state.selectedMode.name}", contentType = "discover-status") {
                         DiscoverStatusRow(text = discoverEndReachedText(state))
                     }
                 }
@@ -327,18 +395,30 @@ private fun DiscoverSearchHeader(
     onOpenFlash: () -> Unit,
     onOpenAnnouncements: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val shape = RoundedCornerShape(22.dp)
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
+    val containerColor = if (isDarkSurface) {
+        Color.White.copy(alpha = 0.045f)
+    } else {
+        colors.surfaceElevated.copy(alpha = 0.78f)
+    }
+    val borderColor = if (isDarkSurface) {
+        Color.White.copy(alpha = 0.07f)
+    } else {
+        colors.border.copy(alpha = 0.46f)
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 10.dp)
             .clip(shape)
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))
-            .border(1.dp, LocalHhhlColors.current.divider.copy(alpha = 0.54f), shape)
+            .background(containerColor)
+            .border(1.dp, borderColor, shape)
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (selectedMode != DiscoverSearchMode.Trends && selectedMode != DiscoverSearchMode.Federation) {
+        if (selectedMode != DiscoverSearchMode.Trends && selectedMode != DiscoverSearchMode.Federation && selectedMode != DiscoverSearchMode.Roles) {
             DiscoverSearchRow(
                 query = query,
                 selectedMode = selectedMode,
@@ -376,15 +456,14 @@ private fun DiscoverQuickActionRow(
     onOpenFlash: () -> Unit,
     onOpenAnnouncements: () -> Unit,
 ) {
-    Row(
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         DiscoverQuickAction(
             label = "频道",
             icon = Icons.Filled.Forum,
-            emphasized = true,
             onClick = onOpenChannels,
         )
         DiscoverQuickAction(
@@ -410,6 +489,11 @@ private fun DiscoverQuickActionRow(
                 onOpenAnnouncements = onOpenAnnouncements,
             ),
             label = "更多探索入口",
+            buttonText = "更多",
+            labeledButtonColumnWidth = DiscoverQuickActionWidth,
+            labeledButtonWidth = HhhlIconActionButtonSize,
+            labeledButtonHeight = HhhlIconActionButtonSize,
+            labeledButtonIconSize = HhhlIconActionButtonIconSize,
         )
     }
 }
@@ -421,8 +505,9 @@ private fun DiscoverQuickAction(
     emphasized: Boolean = false,
     onClick: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
-        modifier = Modifier.width(54.dp),
+        modifier = Modifier.width(DiscoverQuickActionWidth),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -434,7 +519,7 @@ private fun DiscoverQuickAction(
         )
         Text(
             text = label,
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -442,21 +527,24 @@ private fun DiscoverQuickAction(
     }
 }
 
+private val DiscoverQuickActionWidth = 54.dp
+
 @Composable
 private fun DiscoverPassiveSearchPanel(
     selectedMode: DiscoverSearchMode,
     isSearching: Boolean,
     onRefresh: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 44.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.72f))
+            .background(colors.inputBackground.copy(alpha = 0.72f))
             .border(
                 width = 1.dp,
-                color = LocalHhhlColors.current.divider.copy(alpha = 0.46f),
+                color = colors.border.copy(alpha = 0.46f),
                 shape = RoundedCornerShape(16.dp),
             )
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -467,7 +555,7 @@ private fun DiscoverPassiveSearchPanel(
             modifier = Modifier
                 .size(28.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
+                .background(colors.buttonSelectedBackground),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -477,20 +565,20 @@ private fun DiscoverPassiveSearchPanel(
                     Icons.Filled.Notifications
                 },
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = colors.accent,
                 modifier = Modifier.size(17.dp),
             )
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = if (selectedMode == DiscoverSearchMode.Trends) "趋势" else "联邦实例",
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 text = if (isSearching) "正在同步" else "点击刷新获取最新内容",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -553,6 +641,7 @@ private fun DiscoverFilterRow(
                 HhhlOverflowMenu(
                     actions = discoverOriginFilterActions(filters, onFiltersChanged),
                     label = "来源筛选",
+                    buttonText = "更多",
                 )
             }
             if (filters.isActive) {
@@ -705,6 +794,7 @@ private fun DiscoverSearchRow(
     onQueryChanged: (String) -> Unit,
     onSearch: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -722,7 +812,7 @@ private fun DiscoverSearchRow(
                 Icon(
                     imageVector = Icons.Filled.Search,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.secondary,
+                    tint = colors.textSecondary,
                 )
             },
         )
@@ -737,10 +827,13 @@ private fun DiscoverSearchRow(
 
 @Composable
 private fun DiscoverSummaryRow(state: DiscoverUiState?) {
+    val colors = LocalHhhlColors.current
     val selectedMode = state?.selectedMode ?: DiscoverSearchMode.Notes
     val primaryText = when (selectedMode) {
         DiscoverSearchMode.Notes -> state?.query?.takeIf { it.isNotBlank() } ?: "帖子"
         DiscoverSearchMode.Users -> state?.query?.takeIf { it.isNotBlank() } ?: "用户"
+        DiscoverSearchMode.Hashtags -> state?.query?.takeIf { it.isNotBlank() } ?: "话题"
+        DiscoverSearchMode.Roles -> "角色"
         DiscoverSearchMode.Trends -> "趋势"
         DiscoverSearchMode.Federation -> state?.filters?.domain?.takeIf { it.isNotBlank() } ?: "联邦"
     }
@@ -753,6 +846,8 @@ private fun DiscoverSummaryRow(state: DiscoverUiState?) {
         }
         selectedMode == DiscoverSearchMode.Notes -> "${state.notes.size} 条帖子"
         selectedMode == DiscoverSearchMode.Users -> "${state.users.size} 个用户"
+        selectedMode == DiscoverSearchMode.Hashtags -> "${state.trends.size} 个话题"
+        selectedMode == DiscoverSearchMode.Roles -> "${state.roles.size} 个角色"
         selectedMode == DiscoverSearchMode.Trends -> "${state.trends.size} 个趋势"
         selectedMode == DiscoverSearchMode.Federation -> "${state.federationInstances.size} 个实例"
         else -> "未开始搜索"
@@ -770,7 +865,7 @@ private fun DiscoverSummaryRow(state: DiscoverUiState?) {
     ) {
         Text(
             text = summaryText,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -784,6 +879,8 @@ private val DiscoverUiState.resultCount: Int
     get() = when (selectedMode) {
         DiscoverSearchMode.Notes -> notes.size
         DiscoverSearchMode.Users -> users.size
+        DiscoverSearchMode.Hashtags -> trends.size
+        DiscoverSearchMode.Roles -> roles.size
         DiscoverSearchMode.Trends -> trends.size
         DiscoverSearchMode.Federation -> federationInstances.size
     }
@@ -792,6 +889,8 @@ fun discoverEndReachedText(state: DiscoverUiState): String {
     return when (state.selectedMode) {
         DiscoverSearchMode.Notes -> "已显示全部 ${state.notes.size} 条帖子"
         DiscoverSearchMode.Users -> "已显示全部 ${state.users.size} 个用户"
+        DiscoverSearchMode.Hashtags -> "已显示全部 ${state.trends.size} 个话题"
+        DiscoverSearchMode.Roles -> "已显示全部 ${state.roles.size} 个角色"
         DiscoverSearchMode.Trends -> "已显示全部 ${state.trends.size} 个趋势"
         DiscoverSearchMode.Federation -> "已显示全部 ${state.federationInstances.size} 个实例"
     }
@@ -918,6 +1017,8 @@ fun discoverOverflowSearchModes(
 fun discoverSearchPlaceholder(selectedMode: DiscoverSearchMode): String {
     return when (selectedMode) {
         DiscoverSearchMode.Users -> "搜索用户、@用户名"
+        DiscoverSearchMode.Hashtags -> "搜索话题、#标签"
+        DiscoverSearchMode.Roles -> "查看站点角色"
         DiscoverSearchMode.Notes -> "搜索帖子、话题、关键词"
         DiscoverSearchMode.Trends -> "趋势会自动加载"
         DiscoverSearchMode.Federation -> "联邦实例会自动加载"
@@ -1016,6 +1117,8 @@ fun discoverVisibleModes(
     return DiscoverSearchMode.entries.filter { mode ->
         when (mode) {
             DiscoverSearchMode.Notes -> canSearchNotes
+            DiscoverSearchMode.Hashtags -> true
+            DiscoverSearchMode.Roles -> true
             DiscoverSearchMode.Trends -> canTrend
             DiscoverSearchMode.Federation -> canViewFederation
             DiscoverSearchMode.Users -> true
@@ -1028,6 +1131,7 @@ private fun FederationInstanceRow(
     instance: FederationInstance,
     onOpen: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1039,17 +1143,17 @@ private fun FederationInstanceRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = instance.name?.takeIf { it.isNotBlank() } ?: instance.host,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(
                 text = "${instance.host} · ${instance.softwareName.orEmpty()} ${instance.softwareVersion.orEmpty()}",
-                color = MaterialTheme.colorScheme.secondary,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
                 text = "${instance.usersCount} 用户 · ${instance.notesCount} 帖子",
-                color = MaterialTheme.colorScheme.secondary,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -1057,14 +1161,163 @@ private fun FederationInstanceRow(
         Text(
             text = status,
             color = if (status == "联邦中") {
-                MaterialTheme.colorScheme.primary
+                colors.accent
             } else {
-                MaterialTheme.colorScheme.secondary
+                colors.textSecondary
             },
             style = MaterialTheme.typography.labelMedium,
         )
     }
     HhhlDivider()
+}
+
+@Composable
+private fun RoleRow(
+    role: RoleSummary,
+    selected: Boolean,
+    onOpen: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onOpen() }
+            .background(
+                if (selected) colors.buttonSelectedBackground.copy(alpha = 0.52f) else colors.pageBackground,
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(colors.accentSoft),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = role.name.trim().firstOrNull()?.toString()?.uppercase() ?: "R",
+                color = colors.accent,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(
+                text = role.name,
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = role.description.ifBlank { "${role.usersCount} 人拥有" },
+                color = colors.textMuted,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (role.isAdministrator) HhhlActionChip(label = "管理", emphasized = true, enabled = false, onClick = {})
+            if (role.isModerator) HhhlActionChip(label = "审核", emphasized = true, enabled = false, onClick = {})
+            HhhlActionChip(label = "${role.usersCount} 人", enabled = false, onClick = {})
+        }
+    }
+    HhhlDivider()
+}
+
+@Composable
+private fun RoleDetailPanel(
+    role: RoleSummary,
+    users: List<cc.hhhl.client.model.User>,
+    notes: List<Note>,
+    isLoading: Boolean,
+    message: String?,
+    onOpenUser: (String) -> Unit,
+    onOpenNote: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    DiscoverInfoPanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = role.name,
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = role.description.ifBlank { "角色详情" },
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            HhhlActionChip(
+                label = if (isLoading) "同步中" else "${users.size} 成员",
+                emphasized = true,
+                enabled = false,
+                onClick = {},
+            )
+        }
+        message?.takeIf { it.isNotBlank() }?.let { text ->
+            Text(text = text, color = colors.textMuted, style = MaterialTheme.typography.bodySmall)
+        }
+        if (users.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                users.take(8).forEach { user ->
+                    HhhlActionChip(
+                        label = user.displayName.ifBlank { "@${user.username}" },
+                        emphasized = false,
+                        onClick = { onOpenUser(user.id) },
+                    )
+                }
+            }
+        }
+        if (notes.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "角色动态",
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                notes.take(3).forEach { note ->
+                    InlineRichText(
+                        text = notePreviewText(note),
+                        color = colors.textMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxChars = 120,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(discoverInfoPillColor())
+                            .clickable { onOpenNote(note.id) }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1077,6 +1330,7 @@ private fun FederationInstanceDetail(
     onToggleSilence: () -> Unit,
     onToggleBlock: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1091,13 +1345,13 @@ private fun FederationInstanceDetail(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = instance.name?.takeIf { it.isNotBlank() } ?: instance.host,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     text = instance.host,
-                    color = MaterialTheme.colorScheme.secondary,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1106,7 +1360,7 @@ private fun FederationInstanceDetail(
         instance.description?.takeIf { it.isNotBlank() }?.let { description ->
             Text(
                 text = description,
-                color = MaterialTheme.colorScheme.secondary,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 4,
                 overflow = TextOverflow.Ellipsis,
@@ -1154,9 +1408,9 @@ private fun FederationInstanceDetail(
         Text(
             text = statusText,
             color = if (message == null && !isLoading && !actionPending) {
-                MaterialTheme.colorScheme.secondary
+                colors.textSecondary
             } else {
-                MaterialTheme.colorScheme.primary
+                colors.accent
             },
             style = MaterialTheme.typography.bodySmall,
         )
@@ -1169,10 +1423,11 @@ private fun FederationDetailSection(
     title: String,
     rows: List<FederationDetailField>,
 ) {
+    val colors = LocalHhhlColors.current
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             text = title,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
         )
@@ -1184,13 +1439,13 @@ private fun FederationDetailSection(
             ) {
                 Text(
                     text = row.label,
-                    color = MaterialTheme.colorScheme.secondary,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.width(72.dp),
                 )
                 Text(
                     text = row.value,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -1204,6 +1459,7 @@ private fun TrendRow(
     trend: TrendingHashtag,
     onOpenHashtag: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1218,24 +1474,258 @@ private fun TrendRow(
         ) {
             Text(
                 text = "#${trend.tag}",
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(
                 text = "${trend.usersCount} 人正在使用",
-                color = MaterialTheme.colorScheme.secondary,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
         Text(
             text = trendChartSummary(trend),
-            color = MaterialTheme.colorScheme.primary,
+            color = colors.accent,
             style = MaterialTheme.typography.labelMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
     HhhlDivider()
+}
+
+@Composable
+private fun PinnedUsersPanel(
+    users: List<cc.hhhl.client.model.User>,
+    isLoading: Boolean,
+    message: String?,
+    onOpenUser: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    DiscoverInfoPanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = "推荐用户",
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = if (isLoading) "同步中" else message ?: "站点置顶的用户",
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (users.isNotEmpty()) {
+                HhhlActionChip(
+                    label = "${users.size} 人",
+                    emphasized = true,
+                    enabled = false,
+                    onClick = {},
+                )
+            }
+        }
+        if (users.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                users.take(12).forEach { user ->
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(discoverInfoPillColor())
+                            .border(1.dp, discoverInfoPillBorderColor(), RoundedCornerShape(999.dp))
+                            .clickable { onOpenUser(user.id) }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Avatar(
+                            initial = user.avatarInitial,
+                            avatarUrl = user.avatarUrl,
+                            avatarDecorations = user.avatarDecorations,
+                            size = 24.dp,
+                        )
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(0.dp),
+                        ) {
+                            Text(
+                                text = user.displayName.ifBlank { "@${user.username}" },
+                                color = colors.textPrimary,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "${user.notesCount} 条 · ${user.followersCount} 粉丝",
+                                color = colors.textMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HashtagDetailPanel(
+    hashtag: TrendingHashtag,
+    users: List<cc.hhhl.client.model.User>,
+    isLoadingUsers: Boolean,
+    message: String?,
+    onOpenUser: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    DiscoverInfoPanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = "#${hashtag.tag}",
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${hashtag.usersCount} 人使用 · ${trendChartSummary(hashtag)}",
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            HhhlActionChip(
+                label = if (isLoadingUsers) "同步中" else "使用者 ${users.size}",
+                enabled = false,
+                emphasized = users.isNotEmpty(),
+                onClick = {},
+            )
+        }
+        message?.takeIf { it.isNotBlank() }?.let { text ->
+            Text(
+                text = text,
+                color = colors.textMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (users.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                users.take(8).forEach { user ->
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(discoverInfoPillColor())
+                            .border(1.dp, discoverInfoPillBorderColor(), RoundedCornerShape(999.dp))
+                            .clickable { onOpenUser(user.id) }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Avatar(
+                            initial = user.avatarInitial,
+                            avatarUrl = user.avatarUrl,
+                            avatarDecorations = user.avatarDecorations,
+                            size = 24.dp,
+                        )
+                        Text(
+                            text = user.displayName.ifBlank { "@${user.username}" },
+                            color = colors.textPrimary,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverInfoPanel(
+    modifier: Modifier = Modifier,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
+    val shape = RoundedCornerShape(18.dp)
+    val containerColor = if (isDarkSurface) {
+        Color.White.copy(alpha = 0.050f)
+    } else {
+        colors.surface.copy(alpha = 0.82f)
+    }
+    val borderColor = if (isDarkSurface) {
+        Color.White.copy(alpha = 0.075f)
+    } else {
+        colors.border.copy(alpha = 0.42f)
+    }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(containerColor)
+            .border(1.dp, borderColor, shape)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalArrangement = verticalArrangement,
+        content = content,
+    )
+}
+
+@Composable
+private fun discoverInfoPillColor(): Color {
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
+    return if (isDarkSurface) {
+        Color.White.copy(alpha = 0.075f)
+    } else {
+        colors.inputBackground.copy(alpha = 0.68f)
+    }
+}
+
+@Composable
+private fun discoverInfoPillBorderColor(): Color {
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
+    return if (isDarkSurface) {
+        Color.White.copy(alpha = 0.070f)
+    } else {
+        colors.border.copy(alpha = 0.30f)
+    }
 }
 
 fun trendChartSummary(trend: TrendingHashtag): String {
@@ -1268,6 +1758,7 @@ private fun DiscoverUserRow(
     user: cc.hhhl.client.model.User,
     onOpenUser: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1283,19 +1774,20 @@ private fun DiscoverUserRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = user.displayName,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
                 text = user.discoverHandle,
-                color = MaterialTheme.colorScheme.secondary,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodySmall,
             )
             if (user.bio.isNotBlank()) {
-                Text(
+                InlineRichText(
                     text = user.bio,
-                    color = MaterialTheme.colorScheme.secondary,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodySmall,
+                    maxChars = 180,
                 )
             }
         }

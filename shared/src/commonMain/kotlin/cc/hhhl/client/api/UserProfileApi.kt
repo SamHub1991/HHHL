@@ -34,6 +34,12 @@ interface UserProfileApi {
         token: String,
         draft: UserProfileUpdateDraft,
     ): UserProfileUpdateResult = UserProfileUpdateResult.ServerError(400, "不支持编辑用户资料")
+
+    suspend fun checkUsernameAvailable(username: String): UserAvailabilityResult =
+        UserAvailabilityResult.ServerError(400, "不支持校验用户名")
+
+    suspend fun checkEmailAddressAvailable(emailAddress: String): UserAvailabilityResult =
+        UserAvailabilityResult.ServerError(400, "不支持校验邮箱")
 }
 
 sealed interface UserProfileLoadResult {
@@ -67,6 +73,20 @@ sealed interface UserProfileUpdateResult {
     ) : UserProfileUpdateResult
 
     data class NetworkError(val message: String) : UserProfileUpdateResult
+}
+
+sealed interface UserAvailabilityResult {
+    data class Success(
+        val available: Boolean,
+        val reason: String? = null,
+    ) : UserAvailabilityResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : UserAvailabilityResult
+
+    data class NetworkError(val message: String) : UserAvailabilityResult
 }
 
 class SharkeyUserProfileApi(
@@ -151,6 +171,28 @@ class SharkeyUserProfileApi(
         }
     }
 
+    override suspend fun checkUsernameAvailable(username: String): UserAvailabilityResult {
+        val cleanUsername = username.trim().removePrefix("@")
+        if (cleanUsername.isBlank()) {
+            return UserAvailabilityResult.ServerError(HttpStatusCode.BadRequest.value, "请输入用户名")
+        }
+        return checkAvailability(
+            endpoint = arrayOf("username", "available"),
+            requestBody = UsernameAvailableRequest(username = cleanUsername),
+        )
+    }
+
+    override suspend fun checkEmailAddressAvailable(emailAddress: String): UserAvailabilityResult {
+        val cleanEmailAddress = emailAddress.trim()
+        if (cleanEmailAddress.isBlank()) {
+            return UserAvailabilityResult.ServerError(HttpStatusCode.BadRequest.value, "请输入邮箱")
+        }
+        return checkAvailability(
+            endpoint = arrayOf("email-address", "available"),
+            requestBody = EmailAddressAvailableRequest(emailAddress = cleanEmailAddress),
+        )
+    }
+
     private suspend fun loadProfile(requestBody: UserProfileRequest): UserProfileLoadResult {
         return try {
             val response = client.post(apiUrl("users", "show")) {
@@ -171,6 +213,35 @@ class SharkeyUserProfileApi(
             throw error
         } catch (error: Throwable) {
             UserProfileLoadResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    private suspend fun checkAvailability(
+        endpoint: Array<out String>,
+        requestBody: Any,
+    ): UserAvailabilityResult {
+        return try {
+            val response = client.post(apiUrl(*endpoint)) {
+                contentType(ContentType.Application.Json)
+                setBody(requestBody)
+            }
+
+            when (response.status) {
+                HttpStatusCode.OK -> response.body<AvailabilityDto>().let { dto ->
+                    UserAvailabilityResult.Success(
+                        available = dto.available,
+                        reason = dto.reason?.takeIf { it.isNotBlank() },
+                    )
+                }
+                else -> UserAvailabilityResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            UserAvailabilityResult.NetworkError(error.message ?: "网络请求失败")
         }
     }
 
@@ -220,6 +291,22 @@ private data class UserProfileUpdateRequest(
         }
     }
 }
+
+@Serializable
+private data class UsernameAvailableRequest(
+    val username: String,
+)
+
+@Serializable
+private data class EmailAddressAvailableRequest(
+    val emailAddress: String,
+)
+
+@Serializable
+private data class AvailabilityDto(
+    val available: Boolean,
+    val reason: String? = null,
+)
 
 @Serializable
 private data class UserProfileDto(

@@ -2,15 +2,23 @@ package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.DiscoverApi
 import cc.hhhl.client.api.DiscoverFederationActionResult
+import cc.hhhl.client.api.DiscoverFederationFollowResult
 import cc.hhhl.client.api.DiscoverFederationInstanceResult
 import cc.hhhl.client.api.DiscoverFederationResult
+import cc.hhhl.client.api.DiscoverFederationStatsResult
+import cc.hhhl.client.api.DiscoverHashtagResult
 import cc.hhhl.client.api.DiscoverNoteSearchOptions
+import cc.hhhl.client.api.DiscoverRoleDetailResult
+import cc.hhhl.client.api.DiscoverRoleResult
 import cc.hhhl.client.api.DiscoverSearchResult
 import cc.hhhl.client.api.DiscoverTrendResult
 import cc.hhhl.client.api.DiscoverUserSearchResult
 import cc.hhhl.client.api.SharkeyDiscoverApi
+import cc.hhhl.client.model.FederationFollow
 import cc.hhhl.client.model.FederationInstance
+import cc.hhhl.client.model.FederationStats
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.RoleSummary
 import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.model.User
 import cc.hhhl.client.state.DiscoverAdvancedFilters
@@ -76,6 +84,59 @@ open class DiscoverRepository(
         }
     }
 
+    open suspend fun loadPinnedUsers(): DiscoverRepositoryResult {
+        return when (val result = api.loadPinnedUsers()) {
+            is DiscoverUserSearchResult.Success -> DiscoverRepositoryResult.PinnedUsersSuccess(result.users)
+            DiscoverUserSearchResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            is DiscoverUserSearchResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverUserSearchResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadRoles(): DiscoverRepositoryResult {
+        return when (val result = api.loadRoles(tokenProvider().orEmpty())) {
+            is DiscoverRoleResult.Success -> DiscoverRepositoryResult.RoleSuccess(result.roles)
+            DiscoverRoleResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            is DiscoverRoleResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverRoleResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun openRole(roleId: String): DiscoverRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Unauthorized
+        val cleanRoleId = roleId.trim().takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Error("角色 ID 不能为空")
+        return when (val result = api.loadRole(token, cleanRoleId)) {
+            is DiscoverRoleDetailResult.Success -> DiscoverRepositoryResult.RoleDetailSuccess(result.role)
+            DiscoverRoleDetailResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            is DiscoverRoleDetailResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverRoleDetailResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadRoleUsers(roleId: String): DiscoverRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Unauthorized
+        return when (val result = api.loadRoleUsers(token, roleId, DEFAULT_PAGE_SIZE)) {
+            is DiscoverUserSearchResult.Success -> DiscoverRepositoryResult.RoleUsersSuccess(result.users)
+            DiscoverUserSearchResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            is DiscoverUserSearchResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverUserSearchResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadRoleNotes(roleId: String): DiscoverRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Unauthorized
+        return when (val result = api.loadRoleNotes(token, roleId, DEFAULT_PAGE_SIZE)) {
+            is DiscoverSearchResult.Success -> DiscoverRepositoryResult.RoleNotesSuccess(result.notes)
+            DiscoverSearchResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            is DiscoverSearchResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverSearchResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
     open suspend fun loadTrends(): DiscoverRepositoryResult {
         return when (val result = api.loadTrendingHashtags()) {
             is DiscoverTrendResult.Success -> DiscoverRepositoryResult.TrendSuccess(result.trends)
@@ -83,6 +144,68 @@ open class DiscoverRepository(
                 DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
             }
             is DiscoverTrendResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun searchHashtags(query: String): DiscoverRepositoryResult {
+        val cleanQuery = query.trim().removePrefix("#").takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Error("请输入话题")
+        return when (val result = api.searchHashtags(tokenProvider().orEmpty(), cleanQuery, DEFAULT_PAGE_SIZE)) {
+            is DiscoverTrendResult.Success -> DiscoverRepositoryResult.TrendSuccess(result.trends)
+            is DiscoverTrendResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverTrendResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadHashtags(): DiscoverRepositoryResult {
+        return when (val result = api.loadHashtags(tokenProvider().orEmpty(), DEFAULT_PAGE_SIZE)) {
+            is DiscoverTrendResult.Success -> DiscoverRepositoryResult.TrendSuccess(result.trends)
+            is DiscoverTrendResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverTrendResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadMoreHashtags(currentTrends: List<TrendingHashtag>): DiscoverRepositoryResult {
+        return when (val result = api.loadHashtags(tokenProvider().orEmpty(), DEFAULT_PAGE_SIZE, offset = currentTrends.size)) {
+            is DiscoverTrendResult.Success -> DiscoverRepositoryResult.TrendSuccess(
+                currentTrends.appendDistinctBy(result.trends) { it.tag },
+            )
+            is DiscoverTrendResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverTrendResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun showHashtag(tag: String): DiscoverRepositoryResult {
+        val cleanTag = tag.trim().removePrefix("#").takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Error("请输入话题")
+        return when (val result = api.showHashtag(tokenProvider().orEmpty(), cleanTag)) {
+            is DiscoverHashtagResult.Success -> DiscoverRepositoryResult.HashtagSuccess(result.hashtag)
+            DiscoverHashtagResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            is DiscoverHashtagResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverHashtagResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadHashtagUsers(
+        tag: String,
+        filters: DiscoverAdvancedFilters = DiscoverAdvancedFilters(),
+    ): DiscoverRepositoryResult {
+        val cleanTag = tag.trim().removePrefix("#").takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Error("请输入话题")
+        return when (
+            val result = api.loadHashtagUsers(
+                token = tokenProvider().orEmpty(),
+                tag = cleanTag,
+                limit = DEFAULT_PAGE_SIZE,
+                origin = filters.origin.apiValue,
+            )
+        ) {
+            is DiscoverUserSearchResult.Success -> DiscoverRepositoryResult.UserSuccess(
+                result.users.filterUsersByDiscoverFilters(filters),
+            )
+            DiscoverUserSearchResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            is DiscoverUserSearchResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverUserSearchResult.ServerError -> DiscoverRepositoryResult.Error(result.message.toFriendlySearchError())
         }
     }
 
@@ -126,6 +249,63 @@ open class DiscoverRepository(
         }
     }
 
+    open suspend fun loadFederationFollowers(
+        host: String,
+        currentFollows: List<FederationFollow> = emptyList(),
+    ): DiscoverRepositoryResult {
+        return loadFederationFollows(
+            host = host,
+            currentFollows = currentFollows,
+            loader = { cleanHost, limit, untilId, includeFollower, includeFollowee ->
+                api.loadFederationFollowers(cleanHost, limit, untilId, includeFollower, includeFollowee)
+            },
+        )
+    }
+
+    open suspend fun loadFederationFollowing(
+        host: String,
+        currentFollows: List<FederationFollow> = emptyList(),
+    ): DiscoverRepositoryResult {
+        return loadFederationFollows(
+            host = host,
+            currentFollows = currentFollows,
+            loader = { cleanHost, limit, untilId, includeFollower, includeFollowee ->
+                api.loadFederationFollowing(cleanHost, limit, untilId, includeFollower, includeFollowee)
+            },
+        )
+    }
+
+    open suspend fun loadFederationUsers(
+        host: String,
+        currentUsers: List<User> = emptyList(),
+    ): DiscoverRepositoryResult {
+        val cleanHost = host.trim().takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Error("实例域名为空")
+
+        return when (
+            val result = api.loadFederationUsers(
+                host = cleanHost,
+                limit = DEFAULT_PAGE_SIZE,
+                untilId = currentUsers.lastOrNull()?.id,
+            )
+        ) {
+            is DiscoverUserSearchResult.Success -> DiscoverRepositoryResult.UserSuccess(
+                currentUsers.appendDistinctBy(result.users) { it.id },
+            )
+            DiscoverUserSearchResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            is DiscoverUserSearchResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverUserSearchResult.ServerError -> DiscoverRepositoryResult.Error(result.message.toFriendlySearchError())
+        }
+    }
+
+    open suspend fun loadFederationStats(): DiscoverRepositoryResult {
+        return when (val result = api.loadFederationStats(DEFAULT_FEDERATION_STATS_LIMIT)) {
+            is DiscoverFederationStatsResult.Success -> DiscoverRepositoryResult.FederationStatsSuccess(result.stats)
+            is DiscoverFederationStatsResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverFederationStatsResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
     open suspend fun updateFederationInstance(
         host: String,
         isSilenced: Boolean,
@@ -153,6 +333,50 @@ open class DiscoverRepository(
                 DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
             }
             is DiscoverFederationActionResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun updateRemoteUser(userId: String): DiscoverRepositoryResult {
+        val cleanUserId = userId.trim().takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Error("用户 ID 不能为空")
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Unauthorized
+
+        return when (val result = api.updateRemoteUser(token, cleanUserId)) {
+            DiscoverFederationActionResult.Success -> DiscoverRepositoryResult.FederationActionSuccess
+            DiscoverFederationActionResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            DiscoverFederationActionResult.Unavailable -> DiscoverRepositoryResult.Error("未找到该用户，或当前账号无权刷新远端用户")
+            is DiscoverFederationActionResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverFederationActionResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    private suspend fun loadFederationFollows(
+        host: String,
+        currentFollows: List<FederationFollow>,
+        loader: suspend (String, Int, String?, Boolean, Boolean) -> DiscoverFederationFollowResult,
+    ): DiscoverRepositoryResult {
+        val cleanHost = host.trim().takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Error("实例域名为空")
+
+        return when (
+            val result = loader(
+                cleanHost,
+                DEFAULT_PAGE_SIZE,
+                currentFollows.lastOrNull()?.id,
+                true,
+                true,
+            )
+        ) {
+            is DiscoverFederationFollowResult.Success -> DiscoverRepositoryResult.FederationFollowSuccess(
+                follows = currentFollows.appendDistinctBy(result.follows) { it.id },
+                endReached = result.follows.isEmpty(),
+            )
+            DiscoverFederationFollowResult.Unavailable -> {
+                DiscoverRepositoryResult.Error("未找到该实例，或当前账号无权查看联邦关系")
+            }
+            is DiscoverFederationFollowResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverFederationFollowResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
         }
     }
 
@@ -211,6 +435,7 @@ open class DiscoverRepository(
     private companion object {
         const val DEFAULT_PAGE_SIZE = 20
         const val DEFAULT_FEDERATION_PAGE_SIZE = 30
+        const val DEFAULT_FEDERATION_STATS_LIMIT = 10
     }
 }
 
@@ -279,7 +504,7 @@ private fun String.withDiscoverQueryOperators(filters: DiscoverAdvancedFilters):
     val baseQuery = when (filters.operator) {
         DiscoverSearchOperator.AllWords -> trim()
         DiscoverSearchOperator.AnyWord -> trim()
-            .split(Regex("\\s+"))
+            .split(discoverWhitespaceRegex)
             .filter { it.isNotBlank() }
             .joinToString(" OR ")
         DiscoverSearchOperator.ExactPhrase -> trim().quoteIfNeeded()
@@ -295,11 +520,13 @@ private fun String.withDiscoverQueryOperators(filters: DiscoverAdvancedFilters):
         if (filters.withFiles) add("has:file")
         if (!filters.includeReplies) add("-is:reply")
         filters.excludeWords
-            .split(Regex("\\s+"))
+            .split(discoverWhitespaceRegex)
             .mapNotNull { word -> word.trim().trimStart('-').takeIf { it.isNotBlank() } }
             .forEach { add("-$it") }
     }.joinToString(" ")
 }
+
+private val discoverWhitespaceRegex = Regex("\\s+")
 
 private fun String.toSingleHashtagQuery(): String? {
     val cleanValue = trim()
@@ -341,7 +568,19 @@ sealed interface DiscoverRepositoryResult {
 
     data class UserSuccess(val users: List<User>) : DiscoverRepositoryResult
 
+    data class PinnedUsersSuccess(val users: List<User>) : DiscoverRepositoryResult
+
+    data class RoleSuccess(val roles: List<RoleSummary>) : DiscoverRepositoryResult
+
+    data class RoleDetailSuccess(val role: RoleSummary) : DiscoverRepositoryResult
+
+    data class RoleUsersSuccess(val users: List<User>) : DiscoverRepositoryResult
+
+    data class RoleNotesSuccess(val notes: List<Note>) : DiscoverRepositoryResult
+
     data class TrendSuccess(val trends: List<TrendingHashtag>) : DiscoverRepositoryResult
+
+    data class HashtagSuccess(val hashtag: TrendingHashtag) : DiscoverRepositoryResult
 
     data class FederationSuccess(
         val instances: List<FederationInstance>,
@@ -349,6 +588,13 @@ sealed interface DiscoverRepositoryResult {
     ) : DiscoverRepositoryResult
 
     data class FederationInstanceSuccess(val instance: FederationInstance) : DiscoverRepositoryResult
+
+    data class FederationFollowSuccess(
+        val follows: List<FederationFollow>,
+        val endReached: Boolean = false,
+    ) : DiscoverRepositoryResult
+
+    data class FederationStatsSuccess(val stats: FederationStats) : DiscoverRepositoryResult
 
     data object FederationActionSuccess : DiscoverRepositoryResult
 

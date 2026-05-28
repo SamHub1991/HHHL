@@ -46,12 +46,53 @@ open class UserRelationshipRepository(
         }
     }
 
-    open suspend fun follow(userId: String): UserRelationshipRepositoryResult {
-        return perform(userId) { token, cleanUserId -> api.follow(token, cleanUserId) }
+    open suspend fun loadRenoteMutedUsers(
+        currentEntries: List<UserRelationshipListEntry> = emptyList(),
+    ): UserRelationshipListRepositoryResult {
+        return loadList(currentEntries) { token, untilId ->
+            api.loadRenoteMutedUsers(token, untilId = untilId)
+        }
+    }
+
+    open suspend fun follow(
+        userId: String,
+        withReplies: Boolean? = null,
+    ): UserRelationshipRepositoryResult {
+        return perform(userId) { token, cleanUserId -> api.follow(token, cleanUserId, withReplies = withReplies) }
     }
 
     open suspend fun unfollow(userId: String): UserRelationshipRepositoryResult {
         return perform(userId) { token, cleanUserId -> api.unfollow(token, cleanUserId) }
+    }
+
+    open suspend fun updateFollowing(
+        userId: String,
+        notify: String? = null,
+        withReplies: Boolean? = null,
+    ): UserRelationshipRepositoryResult {
+        return perform(userId) { token, cleanUserId ->
+            api.updateFollowing(token, cleanUserId, notify = notify, withReplies = withReplies)
+        }
+    }
+
+    open suspend fun updateAllFollowing(
+        notify: String? = null,
+        withReplies: Boolean? = null,
+    ): UserRelationshipRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return UserRelationshipRepositoryResult.Unauthorized
+        return when (val result = api.updateAllFollowing(token, notify = notify, withReplies = withReplies)) {
+            UserRelationshipResult.Success -> UserRelationshipRepositoryResult.Success
+            UserRelationshipResult.Unauthorized -> UserRelationshipRepositoryResult.Unauthorized
+            is UserRelationshipResult.NetworkError -> {
+                UserRelationshipRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is UserRelationshipResult.ServerError -> UserRelationshipRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun invalidateFollowing(userId: String): UserRelationshipRepositoryResult {
+        return perform(userId) { token, cleanUserId -> api.invalidateFollowing(token, cleanUserId) }
     }
 
     open suspend fun mute(userId: String): UserRelationshipRepositoryResult {

@@ -5,8 +5,10 @@ import cc.hhhl.client.api.SettingsCapabilityResult
 import cc.hhhl.client.api.SettingsManagementMutationResult
 import cc.hhhl.client.api.SettingsManagementSectionResult
 import cc.hhhl.client.api.SettingsPreferencesResult
+import cc.hhhl.client.api.SettingsSharedAccessLoginResult
 import cc.hhhl.client.api.SettingsWebhookDetailResult
 import cc.hhhl.client.api.SharkeySettingsApi
+import cc.hhhl.client.repository.AvatarDecorationRepositoryResult
 import cc.hhhl.client.display.DefaultNoteVisibility
 import cc.hhhl.client.display.NotificationBadgeMode
 import cc.hhhl.client.display.TimelineDensity
@@ -33,6 +35,7 @@ import kotlinx.coroutines.coroutineScope
 open class SettingsRepository(
     private val tokenProvider: () -> String? = { null },
     private val api: SettingsApi = SharkeySettingsApi(),
+    private val avatarDecorationRepository: AvatarDecorationRepository = AvatarDecorationRepository(tokenProvider),
 ) {
     open suspend fun loadRemotePreferences(): SettingsRepositoryResult {
         val token = tokenProvider()?.takeIf { it.isNotBlank() }
@@ -66,6 +69,32 @@ open class SettingsRepository(
         val token = tokenProvider()?.takeIf { it.isNotBlank() }
             ?: return SettingsManagementRepositoryResult.Unauthorized
 
+        if (key == cc.hhhl.client.model.SettingsManagementSectionKey.AvatarDecorations) {
+            return when (val result = avatarDecorationRepository.load()) {
+                is AvatarDecorationRepositoryResult.Success -> SettingsManagementRepositoryResult.Success(
+                    SettingsManagementSection(
+                        key = key,
+                        title = "头像挂件",
+                        description = "服务器返回的可用头像挂件，头像组件会按用户资料里的挂件数据渲染。",
+                        items = result.decorations.map { decoration ->
+                            cc.hhhl.client.model.SettingsManagementItem(
+                                id = decoration.id,
+                                title = decoration.id.ifBlank { "未命名挂件" },
+                                subtitle = decoration.url,
+                                meta = "偏移 ${decoration.offsetX}, ${decoration.offsetY} · 角度 ${decoration.angle}",
+                                badges = listOfNotNull(
+                                    "预览".takeIf { decoration.url.isNotBlank() },
+                                    "翻转".takeIf { decoration.flipH },
+                                ),
+                            )
+                        },
+                    ),
+                )
+                AvatarDecorationRepositoryResult.Unauthorized -> SettingsManagementRepositoryResult.Unauthorized
+                is AvatarDecorationRepositoryResult.Error -> SettingsManagementRepositoryResult.Error(result.message)
+            }
+        }
+
         return when (val result = api.loadManagementSection(token, key)) {
             is SettingsManagementSectionResult.Success -> SettingsManagementRepositoryResult.Success(result.section)
             SettingsManagementSectionResult.Unauthorized -> SettingsManagementRepositoryResult.Unauthorized
@@ -87,6 +116,55 @@ open class SettingsRepository(
                 SettingsManagementMutationRepositoryResult.Error("无法连接服务器：${result.message}")
             }
             is SettingsManagementMutationResult.ServerError -> SettingsManagementMutationRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun createInvite(): SettingsManagementMutationRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsManagementMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.createInvite(token)) {
+            SettingsManagementMutationResult.Success -> SettingsManagementMutationRepositoryResult.Success
+            SettingsManagementMutationResult.Unauthorized -> SettingsManagementMutationRepositoryResult.Unauthorized
+            is SettingsManagementMutationResult.NetworkError -> {
+                SettingsManagementMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsManagementMutationResult.ServerError -> SettingsManagementMutationRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun deleteInvite(inviteId: String): SettingsManagementMutationRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsManagementMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.deleteInvite(token, inviteId)) {
+            SettingsManagementMutationResult.Success -> SettingsManagementMutationRepositoryResult.Success
+            SettingsManagementMutationResult.Unauthorized -> SettingsManagementMutationRepositoryResult.Unauthorized
+            is SettingsManagementMutationResult.NetworkError -> {
+                SettingsManagementMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsManagementMutationResult.ServerError -> SettingsManagementMutationRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loginSharedAccess(grantId: String): SettingsSharedAccessLoginRepositoryResult {
+        val cleanGrantId = grantId.trim()
+        if (cleanGrantId.isEmpty()) {
+            return SettingsSharedAccessLoginRepositoryResult.Error("无法读取共享访问")
+        }
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return SettingsSharedAccessLoginRepositoryResult.Unauthorized
+
+        return when (val result = api.loginSharedAccess(token, cleanGrantId)) {
+            is SettingsSharedAccessLoginResult.Success -> SettingsSharedAccessLoginRepositoryResult.Success(
+                userId = result.userId,
+                token = result.token,
+            )
+            SettingsSharedAccessLoginResult.Unauthorized -> SettingsSharedAccessLoginRepositoryResult.Unauthorized
+            is SettingsSharedAccessLoginResult.NetworkError -> {
+                SettingsSharedAccessLoginRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is SettingsSharedAccessLoginResult.ServerError -> SettingsSharedAccessLoginRepositoryResult.Error(result.message)
         }
     }
 
@@ -258,6 +336,12 @@ open class SettingsRepository(
                         icon = "录",
                         enabled = remotePreferences?.security?.signinHistoryAvailable == true,
                     ),
+                    SettingsItem(
+                        key = SettingsItemKey.AvatarDecorations,
+                        label = "头像挂件",
+                        value = "同步服务器挂件",
+                        icon = "挂",
+                    ),
                 ),
             ),
             SettingsGroup(
@@ -395,6 +479,20 @@ open class SettingsRepository(
                         enabled = remotePreferences?.integrations?.apiTokensAvailable == true,
                     ),
                     SettingsItem(
+                        key = SettingsItemKey.Invites,
+                        label = "邀请码",
+                        value = remotePreferences?.integrations?.let { integrations ->
+                            when {
+                                integrations.invitesCount == null -> null
+                                integrations.inviteRemaining != null ->
+                                    "${integrations.invitesCount} 个，剩余 ${integrations.inviteRemaining} 个"
+                                else -> "${integrations.invitesCount} 个"
+                            }
+                        } ?: remoteValue,
+                        icon = "邀",
+                        enabled = remotePreferences?.integrations?.invitesAvailable == true,
+                    ),
+                    SettingsItem(
                         key = SettingsItemKey.SharedAccess,
                         label = "共享访问",
                         value = remotePreferences?.integrations?.sharedAccessCount?.let { "$it 个" } ?: remoteValue,
@@ -446,6 +544,7 @@ open class SettingsRepository(
     private suspend fun SettingsPreferences.withCapabilityCounts(token: String): SettingsPreferences {
         return coroutineScope {
             val apiTokens = async { api.loadApiTokens(token) }
+            val invites = async { api.loadInvites(token) }
             val sharedAccess = async { api.loadSharedAccess(token) }
             val webhooks = async { api.loadWebhooks(token) }
             val authorizedApps = async { api.loadAuthorizedApps(token) }
@@ -457,6 +556,7 @@ open class SettingsRepository(
                     .withSigninHistory(signinHistory.await()),
                 integrations = integrations
                     .withApiTokens(apiTokens.await())
+                    .withInvites(invites.await())
                     .withSharedAccess(sharedAccess.await())
                     .withWebhooks(webhooks.await()),
             )
@@ -494,6 +594,18 @@ open class SettingsRepository(
             )
             SettingsCapabilityResult.Available -> copy(apiTokensAvailable = true)
             is SettingsCapabilityResult.Unsupported -> copy(apiTokensAvailable = false)
+        }
+    }
+
+    private fun IntegrationSettings.withInvites(result: SettingsCapabilityResult): IntegrationSettings {
+        return when (result) {
+            is SettingsCapabilityResult.Count -> copy(
+                invitesAvailable = true,
+                invitesCount = result.total,
+                inviteRemaining = result.active,
+            )
+            SettingsCapabilityResult.Available -> copy(invitesAvailable = true)
+            is SettingsCapabilityResult.Unsupported -> copy(invitesAvailable = false)
         }
     }
 
@@ -555,6 +667,17 @@ sealed interface SettingsWebhookDetailRepositoryResult {
     data object Unauthorized : SettingsWebhookDetailRepositoryResult
 
     data class Error(val message: String) : SettingsWebhookDetailRepositoryResult
+}
+
+sealed interface SettingsSharedAccessLoginRepositoryResult {
+    data class Success(
+        val userId: String,
+        val token: String,
+    ) : SettingsSharedAccessLoginRepositoryResult
+
+    data object Unauthorized : SettingsSharedAccessLoginRepositoryResult
+
+    data class Error(val message: String) : SettingsSharedAccessLoginRepositoryResult
 }
 
 private fun Boolean.onOffLabel(): String = if (this) "开启" else "关闭"

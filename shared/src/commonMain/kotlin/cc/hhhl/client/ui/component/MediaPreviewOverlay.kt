@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import cc.hhhl.client.theme.LocalHhhlColors
 import coil3.compose.AsyncImage
 
 @Composable
@@ -42,13 +43,18 @@ fun MediaPreviewOverlay(
     onOpenExternal: (String) -> Unit,
     onDownload: (MediaPreviewItem) -> Unit = {},
 ) {
-    val item = session.current
+    val colors = LocalHhhlColors.current
+    val item = session.currentOrNull
+    if (item == null) {
+        LaunchedEffect(Unit) { onDismiss() }
+        return
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black),
+                .background(colors.overlayScrim),
         ) {
             Row(
                 modifier = Modifier
@@ -58,12 +64,12 @@ fun MediaPreviewOverlay(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 MediaPreviewTextButton(onClick = onDismiss) {
-                    Text("关闭", color = Color.White)
+                    Text("关闭", color = colors.textInverse)
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = item.label,
-                        color = Color.White,
+                        color = colors.textInverse,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -71,17 +77,17 @@ fun MediaPreviewOverlay(
                     )
                     Text(
                         text = "${session.selectedIndex + 1}/${session.items.size} · ${item.typeLabel}",
-                        color = Color(0xFF9AA0A6),
+                        color = colors.textInverse.copy(alpha = 0.64f),
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
                 MediaPreviewTextButton(onClick = { onDownload(item) }) {
-                    Text("下载", color = Color.White)
+                    Text("下载", color = colors.textInverse)
                 }
                 MediaPreviewTextButton(onClick = { onOpenExternal(item.openUrl) }) {
-                    Text("外部打开", color = Color.White)
+                    Text("外部打开", color = colors.textInverse)
                 }
             }
             Box(
@@ -180,18 +186,20 @@ private fun MediaPreviewTextButton(
     enabled: Boolean = true,
     content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     HhhlTextButton(
         onClick = onClick,
         enabled = enabled,
-        containerColor = Color.White.copy(alpha = if (enabled) 0.12f else 0.06f),
-        borderColor = Color.White.copy(alpha = if (enabled) 0.16f else 0.08f),
-        contentColor = Color.White.copy(alpha = if (enabled) 1f else 0.42f),
+        containerColor = colors.surfaceElevated.copy(alpha = if (enabled) 0.28f else 0.14f),
+        borderColor = colors.textInverse.copy(alpha = if (enabled) 0.16f else 0.08f),
+        contentColor = colors.textInverse.copy(alpha = if (enabled) 1f else 0.42f),
         content = content,
     )
 }
 
 @Composable
 private fun MediaPreviewFallback(item: MediaPreviewItem) {
+    val colors = LocalHhhlColors.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -199,7 +207,7 @@ private fun MediaPreviewFallback(item: MediaPreviewItem) {
     ) {
         Text(
             text = if (item.isSensitive) "敏感内容" else item.label,
-            color = Color.White,
+            color = colors.textInverse,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
@@ -207,7 +215,7 @@ private fun MediaPreviewFallback(item: MediaPreviewItem) {
         )
         Text(
             text = if (item.previewUrl == null) "此文件不自动预览，可外部打开" else item.typeLabel,
-            color = Color(0xFF9AA0A6),
+            color = colors.textInverse.copy(alpha = 0.64f),
             style = MaterialTheme.typography.bodySmall,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -215,12 +223,12 @@ private fun MediaPreviewFallback(item: MediaPreviewItem) {
         Box(
             modifier = Modifier
                 .size(72.dp)
-                .background(Color(0xFF202327)),
+                .background(colors.mediaBackground),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = item.typeBadge,
-                color = Color.White,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.labelMedium,
             )
         }

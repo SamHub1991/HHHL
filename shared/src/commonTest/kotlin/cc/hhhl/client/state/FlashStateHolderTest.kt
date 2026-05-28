@@ -11,9 +11,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -83,6 +85,36 @@ class FlashStateHolderTest {
         assertFalse(holder.state.value.isLoadingDetail)
         assertEquals(flash, holder.state.value.selectedFlash)
         assertEquals(listOf("flash-1"), calls)
+    }
+
+    @Test
+    fun openingAnotherFlashInvalidatesOlderDetailResult() = runTest {
+        val first = CompletableDeferred<FlashRepositoryResult>()
+        val second = CompletableDeferred<FlashRepositoryResult>()
+        val firstFlash = sampleFlash("flash-1")
+        val secondFlash = sampleFlash("flash-2")
+        val holder = FlashStateHolder(
+            repository = fakeRepository(
+                flashesResult = FlashesRepositoryResult.Success(emptyList()),
+                flashResultProvider = { id -> if (id == "flash-1") first.await() else second.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.openFlash("flash-1")
+        runCurrent()
+        holder.openFlash("flash-2")
+        runCurrent()
+        second.complete(FlashRepositoryResult.Success(secondFlash))
+        advanceUntilIdle()
+
+        assertEquals(secondFlash, holder.state.value.selectedFlash)
+        assertFalse(holder.state.value.isLoadingDetail)
+
+        first.complete(FlashRepositoryResult.Success(firstFlash))
+        advanceUntilIdle()
+
+        assertEquals(secondFlash, holder.state.value.selectedFlash)
     }
 
     @Test
@@ -245,6 +277,7 @@ class FlashStateHolderTest {
         onCreateFlash: (FlashDraft) -> Unit = {},
         onUpdateFlash: (String, FlashDraft) -> Unit = { _, _ -> },
         onDeleteFlash: (String) -> Unit = {},
+        flashResultProvider: suspend (String) -> FlashRepositoryResult = { flashResult },
     ): FlashRepository {
         return sequenceRepository(
             flashesResults = listOf(flashesResult),
@@ -257,6 +290,7 @@ class FlashStateHolderTest {
             onCreateFlash = onCreateFlash,
             onUpdateFlash = onUpdateFlash,
             onDeleteFlash = onDeleteFlash,
+            flashResultProvider = flashResultProvider,
         )
     }
 
@@ -271,6 +305,7 @@ class FlashStateHolderTest {
         onCreateFlash: (FlashDraft) -> Unit = {},
         onUpdateFlash: (String, FlashDraft) -> Unit = { _, _ -> },
         onDeleteFlash: (String) -> Unit = {},
+        flashResultProvider: suspend (String) -> FlashRepositoryResult = { flashResult },
     ): FlashRepository {
         var flashResultIndex = 0
         return object : FlashRepository(
@@ -339,7 +374,7 @@ class FlashStateHolderTest {
 
             override suspend fun showFlash(flashId: String): FlashRepositoryResult {
                 onShowFlash(flashId)
-                return flashResult
+                return flashResultProvider(flashId)
             }
 
             override suspend fun likeFlash(flashId: String): FlashActionRepositoryResult {
@@ -354,7 +389,7 @@ class FlashStateHolderTest {
 
             override suspend fun createFlash(draft: FlashDraft): FlashRepositoryResult {
                 onCreateFlash(draft)
-                return flashResult
+                return flashResultProvider("create")
             }
 
             override suspend fun updateFlash(
@@ -362,7 +397,7 @@ class FlashStateHolderTest {
                 draft: FlashDraft,
             ): FlashRepositoryResult {
                 onUpdateFlash(flashId, draft)
-                return flashResult
+                return flashResultProvider(flashId)
             }
 
             override suspend fun deleteFlash(flashId: String): FlashActionRepositoryResult {

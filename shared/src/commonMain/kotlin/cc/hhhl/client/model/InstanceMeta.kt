@@ -14,6 +14,48 @@ data class InstanceMeta(
     val defaultLike: String = "❤️",
     val noteSearchableScope: String? = null,
     val capabilities: InstanceCapabilities = InstanceCapabilities(),
+    val stats: InstanceStats? = null,
+    val onlineUsers: InstanceOnlineUsers? = null,
+    val serverInfo: InstanceServerInfo? = null,
+)
+
+@Immutable
+data class InstanceStats(
+    val notesCount: Long = 0,
+    val originalNotesCount: Long = 0,
+    val usersCount: Long = 0,
+    val originalUsersCount: Long = 0,
+    val reactionsCount: Long = 0,
+    val instances: Long = 0,
+    val driveUsageLocal: Long = 0,
+    val driveUsageRemote: Long = 0,
+)
+
+@Immutable
+data class InstanceOnlineUsers(
+    val count: Int = 0,
+    val countAcrossNetwork: Int = 0,
+)
+
+@Immutable
+data class InstanceServerInfo(
+    val machine: String = "",
+    val cpuModel: String = "",
+    val cpuCores: Int = 0,
+    val memoryTotal: Long = 0,
+    val storageTotal: Long = 0,
+    val storageUsed: Long = 0,
+)
+
+@Immutable
+data class InstanceEndpointInfo(
+    val params: List<InstanceEndpointParam> = emptyList(),
+)
+
+@Immutable
+data class InstanceEndpointParam(
+    val name: String,
+    val type: String,
 )
 
 @Immutable

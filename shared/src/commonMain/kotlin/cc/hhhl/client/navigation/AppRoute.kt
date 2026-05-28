@@ -57,6 +57,8 @@ fun rootRouteFor(route: AppRoute): RootRoute {
         AppRoute.Profile,
         AppRoute.ProfileNotes,
         AppRoute.Settings,
+        AppRoute.ThemeCustomization,
+        AppRoute.Automation,
         is AppRoute.SettingsManagement,
         AppRoute.AdminDashboard,
         AppRoute.Drive,
@@ -81,6 +83,8 @@ sealed interface AppRoute {
     data object Profile : AppRoute
     data object ProfileNotes : AppRoute
     data object Settings : AppRoute
+    data object ThemeCustomization : AppRoute
+    data object Automation : AppRoute
     data class SettingsManagement(val key: SettingsManagementSectionKey) : AppRoute
     data object AdminDashboard : AppRoute
     data object Drive : AppRoute
@@ -106,5 +110,6 @@ sealed interface AppRoute {
     data class Compose(
         val replyToId: String? = null,
         val renoteId: String? = null,
+        val channelId: String? = null,
     ) : AppRoute
 }

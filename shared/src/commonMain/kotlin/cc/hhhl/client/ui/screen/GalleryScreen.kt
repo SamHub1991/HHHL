@@ -21,11 +21,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -50,6 +49,7 @@ import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.DriveFilePreview
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
+import cc.hhhl.client.ui.component.HhhlCheckbox
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlIconActionButton
@@ -57,6 +57,7 @@ import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
+import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.driveFileMediaPreviewSession
 
@@ -121,7 +122,7 @@ fun GalleryScreen(
             navigation = { HhhlBackButton(onClick = onBack) },
             action = if (overflowActions.isNotEmpty()) {
                 {
-                    HhhlOverflowMenu(actions = overflowActions)
+                    HhhlOverflowMenu(actions = overflowActions, buttonText = "更多")
                 }
             } else {
                 null
@@ -148,7 +149,7 @@ fun GalleryScreen(
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item(contentType = "gallery-status") {
+                item(key = "gallery-error-${selectedKind.name}", contentType = "gallery-status") {
                     GalleryStatusRow(
                         text = message,
                         actionText = "重试",
@@ -157,12 +158,14 @@ fun GalleryScreen(
                 }
             }
             if (state?.isLoadingPosts == true && posts.isEmpty()) {
-                item(contentType = "gallery-status") {
+                item(key = "gallery-loading-${selectedKind.name}", contentType = "gallery-status") {
                     GalleryStatusRow(text = "正在加载图库...", loading = true)
                 }
             }
             if (state != null && !state.isLoadingPosts && posts.isEmpty() && state.errorMessage == null) {
-                item(contentType = "gallery-status") { GalleryStatusRow(text = "还没有图库作品") }
+                item(key = "gallery-empty-${selectedKind.name}", contentType = "gallery-status") {
+                    GalleryStatusRow(text = "还没有图库作品")
+                }
             }
             items(
                 items = posts,
@@ -178,7 +181,7 @@ fun GalleryScreen(
                 )
             }
             if (state != null && posts.isNotEmpty() && state.isLoadingMore) {
-                item(contentType = "gallery-status") {
+                item(key = "gallery-loading-more-${selectedKind.name}", contentType = "gallery-status") {
                     GalleryStatusRow(
                         text = "正在加载更多...",
                         loading = state.isLoadingMore,
@@ -211,6 +214,7 @@ private fun GallerySummaryRow(
     onRefreshPosts: () -> Unit,
     onCreatePost: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val stateText = if (isLoading) "加载中" else "${postCount} 项"
     Row(
         modifier = Modifier
@@ -221,7 +225,7 @@ private fun GallerySummaryRow(
     ) {
         Text(
             text = "${selectedKind.label} · $stateText",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -280,6 +284,7 @@ private fun GalleryPostRow(
     onOpenMedia: (String) -> Unit,
     onOpenMediaPreview: ((MediaPreviewSession) -> Unit)?,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -299,7 +304,7 @@ private fun GalleryPostRow(
             ) {
                 Text(
                     text = post.title.ifBlank { "未命名作品" },
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -307,18 +312,17 @@ private fun GalleryPostRow(
                 )
                 Text(
                     text = "@${post.author.username} · ${post.imageCountLabel} · ${post.likedCount} 喜欢",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (post.description.isNotBlank()) {
-                    Text(
+                    InlineRichText(
                         text = post.description,
-                        color = MaterialTheme.colorScheme.secondary,
+                        color = colors.textSecondary,
                         style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                        maxChars = 320,
                     )
                 }
             }
@@ -351,6 +355,7 @@ private fun GalleryDetailView(
 ) {
     var editDialogOpen by remember(post.id) { mutableStateOf(false) }
     var deleteDialogOpen by remember(post.id) { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
     val canManagePost = !currentUserId.isNullOrBlank() && post.userId == currentUserId
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -373,6 +378,7 @@ private fun GalleryDetailView(
                                 onClick = { deleteDialogOpen = true },
                             ),
                         ),
+                        buttonText = "更多",
                     )
                 }
             } else {
@@ -382,14 +388,16 @@ private fun GalleryDetailView(
         HhhlDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             if (isLoading) {
-                item(contentType = "gallery-detail-status") {
+                item(key = "gallery-detail-loading-${post.id}", contentType = "gallery-detail-status") {
                     GalleryStatusRow(text = "正在加载作品...", loading = true)
                 }
             }
             errorMessage?.let { message ->
-                item(contentType = "gallery-detail-status") { GalleryStatusRow(text = message) }
+                item(key = "gallery-detail-error-${post.id}", contentType = "gallery-detail-status") {
+                    GalleryStatusRow(text = message)
+                }
             }
-            item(contentType = "gallery-detail") {
+            item(key = "gallery-detail-${post.id}", contentType = "gallery-detail") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -398,7 +406,7 @@ private fun GalleryDetailView(
                 ) {
                     Text(
                         text = post.title.ifBlank { "未命名作品" },
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = colors.textPrimary,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                     )
@@ -421,13 +429,13 @@ private fun GalleryDetailView(
                             Column {
                                 Text(
                                     text = post.author.displayName,
-                                    color = MaterialTheme.colorScheme.onBackground,
+                                    color = colors.textPrimary,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
                                     text = "@${post.author.username} · ${post.likedCount} 喜欢",
-                                    color = LocalHhhlColors.current.subtleText,
+                                    color = colors.textMuted,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -449,9 +457,9 @@ private fun GalleryDetailView(
                         onOpenMediaPreview = onOpenMediaPreview,
                     )
                     if (post.description.isNotBlank()) {
-                        Text(
+                        InlineRichText(
                             text = post.description,
-                            color = MaterialTheme.colorScheme.onBackground,
+                            color = colors.textPrimary,
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
@@ -522,6 +530,7 @@ private fun GalleryFileStrip(
     onOpenMedia: (String) -> Unit,
     onOpenMediaPreview: ((MediaPreviewSession) -> Unit)?,
 ) {
+    val colors = LocalHhhlColors.current
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         files.take(3).forEach { file ->
             key(file.id) {
@@ -550,12 +559,12 @@ private fun GalleryFileStrip(
                     .weight(1f)
                     .height(104.dp)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(LocalHhhlColors.current.mediaBackground),
+                    .background(colors.mediaBackground),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = "暂无图片",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -577,13 +586,14 @@ private fun GalleryTagRow(post: GalleryPost) {
 
 @Composable
 private fun GalleryTag(text: String) {
+    val colors = LocalHhhlColors.current
     Text(
         text = text,
-        color = MaterialTheme.colorScheme.primary,
+        color = colors.accent,
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(LocalHhhlColors.current.mediaBackground)
+            .background(colors.mediaBackground)
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )
 }
@@ -621,7 +631,7 @@ private fun GalleryEditorDialog(
     val fileIds = parseGalleryFileIds(fileIdsText)
     val canSubmit = !isSaving && postTitle.isNotBlank() && fileIds.isNotEmpty()
 
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
@@ -700,18 +710,19 @@ private fun GalleryDraftCheckboxRow(
     label: String,
     onCheckedChange: (Boolean) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(
+        HhhlCheckbox(
             checked = checked,
             onCheckedChange = onCheckedChange,
             enabled = enabled,
         )
         Text(
             text = label,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.bodyMedium,
         )
     }
@@ -724,13 +735,14 @@ private fun DeleteGalleryPostDialog(
     onDismiss: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    AlertDialog(
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("删除图库") },
         text = {
             Text(
                 text = "删除「${post.title.ifBlank { "未命名作品" }}」后，图库列表会移除它，Drive 文件不会被删除。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },

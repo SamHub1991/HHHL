@@ -30,6 +30,10 @@ fun parseRichText(
     val segments = mutableListOf<RichTextSegment>()
     var index = 0
     while (index < text.length) {
+        if (segments.size >= MAX_RICH_TEXT_SEGMENTS) {
+            segments.addText(text.substring(index))
+            break
+        }
         val match = nextRichTextMatch(text = text, startIndex = index, emojiUrls = emojiUrls)
         if (match == null) {
             segments.addText(text.substring(index))
@@ -38,11 +42,17 @@ fun parseRichText(
         if (match.start > index) {
             segments.addText(text.substring(index, match.start))
         }
+        if (segments.size >= MAX_RICH_TEXT_SEGMENTS) {
+            segments.addText(text.substring(match.start))
+            break
+        }
         segments.add(match.segment)
         index = match.end
     }
     return segments.ifEmpty { listOf(RichTextSegment.Text("")) }
 }
+
+private const val MAX_RICH_TEXT_SEGMENTS = 160
 
 private data class RichTextMatch(
     val start: Int,
@@ -58,7 +68,7 @@ private fun nextRichTextMatch(
     var index = startIndex
     while (index < text.length) {
         val match = when {
-            text.startsWith("https://", index) || text.startsWith("http://", index) -> parseUrl(text, index)
+            text.startsWithHttpUrl(index) -> parseUrl(text, index)
             text[index] == '@' && hasTokenBoundary(text, index) -> parseMention(text, index)
             text[index] == '#' && hasTokenBoundary(text, index) -> parseHashtag(text, index)
             text[index] == ':' && emojiUrls.isNotEmpty() -> parseEmoji(text, index, emojiUrls)
@@ -72,14 +82,34 @@ private fun nextRichTextMatch(
 
 private fun parseUrl(text: String, start: Int): RichTextMatch? {
     var end = start
-    while (end < text.length && !text[end].isWhitespace()) {
+    while (end < text.length && !text[end].isWhitespace() && text[end] !in urlTerminatingPunctuation) {
         end += 1
     }
-    while (end > start && text[end - 1] in trailingUrlPunctuation) {
+    while (end > start && shouldTrimTrailingUrlChar(text, start, end)) {
         end -= 1
     }
     if (end == start) return null
     return RichTextMatch(start, end, RichTextSegment.Url(text.substring(start, end)))
+}
+
+private fun String.startsWithHttpUrl(index: Int): Boolean {
+    return startsWith("https://", startIndex = index, ignoreCase = true) ||
+        startsWith("http://", startIndex = index, ignoreCase = true)
+}
+
+private fun shouldTrimTrailingUrlChar(text: String, start: Int, end: Int): Boolean {
+    val char = text[end - 1]
+    if (char !in trailingUrlPunctuation) return false
+    val opener = pairedUrlOpeners[char] ?: return true
+    return text.countUrlChar(start, end, char) > text.countUrlChar(start, end, opener)
+}
+
+private fun String.countUrlChar(start: Int, end: Int, char: Char): Int {
+    var count = 0
+    for (index in start until end) {
+        if (this[index] == char) count += 1
+    }
+    return count
 }
 
 private fun parseMention(text: String, start: Int): RichTextMatch? {
@@ -165,7 +195,7 @@ private fun parseTokenAfterMarker(text: String, markerIndex: Int): MarkerToken? 
 private fun hasTokenBoundary(text: String, markerIndex: Int): Boolean {
     if (markerIndex == 0) return true
     val previous = text[markerIndex - 1]
-    return previous.isWhitespace() || previous in "([{<\"'"
+    return previous.isWhitespace() || previous in tokenLeadingBoundaryPunctuation
 }
 
 private fun Char.isRichTokenChar(): Boolean {
@@ -182,5 +212,21 @@ private fun MutableList<RichTextSegment>.addText(value: String) {
     }
 }
 
-private val trailingUrlPunctuation = setOf('.', ',', '!', '?', ':', ';', ')', ']', '}')
-private val trailingTokenPunctuation = setOf('.', ',', '!', '?', ':', ';')
+private val trailingUrlPunctuation = setOf(
+    '.', ',', '!', '?', ':', ';', ')', ']', '}', '>', '"', '\'',
+    '。', '，', '！', '？', '：', '；', '、', '）', '】', '》', '」', '』',
+)
+private val urlTerminatingPunctuation = setOf('>', '。', '，', '！', '？', '：', '；', '、', '）', '】', '》', '」', '』')
+private val pairedUrlOpeners = mapOf(
+    ')' to '(',
+    ']' to '[',
+    '}' to '{',
+)
+private val tokenLeadingBoundaryPunctuation = setOf(
+    '(', '[', '{', '<', '"', '\'',
+    '（', '【', '《', '「', '『',
+)
+private val trailingTokenPunctuation = setOf(
+    '.', ',', '!', '?', ':', ';',
+    '。', '，', '！', '？', '：', '；', '、', '）', '】', '》', '」', '』',
+)

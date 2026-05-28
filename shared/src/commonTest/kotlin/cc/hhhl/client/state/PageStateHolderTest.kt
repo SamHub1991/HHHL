@@ -13,8 +13,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -84,6 +86,59 @@ class PageStateHolderTest {
         assertFalse(holder.state.value.isLoadingDetail)
         assertEquals(page, holder.state.value.selectedPage)
         assertEquals(listOf("page-1"), calls)
+    }
+
+    @Test
+    fun openingAnotherPageInvalidatesOlderDetailResult() = runTest {
+        val first = CompletableDeferred<PageRepositoryResult>()
+        val second = CompletableDeferred<PageRepositoryResult>()
+        val pageOne = samplePage("page-1")
+        val pageTwo = samplePage("page-2")
+        val holder = PageStateHolder(
+            repository = fakeRepository(
+                pagesResult = PagesRepositoryResult.Success(emptyList()),
+                pageResultProvider = { id -> if (id == "page-1") first.await() else second.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.openPage("page-1")
+        runCurrent()
+        holder.openPage("page-2")
+        runCurrent()
+        second.complete(PageRepositoryResult.Success(pageTwo))
+        advanceUntilIdle()
+
+        assertEquals(pageTwo, holder.state.value.selectedPage)
+        assertFalse(holder.state.value.isLoadingDetail)
+
+        first.complete(PageRepositoryResult.Success(pageOne))
+        advanceUntilIdle()
+
+        assertEquals(pageTwo, holder.state.value.selectedPage)
+    }
+
+    @Test
+    fun closeDetailInvalidatesPendingDetailResult() = runTest {
+        val pending = CompletableDeferred<PageRepositoryResult>()
+        val holder = PageStateHolder(
+            repository = fakeRepository(
+                pagesResult = PagesRepositoryResult.Success(emptyList()),
+                pageResultProvider = { pending.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.openPage("page-1")
+        runCurrent()
+        assertTrue(holder.state.value.isLoadingDetail)
+
+        holder.closeDetail()
+        pending.complete(PageRepositoryResult.Success(samplePage("page-1")))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isLoadingDetail)
+        assertEquals(null, holder.state.value.selectedPage)
     }
 
     @Test
@@ -205,6 +260,32 @@ class PageStateHolderTest {
         assertEquals(null, holder.state.value.editingDraft)
     }
 
+    @Test
+    fun cancelEditingInvalidatesPendingSaveResult() = runTest {
+        val pending = CompletableDeferred<PageRepositoryResult>()
+        val holder = PageStateHolder(
+            repository = fakeRepository(
+                pagesResult = PagesRepositoryResult.Success(emptyList()),
+                pageResultProvider = { pending.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.startCreatingPage()
+        holder.updateDraft(PageDraft(title = "Title", name = "title", content = "body"))
+        holder.saveEditingPage()
+        runCurrent()
+        assertTrue(holder.state.value.isSavingPage)
+
+        holder.cancelEditingPage()
+        pending.complete(PageRepositoryResult.Success(samplePage("page-created")))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isSavingPage)
+        assertEquals(null, holder.state.value.selectedPage)
+        assertEquals(emptyList(), holder.state.value.pages)
+    }
+
     private fun fakeRepository(
         pagesResult: PagesRepositoryResult,
         pageResult: PageRepositoryResult = PageRepositoryResult.Success(samplePage("page-1")),
@@ -213,6 +294,7 @@ class PageStateHolderTest {
         onShowPage: (String) -> Unit = {},
         onLikePage: (String) -> Unit = {},
         onUnlikePage: (String) -> Unit = {},
+        pageResultProvider: suspend (String) -> PageRepositoryResult = { pageResult },
     ): PageRepository {
         return sequenceRepository(
             pagesResults = listOf(pagesResult),
@@ -222,6 +304,7 @@ class PageStateHolderTest {
             onShowPage = onShowPage,
             onLikePage = onLikePage,
             onUnlikePage = onUnlikePage,
+            pageResultProvider = pageResultProvider,
         )
     }
 
@@ -233,6 +316,7 @@ class PageStateHolderTest {
         onShowPage: (String) -> Unit = {},
         onLikePage: (String) -> Unit = {},
         onUnlikePage: (String) -> Unit = {},
+        pageResultProvider: suspend (String) -> PageRepositoryResult = { pageResult },
     ): PageRepository {
         var pageResultIndex = 0
         return object : PageRepository(
@@ -308,7 +392,7 @@ class PageStateHolderTest {
 
             override suspend fun showPage(pageId: String): PageRepositoryResult {
                 onShowPage(pageId)
-                return pageResult
+                return pageResultProvider(pageId)
             }
 
             override suspend fun showPageByPath(
@@ -316,7 +400,7 @@ class PageStateHolderTest {
                 name: String,
             ): PageRepositoryResult {
                 onShowPage("$username/$name")
-                return pageResult
+                return pageResultProvider("$username/$name")
             }
 
             override suspend fun likePage(pageId: String): PageActionRepositoryResult {
@@ -330,14 +414,14 @@ class PageStateHolderTest {
             }
 
             override suspend fun createPage(draft: PageDraft): PageRepositoryResult {
-                return pageResult
+                return pageResultProvider("create")
             }
 
             override suspend fun updatePage(
                 pageId: String,
                 draft: PageDraft,
             ): PageRepositoryResult {
-                return pageResult
+                return pageResultProvider(pageId)
             }
 
             override suspend fun deletePage(pageId: String): PageActionRepositoryResult {

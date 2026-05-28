@@ -92,17 +92,19 @@ fun AdminDashboardScreen(
         }
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             if (state.isLoading) {
-                item(contentType = "admin-status") {
+                item(key = "admin-loading-${state.selectedTab.name}", contentType = "admin-status") {
                     AdminStatusRow(text = "正在加载管理数据...", loading = true)
                 }
             }
             state.errorMessage?.let { message ->
-                item(contentType = "admin-status") {
+                item(key = "admin-error-${state.selectedTab.name}", contentType = "admin-status") {
                     AdminStatusRow(text = message, actionText = "重试", onAction = onRefresh)
                 }
             }
             state.actionMessage?.let { message ->
-                item(contentType = "admin-status") { AdminStatusRow(text = message) }
+                item(key = "admin-action-message-${state.selectedTab.name}", contentType = "admin-status") {
+                    AdminStatusRow(text = message)
+                }
             }
             when (state.selectedTab) {
                 AdminDashboardTab.Reports -> reportsContent(
@@ -167,7 +169,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.reportsContent(
     onResolveReport: (String, Boolean) -> Unit,
 ) {
     if (reports.isEmpty()) {
-        item(contentType = "admin-status") { AdminStatusRow(text = "暂无待处理举报") }
+        item(key = "admin-reports-empty", contentType = "admin-status") { AdminStatusRow(text = "暂无待处理举报") }
     }
     items(
         items = reports,
@@ -192,7 +194,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.usersContent(
     onSearchUsers: () -> Unit,
     onLoadUserRoles: (String) -> Unit,
 ) {
-    item(contentType = "admin-user-search") {
+    item(key = "admin-user-search", contentType = "admin-user-search") {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -216,7 +218,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.usersContent(
         HhhlDivider()
     }
     if (users.isEmpty()) {
-        item(contentType = "admin-status") { AdminStatusRow(text = "没有用户结果") }
+        item(key = "admin-users-empty", contentType = "admin-status") { AdminStatusRow(text = "没有用户结果") }
     }
     items(
         items = users,
@@ -235,7 +237,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.rolesContent(
     roles: List<AdminRoleSummary>,
 ) {
     if (roles.isEmpty()) {
-        item(contentType = "admin-status") { AdminStatusRow(text = "没有可显示的角色") }
+        item(key = "admin-roles-empty", contentType = "admin-status") { AdminStatusRow(text = "没有可显示的角色") }
     }
     items(
         items = roles,
@@ -258,7 +260,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.announcementsContent(
     onCancelAnnouncementEdit: () -> Unit,
     onDeleteAnnouncement: (String) -> Unit,
 ) {
-    item(contentType = "admin-announcement-editor") {
+    item(key = "admin-announcement-editor", contentType = "admin-announcement-editor") {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -298,7 +300,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.announcementsContent(
         HhhlDivider()
     }
     if (announcements.isEmpty()) {
-        item(contentType = "admin-status") { AdminStatusRow(text = "没有可显示的公告") }
+        item(key = "admin-announcements-empty", contentType = "admin-status") { AdminStatusRow(text = "没有可显示的公告") }
     }
     items(
         items = announcements,
@@ -319,10 +321,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.instanceContent(
     instance: AdminInstanceSettings?,
 ) {
     if (instance == null) {
-        item(contentType = "admin-status") { AdminStatusRow(text = "实例设置不可用") }
+        item(key = "admin-instance-unavailable", contentType = "admin-status") { AdminStatusRow(text = "实例设置不可用") }
         return
     }
-    item(contentType = "admin-instance") {
+    item(key = "admin-instance", contentType = "admin-instance") {
         AdminKeyValueBlock(
             rows = listOf(
                 "名称" to instance.name,
@@ -463,6 +465,7 @@ private fun AdminListRow(
     onClick: (() -> Unit)? = null,
     action: (@Composable () -> Unit)? = null,
 ) {
+    val colors = LocalHhhlColors.current
     HhhlInlinePanel(
         modifier = Modifier
             .padding(horizontal = 14.dp, vertical = 6.dp)
@@ -479,7 +482,7 @@ private fun AdminListRow(
             ) {
                 Text(
                     text = title.ifBlank { "未命名" },
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -487,14 +490,14 @@ private fun AdminListRow(
                 )
                 Text(
                     text = subtitle,
-                    color = MaterialTheme.colorScheme.secondary,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = meta,
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -507,7 +510,7 @@ private fun AdminListRow(
                         badges.forEach { badge ->
                             Text(
                                 text = badge,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = colors.accent,
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
@@ -521,6 +524,7 @@ private fun AdminListRow(
 
 @Composable
 private fun AdminKeyValueBlock(rows: List<Pair<String, String>>) {
+    val colors = LocalHhhlColors.current
     Column(modifier = Modifier.fillMaxWidth()) {
         rows.forEach { (key, value) ->
             Row(
@@ -531,13 +535,13 @@ private fun AdminKeyValueBlock(rows: List<Pair<String, String>>) {
             ) {
                 Text(
                     text = key,
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(0.32f),
                 )
                 Text(
                     text = value.ifBlank { "未设置" },
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(0.68f),
                     maxLines = 3,

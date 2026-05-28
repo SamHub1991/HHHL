@@ -31,6 +31,38 @@ data class NoteReaction(
 )
 
 @Immutable
+data class NoteReactionUser(
+    val id: String,
+    val reaction: String,
+    val user: User,
+)
+
+@Immutable
+data class NoteTranslation(
+    val sourceLang: String = "",
+    val targetLang: String = "",
+    val text: String,
+)
+
+@Immutable
+data class NoteState(
+    val isFavorited: Boolean = false,
+    val myReaction: String? = null,
+    val isMutedThread: Boolean = false,
+    val isMutedNote: Boolean = false,
+    val isRenoteMuted: Boolean = false,
+    val isRenoted: Boolean = false,
+)
+
+@Immutable
+data class NoteVersion(
+    val id: String,
+    val text: String,
+    val cw: String? = null,
+    val createdAtLabel: String = "",
+)
+
+@Immutable
 data class NoteMedia(
     val id: String,
     val description: String,

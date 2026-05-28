@@ -33,6 +33,20 @@ class TimelineCacheCodecTest {
     }
 
     @Test
+    fun codecTrimsTimelineSnapshotsPerKind() {
+        val notes = (0 until 130).map { index -> FakeData.timeline[0].copy(id = "note-$index") }
+
+        val decoded = TimelineCacheCodec.decode(
+            TimelineCacheCodec.encode(mapOf(TimelineKind.Home to notes)),
+        )
+
+        val restored = decoded.getValue(TimelineKind.Home)
+        assertEquals(120, restored.size)
+        assertEquals("note-0", restored.first().id)
+        assertEquals("note-119", restored.last().id)
+    }
+
+    @Test
     fun preservesTimelinePresentationFieldsAcrossColdRestore() {
         val quoted = FakeData.timeline[1].copy(
             media = listOf(

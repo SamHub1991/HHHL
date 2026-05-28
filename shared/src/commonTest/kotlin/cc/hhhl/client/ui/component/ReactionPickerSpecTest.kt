@@ -12,6 +12,8 @@ class ReactionPickerSpecTest {
         assertEquals(260.dp, HhhlReactionPickerMenuWidth)
         assertEquals(42.dp, HhhlReactionPickerItemSize)
         assertEquals(6.dp, HhhlReactionPickerGridSpacing)
+        assertEquals(48, HhhlReactionPickerMaxSectionItems)
+        assertEquals(120, HhhlReactionPickerMaxTotalItems)
     }
 
     @Test
@@ -130,6 +132,23 @@ class ReactionPickerSpecTest {
             ),
             sections,
         )
+    }
+
+    @Test
+    fun pickerSectionsAreBoundedSoOpeningReactionMenuDoesNotComposeHugeLists() {
+        val options = buildList {
+            add("⭐")
+            repeat(80) { index -> add("emoji$index") }
+            repeat(160) { index -> add(":custom$index:") }
+        }
+
+        val sections = reactionPickerSections(reactionOptions = options)
+        val total = sections.sumOf { it.reactions.size }
+
+        assertEquals(true, sections.all { it.reactions.size <= HhhlReactionPickerMaxSectionItems })
+        assertEquals(true, total <= HhhlReactionPickerMaxTotalItems)
+        assertEquals(48, sections.single { it.label == "常用" }.reactions.size)
+        assertEquals(48, sections.single { it.label == "自定义" }.reactions.size)
     }
 
     @Test

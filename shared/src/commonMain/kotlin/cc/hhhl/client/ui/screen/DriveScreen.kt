@@ -60,9 +60,11 @@ import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
+import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.driveFileMediaPreviewSession
 import cc.hhhl.client.ui.component.mediaTypeDisplayName
+import cc.hhhl.client.presentation.notePreviewText
 
 @Composable
 fun DriveScreen(
@@ -73,6 +75,7 @@ fun DriveScreen(
     onLoadMoreFolders: () -> Unit = {},
     onQueryChanged: (String) -> Unit = {},
     onSearch: () -> Unit = {},
+    onStreamModeChanged: (Boolean) -> Unit = {},
     onSortSelected: (DriveFileSort) -> Unit = {},
     onTypeFilterSelected: (DriveFileTypeFilter) -> Unit = {},
     onUpload: () -> Unit = {},
@@ -137,6 +140,7 @@ fun DriveScreen(
             onNavigateUp = onNavigateUp,
             onQueryChanged = onQueryChanged,
             onSearch = onSearch,
+            onStreamModeChanged = onStreamModeChanged,
             onSortSelected = onSortSelected,
             onTypeFilterSelected = onTypeFilterSelected,
         )
@@ -154,17 +158,17 @@ fun DriveScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (state.isManaging) {
-                item(contentType = "drive-status") {
+                item(key = "drive-managing", contentType = "drive-status") {
                     DriveStatusRow(text = "正在处理 Drive 操作...", loading = true)
                 }
             }
             if (state.isLoading && state.files.isEmpty() && state.folders.isEmpty()) {
-                item(contentType = "drive-status") {
+                item(key = "drive-loading-${state.folderId.orEmpty()}", contentType = "drive-status") {
                     DriveStatusRow(text = "正在加载 Drive...", loading = true)
                 }
             }
             state.errorMessage?.let { message ->
-                item(contentType = "drive-status") {
+                item(key = "drive-error-${state.folderId.orEmpty()}", contentType = "drive-status") {
                     DriveStatusRow(
                         text = message,
                         actionText = "重试",
@@ -179,12 +183,12 @@ fun DriveScreen(
                 state.errorMessage == null &&
                 !creatingFolder
             ) {
-                item(contentType = "drive-status") {
+                item(key = "drive-empty-${state.folderId.orEmpty()}", contentType = "drive-status") {
                     DriveStatusRow(text = if (state.files.isEmpty()) "Drive 里还没有文件" else "没有匹配此类型的文件")
                 }
             }
             state.selectedFile?.let { file ->
-                item(contentType = "drive-details") {
+                item(key = "drive-details-${file.id}", contentType = "drive-details") {
                     DriveFileDetailsRow(
                         file = file,
                         details = state.selectedFileDetails,
@@ -199,7 +203,7 @@ fun DriveScreen(
                 }
             }
             if (creatingFolder) {
-                item(contentType = "drive-editor") {
+                item(key = "drive-new-folder-${state.folderId.orEmpty()}", contentType = "drive-editor") {
                     DriveNewFolderRow(
                         draftName = nameDraft,
                         actionsEnabled = actionsEnabled,
@@ -267,7 +271,7 @@ fun DriveScreen(
                 )
             }
             if (state.folders.isNotEmpty() && !state.foldersEndReached) {
-                item(contentType = "drive-status") {
+                item(key = "drive-loading-more-folders-${state.folderId.orEmpty()}", contentType = "drive-status") {
                     DriveLoadMoreEffect(
                         enabled = !state.isLoadingMoreFolders,
                         onLoadMore = onLoadMoreFolders,
@@ -345,7 +349,7 @@ fun DriveScreen(
                 )
             }
             if (state.files.isNotEmpty() && !state.endReached) {
-                item(contentType = "drive-status") {
+                item(key = "drive-loading-more-files-${state.folderId.orEmpty()}", contentType = "drive-status") {
                     DriveLoadMoreEffect(
                         enabled = !state.isLoadingMore,
                         onLoadMore = onLoadMore,
@@ -373,12 +377,17 @@ private fun DriveHeaderTools(
     onNavigateUp: () -> Unit,
     onQueryChanged: (String) -> Unit,
     onSearch: () -> Unit,
+    onStreamModeChanged: (Boolean) -> Unit,
     onSortSelected: (DriveFileSort) -> Unit,
     onTypeFilterSelected: (DriveFileTypeFilter) -> Unit,
 ) {
-    val folderText = state.folderPath.lastOrNull()?.name ?: "根目录"
+    val folderText = if (state.isStreamMode) "最近文件" else state.folderPath.lastOrNull()?.name ?: "根目录"
     val visibleCount = remember(state.files, state.typeFilter) { state.visibleFiles.size }
-    val countText = "${state.folders.size} 文件夹 · $visibleCount/${state.files.size} 文件"
+    val countText = if (state.isStreamMode) {
+        "$visibleCount/${state.files.size} 文件"
+    } else {
+        "${state.folders.size} 文件夹 · $visibleCount/${state.files.size} 文件"
+    }
     val stateText = when {
         state.isUploading -> "上传中"
         state.isManaging -> "处理中"
@@ -400,7 +409,7 @@ private fun DriveHeaderTools(
         ) {
             Text(
                 text = "$folderText · $countText · $stateText",
-                color = MaterialTheme.colorScheme.onBackground,
+                color = LocalHhhlColors.current.textPrimary,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
@@ -429,10 +438,12 @@ private fun DriveHeaderTools(
             HhhlOverflowMenu(
                 actions = driveSummaryActions(
                     inFolder = state.folderPath.isNotEmpty(),
+                    isStreamMode = state.isStreamMode,
                     isLoading = state.isLoading,
                     actionsEnabled = actionsEnabled,
                     onRefresh = onRefresh,
                     onNavigateUp = onNavigateUp,
+                    onStreamModeChanged = onStreamModeChanged,
                 ),
             )
         }
@@ -468,16 +479,25 @@ private fun DriveHeaderTools(
 
 fun driveSummaryActions(
     inFolder: Boolean,
+    isStreamMode: Boolean,
     isLoading: Boolean,
     actionsEnabled: Boolean,
     onRefresh: () -> Unit,
     onNavigateUp: () -> Unit,
+    onStreamModeChanged: (Boolean) -> Unit,
 ): List<HhhlOverflowMenuAction> = buildList {
     add(
         HhhlOverflowMenuAction(
             label = if (isLoading) "同步中" else "刷新",
             enabled = !isLoading,
             onClick = onRefresh,
+        ),
+    )
+    add(
+        HhhlOverflowMenuAction(
+            label = if (isStreamMode) "返回目录" else "最近文件流",
+            enabled = actionsEnabled,
+            onClick = { onStreamModeChanged(!isStreamMode) },
         ),
     )
     if (inFolder) {
@@ -505,7 +525,7 @@ private fun DrivePathRow(
     ) {
         Text(
             text = "当前位置",
-            color = LocalHhhlColors.current.subtleText,
+            color = LocalHhhlColors.current.textMuted,
             style = MaterialTheme.typography.labelSmall,
         )
         FlowRow(
@@ -521,7 +541,7 @@ private fun DrivePathRow(
             path.forEachIndexed { index, folder ->
                 Text(
                     text = "/",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = LocalHhhlColors.current.textMuted,
                     style = MaterialTheme.typography.labelMedium,
                 )
                 DriveBreadcrumbText(
@@ -677,7 +697,7 @@ private fun DriveFolderRow(
                 } else {
                     Text(
                         text = folder.name.ifBlank { "未命名文件夹" },
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = LocalHhhlColors.current.textPrimary,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -686,7 +706,7 @@ private fun DriveFolderRow(
                 }
                 Text(
                     text = "${folder.foldersCount} 文件夹 · ${folder.filesCount} 文件 · ${folder.createdAtLabel}",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = LocalHhhlColors.current.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -730,7 +750,7 @@ private fun DriveNewFolderRow(
             ) {
                 Text(
                     text = "新建文件夹",
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = LocalHhhlColors.current.textPrimary,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -767,6 +787,7 @@ private fun DriveFileRow(
     onDetails: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val selectionSpec = remember(file) { file.toDriveSelectionItemSpec() }
     HhhlInlinePanel(
         modifier = Modifier.clickable(enabled = canOpen) { onClick() },
@@ -801,7 +822,7 @@ private fun DriveFileRow(
                     ) {
                         Text(
                             text = selectionSpec.name,
-                            color = MaterialTheme.colorScheme.onBackground,
+                            color = colors.textPrimary,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
@@ -811,7 +832,7 @@ private fun DriveFileRow(
                         if (file.isSensitive) {
                             Text(
                                 text = "敏感",
-                                color = MaterialTheme.colorScheme.error,
+                                color = colors.danger,
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
@@ -819,7 +840,7 @@ private fun DriveFileRow(
                 }
                 Text(
                     text = buildFileMeta(selectionSpec),
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -827,7 +848,7 @@ private fun DriveFileRow(
                 file.comment?.takeIf { it.isNotBlank() }?.let { comment ->
                     Text(
                         text = comment,
-                        color = MaterialTheme.colorScheme.secondary,
+                        color = colors.textSecondary,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -871,9 +892,9 @@ private fun DriveBreadcrumbText(
 ) {
     val colors = LocalHhhlColors.current
     val contentColor = when {
-        selected -> MaterialTheme.colorScheme.primary
-        enabled -> MaterialTheme.colorScheme.onBackground
-        else -> colors.subtleText
+        selected -> colors.accent
+        enabled -> colors.textPrimary
+        else -> colors.textMuted
     }
     Text(
         text = text,
@@ -885,7 +906,7 @@ private fun DriveBreadcrumbText(
         modifier = Modifier
             .clip(RoundedCornerShape(5.dp))
             .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else colors.inputBackground.copy(alpha = 0.42f),
+                if (selected) colors.buttonSelectedBackground else colors.inputBackground.copy(alpha = 0.42f),
             )
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 7.dp, vertical = 4.dp),
@@ -904,6 +925,7 @@ private fun DriveFileDetailsRow(
     onClose: () -> Unit,
     onOpenNote: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val resolvedFile = details?.file ?: file
     HhhlInlinePanel(
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -915,7 +937,7 @@ private fun DriveFileDetailsRow(
         ) {
             Text(
                 text = "文件详情",
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
@@ -961,7 +983,7 @@ private fun DriveFileDetailsRow(
         if (attachedNotes.isNotEmpty()) {
             Text(
                 text = "被以下帖子引用",
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -980,23 +1002,23 @@ private fun DriveAttachedNoteRow(
     note: Note,
     onOpenNote: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     HhhlInlinePanel(
         modifier = Modifier.clickable { onOpenNote(note.id) },
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
             text = "${note.author.displayName} · ${note.createdAtLabel}",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Text(
-            text = note.text.ifBlank { note.cw?.takeIf { it.isNotBlank() } ?: "查看帖子" },
-            color = MaterialTheme.colorScheme.onBackground,
+        val previewText = notePreviewText(note, fallback = "查看帖子")
+        InlineRichText(
+            text = previewText,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.bodySmall,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -1006,20 +1028,21 @@ private fun DriveDetailLine(
     label: String,
     value: String,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.Top,
     ) {
         Text(
             text = label,
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.size(width = 56.dp, height = 18.dp),
             maxLines = 1,
         )
         Text(
             text = value,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.weight(1f),
             maxLines = 2,
@@ -1030,17 +1053,18 @@ private fun DriveDetailLine(
 
 @Composable
 private fun DriveFolderGlyph() {
+    val colors = LocalHhhlColors.current
     Box(
         modifier = Modifier
             .size(38.dp)
             .clip(RoundedCornerShape(7.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
+            .background(colors.accentSoft),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             imageVector = Icons.Filled.Folder,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = colors.accent,
             modifier = Modifier.size(22.dp),
         )
     }

@@ -261,9 +261,12 @@ class TimelineStateHolder(
 
             mutableState.update { current ->
                 val tab = current.tabs.getValue(kind)
+                val currentParentIds = tab.notes.mapTo(LinkedHashSet(tab.notes.size)) { it.id }
+                val scopedReplies = replies.filter { reply -> reply.replyId in currentParentIds }
+                if (scopedReplies.isEmpty()) return@update current
                 current.copy(
                     tabs = current.tabs + (kind to tab.copy(
-                        notes = tab.notes.appendDistinctBy(replies) { it.id },
+                        notes = tab.notes.appendDistinctBy(scopedReplies) { it.id },
                     )),
                 )
             }

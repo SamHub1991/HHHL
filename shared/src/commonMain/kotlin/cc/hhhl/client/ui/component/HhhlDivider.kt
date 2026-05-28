@@ -15,6 +15,6 @@ fun HhhlDivider(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .height(1.dp)
-            .background(LocalHhhlColors.current.divider.copy(alpha = 0.72f)),
+            .background(LocalHhhlColors.current.border.copy(alpha = 0.72f)),
     )
 }

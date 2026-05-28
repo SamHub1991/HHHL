@@ -53,9 +53,13 @@ class ComposeStateHolder(
     private val mutableState = MutableStateFlow(ComposeUiState())
     val state: StateFlow<ComposeUiState> = mutableState
     private val pendingMediaUploads = ArrayDeque<DriveFileUpload>()
+    private var draftSessionId = 0
+    private var visibleUserResolveRequestId = 0
+    private var scheduledNotesRequestId = 0
 
     fun restoreStoredDraft() {
         val storedDraft = runCatching { draftStore.loadDraft() }.getOrNull() ?: return
+        draftSessionId += 1
         updateDraftState { current ->
             current.copy(
                 draft = storedDraft.sanitizedForCapabilities(current.canPublicNote, current.canScheduleNotes),
@@ -67,6 +71,7 @@ class ComposeStateHolder(
     }
 
     fun startReply(replyId: String) {
+        invalidateDraftSession()
         updateDraftState {
             it.copy(
                 draft = ComposeDraft(
@@ -82,6 +87,7 @@ class ComposeStateHolder(
     }
 
     fun startQuote(renoteId: String) {
+        invalidateDraftSession()
         updateDraftState {
             it.copy(
                 draft = ComposeDraft(
@@ -97,6 +103,7 @@ class ComposeStateHolder(
     }
 
     fun startChannelNote(channelId: String) {
+        invalidateDraftSession()
         updateDraftState {
             it.copy(
                 draft = ComposeDraft(
@@ -112,6 +119,7 @@ class ComposeStateHolder(
     }
 
     fun startNewNote() {
+        invalidateDraftSession()
         updateDraftState {
             it.copy(
                 draft = newDraft(it.canPublicNote),
@@ -210,6 +218,7 @@ class ComposeStateHolder(
     }
 
     fun resetDraft() {
+        invalidateDraftSession()
         updateDraftState {
             it.copy(
                 draft = newDraft(it.canPublicNote),
@@ -259,6 +268,8 @@ class ComposeStateHolder(
                 requiresRelogin = false,
             )
         }
+        val requestId = ++visibleUserResolveRequestId
+        val visibleUserSnapshot = current.draft.visibleUserIds
 
         scope.launch {
             val resolvedIds = mutableMapOf<String, String>()
@@ -279,6 +290,9 @@ class ComposeStateHolder(
             }
 
             updateDraftState { latest ->
+                if (requestId != visibleUserResolveRequestId || latest.draft.visibleUserIds != visibleUserSnapshot) {
+                    return@updateDraftState latest.copy(isResolvingVisibleUsers = false)
+                }
                 if (errorMessage != null) {
                     latest.copy(
                         isResolvingVisibleUsers = false,
@@ -303,7 +317,12 @@ class ComposeStateHolder(
                     )
                 }
             }
-            if (errorMessage == null && sendAfterResolve) {
+            if (
+                errorMessage == null &&
+                sendAfterResolve &&
+                requestId == visibleUserResolveRequestId &&
+                state.value.draft.visibleUserIds.none { it.toComposeVisibleUserMention() != null }
+            ) {
                 send()
             }
         }
@@ -508,6 +527,7 @@ class ComposeStateHolder(
             }
             return
         }
+        val uploadSessionId = draftSessionId
 
         mutableState.update {
             it.copy(
@@ -520,6 +540,9 @@ class ComposeStateHolder(
         scope.launch {
             when (val result = uploadRepository.upload(upload)) {
                 is DriveFileRepositoryResult.Success -> updateDraftState {
+                    if (uploadSessionId != draftSessionId) {
+                        return@updateDraftState it.copy(isUploadingMedia = false)
+                    }
                     it.copy(
                         draft = it.draft.copy(
                             fileIds = (it.draft.fileIds + result.file.id).distinct().take(MAX_FILE_COUNT),
@@ -533,6 +556,7 @@ class ComposeStateHolder(
                     )
                 }
                 DriveFileRepositoryResult.Unauthorized -> mutableState.update {
+                    if (uploadSessionId != draftSessionId) return@update it.copy(isUploadingMedia = false)
                     it.copy(
                         isUploadingMedia = false,
                         errorMessage = "登录已失效，请重新登录",
@@ -540,6 +564,7 @@ class ComposeStateHolder(
                     )
                 }
                 is DriveFileRepositoryResult.ValidationError -> mutableState.update {
+                    if (uploadSessionId != draftSessionId) return@update it.copy(isUploadingMedia = false)
                     it.copy(
                         isUploadingMedia = false,
                         errorMessage = result.message,
@@ -547,6 +572,7 @@ class ComposeStateHolder(
                     )
                 }
                 is DriveFileRepositoryResult.Error -> mutableState.update {
+                    if (uploadSessionId != draftSessionId) return@update it.copy(isUploadingMedia = false)
                     it.copy(
                         isUploadingMedia = false,
                         errorMessage = result.message,
@@ -554,7 +580,11 @@ class ComposeStateHolder(
                     )
                 }
             }
-            uploadNextPendingMedia()
+            if (uploadSessionId == draftSessionId) {
+                uploadNextPendingMedia()
+            } else {
+                pendingMediaUploads.clear()
+            }
         }
     }
 
@@ -782,20 +812,31 @@ class ComposeStateHolder(
         }
 
         val draft = current.draft
+        val sendSessionId = draftSessionId
         scope.launch {
             when (val result = repository.send(draft)) {
                 is ComposeRepositoryResult.Success -> {
-                    runCatching { draftStore.clearDraft() }
-                    mutableState.update {
-                        it.copy(
-                            draft = newDraft(it.canPublicNote),
-                            attachedFiles = emptyList(),
-                            updatingFileIds = emptySet(),
-                            isSending = false,
-                            errorMessage = null,
-                            createdNoteId = result.createdNoteId,
-                            requiresRelogin = false,
-                        )
+                    mutableState.update { latest ->
+                        if (sendSessionId != draftSessionId || latest.draft != draft) {
+                            latest.copy(
+                                isSending = false,
+                                errorMessage = null,
+                                createdNoteId = result.createdNoteId,
+                                requiresRelogin = false,
+                            )
+                        } else {
+                            draftSessionId += 1
+                            runCatching { draftStore.clearDraft() }
+                            latest.copy(
+                                draft = newDraft(latest.canPublicNote),
+                                attachedFiles = emptyList(),
+                                updatingFileIds = emptySet(),
+                                isSending = false,
+                                errorMessage = null,
+                                createdNoteId = result.createdNoteId,
+                                requiresRelogin = false,
+                            )
+                        }
                     }
                 }
                 ComposeRepositoryResult.Unauthorized -> mutableState.update {
@@ -829,6 +870,7 @@ class ComposeStateHolder(
 
     fun loadScheduledNotes() {
         if (state.value.isLoadingScheduledNotes) return
+        val requestId = ++scheduledNotesRequestId
         mutableState.update {
             it.copy(
                 isLoadingScheduledNotes = true,
@@ -839,6 +881,7 @@ class ComposeStateHolder(
         scope.launch {
             when (val result = repository.listScheduledNotes()) {
                 is ComposeScheduledNotesRepositoryResult.Success -> mutableState.update {
+                    if (requestId != scheduledNotesRequestId) return@update it
                     it.copy(
                         scheduledNotes = result.notes,
                         isLoadingScheduledNotes = false,
@@ -847,6 +890,7 @@ class ComposeStateHolder(
                     )
                 }
                 ComposeScheduledNotesRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != scheduledNotesRequestId) return@update it
                     it.copy(
                         isLoadingScheduledNotes = false,
                         errorMessage = "登录已失效，请重新登录",
@@ -854,6 +898,7 @@ class ComposeStateHolder(
                     )
                 }
                 is ComposeScheduledNotesRepositoryResult.Error -> mutableState.update {
+                    if (requestId != scheduledNotesRequestId) return@update it
                     it.copy(
                         isLoadingScheduledNotes = false,
                         errorMessage = result.message,
@@ -944,6 +989,12 @@ class ComposeStateHolder(
 
     private fun persistDraft(draft: ComposeDraft) {
         runCatching { draftStore.saveDraft(draft) }
+    }
+
+    private fun invalidateDraftSession() {
+        draftSessionId += 1
+        visibleUserResolveRequestId += 1
+        pendingMediaUploads.clear()
     }
 
     private fun ComposeDraft.sanitizedForCapabilities(

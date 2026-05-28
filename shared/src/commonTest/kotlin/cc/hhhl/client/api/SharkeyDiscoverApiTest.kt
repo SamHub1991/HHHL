@@ -136,6 +136,25 @@ class SharkeyDiscoverApiTest {
     }
 
     @Test
+    fun loadsRolesWithoutJsonPayload() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/roles/list", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertTrue(request.body !is TextContent)
+                respondRoleArray()
+            },
+        )
+
+        val result = api.loadRoles("")
+
+        assertIs<DiscoverRoleResult.Success>(result)
+        assertEquals("role-1", result.roles.single().id)
+        assertEquals("Supporter", result.roles.single().name)
+    }
+
+    @Test
     fun searchesNotesByTagFromTagSearchEndpoint() = runTest {
         val api = SharkeyDiscoverApi(
             baseUrl = "https://dc.hhhl.cc/",
@@ -243,6 +262,48 @@ class SharkeyDiscoverApiTest {
     }
 
     @Test
+    fun searchesHashtagsFromStringArrayEndpointWithoutToken() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/hashtags/search", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(!body.contains("\"i\""))
+                assertTrue(body.contains("\"query\":\"AI\""))
+                assertTrue(body.contains("\"limit\":20"))
+                respond(
+                    content = """["AI","Compose"]""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = api.searchHashtags(token = "", query = "#AI", limit = 20)
+
+        assertIs<DiscoverTrendResult.Success>(result)
+        assertEquals(listOf("AI", "Compose"), result.trends.map { it.tag })
+    }
+
+    @Test
+    fun loadsHashtagListsWithoutTokenPayload() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/hashtags/list", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(!body.contains("\"i\""))
+                assertTrue(body.contains("\"sort\":\"+attachedUsers\""))
+                respondTrendArray()
+            },
+        )
+
+        assertIs<DiscoverTrendResult.Success>(api.loadHashtags(token = "", limit = 20))
+    }
+
+    @Test
     fun loadsFederationInstancesFromFederationInstancesEndpoint() = runTest {
         val api = SharkeyDiscoverApi(
             baseUrl = "https://dc.hhhl.cc/",
@@ -294,6 +355,103 @@ class SharkeyDiscoverApiTest {
     }
 
     @Test
+    fun loadsFederationFollowersFromFollowersEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/federation/followers", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""host":"example.social""""))
+                assertTrue(body.contains(""""limit":20"""))
+                assertTrue(body.contains(""""untilId":"follow-old""""))
+                assertTrue(body.contains(""""includeFollower":true"""))
+                assertTrue(body.contains(""""includeFollowee":true"""))
+                respondFederationFollows()
+            },
+        )
+
+        val result = api.loadFederationFollowers(
+            host = "example.social",
+            limit = 20,
+            untilId = "follow-old",
+            includeFollower = true,
+            includeFollowee = true,
+        )
+
+        assertIs<DiscoverFederationFollowResult.Success>(result)
+        val follow = result.follows.single()
+        assertEquals("follow-1", follow.id)
+        assertEquals("user-followee", follow.followeeId)
+        assertEquals("user-follower", follow.followerId)
+        assertEquals("Followee", follow.followee?.displayName)
+        assertEquals("Follower", follow.follower?.displayName)
+        assertEquals("2026-05-25 10:30", follow.createdAtLabel)
+    }
+
+    @Test
+    fun loadsFederationFollowingFromFollowingEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/federation/following", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""host":"example.social""""))
+                assertTrue(body.contains(""""limit":20"""))
+                respondFederationFollows()
+            },
+        )
+
+        assertIs<DiscoverFederationFollowResult.Success>(
+            api.loadFederationFollowing(host = "example.social", limit = 20),
+        )
+    }
+
+    @Test
+    fun loadsFederationUsersFromUsersEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/federation/users", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""host":"example.social""""))
+                assertTrue(body.contains(""""limit":20"""))
+                assertTrue(body.contains(""""untilId":"user-old""""))
+                respondUserArray()
+            },
+        )
+
+        val result = api.loadFederationUsers(
+            host = "example.social",
+            limit = 20,
+            untilId = "user-old",
+        )
+
+        assertIs<DiscoverUserSearchResult.Success>(result)
+        assertEquals("user-1", result.users.single().id)
+    }
+
+    @Test
+    fun loadsFederationStatsFromStatsEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/federation/stats", request.url.toString())
+                assertEquals("""{"limit":10}""", (request.body as TextContent).text)
+                respondFederationStats()
+            },
+        )
+
+        val result = api.loadFederationStats(limit = 10)
+
+        assertIs<DiscoverFederationStatsResult.Success>(result)
+        assertEquals(1, result.stats.topSubInstances.size)
+        assertEquals(7, result.stats.otherFollowersCount)
+        assertEquals(1, result.stats.topPubInstances.size)
+        assertEquals(9, result.stats.otherFollowingCount)
+    }
+
+    @Test
     fun updatesFederationInstanceFromAdminEndpoint() = runTest {
         val api = SharkeyDiscoverApi(
             baseUrl = "https://dc.hhhl.cc/",
@@ -316,6 +474,24 @@ class SharkeyDiscoverApiTest {
                 isSilenced = true,
                 isSuspended = false,
             ),
+        )
+    }
+
+    @Test
+    fun updatesRemoteUserFromFederationUpdateRemoteUserEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/federation/update-remote-user", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""userId":"user-remote""""))
+                respond("", status = HttpStatusCode.NoContent)
+            },
+        )
+
+        assertIs<DiscoverFederationActionResult.Success>(
+            api.updateRemoteUser(token = "token-123", userId = "user-remote"),
         )
     }
 
@@ -402,6 +578,27 @@ class SharkeyDiscoverApiTest {
         )
     }
 
+    private fun MockRequestHandleScope.respondRoleArray(): HttpResponseData {
+        return respond(
+            content = """
+                [
+                  {
+                    "id": "role-1",
+                    "name": "Supporter",
+                    "description": "Public role",
+                    "usersCount": 12,
+                    "isPublic": true,
+                    "isModerator": false,
+                    "isAdministrator": false,
+                    "color": "#ff8800"
+                  }
+                ]
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
     private fun MockRequestHandleScope.respondFederationArray(): HttpResponseData {
         return respond(
             content = """
@@ -468,6 +665,82 @@ class SharkeyDiscoverApiTest {
                   "faviconUrl": "https://example.social/favicon.ico",
                   "infoUpdatedAt": "2026-05-25T00:00:00.000Z",
                   "latestRequestReceivedAt": "2026-05-25T01:00:00.000Z"
+                }
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
+    private fun MockRequestHandleScope.respondFederationFollows(): HttpResponseData {
+        return respond(
+            content = """
+                [
+                  {
+                    "id": "follow-1",
+                    "createdAt": "2026-05-25T02:30:00.000Z",
+                    "followeeId": "user-followee",
+                    "followerId": "user-follower",
+                    "followee": {
+                      "id": "user-followee",
+                      "username": "followee",
+                      "host": "example.social",
+                      "name": "Followee"
+                    },
+                    "follower": {
+                      "id": "user-follower",
+                      "username": "follower",
+                      "host": "remote.example",
+                      "name": "Follower"
+                    }
+                  }
+                ]
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
+    private fun MockRequestHandleScope.respondFederationStats(): HttpResponseData {
+        return respond(
+            content = """
+                {
+                  "topSubInstances": [
+                    {
+                      "id": "sub-1",
+                      "host": "sub.example",
+                      "usersCount": 10,
+                      "notesCount": 20,
+                      "followingCount": 3,
+                      "followersCount": 4,
+                      "isNotResponding": false,
+                      "isSuspended": false,
+                      "isBlocked": false,
+                      "softwareName": "sharkey",
+                      "softwareVersion": "2025.5.2",
+                      "name": "Sub",
+                      "isSilenced": false
+                    }
+                  ],
+                  "otherFollowersCount": 7,
+                  "topPubInstances": [
+                    {
+                      "id": "pub-1",
+                      "host": "pub.example",
+                      "usersCount": 30,
+                      "notesCount": 40,
+                      "followingCount": 5,
+                      "followersCount": 6,
+                      "isNotResponding": false,
+                      "isSuspended": false,
+                      "isBlocked": false,
+                      "softwareName": "misskey",
+                      "softwareVersion": "2025.5.2",
+                      "name": "Pub",
+                      "isSilenced": false
+                    }
+                  ],
+                  "otherFollowingCount": 9
                 }
             """.trimIndent(),
             status = HttpStatusCode.OK,

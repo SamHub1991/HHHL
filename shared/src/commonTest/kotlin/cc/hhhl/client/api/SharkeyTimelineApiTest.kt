@@ -67,6 +67,7 @@ class SharkeyTimelineApiTest {
         api.loadTimeline(TimelineKind.Global, "token-123", 20)
         api.loadTimeline(TimelineKind.Social, "token-123", 20)
         api.loadTimeline(TimelineKind.Bubble, "token-123", 20)
+        api.loadTimeline(TimelineKind.Featured, "token-123", 20)
 
         assertEquals(
             listOf(
@@ -74,9 +75,76 @@ class SharkeyTimelineApiTest {
                 "/api/notes/global-timeline",
                 "/api/notes/hybrid-timeline",
                 "/api/notes/bubble-timeline",
+                "/api/notes/featured",
             ),
             paths,
         )
+    }
+
+    @Test
+    fun loadsPollRecommendationsFromPollRecommendationEndpoint() = runTest {
+        val api = SharkeyTimelineApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notes/polls/recommendation", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""limit":20""""))
+                assertTrue(body.contains(""""offset":40""""))
+                assertTrue(body.contains(""""expired":true""""))
+                respondNoteArray()
+            },
+        )
+
+        val result = api.loadPollRecommendations(
+            token = "token-123",
+            limit = 20,
+            offset = 40,
+            expired = true,
+        )
+
+        assertIs<TimelineLoadResult.Success>(result)
+        assertEquals(1, result.notes.size)
+    }
+
+    @Test
+    fun loadsFollowingNotesFromFollowingEndpoint() = runTest {
+        val api = SharkeyTimelineApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notes/following", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains("\"i\":\"token-123\""))
+                assertTrue(body.contains("\"list\":\"mutuals\""))
+                assertTrue(body.contains("\"limit\":20"))
+                assertTrue(body.contains("\"untilId\":\"note-old\""))
+                assertTrue(body.contains("\"filesOnly\":true"))
+                assertTrue(body.contains("\"includeNonPublic\":true"))
+                assertTrue(body.contains("\"includeReplies\":true"))
+                assertTrue(body.contains("\"includeQuotes\":true"))
+                assertTrue(body.contains("\"includeBots\":false"))
+                respondNoteArray()
+            },
+        )
+
+        val result = api.loadFollowingNotes(
+            token = "token-123",
+            limit = 20,
+            untilId = "note-old",
+            list = FollowingNotesListKind.Mutuals,
+            filesOnly = true,
+            includeNonPublic = true,
+            includeReplies = true,
+            includeQuotes = true,
+            includeBots = false,
+        )
+
+        assertIs<TimelineLoadResult.Success>(result)
+        assertEquals(1, result.notes.size)
     }
 
     @Test

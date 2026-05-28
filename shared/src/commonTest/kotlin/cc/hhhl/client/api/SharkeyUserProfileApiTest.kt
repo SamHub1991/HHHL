@@ -158,6 +158,48 @@ class SharkeyUserProfileApiTest {
         assertIs<UserProfileLoadResult.ServerError>(api.loadProfileByUsername("token-123", " @ "))
     }
 
+    @Test
+    fun checksUsernameAvailabilityEndpoint() = runTest {
+        val api = SharkeyUserProfileApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/username/available", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""username":"alice""""))
+                respond("""{"available":true}""", status = HttpStatusCode.OK, headers = jsonHeaders)
+            },
+        )
+
+        val result = api.checkUsernameAvailable(" @alice ")
+
+        assertEquals(UserAvailabilityResult.Success(available = true), result)
+    }
+
+    @Test
+    fun checksEmailAddressAvailabilityEndpoint() = runTest {
+        val api = SharkeyUserProfileApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/email-address/available", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""emailAddress":"alice@example.com""""))
+                respond(
+                    """{"available":false,"reason":"used"}""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = api.checkEmailAddressAvailable(" alice@example.com ")
+
+        assertEquals(UserAvailabilityResult.Success(available = false, reason = "used"), result)
+    }
+
     private fun MockRequestHandleScope.respondProfile(
         name: String = "Alice",
         description: String = "bio text",

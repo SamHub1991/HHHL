@@ -27,11 +27,10 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,7 +41,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -58,6 +56,8 @@ import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NoteVisibility
 import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.model.User
+import cc.hhhl.client.presentation.notePreviewText
+import cc.hhhl.client.presentation.truncateRichTextPreviewText
 import cc.hhhl.client.state.ComposeCompletionKind
 import cc.hhhl.client.state.ComposeCompletionUiState
 import cc.hhhl.client.state.ComposePollDeadlinePreset
@@ -69,7 +69,9 @@ import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
+import cc.hhhl.client.ui.component.HhhlCheckbox
 import cc.hhhl.client.ui.component.CustomEmojiPicker
+import cc.hhhl.client.ui.component.CustomEmojiReactionLabel
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlInlinePanel
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
@@ -317,7 +319,7 @@ fun ComposeScreen(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item(contentType = "compose-summary") {
+            item(key = "compose-summary", contentType = "compose-summary") {
                 ComposeSummaryRow(
                     draft = draft,
                     targetPreview = targetPreview,
@@ -328,7 +330,7 @@ fun ComposeScreen(
                     maxTextLength = maxTextLength,
                 )
             }
-            item(contentType = "compose-editor") {
+            item(key = "compose-editor", contentType = "compose-editor") {
                 ComposeEditorSection(
                     draft = draft,
                     pollEnabled = poll != null,
@@ -356,7 +358,7 @@ fun ComposeScreen(
                 )
             }
             if (draft.fileIds.isNotEmpty()) {
-                item(contentType = "compose-attachments") {
+                item(key = "compose-attachments", contentType = "compose-attachments") {
                     ComposeAttachmentSection(
                         fileIds = draft.fileIds,
                         attachedFileById = attachedFileById,
@@ -367,7 +369,7 @@ fun ComposeScreen(
                 }
             }
             poll?.let { pollDraft ->
-                item(contentType = "compose-poll") {
+                item(key = "compose-poll", contentType = "compose-poll") {
                     ComposePollSection(
                         pollDraft = pollDraft,
                         pollChoiceUpdater = pollChoiceUpdater,
@@ -383,7 +385,7 @@ fun ComposeScreen(
                     )
                 }
             }
-            item(contentType = "compose-visibility") {
+            item(key = "compose-visibility", contentType = "compose-visibility") {
                 ComposeVisibilitySection(
                     draft = draft,
                     canPublicNote = canPublicNote,
@@ -393,7 +395,7 @@ fun ComposeScreen(
                     onResolveVisibleUserMentions = onResolveVisibleUserMentions,
                 )
             }
-            item(contentType = "compose-web-actions") {
+            item(key = "compose-web-actions", contentType = "compose-web-actions") {
                 ComposeWebActionSection(
                     draft = draft,
                     canScheduleNotes = canScheduleNotes,
@@ -420,11 +422,12 @@ fun ComposeScreen(
                 )
             }
             errorMessage?.let { message ->
-                item(contentType = "compose-error") {
+                item(key = "compose-error", contentType = "compose-error") {
+                    val colors = LocalHhhlColors.current
                     Text(
                         text = message,
                         modifier = Modifier.padding(horizontal = 14.dp),
-                        color = MaterialTheme.colorScheme.error,
+                        color = colors.danger,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -442,17 +445,18 @@ fun ComposeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                val colors = LocalHhhlColors.current
                 Text(
                     text = composeEditorStatusParts(draft).joinToString(" · "),
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
                     text = "${draft.text.length}/$maxTextLength",
                     color = if (draft.text.length > maxTextLength) {
-                        MaterialTheme.colorScheme.error
+                        colors.danger
                     } else {
-                        MaterialTheme.colorScheme.secondary
+                        colors.textSecondary
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -461,13 +465,14 @@ fun ComposeScreen(
     }
 
     pendingRemoveFileId?.let { fileId ->
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { pendingRemoveFileId = null },
             title = { Text("移除附件") },
             text = {
+                val colors = LocalHhhlColors.current
                 Text(
                     text = "附件会从当前发帖草稿移除，不会删除云端文件。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -491,13 +496,14 @@ fun ComposeScreen(
     }
 
     if (removePollDialogOpen) {
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { removePollDialogOpen = false },
             title = { Text("移除投票") },
             text = {
+                val colors = LocalHhhlColors.current
                 Text(
                     text = "当前投票选项、截止时间和多选设置会从草稿中移除。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -547,13 +553,14 @@ fun ComposeScreen(
     }
 
     if (resetDraftDialogOpen) {
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { resetDraftDialogOpen = false },
             title = { Text("重置发帖") },
             text = {
+                val colors = LocalHhhlColors.current
                 Text(
                     text = "当前文字、附件、投票和发帖设置都会清空。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -671,6 +678,7 @@ private fun ComposeEditorSection(
     onInsertText: (String) -> Unit,
     onResolveVisibleUserMentions: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     var emojiPickerOpen by remember { mutableStateOf(false) }
     var editorMode by remember { mutableStateOf(ComposeEditorMode.Edit) }
     LaunchedEffect(draft.text) {
@@ -689,15 +697,15 @@ private fun ComposeEditorSection(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(18.dp))
                 .background(
-                    if (MaterialTheme.colorScheme.surface.luminance() < 0.2f) {
-                        MaterialTheme.colorScheme.background.copy(alpha = 0.34f)
+                    if (colors.surface.luminance() < 0.2f) {
+                        colors.pageBackground.copy(alpha = 0.34f)
                     } else {
-                        LocalHhhlColors.current.inputBackground.copy(alpha = 0.74f)
+                        colors.inputBackground.copy(alpha = 0.74f)
                     },
                 )
                 .border(
                     1.dp,
-                    LocalHhhlColors.current.divider.copy(alpha = 0.48f),
+                    colors.border.copy(alpha = 0.48f),
                     RoundedCornerShape(18.dp),
                 )
                 .padding(composeEditorSurfaceSpec().contentPadding.dp),
@@ -755,6 +763,7 @@ private fun ComposeEditorSection(
                     minHeight = composeEditorSurfaceSpec().bodyMinHeight,
                     singleLine = false,
                 )
+                ComposeInsertedEmojiPreview(text = draft.text)
             } else {
                 ComposeMarkdownPreview(
                     text = draft.text,
@@ -829,7 +838,7 @@ private fun ComposeEditorSection(
             }
             Text(
                 text = "${draft.text.length} 字",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.align(Alignment.End),
             )
@@ -848,6 +857,39 @@ private fun ComposeEditorSection(
 }
 
 @Composable
+private fun ComposeInsertedEmojiPreview(text: String) {
+    val colors = LocalHhhlColors.current
+    val emojis = remember(text) { text.composeInsertedEmojiCodes() }
+    if (emojis.isEmpty()) return
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.surfaceElevated.copy(alpha = 0.58f))
+            .border(
+                width = 1.dp,
+                color = colors.border.copy(alpha = 0.36f),
+                shape = RoundedCornerShape(12.dp),
+            )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        emojis.forEach { emoji ->
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(colors.inputBackground.copy(alpha = 0.72f))
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CustomEmojiReactionLabel(reaction = emoji)
+            }
+        }
+    }
+}
+
+@Composable
 private fun ComposeMarkdownPreview(
     text: String,
     cw: String?,
@@ -859,10 +901,11 @@ private fun ComposeMarkdownPreview(
             .heightIn(min = minHeight.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        val colors = LocalHhhlColors.current
         cw?.takeIf { it.isNotBlank() }?.let { warning ->
             Text(
                 text = warning,
-                color = MaterialTheme.colorScheme.error,
+                color = colors.danger,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -870,7 +913,7 @@ private fun ComposeMarkdownPreview(
         if (text.isBlank()) {
             Text(
                 text = "预览会在输入内容后显示",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodyLarge,
             )
         } else {
@@ -893,6 +936,7 @@ private fun ComposeCompletionPanel(
     onUserSelected: (User) -> Unit,
     onEmojiSelected: (CustomEmoji) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val visibleToken = token ?: return
     val emojis = remember(customEmojis, recentEmojiCodes, visibleToken) {
         if (visibleToken.kind != ComposeCompletionKind.Emoji) {
@@ -937,7 +981,7 @@ private fun ComposeCompletionPanel(
                 if (visibleToken.query.isBlank() && !state.isLoading && state.users.isEmpty()) {
                     Text(
                         text = "继续输入用户名",
-                        color = LocalHhhlColors.current.subtleText,
+                        color = colors.textMuted,
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                     )
@@ -955,7 +999,7 @@ private fun ComposeCompletionPanel(
         if (state.isLoading) {
             Text(
                 text = "搜索中",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
             )
@@ -963,7 +1007,7 @@ private fun ComposeCompletionPanel(
         state.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
             Text(
                 text = message,
-                color = MaterialTheme.colorScheme.error,
+                color = colors.danger,
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
             )
@@ -976,6 +1020,7 @@ private fun ComposeHashtagCompletionRow(
     trend: TrendingHashtag,
     onClick: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -987,21 +1032,21 @@ private fun ComposeHashtagCompletionRow(
     ) {
         Text(
             text = "#",
-            color = MaterialTheme.colorScheme.primary,
+            color = colors.accent,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
         )
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = trend.tag,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = "${trend.usersCount} 人正在使用",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1015,6 +1060,7 @@ private fun ComposeUserCompletionRow(
     user: User,
     onClick: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1032,14 +1078,14 @@ private fun ComposeUserCompletionRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = user.displayName,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = user.composeHandleText(),
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1053,6 +1099,7 @@ private fun ComposeEmojiCompletionRow(
     emoji: CustomEmoji,
     onClick: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1066,12 +1113,12 @@ private fun ComposeEmojiCompletionRow(
             modifier = Modifier
                 .size(30.dp)
                 .clip(RoundedCornerShape(9.dp))
-                .background(LocalHhhlColors.current.inputBackground),
+                .background(colors.inputBackground),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = ":",
-                color = MaterialTheme.colorScheme.primary,
+                color = colors.accent,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
@@ -1079,7 +1126,7 @@ private fun ComposeEmojiCompletionRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = emoji.name,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1087,7 +1134,7 @@ private fun ComposeEmojiCompletionRow(
             emoji.category?.takeIf { it.isNotBlank() }?.let { category ->
                 Text(
                     text = category,
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1108,10 +1155,11 @@ private fun ComposeScheduleDialog(
     var time by remember(scheduledAt) { mutableStateOf(initial.toLocalTimeInput()) }
     val parsed = remember(date, time) { parseLocalScheduleMillis(date, time) }
 
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("预约发布") },
         text = {
+            val colors = LocalHhhlColors.current
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 HhhlTextInput(
                     value = date,
@@ -1131,7 +1179,7 @@ private fun ComposeScheduleDialog(
                     } else {
                         "将于 ${parsed.toCompactLocalDateTime()} 发布。"
                     },
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1162,14 +1210,15 @@ private fun ComposeScheduledNotesDialog(
     onDelete: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("预约列表") },
         text = {
+            val colors = LocalHhhlColors.current
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 when {
-                    isLoading -> Text("加载中", color = LocalHhhlColors.current.subtleText)
-                    notes.isEmpty() -> Text("暂无预约帖子", color = LocalHhhlColors.current.subtleText)
+                    isLoading -> Text("加载中", color = colors.textMuted)
+                    notes.isEmpty() -> Text("暂无预约帖子", color = colors.textMuted)
                     else -> notes.forEach { note ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1177,17 +1226,14 @@ private fun ComposeScheduledNotesDialog(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = note.cw?.takeIf { it.isNotBlank() }
-                                        ?: note.text.takeIf { it.isNotBlank() }
-                                        ?: "无正文",
+                                InlineRichText(
+                                    text = composeScheduledNotePreviewText(note),
                                     style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
+                                    maxChars = 220,
                                 )
                                 Text(
                                     text = note.scheduledAt?.toCompactLocalDateTime() ?: note.visibility.label,
-                                    color = LocalHhhlColors.current.subtleText,
+                                    color = colors.textMuted,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -1231,6 +1277,7 @@ private fun ComposePlainInput(
     fieldValue: TextFieldValue? = null,
     onFieldValueChange: ((TextFieldValue) -> Unit)? = null,
 ) {
+    val colors = LocalHhhlColors.current
     BasicTextField(
         value = fieldValue ?: TextFieldValue(value, selection = TextRange(value.length)),
         onValueChange = { nextValue ->
@@ -1245,14 +1292,14 @@ private fun ComposePlainInput(
             .heightIn(min = minHeight.dp),
         singleLine = singleLine,
         textStyle = MaterialTheme.typography.bodyLarge.copy(
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
         ),
         decorationBox = { innerTextField ->
             Box(modifier = Modifier.fillMaxWidth()) {
                 if (value.isEmpty()) {
                     Text(
                         text = placeholder,
-                        color = LocalHhhlColors.current.subtleText,
+                        color = colors.textMuted,
                         style = MaterialTheme.typography.bodyLarge,
                     )
                 }
@@ -1338,6 +1385,17 @@ private fun TextFieldValue.insertComposeText(fragment: String): TextFieldValue {
     val nextCursor = prefix.length + insertion.length
     return copy(text = nextText, selection = TextRange(nextCursor))
 }
+
+private fun String.composeInsertedEmojiCodes(): List<String> {
+    return ComposeCustomEmojiCodeRegex
+        .findAll(this)
+        .map { it.value }
+        .distinct()
+        .take(12)
+        .toList()
+}
+
+private val ComposeCustomEmojiCodeRegex = Regex(":[A-Za-z0-9_@.-]+:")
 
 private fun Char.isComposeTokenBoundary(): Boolean {
     return isWhitespace() || this in listOf('(', ')', '[', ']', '{', '}', '<', '>', '"', '\'', '`')
@@ -1448,7 +1506,7 @@ private fun ComposeVisibilitySection(
                         visibleUserIds = draft.visibleUserIds,
                         isResolving = isResolvingVisibleUsers,
                     ),
-                    color = LocalHhhlColors.current.subtleText,
+                    color = LocalHhhlColors.current.textMuted,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
@@ -1489,7 +1547,7 @@ private fun ComposeAttachmentSection(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .background(LocalHhhlColors.current.inputBackground)
+                        .background(LocalHhhlColors.current.buttonBackground)
                         .padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -1524,7 +1582,7 @@ private fun ComposeAttachmentSection(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
+                            HhhlCheckbox(
                                 checked = localSensitive,
                                 onCheckedChange = { localSensitive = it },
                                 enabled = !isUpdating,
@@ -1591,7 +1649,7 @@ private fun ComposePollSection(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
+                    HhhlCheckbox(
                         checked = pollDraft.multiple,
                         onCheckedChange = pollMultipleUpdater,
                     )
@@ -1657,23 +1715,30 @@ private fun ComposeSection(
     compact: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
     val shape = RoundedCornerShape(if (compact) 18.dp else 20.dp)
     val containerColor = if (isDarkSurface) {
-        LocalHhhlColors.current.cardBackground.copy(alpha = 0.82f)
+        colors.noteBackground.copy(alpha = 0.82f)
     } else {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+        colors.surface.copy(alpha = 0.92f)
     }
     val borderColor = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.07f)
+        colors.border.copy(alpha = 0.34f)
     } else {
-        LocalHhhlColors.current.divider.copy(alpha = 0.64f)
+        colors.border.copy(alpha = 0.64f)
     }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp)
-            .shadow(if (isDarkSurface) 3.dp else 1.dp, shape, clip = false)
+            .shadow(
+                elevation = if (isDarkSurface) 3.dp else 1.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = colors.shadow,
+                spotColor = colors.shadow,
+            )
             .clip(shape)
             .background(containerColor)
             .border(1.dp, borderColor, shape)
@@ -1683,14 +1748,14 @@ private fun ComposeSection(
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = title,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = if (compact) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             supportingText?.takeIf { it.isNotBlank() }?.let { text ->
                 Text(
                     text = text,
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1830,18 +1895,19 @@ fun composeTargetPreview(
         ComposeTargetKind.Reply -> "回复"
         ComposeTargetKind.Quote -> "引用"
     }
+    val body = notePreviewText(
+        note = note,
+        fallback = note.media.takeIf { it.isNotEmpty() }?.let { "${it.size} 个附件" } ?: "这条动态",
+    )
     return ComposeTargetPreview(
         title = "$titlePrefix @${note.author.username}",
-        body = note.cw
-            ?.takeIf { it.isNotBlank() }
-            ?: note.text.takeIf { it.isNotBlank() }
-            ?: note.media.takeIf { it.isNotEmpty() }?.let { "${it.size} 个附件" }
-            ?: "这条动态",
+        body = body.truncateRichTextPreviewText(260),
     )
 }
 
 @Composable
 private fun ComposeTargetPreviewCard(preview: ComposeTargetPreview) {
+    val colors = LocalHhhlColors.current
     HhhlInlinePanel(
         modifier = Modifier
             .fillMaxWidth()
@@ -1855,7 +1921,7 @@ private fun ComposeTargetPreviewCard(preview: ComposeTargetPreview) {
                     .width(3.dp)
                     .heightIn(min = 42.dp)
                     .clip(RoundedCornerShape(3.dp))
-                    .background(MaterialTheme.colorScheme.primary),
+                    .background(colors.accent),
             )
             Column(
                 modifier = Modifier.weight(1f),
@@ -1863,16 +1929,15 @@ private fun ComposeTargetPreviewCard(preview: ComposeTargetPreview) {
             ) {
                 Text(
                     text = preview.title,
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
-                Text(
+                InlineRichText(
                     text = preview.body,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodySmall,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
+                    maxChars = 260,
                 )
             }
         }
@@ -1880,6 +1945,10 @@ private fun ComposeTargetPreviewCard(preview: ComposeTargetPreview) {
 }
 
 fun composeTargetPreviewUsesMarkdownQuoteRail(): Boolean = true
+
+internal fun composeScheduledNotePreviewText(note: ComposeScheduledNote): String {
+    return notePreviewText(text = note.text, cw = note.cw, fallback = "无正文")
+}
 
 private val NoteVisibility.label: String
     get() = when (this) {

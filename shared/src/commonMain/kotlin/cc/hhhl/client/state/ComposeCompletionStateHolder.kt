@@ -35,11 +35,13 @@ class ComposeCompletionStateHolder(
     val state: StateFlow<ComposeCompletionUiState> = mutableState
 
     private var searchJob: Job? = null
+    private var requestId = 0
     private var trendCache: List<TrendingHashtag>? = null
     private val userCache = LinkedHashMap<String, List<User>>()
 
     fun request(kind: ComposeCompletionKind?, query: String) {
         val cleanQuery = query.trim().trimStart('#', '@', ':')
+        val currentRequestId = ++requestId
         searchJob?.cancel()
         if (kind == null) {
             mutableState.update { ComposeCompletionUiState() }
@@ -59,9 +61,10 @@ class ComposeCompletionStateHolder(
 
         searchJob = scope.launch {
             when (kind) {
-                ComposeCompletionKind.Hashtag -> loadHashtags(cleanQuery)
-                ComposeCompletionKind.Mention -> loadUsers(cleanQuery)
+                ComposeCompletionKind.Hashtag -> loadHashtags(cleanQuery, currentRequestId)
+                ComposeCompletionKind.Mention -> loadUsers(cleanQuery, currentRequestId)
                 ComposeCompletionKind.Emoji -> mutableState.update {
+                    if (!isCurrentCompletionRequest(currentRequestId, ComposeCompletionKind.Emoji, cleanQuery)) return@update it
                     it.copy(
                         activeKind = ComposeCompletionKind.Emoji,
                         query = cleanQuery,
@@ -75,11 +78,12 @@ class ComposeCompletionStateHolder(
         }
     }
 
-    private suspend fun loadHashtags(query: String) {
+    private suspend fun loadHashtags(query: String, currentRequestId: Int) {
         val trends = trendCache ?: when (val result = repository.loadTrends()) {
             is DiscoverRepositoryResult.TrendSuccess -> result.trends.also { trendCache = it }
             is DiscoverRepositoryResult.Error -> {
                 mutableState.update {
+                    if (!isCurrentCompletionRequest(currentRequestId, ComposeCompletionKind.Hashtag, query)) return@update it
                     it.copy(isLoading = false, hashtags = emptyList(), errorMessage = result.message)
                 }
                 return
@@ -91,6 +95,7 @@ class ComposeCompletionStateHolder(
             .sortedWith(compareByDescending<TrendingHashtag> { it.usersCount }.thenBy { it.tag.lowercase() })
             .take(8)
         mutableState.update {
+            if (!isCurrentCompletionRequest(currentRequestId, ComposeCompletionKind.Hashtag, query)) return@update it
             it.copy(
                 activeKind = ComposeCompletionKind.Hashtag,
                 query = query,
@@ -102,9 +107,10 @@ class ComposeCompletionStateHolder(
         }
     }
 
-    private suspend fun loadUsers(query: String) {
+    private suspend fun loadUsers(query: String, currentRequestId: Int) {
         if (query.isBlank()) {
             mutableState.update {
+                if (!isCurrentCompletionRequest(currentRequestId, ComposeCompletionKind.Mention, query)) return@update it
                 it.copy(
                     activeKind = ComposeCompletionKind.Mention,
                     query = query,
@@ -119,6 +125,7 @@ class ComposeCompletionStateHolder(
         delay(220)
         userCache[query]?.let { cachedUsers ->
             mutableState.update {
+                if (!isCurrentCompletionRequest(currentRequestId, ComposeCompletionKind.Mention, query)) return@update it
                 it.copy(
                     activeKind = ComposeCompletionKind.Mention,
                     query = query,
@@ -139,6 +146,7 @@ class ComposeCompletionStateHolder(
                     userCache.remove(userCache.keys.first())
                 }
                 mutableState.update {
+                    if (!isCurrentCompletionRequest(currentRequestId, ComposeCompletionKind.Mention, query)) return@update it
                     it.copy(
                         activeKind = ComposeCompletionKind.Mention,
                         query = query,
@@ -150,14 +158,26 @@ class ComposeCompletionStateHolder(
                 }
             }
             DiscoverRepositoryResult.Unauthorized -> mutableState.update {
+                if (!isCurrentCompletionRequest(currentRequestId, ComposeCompletionKind.Mention, query)) return@update it
                 it.copy(isLoading = false, users = emptyList(), errorMessage = "登录后可搜索用户")
             }
             is DiscoverRepositoryResult.Error -> mutableState.update {
+                if (!isCurrentCompletionRequest(currentRequestId, ComposeCompletionKind.Mention, query)) return@update it
                 it.copy(isLoading = false, users = emptyList(), errorMessage = result.message)
             }
             else -> mutableState.update {
+                if (!isCurrentCompletionRequest(currentRequestId, ComposeCompletionKind.Mention, query)) return@update it
                 it.copy(isLoading = false, users = emptyList())
             }
         }
+    }
+
+    private fun isCurrentCompletionRequest(
+        currentRequestId: Int,
+        kind: ComposeCompletionKind,
+        query: String,
+    ): Boolean {
+        val current = state.value
+        return currentRequestId == requestId && current.activeKind == kind && current.query == query
     }
 }

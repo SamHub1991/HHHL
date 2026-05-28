@@ -25,6 +25,13 @@ interface FollowRequestApi {
         untilId: String? = null,
     ): FollowRequestLoadResult
 
+    suspend fun loadSent(
+        token: String,
+        limit: Int,
+        untilId: String? = null,
+    ): FollowRequestLoadResult =
+        FollowRequestLoadResult.ServerError(501, "已发送关注请求接口未实现")
+
     suspend fun accept(
         token: String,
         userId: String,
@@ -34,6 +41,12 @@ interface FollowRequestApi {
         token: String,
         userId: String,
     ): FollowRequestActionResult
+
+    suspend fun cancel(
+        token: String,
+        userId: String,
+    ): FollowRequestActionResult =
+        FollowRequestActionResult.ServerError(501, "取消关注请求接口未实现")
 }
 
 sealed interface FollowRequestLoadResult {
@@ -105,6 +118,59 @@ class SharkeyFollowRequestApi(
         }
     }
 
+    override suspend fun loadSent(
+        token: String,
+        limit: Int,
+        untilId: String?,
+    ): FollowRequestLoadResult {
+        return loadRequestList(
+            endpoint = arrayOf("following", "requests", "sent"),
+            token = token,
+            limit = limit,
+            untilId = untilId,
+        )
+    }
+
+    private suspend fun loadRequestList(
+        endpoint: Array<String>,
+        token: String,
+        limit: Int,
+        untilId: String?,
+    ): FollowRequestLoadResult {
+        val cleanToken = token.trim()
+        if (cleanToken.isEmpty()) return FollowRequestLoadResult.Unauthorized
+
+        return try {
+            val response = client.post(apiUrl(*endpoint)) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    FollowRequestListRequest(
+                        i = cleanToken,
+                        limit = limit.coerceIn(1, 100),
+                        untilId = untilId?.takeIf { it.isNotBlank() },
+                    ),
+                )
+            }
+
+            if (response.isSharkeyUnauthorized()) return FollowRequestLoadResult.Unauthorized
+
+            when (response.status) {
+                HttpStatusCode.OK -> FollowRequestLoadResult.Success(
+                    response.body<List<FollowRequestDto>>().map { it.toDomainRequest() },
+                )
+                HttpStatusCode.Unauthorized -> FollowRequestLoadResult.Unauthorized
+                else -> FollowRequestLoadResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            FollowRequestLoadResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
     override suspend fun accept(
         token: String,
         userId: String,
@@ -117,6 +183,13 @@ class SharkeyFollowRequestApi(
         userId: String,
     ): FollowRequestActionResult {
         return postAction(arrayOf("following", "requests", "reject"), token, userId)
+    }
+
+    override suspend fun cancel(
+        token: String,
+        userId: String,
+    ): FollowRequestActionResult {
+        return postAction(arrayOf("following", "requests", "cancel"), token, userId)
     }
 
     private suspend fun postAction(
@@ -182,12 +255,15 @@ private data class FollowRequestActionRequest(
 @Serializable
 private data class FollowRequestDto(
     val id: String,
-    val follower: FollowRequestUserDto,
+    val follower: FollowRequestUserDto? = null,
+    val followee: FollowRequestUserDto? = null,
+    val user: FollowRequestUserDto? = null,
 ) {
     fun toDomainRequest(): FollowRequest {
+        val requestUser = follower ?: followee ?: user ?: FollowRequestUserDto(id = id, username = id)
         return FollowRequest(
             id = id,
-            user = follower.toDomainUser(),
+            user = requestUser.toDomainUser(),
         )
     }
 }

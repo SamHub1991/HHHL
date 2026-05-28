@@ -35,10 +35,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -50,22 +50,22 @@ import cc.hhhl.client.navigation.RootRoute
 import cc.hhhl.client.navigation.primaryRootRoutes
 import cc.hhhl.client.theme.LocalHhhlColors
 
-internal val HhhlBottomNavHeight = 58.dp
-internal val HhhlBottomNavPanelHeight = 46.dp
+internal val HhhlBottomNavHeight = 56.dp
+internal val HhhlBottomNavPanelHeight = 44.dp
 internal val HhhlBottomNavPanelHorizontalPadding = 12.dp
-internal val HhhlBottomNavPanelCornerRadius = 28.dp
-internal val HhhlBottomNavPanelElevation = 18.dp
-internal val HhhlBottomNavPanelHighlightAlpha = 0.24f
+internal val HhhlBottomNavPanelCornerRadius = 24.dp
+internal val HhhlBottomNavPanelElevation = 10.dp
+internal val HhhlBottomNavPanelHighlightAlpha = 0.18f
 internal val HhhlBottomNavIconSize = 20.dp
 internal val HhhlBottomNavIconSlotWidth = 60.dp
-internal val HhhlBottomNavIconSlotHeight = 28.dp
-internal val HhhlBottomNavLabelSlotHeight = 13.dp
+internal val HhhlBottomNavIconSlotHeight = 27.dp
+internal val HhhlBottomNavLabelSlotHeight = 14.dp
 internal val HhhlBottomNavIconOffsetIdle = 6.dp
 internal val HhhlBottomNavIconOffsetActive = 0.dp
 internal val HhhlBottomNavIdlePillWidth = 40.dp
-internal val HhhlBottomNavSelectedPillWidth = 56.dp
-internal val HhhlBottomNavSelectedPillHeight = 26.dp
-internal val HhhlBottomNavSelectedPillCornerRadius = 16.dp
+internal val HhhlBottomNavSelectedPillWidth = 54.dp
+internal val HhhlBottomNavSelectedPillHeight = 25.dp
+internal val HhhlBottomNavSelectedPillCornerRadius = 14.dp
 internal val HhhlBottomNavVerticalPadding = 6.dp
 internal val HhhlBottomNavBadgeHeight = 18.dp
 internal val HhhlBottomNavBadgeSingleMinWidth = 18.dp
@@ -82,11 +82,16 @@ fun HhhlBottomNav(
     routes: List<RootRoute> = primaryRootRoutes(),
     badgeCounts: Map<RootRoute, Int> = emptyMap(),
 ) {
-    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
+    val fontScale = LocalDensity.current.fontScale.coerceIn(1f, 1.6f)
+    val extraHeight = ((fontScale - 1f) * 18f).dp
+    val navHeight = HhhlBottomNavHeight + extraHeight
+    val panelHeight = HhhlBottomNavPanelHeight + extraHeight
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(HhhlBottomNavHeight)
+            .height(navHeight)
             .padding(
                 horizontal = HhhlBottomNavPanelHorizontalPadding,
                 vertical = HhhlBottomNavVerticalPadding,
@@ -97,40 +102,42 @@ fun HhhlBottomNav(
         val panelBrush = Brush.verticalGradient(
             colors = if (isDarkSurface) {
                 listOf(
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+                    colors.accent.copy(alpha = 0.06f),
+                    colors.bottomNavBackground.copy(alpha = 0.90f),
+                    colors.bottomNavBackground.copy(alpha = 0.78f),
                 )
             } else {
                 listOf(
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.80f),
+                    colors.bottomNavBackground.copy(alpha = 0.95f),
+                    colors.bottomNavBackground.copy(alpha = 0.86f),
                 )
             },
         )
         val panelBorderColor = if (isDarkSurface) {
-            MaterialTheme.colorScheme.primary.copy(alpha = HhhlBottomNavPanelHighlightAlpha)
+            colors.focusRing.copy(alpha = HhhlBottomNavPanelHighlightAlpha)
         } else {
-            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
+            colors.border.copy(alpha = 0.32f)
         }
         if (isDarkSurface) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(HhhlBottomNavPanelHeight)
+                    .height(panelHeight)
                     .padding(horizontal = 10.dp)
                     .clip(panelShape)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.04f)),
+                    .background(colors.accent.copy(alpha = 0.025f)),
             )
         }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(HhhlBottomNavPanelHeight)
+                .height(panelHeight)
                 .shadow(
                     elevation = HhhlBottomNavPanelElevation,
                     shape = panelShape,
                     clip = false,
+                    ambientColor = colors.shadow,
+                    spotColor = colors.shadow,
                 )
                 .clip(panelShape)
                 .background(panelBrush)
@@ -139,7 +146,7 @@ fun HhhlBottomNav(
                     color = panelBorderColor,
                     shape = panelShape,
                 )
-                .padding(horizontal = 4.dp),
+                .padding(horizontal = 5.dp),
         ) {
             Box(
                 modifier = Modifier
@@ -148,15 +155,15 @@ fun HhhlBottomNav(
                     .align(Alignment.TopCenter)
                     .background(
                         if (isDarkSurface) {
-                            Color.White.copy(alpha = 0.14f)
+                            colors.surface.copy(alpha = 0.22f)
                         } else {
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.40f)
+                            colors.surface.copy(alpha = 0.40f)
                         },
                     ),
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(1.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 routes.forEach { route ->
@@ -167,6 +174,9 @@ fun HhhlBottomNav(
                         badgeText = bottomNavBadgeText(badgeCounts[route] ?: 0),
                         onClick = { onSelected(route) },
                         modifier = Modifier.weight(1f),
+                        navHeight = navHeight,
+                        panelHeight = panelHeight,
+                        fontScale = fontScale,
                     )
                 }
             }
@@ -181,8 +191,12 @@ private fun HhhlBottomNavItem(
     badgeText: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    navHeight: Dp = HhhlBottomNavHeight,
+    panelHeight: Dp = HhhlBottomNavPanelHeight,
+    fontScale: Float = 1f,
 ) {
-    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
     val pillWidth by animateDpAsState(
         targetValue = if (active) HhhlBottomNavSelectedPillWidth else HhhlBottomNavIdlePillWidth,
         animationSpec = tween(durationMillis = 190),
@@ -190,9 +204,9 @@ private fun HhhlBottomNavItem(
     )
     val pillColor by animateColorAsState(
         targetValue = if (active) {
-            MaterialTheme.colorScheme.primary.copy(alpha = if (isDarkSurface) 0.18f else 0.12f)
+            colors.bottomNavSelected.copy(alpha = if (isDarkSurface) 0.84f else 0.78f)
         } else {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.0f)
+            colors.surface.copy(alpha = 0.0f)
         },
         animationSpec = tween(durationMillis = 190),
         label = "bottom-nav-pill-color",
@@ -203,15 +217,15 @@ private fun HhhlBottomNavItem(
         label = "bottom-nav-icon-offset",
     )
     val iconColor = if (active) {
-        MaterialTheme.colorScheme.primary
+        colors.accent
     } else {
-        LocalHhhlColors.current.subtleText
+        colors.textMuted
     }
     val textColor by animateColorAsState(
         targetValue = if (active) {
-            MaterialTheme.colorScheme.primary
+            colors.accent
         } else {
-            MaterialTheme.colorScheme.onBackground.copy(alpha = 0f)
+            colors.textPrimary.copy(alpha = 0f)
         },
         animationSpec = tween(durationMillis = 180),
         label = "bottom-nav-text-color",
@@ -220,7 +234,7 @@ private fun HhhlBottomNavItem(
 
     Column(
         modifier = modifier
-            .height(HhhlBottomNavHeight - (HhhlBottomNavVerticalPadding * 2f))
+            .height(navHeight - (HhhlBottomNavVerticalPadding * 2f))
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -231,10 +245,11 @@ private fun HhhlBottomNavItem(
         verticalArrangement = Arrangement.Center,
     ) {
         Column(
-            modifier = Modifier.height(HhhlBottomNavPanelHeight),
+            modifier = Modifier.height(panelHeight),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
+            val labelSlotHeight = HhhlBottomNavLabelSlotHeight + ((fontScale - 1f) * 12f).dp
             Box(
                 modifier = Modifier
                     .height(HhhlBottomNavIconSlotHeight)
@@ -251,9 +266,9 @@ private fun HhhlBottomNavItem(
                         .border(
                             width = 1.dp,
                             color = if (active) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = if (isDarkSurface) 0.24f else 0.16f)
+                                colors.focusRing.copy(alpha = if (isDarkSurface) 0.44f else 0.28f)
                             } else {
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0f)
+                                colors.surface.copy(alpha = 0f)
                             },
                             shape = RoundedCornerShape(HhhlBottomNavSelectedPillCornerRadius),
                         ),
@@ -269,10 +284,12 @@ private fun HhhlBottomNavItem(
                     )
                 }
                 badgeText?.let { text ->
+                    val badgeHeight = HhhlBottomNavBadgeHeight + ((fontScale - 1f) * 8f).dp
+                    val badgeMinWidth = bottomNavBadgeMinWidth(text) + ((fontScale - 1f) * 7f).dp
                     val badgeBrush = Brush.verticalGradient(
                         colors = listOf(
-                            MaterialTheme.colorScheme.error.copy(alpha = 0.96f),
-                            MaterialTheme.colorScheme.error.copy(alpha = 0.84f),
+                            colors.unreadBadge.copy(alpha = 0.96f),
+                            colors.unreadBadge.copy(alpha = 0.84f),
                         ),
                     )
                     Box(
@@ -282,17 +299,17 @@ private fun HhhlBottomNavItem(
                             .background(badgeBrush)
                             .border(
                                 width = 1.dp,
-                                color = MaterialTheme.colorScheme.onError.copy(alpha = HhhlNotificationBadgeStrokeAlpha),
+                                color = colors.textInverse.copy(alpha = HhhlNotificationBadgeStrokeAlpha),
                                 shape = RoundedCornerShape(999.dp),
                             )
-                            .height(HhhlBottomNavBadgeHeight)
-                            .widthIn(min = bottomNavBadgeMinWidth(text))
+                            .height(badgeHeight)
+                            .widthIn(min = badgeMinWidth)
                             .padding(horizontal = 5.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             text = text,
-                            color = MaterialTheme.colorScheme.onError,
+                            color = colors.textInverse,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
@@ -302,7 +319,7 @@ private fun HhhlBottomNavItem(
                 }
             }
             Box(
-                modifier = Modifier.height(HhhlBottomNavLabelSlotHeight),
+                modifier = Modifier.height(labelSlotHeight),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(

@@ -6,6 +6,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,13 +26,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddReaction
+import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.Repeat
-import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material.icons.outlined.StarBorder
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -47,6 +47,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -59,8 +60,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import cc.hhhl.client.model.AvatarDecoration
 import cc.hhhl.client.model.CustomEmoji
@@ -81,16 +83,25 @@ internal val HhhlReactionPickerItemSize = 42.dp
 internal val HhhlReactionPickerGridSpacing = 6.dp
 private val HhhlUnifiedReactionPickerMenuWidth = 292.dp
 private val HhhlUnifiedReactionPickerMenuHeight = 318.dp
+private val HhhlReactionPickerSheetWidth = 360.dp
+private val HhhlReactionPickerSheetMaxHeight = 420.dp
+private val HhhlReactionPickerContentMaxHeight = 316.dp
+internal const val HhhlReactionPickerMaxSectionItems = 48
+internal const val HhhlReactionPickerMaxTotalItems = 120
 
 @Immutable
 data class NoteRowActions(
     val onShareNote: ((String) -> Unit)? = null,
     val onHideFromList: (String) -> Unit = {},
     val onMuteNote: (String) -> Unit = {},
+    val onUnmuteNote: (String) -> Unit = {},
+    val onMuteRenotes: (String, String) -> Unit = { _, _ -> },
+    val onUnmuteRenotes: (String, String) -> Unit = { _, _ -> },
     val onReportNote: (String, String) -> Unit = { _, _ -> },
 )
 
 val LocalNoteRowActions = staticCompositionLocalOf { NoteRowActions() }
+val LocalBlockedNoteAuthorIds = staticCompositionLocalOf<Set<String>> { emptySet() }
 
 @Composable
 fun NoteRow(
@@ -124,6 +135,7 @@ fun NoteRow(
     isSpecialCareAuthor: Boolean = false,
     density: NoteRowDensity = NoteRowDensity.Comfortable,
 ) {
+    if (note.isHiddenByBlockedAuthor(LocalBlockedNoteAuthorIds.current)) return
     var reactionMenuExpanded by remember(note.id) { mutableStateOf(false) }
     var deleteConfirmOpen by remember(note.id) { mutableStateOf(false) }
     var reportConfirmOpen by remember(note.id) { mutableStateOf(false) }
@@ -131,16 +143,17 @@ fun NoteRow(
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
     val rowActions = LocalNoteRowActions.current
-    val effectiveOnShareNote = onShareNote ?: rowActions.onShareNote ?: onOpenUrl
+    val effectiveOnShareNote = onShareNote ?: rowActions.onShareNote
     val effectiveOnHideFromList = onHideFromList ?: rowActions.onHideFromList
     val effectiveOnMuteNote = onMuteNote ?: rowActions.onMuteNote
+    val effectiveOnUnmuteNote = rowActions.onUnmuteNote
+    val effectiveOnMuteRenotes = rowActions.onMuteRenotes
+    val effectiveOnUnmuteRenotes = rowActions.onUnmuteRenotes
     val effectiveOnReportNote = onReportNote ?: rowActions.onReportNote
-    val customEmojiUrls = LocalCustomEmojiUrls.current
-    val pickerCustomEmojis = remember(customEmojis, reactionOptions, customEmojiUrls) {
-        customEmojisForReactionPicker(
+    val pickerSections = remember(reactionOptions, recentReactions) {
+        reactionPickerSections(
             reactionOptions = reactionOptions,
-            customEmojis = customEmojis,
-            customEmojiUrls = customEmojiUrls,
+            recentReactions = recentReactions,
         )
     }
     val isContentVisible = noteContentVisible(note, expanded = contentExpanded)
@@ -195,28 +208,32 @@ fun NoteRow(
                 if (note.isRenote) {
                     Text(
                         text = "转发",
-                        color = LocalHhhlColors.current.subtleText,
+                        color = LocalHhhlColors.current.textMuted,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
                 noteVisibilityBadge(note.visibility)?.let { badge ->
                     Text(
                         text = badge,
-                        color = LocalHhhlColors.current.subtleText,
+                        color = LocalHhhlColors.current.textMuted,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
                 note.cw?.takeIf { it.isNotBlank() }?.let { cw ->
+                    val colors = LocalHhhlColors.current
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
+                        InlineRichText(
                             text = cw,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
+                            color = colors.textPrimary,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                            maxChars = 260,
+                            onOpenUrl = onOpenUrl,
+                            onOpenMention = onOpenMention,
+                            onOpenHashtag = onOpenHashtag,
                         )
                         Text(
                             text = if (contentExpanded) "收起内容" else "显示内容",
-                            color = MaterialTheme.colorScheme.primary,
+                            color = colors.accent,
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.clickable { contentExpanded = !contentExpanded },
                         )
@@ -226,6 +243,7 @@ fun NoteRow(
                     InlineRichText(
                         text = note.text,
                         style = MaterialTheme.typography.bodyMedium,
+                        maxChars = if (density == NoteRowDensity.Compact) 700 else null,
                         onOpenUrl = onOpenUrl,
                         onOpenMention = onOpenMention,
                         onOpenHashtag = onOpenHashtag,
@@ -239,7 +257,11 @@ fun NoteRow(
                         )
                     }
                     if (note.reactions.isNotEmpty()) {
-                        ReactionStrip(note)
+                        ReactionStrip(
+                            note = note,
+                            enabled = !isActionPending,
+                            onReact = onReact,
+                        )
                     }
                     note.quotedNote?.let { quoted ->
                         QuotedNoteCard(
@@ -271,6 +293,7 @@ fun NoteRow(
                         count = note.replyCount,
                         contentDescription = "回复",
                         enabled = !isActionPending,
+                        showDisabledState = false,
                         onClick = { onReply(note.id) },
                         modifier = Modifier.weight(1f),
                     )
@@ -279,6 +302,7 @@ fun NoteRow(
                         count = note.renoteCount,
                         contentDescription = "转发",
                         enabled = !isActionPending,
+                        showDisabledState = false,
                         onClick = { onRenote(note.id) },
                         modifier = Modifier.weight(1f),
                     )
@@ -286,14 +310,16 @@ fun NoteRow(
                         icon = Icons.Outlined.FormatQuote,
                         contentDescription = "引用",
                         enabled = !isActionPending,
+                        showDisabledState = false,
                         onClick = { onQuote(note.id) },
                         modifier = Modifier.weight(1f),
                     )
                     NoteActionButton(
-                        icon = if (note.isFavorited) Icons.Outlined.Star else Icons.Outlined.StarBorder,
+                        icon = Icons.Outlined.Bookmark,
                         selected = note.isFavorited,
-                        contentDescription = if (note.isFavorited) "取消收藏" else "收藏",
+                        contentDescription = if (note.isFavorited) "取消保存" else "保存到收藏",
                         enabled = !isActionPending,
+                        showDisabledState = false,
                         onClick = { onFavorite(note.id) },
                         modifier = Modifier.weight(1f),
                     )
@@ -302,6 +328,7 @@ fun NoteRow(
                         reactionText = note.myReaction,
                         count = note.reactionCount,
                         selected = note.myReaction != null,
+                        selectedEmphasis = NoteActionSelectedEmphasis.Soft,
                         contentDescription = if (note.myReaction != null) "取消反应" else "添加反应",
                         enabled = !isActionPending,
                         onClick = {
@@ -314,27 +341,14 @@ fun NoteRow(
                         },
                         modifier = Modifier.weight(1f),
                     )
-                    DropdownMenu(
-                        expanded = reactionMenuExpanded,
-                        onDismissRequest = {
-                            reactionMenuExpanded = false
-                        },
-                        offset = DpOffset(x = HhhlOverflowMenuOffsetX, y = HhhlOverflowMenuOffsetY),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .width(HhhlUnifiedReactionPickerMenuWidth)
-                            .height(HhhlUnifiedReactionPickerMenuHeight),
-                    ) {
-                        CustomEmojiPicker(
-                            customEmojis = pickerCustomEmojis,
-                            recentEmojiCodes = recentReactions,
-                            onEmojiSelected = { reaction ->
+                    if (reactionMenuExpanded) {
+                        ReactionPickerDialog(
+                            sections = pickerSections,
+                            onDismiss = { reactionMenuExpanded = false },
+                            onReactionSelected = { reaction ->
                                 reactionMenuExpanded = false
                                 onReact(note.id, reaction)
                             },
-                            modifier = Modifier.fillMaxWidth(),
-                            compact = true,
                         )
                     }
                     if (overflowActions.isNotEmpty()) {
@@ -355,11 +369,21 @@ fun NoteRow(
                                         NoteOverflowAction.Embed -> {
                                             clipboardManager.setText(AnnotatedString(noteEmbedCode))
                                         }
-                                        NoteOverflowAction.Share -> effectiveOnShareNote(noteLink)
+                                        NoteOverflowAction.Share -> {
+                                            val shareNote = effectiveOnShareNote
+                                            if (shareNote != null) {
+                                                shareNote(noteLink)
+                                            } else {
+                                                clipboardManager.setText(AnnotatedString(noteLink))
+                                            }
+                                        }
                                         NoteOverflowAction.Favorite -> onFavorite(note.id)
                                         NoteOverflowAction.AddToClip -> onAddToClip?.invoke(note)
                                         NoteOverflowAction.HideFromList -> effectiveOnHideFromList(note.id)
                                         NoteOverflowAction.MuteNote -> effectiveOnMuteNote(note.id)
+                                        NoteOverflowAction.UnmuteNote -> effectiveOnUnmuteNote(note.id)
+                                        NoteOverflowAction.MuteRenotes -> effectiveOnMuteRenotes(note.id, note.author.id)
+                                        NoteOverflowAction.UnmuteRenotes -> effectiveOnUnmuteRenotes(note.id, note.author.id)
                                         NoteOverflowAction.User -> onOpenUser(note.author.id)
                                         NoteOverflowAction.Report -> reportConfirmOpen = true
                                         NoteOverflowAction.Delete -> deleteConfirmOpen = true
@@ -370,6 +394,7 @@ fun NoteRow(
                         HhhlOverflowMenu(
                             actions = menuActions,
                             enabled = !isActionPending,
+                            showDisabledState = false,
                         )
                     }
                 }
@@ -379,7 +404,7 @@ fun NoteRow(
     }
 
     if (deleteConfirmOpen) {
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { deleteConfirmOpen = false },
             title = { Text("删除帖子") },
             text = { Text("这会从实例删除这条帖子，操作完成后不可在客户端恢复。") },
@@ -403,7 +428,7 @@ fun NoteRow(
     }
 
     if (reportConfirmOpen) {
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { reportConfirmOpen = false },
             title = { Text("举报帖子") },
             text = { Text("会把这条帖子提交给实例管理员处理。") },
@@ -427,6 +452,11 @@ fun NoteRow(
     }
 }
 
+fun Note.isHiddenByBlockedAuthor(blockedUserIds: Set<String>): Boolean {
+    if (blockedUserIds.isEmpty()) return false
+    return author.id in blockedUserIds || quotedNote?.isHiddenByBlockedAuthor(blockedUserIds) == true
+}
+
 enum class NoteOverflowAction(val label: String) {
     OpenDetail("详情"),
     CopyContent("复制内容"),
@@ -436,7 +466,10 @@ enum class NoteOverflowAction(val label: String) {
     Favorite("收藏"),
     AddToClip("便签"),
     HideFromList("隐藏帖子列表"),
-    MuteNote("Mute note"),
+    MuteNote("静音帖子"),
+    UnmuteNote("取消帖子静音"),
+    MuteRenotes("静音此用户转发"),
+    UnmuteRenotes("取消转发静音"),
     User("用户"),
     Report("举报"),
     Delete("删除帖子"),
@@ -459,32 +492,150 @@ data class ReactionPickerSection(
 )
 
 @Composable
+private fun ReactionPickerDialog(
+    sections: List<ReactionPickerSection>,
+    onDismiss: () -> Unit,
+    onReactionSelected: (String) -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        val colors = LocalHhhlColors.current
+        val isDarkSurface = colors.surface.luminance() < 0.2f
+        val panelShape = RoundedCornerShape(28.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 14.dp, vertical = 18.dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = HhhlReactionPickerSheetWidth)
+                    .fillMaxWidth()
+                    .heightIn(max = HhhlReactionPickerSheetMaxHeight)
+                    .shadow(
+                        elevation = 18.dp,
+                        shape = panelShape,
+                        clip = false,
+                        ambientColor = colors.shadow,
+                        spotColor = colors.shadow,
+                    )
+                    .clip(panelShape)
+                    .background(
+                        if (isDarkSurface) colors.surfaceElevated.copy(alpha = 0.96f) else colors.surface.copy(alpha = 0.98f),
+                    )
+                    .border(1.dp, colors.border.copy(alpha = if (isDarkSurface) 0.34f else 0.48f), panelShape)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .size(width = 34.dp, height = 4.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(colors.border.copy(alpha = 0.72f)),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            text = "选择回应",
+                            color = colors.textPrimary,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "轻点一个表情发送",
+                            color = colors.textMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(colors.inputBackground.copy(alpha = if (isDarkSurface) 0.58f else 0.78f))
+                            .border(1.dp, colors.border.copy(alpha = 0.36f), RoundedCornerShape(999.dp))
+                            .clickable(onClick = onDismiss),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "关闭",
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                if (sections.isEmpty()) {
+                    Text(
+                        text = "暂无可用表情",
+                        color = colors.textMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(vertical = 18.dp),
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = HhhlReactionPickerContentMaxHeight)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(colors.inputBackground.copy(alpha = if (isDarkSurface) 0.28f else 0.40f))
+                            .border(1.dp, colors.border.copy(alpha = 0.28f), RoundedCornerShape(18.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 10.dp, vertical = 10.dp),
+                    ) {
+                        ReactionPickerGrid(
+                            sections = sections,
+                            onReactionSelected = onReactionSelected,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ReactionPickerGrid(
     sections: List<ReactionPickerSection>,
     onReactionSelected: (String) -> Unit,
 ) {
     Column(
-        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         sections.forEach { section ->
-            Text(
-                text = section.label,
-                color = LocalHhhlColors.current.subtleText,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(horizontal = 2.dp),
-            )
-            FlowRow(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(HhhlReactionPickerGridSpacing),
-                verticalArrangement = Arrangement.spacedBy(HhhlReactionPickerGridSpacing),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                section.reactions.forEach { reaction ->
-                    ReactionPickerGridItem(
-                        reaction = reaction,
-                        onClick = { onReactionSelected(reaction) },
-                    )
+                Text(
+                    text = section.label,
+                    color = LocalHhhlColors.current.textMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(HhhlReactionPickerGridSpacing),
+                    verticalArrangement = Arrangement.spacedBy(HhhlReactionPickerGridSpacing),
+                ) {
+                    section.reactions.forEach { reaction ->
+                        ReactionPickerGridItem(
+                            reaction = reaction,
+                            onClick = { onReactionSelected(reaction) },
+                        )
+                    }
                 }
             }
         }
@@ -496,15 +647,17 @@ private fun ReactionPickerGridItem(
     reaction: String,
     onClick: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
+    val shape = RoundedCornerShape(14.dp)
     Box(
         modifier = Modifier
             .size(HhhlReactionPickerItemSize)
-            .clip(RoundedCornerShape(12.dp))
-            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.72f))
+            .clip(shape)
+            .background(colors.surface.copy(alpha = 0.68f))
             .border(
                 width = 1.dp,
-                color = LocalHhhlColors.current.divider.copy(alpha = 0.42f),
-                shape = RoundedCornerShape(12.dp),
+                color = colors.border.copy(alpha = 0.34f),
+                shape = shape,
             )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -541,6 +694,9 @@ fun noteOverflowActions(
     }
     add(NoteOverflowAction.HideFromList)
     add(NoteOverflowAction.MuteNote)
+    add(NoteOverflowAction.UnmuteNote)
+    add(NoteOverflowAction.MuteRenotes)
+    add(NoteOverflowAction.UnmuteRenotes)
     add(NoteOverflowAction.User)
     add(NoteOverflowAction.Report)
     if (canDelete) {
@@ -591,7 +747,17 @@ fun reactionPickerSections(
         defaultReactions.takeIf { it.isNotEmpty() }?.let { ReactionPickerSection("默认", it) },
         commonReactions.takeIf { it.isNotEmpty() }?.let { ReactionPickerSection("常用", it) },
         customReactions.takeIf { it.isNotEmpty() }?.let { ReactionPickerSection("自定义", it) },
-    ).filterSections(cleanQuery)
+    ).filterSections(cleanQuery).boundedReactionPickerSections()
+}
+
+private fun List<ReactionPickerSection>.boundedReactionPickerSections(): List<ReactionPickerSection> {
+    var remaining = HhhlReactionPickerMaxTotalItems
+    return mapNotNull { section ->
+        if (remaining <= 0) return@mapNotNull null
+        val limit = minOf(section.reactions.size, HhhlReactionPickerMaxSectionItems, remaining)
+        remaining -= limit
+        section.copy(reactions = section.reactions.take(limit)).takeIf { it.reactions.isNotEmpty() }
+    }
 }
 
 private fun List<ReactionPickerSection>.filterSections(query: String): List<ReactionPickerSection> {
@@ -701,7 +867,7 @@ private fun NoteAuthorLine(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalHhhlColors.current
-    val displayColor = MaterialTheme.colorScheme.onBackground
+    val displayColor = colors.textPrimary
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -719,7 +885,7 @@ private fun NoteAuthorLine(
                 }
                 withStyle(
                     SpanStyle(
-                        color = colors.subtleText,
+                        color = colors.textMuted,
                         fontSize = metaStyle.fontSize,
                         fontWeight = FontWeight.Normal,
                     ),
@@ -739,7 +905,7 @@ private fun NoteAuthorLine(
         if (isSpecialCareAuthor) {
             Text(
                 text = "特别关心",
-                color = MaterialTheme.colorScheme.primary,
+                color = colors.accent,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -747,10 +913,10 @@ private fun NoteAuthorLine(
                 modifier = Modifier
                     .padding(start = 6.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+                    .background(colors.accentSoft.copy(alpha = 0.78f))
                     .border(
                         width = 1.dp,
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                        color = colors.focusRing.copy(alpha = 0.38f),
                         shape = RoundedCornerShape(8.dp),
                     )
                     .padding(horizontal = 5.dp, vertical = 1.dp),
@@ -759,7 +925,7 @@ private fun NoteAuthorLine(
         if (note.createdAtLabel.isNotBlank()) {
             Text(
                 text = " · ${note.createdAtLabel}",
-                color = colors.subtleText,
+                color = colors.textMuted,
                 style = metaStyle,
                 maxLines = 1,
                 overflow = TextOverflow.Clip,
@@ -779,12 +945,14 @@ private fun QuotedNoteCard(
     onOpenMention: (String) -> Unit,
     onOpenHashtag: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
+    val previewText = notePreviewText(note, fallback = "")
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.38f))
-            .border(1.dp, LocalHhhlColors.current.divider.copy(alpha = 0.66f), RoundedCornerShape(14.dp))
+            .background(colors.quoteBackground.copy(alpha = 0.62f))
+            .border(1.dp, colors.border.copy(alpha = 0.66f), RoundedCornerShape(14.dp))
             .clickable { onOpenNote(note.id) }
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
@@ -795,10 +963,11 @@ private fun QuotedNoteCard(
             displayStyle = MaterialTheme.typography.bodySmall,
             metaStyle = MaterialTheme.typography.labelSmall,
         )
-        if (note.text.isNotBlank()) {
+        if (previewText.isNotBlank()) {
             InlineRichText(
-                text = note.text,
+                text = previewText,
                 style = MaterialTheme.typography.bodySmall,
+                maxChars = 260,
                 onOpenUrl = onOpenUrl,
                 onOpenMention = onOpenMention,
                 onOpenHashtag = onOpenHashtag,
@@ -807,7 +976,7 @@ private fun QuotedNoteCard(
         if (note.media.isNotEmpty()) {
             Text(
                 text = "${note.media.size} 个附件",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -821,6 +990,7 @@ private fun PollStrip(
     onVotePoll: (String, Int) -> Unit,
 ) {
     val poll = note.poll ?: return
+    val colors = LocalHhhlColors.current
     val totalVotes = poll.choices.sumOf { it.votes }.coerceAtLeast(1)
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -830,23 +1000,22 @@ private fun PollStrip(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(6.dp))
-                    .background(LocalHhhlColors.current.mediaBackground)
+                    .background(colors.mediaBackground)
                     .clickable(enabled = enabled) { onVotePoll(note.id, index) }
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
+                InlineRichText(
                     text = if (choice.isVoted) "✓ ${choice.text}" else choice.text,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    maxChars = 180,
                 )
                 Text(
                     text = "${choice.votes} · $percent%",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -858,7 +1027,7 @@ private fun PollStrip(
         if (meta.isNotBlank()) {
             Text(
                 text = meta,
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
@@ -866,17 +1035,21 @@ private fun PollStrip(
 }
 
 @Composable
-private fun ReactionStrip(note: Note) {
+private fun ReactionStrip(
+    note: Note,
+    enabled: Boolean,
+    onReact: (String, String) -> Unit,
+) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         repeat(minOf(4, note.reactions.size)) { index ->
             val reaction = note.reactions[index]
+            val selected = note.myReaction == reaction.reaction
             ReactionChip(
                 reaction = reaction.reaction,
                 count = reaction.count,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(LocalHhhlColors.current.mediaBackground)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                selected = selected,
+                enabled = enabled && !selected,
+                onClick = { onReact(note.id, reaction.reaction) },
             )
         }
     }
@@ -886,17 +1059,37 @@ private fun ReactionStrip(note: Note) {
 private fun ReactionChip(
     reaction: String,
     count: Int,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val shape = RoundedCornerShape(6.dp)
+    val colors = LocalHhhlColors.current
+    val background = if (selected) {
+        colors.noteReactionBackground
+    } else {
+        colors.mediaBackground
+    }
+    val borderColor = if (selected) {
+        colors.focusRing.copy(alpha = 0.62f)
+    } else {
+        Color.Transparent
+    }
     Row(
-        modifier = modifier,
+        modifier = modifier
+            .clip(shape)
+            .background(background)
+            .border(1.dp, borderColor, shape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         CustomEmojiReactionLabel(reaction = reaction)
         Text(
             text = count.toString(),
-            color = MaterialTheme.colorScheme.primary,
+            color = colors.accent,
             style = MaterialTheme.typography.labelMedium,
         )
     }
@@ -910,6 +1103,7 @@ fun Avatar(
     size: Dp = 42.dp,
     modifier: Modifier = Modifier,
 ) {
+    val colors = LocalHhhlColors.current
     val spec = avatarImageSpec(initial = initial, avatarUrl = avatarUrl)
 
     Box(
@@ -921,7 +1115,7 @@ fun Avatar(
             modifier = Modifier
                 .fillMaxSize()
                 .clip(RoundedCornerShape(12.dp))
-                .background(if (spec.remoteUrl == null) Color(0xFF08090B) else Color.Transparent),
+                .background(if (spec.remoteUrl == null) colors.avatarBackground else Color.Transparent),
             contentAlignment = Alignment.Center,
         ) {
             spec.fallbackUrl?.let { fallbackUrl ->
@@ -968,10 +1162,11 @@ private fun RemoteMediaImage(
     mediaVisible: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val colors = LocalHhhlColors.current
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(LocalHhhlColors.current.mediaBackground),
+            .background(colors.mediaBackground),
         contentAlignment = Alignment.Center,
     ) {
         MediaLabel(media = media)
@@ -988,6 +1183,7 @@ private fun RemoteMediaImage(
 
 @Composable
 private fun MediaLabel(media: NoteMedia) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier.padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -995,14 +1191,14 @@ private fun MediaLabel(media: NoteMedia) {
     ) {
         Text(
             text = media.displayLabel,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
         Text(
             text = media.metaLabel,
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1017,6 +1213,7 @@ private fun MediaStrip(
     onOpenMediaPreview: ((MediaPreviewSession) -> Unit)?,
     mediaHeight: Int,
 ) {
+    val colors = LocalHhhlColors.current
     var revealedMediaIds by remember(note.id) { mutableStateOf(emptySet<String>()) }
     val visibleMedia = remember(note.media) { note.media.take(4) }
     val hiddenMediaCount = (note.media.size - visibleMedia.size).coerceAtLeast(0)
@@ -1031,10 +1228,10 @@ private fun MediaStrip(
                     .weight(1f)
                     .height(mediaHeight.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(LocalHhhlColors.current.mediaBackground)
+                    .background(colors.mediaBackground)
                     .border(
                         width = 1.dp,
-                        color = LocalHhhlColors.current.divider.copy(alpha = 0.42f),
+                        color = colors.border.copy(alpha = 0.42f),
                         shape = RoundedCornerShape(12.dp),
                     )
                     .then(
@@ -1074,12 +1271,12 @@ private fun MediaStrip(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.48f)),
+                            .background(colors.overlayScrim.copy(alpha = 0.64f)),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             text = "+$hiddenMediaCount",
-                            color = Color.White,
+                            color = colors.textInverse,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -1111,6 +1308,11 @@ data class NoteActionButtonSpec(
     val showCount: Boolean,
 )
 
+private enum class NoteActionSelectedEmphasis {
+    Normal,
+    Soft,
+}
+
 fun noteActionButtonSpec(count: Int?): NoteActionButtonSpec {
     val countLabel = count?.takeIf { it > 0 }?.let {
         when {
@@ -1134,31 +1336,38 @@ private fun NoteActionButton(
     count: Int? = null,
     reactionText: String? = null,
     selected: Boolean = false,
+    showDisabledState: Boolean = true,
+    selectedEmphasis: NoteActionSelectedEmphasis = NoteActionSelectedEmphasis.Normal,
 ) {
     val spec = noteActionButtonSpec(count)
+    val colors = LocalHhhlColors.current
+    val visuallyEnabled = enabled || !showDisabledState
+    val softSelected = selected && selectedEmphasis == NoteActionSelectedEmphasis.Soft
     val contentColor by animateColorAsState(
         targetValue = when {
-            !enabled -> LocalHhhlColors.current.subtleText
-            selected -> MaterialTheme.colorScheme.primary
-            else -> MaterialTheme.colorScheme.onSurfaceVariant
+            selected -> colors.accent.copy(alpha = if (softSelected) 0.82f else 1f)
+            !visuallyEnabled -> colors.textMuted
+            else -> colors.textSecondary
         },
         animationSpec = tween(durationMillis = 150),
         label = "note-action-content",
     )
     val containerColor by animateColorAsState(
         targetValue = when {
-            selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-            !enabled -> LocalHhhlColors.current.mediaBackground.copy(alpha = 0.36f)
-            else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.025f)
+            softSelected -> colors.noteActionBackground.copy(alpha = 0.62f)
+            selected -> colors.noteActionBackground.copy(alpha = 0.92f)
+            !visuallyEnabled -> colors.noteActionBackground.copy(alpha = 0.36f)
+            else -> colors.noteActionBackground
         },
         animationSpec = tween(durationMillis = 150),
         label = "note-action-container",
     )
     val borderColor by animateColorAsState(
         targetValue = when {
-            selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-            !enabled -> Color.Transparent
-            else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+            softSelected -> colors.border.copy(alpha = 0.24f)
+            selected -> colors.focusRing.copy(alpha = 0.48f)
+            !visuallyEnabled -> colors.border.copy(alpha = 0.18f)
+            else -> colors.border.copy(alpha = 0.22f)
         },
         animationSpec = tween(durationMillis = 150),
         label = "note-action-border",
@@ -1170,9 +1379,11 @@ private fun NoteActionButton(
             .widthIn(min = 0.dp)
             .defaultMinSize(minHeight = HhhlNoteActionMinHeight, minWidth = HhhlNoteActionMinWidth)
             .shadow(
-                elevation = if (selected) HhhlIconActionIdleElevation else 0.dp,
+                elevation = if (selected && !softSelected) HhhlIconActionIdleElevation else 0.dp,
                 shape = shape,
                 clip = false,
+                ambientColor = colors.shadow,
+                spotColor = colors.shadow,
             )
             .clip(shape)
             .background(containerColor)

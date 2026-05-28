@@ -21,9 +21,11 @@ class InstanceMetaStateHolder(
 ) {
     private val mutableState = MutableStateFlow(InstanceMetaUiState())
     val state: StateFlow<InstanceMetaUiState> = mutableState
+    private var loadRequestId = 0
 
-    fun load() {
-        if (state.value.isLoading) return
+    fun load(force: Boolean = false) {
+        if (state.value.isLoading && !force) return
+        val requestId = ++loadRequestId
 
         mutableState.update {
             it.copy(isLoading = true, errorMessage = null)
@@ -32,6 +34,7 @@ class InstanceMetaStateHolder(
         scope.launch {
             when (val result = repository.load()) {
                 is InstanceMetaRepositoryResult.Success -> mutableState.update {
+                    if (requestId != loadRequestId) return@update it
                     it.copy(
                         meta = result.meta,
                         isLoading = false,
@@ -39,6 +42,7 @@ class InstanceMetaStateHolder(
                     )
                 }
                 is InstanceMetaRepositoryResult.Error -> mutableState.update {
+                    if (requestId != loadRequestId) return@update it
                     it.copy(
                         isLoading = false,
                         errorMessage = result.message,
@@ -48,4 +52,3 @@ class InstanceMetaStateHolder(
         }
     }
 }
-

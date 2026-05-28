@@ -2,14 +2,17 @@ package cc.hhhl.client.state
 
 import cc.hhhl.client.api.DiscoverApi
 import cc.hhhl.client.api.DiscoverFederationActionResult
+import cc.hhhl.client.api.DiscoverFederationFollowResult
 import cc.hhhl.client.api.DiscoverFederationInstanceResult
 import cc.hhhl.client.api.DiscoverFederationResult
+import cc.hhhl.client.api.DiscoverFederationStatsResult
 import cc.hhhl.client.api.DiscoverNoteSearchOptions
 import cc.hhhl.client.api.DiscoverSearchResult
 import cc.hhhl.client.api.DiscoverTrendResult
 import cc.hhhl.client.api.DiscoverUserSearchResult
 import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.FederationInstance
+import cc.hhhl.client.model.FederationStats
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.model.User
@@ -19,9 +22,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -102,6 +107,30 @@ class DiscoverStateHolderTest {
         assertFalse(holder.state.value.isSearching)
         assertTrue(holder.state.value.hasSearched)
         assertEquals(listOf(note), holder.state.value.notes)
+    }
+
+    @Test
+    fun queryChangeInvalidatesPendingSearchResult() = runTest {
+        val pending = CompletableDeferred<DiscoverRepositoryResult>()
+        val note = FakeData.timeline[0]
+        val holder = DiscoverStateHolder(
+            repository = fakeRepository(searchProvider = { pending.await() }),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateQuery("Sharkey")
+        holder.search()
+        runCurrent()
+        assertTrue(holder.state.value.isSearching)
+
+        holder.updateQuery("Misskey")
+        pending.complete(DiscoverRepositoryResult.Success(listOf(note)))
+        advanceUntilIdle()
+
+        assertEquals("Misskey", holder.state.value.query)
+        assertFalse(holder.state.value.isSearching)
+        assertEquals(emptyList(), holder.state.value.notes)
+        assertFalse(holder.state.value.hasSearched)
     }
 
     @Test
@@ -531,9 +560,49 @@ class DiscoverStateHolderTest {
         assertEquals(1, holder.state.value.notes.single().reactions.single { it.reaction == "👍" }.count)
     }
 
+    @Test
+    fun closingFederationDetailInvalidatesPendingDetailResult() = runTest {
+        val pending = CompletableDeferred<DiscoverRepositoryResult>()
+        val instance = sampleFederationInstance("one")
+        val updated = instance.copy(name = "updated")
+        val holder = DiscoverStateHolder(
+            repository = fakeRepository(searchProvider = { pending.await() }),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.openFederationInstance(instance)
+        runCurrent()
+        assertTrue(holder.state.value.isLoadingFederationDetail)
+
+        holder.closeFederationInstance()
+        pending.complete(DiscoverRepositoryResult.FederationInstanceSuccess(updated))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isLoadingFederationDetail)
+        assertEquals(null, holder.state.value.selectedFederationInstance)
+    }
+
     private fun fakeRepository(
         searchResult: DiscoverRepositoryResult,
         loadMoreResult: DiscoverRepositoryResult = searchResult,
+        onLoadMore: (String?) -> Unit = {},
+        onSearchNotes: (String) -> Unit = {},
+        onSearchUsers: (String) -> Unit = {},
+        throwOnSearch: Boolean = false,
+        throwOnLoadMore: Boolean = false,
+    ): DiscoverRepository = fakeRepository(
+        searchProvider = { searchResult },
+        loadMoreProvider = { loadMoreResult },
+        onLoadMore = onLoadMore,
+        onSearchNotes = onSearchNotes,
+        onSearchUsers = onSearchUsers,
+        throwOnSearch = throwOnSearch,
+        throwOnLoadMore = throwOnLoadMore,
+    )
+
+    private fun fakeRepository(
+        searchProvider: suspend () -> DiscoverRepositoryResult,
+        loadMoreProvider: suspend () -> DiscoverRepositoryResult = searchProvider,
         onLoadMore: (String?) -> Unit = {},
         onSearchNotes: (String) -> Unit = {},
         onSearchUsers: (String) -> Unit = {},
@@ -582,11 +651,50 @@ class DiscoverStateHolderTest {
                     return DiscoverFederationInstanceResult.Unavailable
                 }
 
+                override suspend fun loadFederationFollowers(
+                    host: String,
+                    limit: Int,
+                    untilId: String?,
+                    includeFollower: Boolean,
+                    includeFollowee: Boolean,
+                ): DiscoverFederationFollowResult {
+                    return DiscoverFederationFollowResult.Success(emptyList())
+                }
+
+                override suspend fun loadFederationFollowing(
+                    host: String,
+                    limit: Int,
+                    untilId: String?,
+                    includeFollower: Boolean,
+                    includeFollowee: Boolean,
+                ): DiscoverFederationFollowResult {
+                    return DiscoverFederationFollowResult.Success(emptyList())
+                }
+
+                override suspend fun loadFederationUsers(
+                    host: String,
+                    limit: Int,
+                    untilId: String?,
+                ): DiscoverUserSearchResult {
+                    return DiscoverUserSearchResult.Success(emptyList())
+                }
+
+                override suspend fun loadFederationStats(limit: Int): DiscoverFederationStatsResult {
+                    return DiscoverFederationStatsResult.Success(sampleFederationStats())
+                }
+
                 override suspend fun updateFederationInstance(
                     token: String,
                     host: String,
                     isSilenced: Boolean,
                     isSuspended: Boolean,
+                ): DiscoverFederationActionResult {
+                    return DiscoverFederationActionResult.Unavailable
+                }
+
+                override suspend fun updateRemoteUser(
+                    token: String,
+                    userId: String,
                 ): DiscoverFederationActionResult {
                     return DiscoverFederationActionResult.Unavailable
                 }
@@ -598,7 +706,7 @@ class DiscoverStateHolderTest {
             ): DiscoverRepositoryResult {
                 if (throwOnSearch) throw IllegalStateException("搜索接口异常")
                 onSearchNotes(query)
-                return searchResult
+                return searchProvider()
             }
 
             override suspend fun loadMore(
@@ -609,7 +717,7 @@ class DiscoverStateHolderTest {
             ): DiscoverRepositoryResult {
                 if (throwOnLoadMore) throw IllegalStateException("搜索接口异常")
                 onLoadMore(untilId)
-                return loadMoreResult
+                return loadMoreProvider()
             }
 
             override suspend fun searchUsers(
@@ -617,22 +725,22 @@ class DiscoverStateHolderTest {
                 filters: DiscoverAdvancedFilters,
             ): DiscoverRepositoryResult {
                 onSearchUsers(query)
-                return searchResult
+                return searchProvider()
             }
 
             override suspend fun loadTrends(): DiscoverRepositoryResult {
-                return searchResult
+                return searchProvider()
             }
 
             override suspend fun loadFederation(
                 currentInstances: List<FederationInstance>,
                 filters: DiscoverAdvancedFilters,
             ): DiscoverRepositoryResult {
-                return searchResult
+                return searchProvider()
             }
 
             override suspend fun loadFederationInstance(host: String): DiscoverRepositoryResult {
-                return searchResult
+                return searchProvider()
             }
 
             override suspend fun updateFederationInstance(
@@ -640,7 +748,7 @@ class DiscoverStateHolderTest {
                 isSilenced: Boolean,
                 isSuspended: Boolean,
             ): DiscoverRepositoryResult {
-                return searchResult
+                return searchProvider()
             }
         }
     }
@@ -660,6 +768,15 @@ class DiscoverStateHolderTest {
             isSuspended = false,
             isBlocked = false,
             isSilenced = false,
+        )
+    }
+
+    private fun sampleFederationStats(): FederationStats {
+        return FederationStats(
+            topSubInstances = listOf(sampleFederationInstance("sub-1")),
+            otherFollowersCount = 7,
+            topPubInstances = listOf(sampleFederationInstance("pub-1")),
+            otherFollowingCount = 9,
         )
     }
 
@@ -709,11 +826,50 @@ class DiscoverStateHolderTest {
                     return DiscoverFederationInstanceResult.Unavailable
                 }
 
+                override suspend fun loadFederationFollowers(
+                    host: String,
+                    limit: Int,
+                    untilId: String?,
+                    includeFollower: Boolean,
+                    includeFollowee: Boolean,
+                ): DiscoverFederationFollowResult {
+                    return DiscoverFederationFollowResult.Success(emptyList())
+                }
+
+                override suspend fun loadFederationFollowing(
+                    host: String,
+                    limit: Int,
+                    untilId: String?,
+                    includeFollower: Boolean,
+                    includeFollowee: Boolean,
+                ): DiscoverFederationFollowResult {
+                    return DiscoverFederationFollowResult.Success(emptyList())
+                }
+
+                override suspend fun loadFederationUsers(
+                    host: String,
+                    limit: Int,
+                    untilId: String?,
+                ): DiscoverUserSearchResult {
+                    return DiscoverUserSearchResult.Success(emptyList())
+                }
+
+                override suspend fun loadFederationStats(limit: Int): DiscoverFederationStatsResult {
+                    return DiscoverFederationStatsResult.Success(sampleFederationStats())
+                }
+
                 override suspend fun updateFederationInstance(
                     token: String,
                     host: String,
                     isSilenced: Boolean,
                     isSuspended: Boolean,
+                ): DiscoverFederationActionResult {
+                    return DiscoverFederationActionResult.Unavailable
+                }
+
+                override suspend fun updateRemoteUser(
+                    token: String,
+                    userId: String,
                 ): DiscoverFederationActionResult {
                     return DiscoverFederationActionResult.Unavailable
                 }

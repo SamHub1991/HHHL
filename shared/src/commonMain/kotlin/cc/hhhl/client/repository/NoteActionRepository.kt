@@ -25,6 +25,8 @@ sealed interface NoteActionRequest {
 
     data class Renote(override val noteId: String) : NoteActionRequest
 
+    data class Unrenote(override val noteId: String) : NoteActionRequest
+
     data class Delete(override val noteId: String) : NoteActionRequest
 
     data class Report(
@@ -34,6 +36,18 @@ sealed interface NoteActionRequest {
     ) : NoteActionRequest
 
     data class Mute(override val noteId: String) : NoteActionRequest
+
+    data class Unmute(override val noteId: String) : NoteActionRequest
+
+    data class MuteRenotes(
+        override val noteId: String,
+        val userId: String,
+    ) : NoteActionRequest
+
+    data class UnmuteRenotes(
+        override val noteId: String,
+        val userId: String,
+    ) : NoteActionRequest
 
     companion object {
         const val DEFAULT_REACTION = "❤️"
@@ -52,22 +66,34 @@ open class NoteActionRepository(
         val userId = (request as? NoteActionRequest.Report)
             ?.userId
             ?.takeIf { it.isNotBlank() }
+            ?: (request as? NoteActionRequest.MuteRenotes)
+                ?.userId
+                ?.takeIf { it.isNotBlank() }
+            ?: (request as? NoteActionRequest.UnmuteRenotes)
+                ?.userId
+                ?.takeIf { it.isNotBlank() }
             ?: if (request is NoteActionRequest.Report) {
                 return NoteActionRepositoryResult.Error("无法举报帖子")
+            } else if (request is NoteActionRequest.MuteRenotes || request is NoteActionRequest.UnmuteRenotes) {
+                return NoteActionRepositoryResult.Error("无法操作转发静音")
             } else {
                 null
             }
 
         val result = when (request) {
-            is NoteActionRequest.React -> api.createReaction(token, noteId, request.reaction)
+            is NoteActionRequest.React -> api.likeNote(token, noteId, request.reaction)
             is NoteActionRequest.DeleteReaction -> api.deleteReaction(token, noteId)
             is NoteActionRequest.Favorite -> api.createFavorite(token, noteId)
             is NoteActionRequest.Unfavorite -> api.deleteFavorite(token, noteId)
             is NoteActionRequest.VotePoll -> api.votePoll(token, noteId, request.choice)
             is NoteActionRequest.Renote -> api.createRenote(token, noteId)
+            is NoteActionRequest.Unrenote -> api.deleteRenote(token, noteId)
             is NoteActionRequest.Delete -> api.deleteNote(token, noteId)
             is NoteActionRequest.Report -> api.reportNote(token, userId.orEmpty(), noteId, request.comment)
             is NoteActionRequest.Mute -> api.muteNote(token, noteId)
+            is NoteActionRequest.Unmute -> api.unmuteNote(token, noteId)
+            is NoteActionRequest.MuteRenotes -> api.muteRenotes(token, userId.orEmpty())
+            is NoteActionRequest.UnmuteRenotes -> api.unmuteRenotes(token, userId.orEmpty())
         }
 
         return when (result) {
@@ -97,7 +123,11 @@ private val NoteActionRequest.successMessage: String
         is NoteActionRequest.Unfavorite -> "已取消收藏"
         is NoteActionRequest.VotePoll -> "已投票"
         is NoteActionRequest.Renote -> "已转发"
+        is NoteActionRequest.Unrenote -> "已取消转发"
         is NoteActionRequest.Delete -> "已删除"
         is NoteActionRequest.Report -> "已提交举报"
         is NoteActionRequest.Mute -> "已静音帖子"
+        is NoteActionRequest.Unmute -> "已取消帖子静音"
+        is NoteActionRequest.MuteRenotes -> "已静音此用户转发"
+        is NoteActionRequest.UnmuteRenotes -> "已取消转发静音"
     }

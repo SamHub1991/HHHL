@@ -86,8 +86,8 @@ class ThemeStateHolderTest {
     fun includesHhhlSharkeyThemePresets() {
         val labels = HhhlThemePreset.entries.map { it.label }
 
-        assertTrue("HHHL 绿" in labels)
-        assertTrue("HHHL 深绿" in labels)
+        assertTrue("HHHL 青绿" in labels)
+        assertTrue("HHHL 夜蓝" in labels)
     }
 
     @Test

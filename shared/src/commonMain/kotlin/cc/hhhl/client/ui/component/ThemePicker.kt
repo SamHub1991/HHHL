@@ -6,11 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,13 +34,14 @@ fun ThemePicker(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = selectedTheme.label
-    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
     val pickerBackground = if (isDarkSurface) {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.70f)
+        colors.surface.copy(alpha = 0.70f)
     } else {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.68f)
+        colors.surface.copy(alpha = 0.68f)
     }
-    val pickerBorder = MaterialTheme.colorScheme.primary.copy(alpha = if (isDarkSurface) 0.14f else 0.08f)
+    val pickerBorder = colors.focusRing.copy(alpha = if (isDarkSurface) 0.42f else 0.22f)
 
     Column(modifier = modifier) {
         Row(
@@ -67,7 +65,7 @@ fun ThemePicker(
             ) {
                 Text(
                     text = selectedLabel,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -76,25 +74,24 @@ fun ThemePicker(
             }
             Text(
                 text = "更换",
-                color = MaterialTheme.colorScheme.primary,
+                color = colors.accent,
                 style = MaterialTheme.typography.labelMedium,
             )
         }
-        DropdownMenu(
+        HhhlDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            modifier = Modifier.heightIn(max = HhhlDropdownMenuMaxHeight),
         ) {
             ThemePresetRegistry.presets.groupBy { it.groupLabel }.forEach { (groupLabel, presets) ->
                 Text(
                     text = groupLabel,
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
                 presets.forEach { preset ->
-                    DropdownMenuItem(
+                    HhhlDropdownMenuItem(
                         text = {
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -103,9 +100,9 @@ fun ThemePicker(
                                 Text(
                                     text = preset.label,
                                     color = if (selectedTheme == preset) {
-                                        MaterialTheme.colorScheme.primary
+                                        colors.accent
                                     } else {
-                                        MaterialTheme.colorScheme.onBackground
+                                        colors.textPrimary
                                     },
                                 )
                             }

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,13 +32,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NoteReactionUser
+import cc.hhhl.client.model.NoteVersion
 import cc.hhhl.client.state.NoteDetailUiState
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
+import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlIconActionButton
+import cc.hhhl.client.ui.component.HhhlInlinePanel
 import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlTopBar
 import cc.hhhl.client.ui.component.MediaPreviewSession
@@ -51,6 +56,12 @@ fun NoteDetailScreen(
     state: NoteDetailUiState? = null,
     onRefresh: () -> Unit = {},
     onLoadMoreReplies: () -> Unit = {},
+    onLoadConversation: () -> Unit = {},
+    onLoadRenotes: () -> Unit = {},
+    onLoadReactionUsers: () -> Unit = {},
+    onLoadVersions: () -> Unit = {},
+    onRefreshPollRecommendation: () -> Unit = {},
+    onTranslate: () -> Unit = {},
     onToggleChildReplies: (String) -> Unit = {},
     onOpenNote: (String) -> Unit = {},
     onOpenUser: (String) -> Unit = {},
@@ -180,10 +191,109 @@ fun NoteDetailScreen(
                         density = noteRowDensity,
                     )
                 }
+                item(key = "note-detail-actions", contentType = "note-detail-actions") {
+                    NoteDetailActionPanel(
+                        state = state,
+                        onLoadConversation = onLoadConversation,
+                        onLoadRenotes = onLoadRenotes,
+                        onLoadReactionUsers = onLoadReactionUsers,
+                        onLoadVersions = onLoadVersions,
+                        onRefreshPollRecommendation = onRefreshPollRecommendation,
+                        onTranslate = onTranslate,
+                    )
+                }
+                state.translation?.let { translation ->
+                    item(key = "note-detail-translation", contentType = "note-detail-panel") {
+                        NoteDetailTextPanel(
+                            title = "翻译",
+                            text = translation.text.ifBlank { "暂无翻译内容" },
+                        )
+                    }
+                }
+                if (state.conversationNotes.isNotEmpty()) {
+                    item(key = "note-detail-context-title", contentType = "note-detail-section") {
+                        NoteDetailSectionTitle(title = "上下文", count = state.conversationNotes.size)
+                    }
+                    items(
+                        items = state.conversationNotes,
+                        key = { "detail-context-${it.id}" },
+                        contentType = { "note-detail-context" },
+                    ) { contextNote ->
+                        NoteRow(
+                            note = contextNote,
+                            onClick = onOpenNote,
+                            onOpenUser = onOpenUser,
+                            onReply = onReply,
+                            onRenote = onRenote,
+                            onQuote = onQuote,
+                            onReact = onReact,
+                            onDeleteReaction = onDeleteReaction,
+                            onFavorite = onFavorite,
+                            onAddToClip = onAddToClip,
+                            onDelete = onDelete,
+                            onOpenMedia = onOpenMedia,
+                            onOpenMediaPreview = onOpenMediaPreview,
+                            onOpenMention = onOpenMention,
+                            onOpenHashtag = onOpenHashtag,
+                            onVotePoll = onVotePoll,
+                            reactionOptions = reactionOptions,
+                            recentReactions = recentReactions,
+                            isActionPending = isActionPending(contextNote.id),
+                            canDelete = canDeleteAuthor(contextNote.author.id),
+                            density = NoteRowDensity.Compact,
+                        )
+                    }
+                }
+                if (state.reactionUsers.isNotEmpty()) {
+                    item(key = "note-detail-reaction-users", contentType = "note-detail-panel") {
+                        NoteReactionUsersPanel(
+                            users = state.reactionUsers,
+                            onOpenUser = onOpenUser,
+                        )
+                    }
+                }
+                if (state.versions.isNotEmpty()) {
+                    item(key = "note-detail-versions", contentType = "note-detail-panel") {
+                        NoteVersionsPanel(versions = state.versions)
+                    }
+                }
+                if (state.renoteNotes.isNotEmpty()) {
+                    item(key = "note-detail-renotes-title", contentType = "note-detail-section") {
+                        NoteDetailSectionTitle(title = "转发", count = state.renoteNotes.size)
+                    }
+                    items(
+                        items = state.renoteNotes,
+                        key = { "detail-renote-${it.id}" },
+                        contentType = { "note-detail-renote" },
+                    ) { renote ->
+                        NoteRow(
+                            note = renote,
+                            onClick = onOpenNote,
+                            onOpenUser = onOpenUser,
+                            onReply = onReply,
+                            onRenote = onRenote,
+                            onQuote = onQuote,
+                            onReact = onReact,
+                            onDeleteReaction = onDeleteReaction,
+                            onFavorite = onFavorite,
+                            onAddToClip = onAddToClip,
+                            onDelete = onDelete,
+                            onOpenMedia = onOpenMedia,
+                            onOpenMediaPreview = onOpenMediaPreview,
+                            onOpenMention = onOpenMention,
+                            onOpenHashtag = onOpenHashtag,
+                            onVotePoll = onVotePoll,
+                            reactionOptions = reactionOptions,
+                            recentReactions = recentReactions,
+                            isActionPending = isActionPending(renote.id),
+                            canDelete = canDeleteAuthor(renote.author.id),
+                            density = NoteRowDensity.Compact,
+                        )
+                    }
+                }
                 item(key = "note-detail-header", contentType = "note-detail-header") {
                     NoteReplyTreeHeader(
                         replyCount = replyData.replies.size,
-                        isLoading = state?.isLoadingReplies == true || state?.isLoadingMoreReplies == true,
                     )
                 }
                 if (state.isLoadingReplies && state.replies.isEmpty()) {
@@ -266,6 +376,207 @@ private data class NoteReplyThreadData(
     val presentationsByReplyId: Map<String, NoteReplyTreePresentation> = emptyMap(),
 )
 
+@Composable
+private fun NoteDetailActionPanel(
+    state: NoteDetailUiState,
+    onLoadConversation: () -> Unit,
+    onLoadRenotes: () -> Unit,
+    onLoadReactionUsers: () -> Unit,
+    onLoadVersions: () -> Unit,
+    onRefreshPollRecommendation: () -> Unit,
+    onTranslate: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            HhhlActionChip(
+                label = if (state.isTranslating) "翻译中" else "翻译",
+                enabled = !state.isTranslating,
+                onClick = onTranslate,
+            )
+            HhhlActionChip(
+                label = if (state.isLoadingConversation) "同步上下文" else "上下文",
+                enabled = !state.isLoadingConversation,
+                onClick = onLoadConversation,
+            )
+            HhhlActionChip(
+                label = if (state.isLoadingReactions) "同步反应" else "反应用户",
+                enabled = !state.isLoadingReactions,
+                onClick = onLoadReactionUsers,
+            )
+            HhhlActionChip(
+                label = if (state.isLoadingRenotes) "同步转发" else "转发列表",
+                enabled = !state.isLoadingRenotes,
+                onClick = onLoadRenotes,
+            )
+            HhhlActionChip(
+                label = if (state.isLoadingVersions) "同步编辑" else "编辑记录",
+                enabled = !state.isLoadingVersions,
+                onClick = onLoadVersions,
+            )
+            if (state.note?.poll != null) {
+                HhhlActionChip(
+                    label = if (state.isRefreshingPollRecommendation) "刷新中" else "投票推荐",
+                    enabled = !state.isRefreshingPollRecommendation,
+                    onClick = onRefreshPollRecommendation,
+                )
+            }
+        }
+        state.detailActionMessage?.let { message ->
+            Text(
+                text = message,
+                color = LocalHhhlColors.current.textMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+    HhhlDivider()
+}
+
+@Composable
+private fun NoteVersionsPanel(versions: List<NoteVersion>) {
+    val colors = LocalHhhlColors.current
+    HhhlInlinePanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        NoteDetailSectionTitle(title = "编辑记录", count = versions.size, padded = false)
+        versions.take(5).forEach { version ->
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = version.createdAtLabel.ifBlank { "编辑记录" },
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = version.text.ifBlank { version.cw ?: "无正文" },
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoteDetailTextPanel(
+    title: String,
+    text: String,
+) {
+    val colors = LocalHhhlColors.current
+    HhhlInlinePanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        emphasized = true,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = title,
+            color = colors.accent,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = text,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+@Composable
+private fun NoteReactionUsersPanel(
+    users: List<NoteReactionUser>,
+    onOpenUser: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    HhhlInlinePanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        NoteDetailSectionTitle(title = "反应用户", count = users.size, padded = false)
+        users.take(12).forEach { reactionUser ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenUser(reactionUser.user.id) },
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Avatar(
+                    initial = reactionUser.user.displayName,
+                    avatarUrl = reactionUser.user.avatarUrl,
+                    avatarDecorations = reactionUser.user.avatarDecorations,
+                    size = 32.dp,
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = reactionUser.user.displayName,
+                        color = colors.textPrimary,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "@${reactionUser.user.username}",
+                        color = colors.textMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    text = reactionUser.reaction,
+                    color = colors.accent,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoteDetailSectionTitle(
+    title: String,
+    count: Int,
+    padded: Boolean = true,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (padded) Modifier.padding(horizontal = 14.dp, vertical = 8.dp) else Modifier),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = count.toString(),
+            color = colors.textSecondary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
 private data class NoteReplyThreadIndex(
     val rootNoteId: String,
     val allReplies: List<Note>,
@@ -331,9 +642,10 @@ private fun ReplyTreeChildControl(
             onClick = { onToggleChildReplies(reply.id) },
         )
         errorMessage?.let {
+            val colors = LocalHhhlColors.current
             Text(
                 text = it,
-                color = MaterialTheme.colorScheme.error,
+                color = colors.danger,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -353,6 +665,7 @@ private fun NoteDetailSummaryRow(
     onRefresh: () -> Unit,
     onLoadMoreReplies: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val authorText = note?.author?.displayName ?: "帖子详情"
     val replyText = when {
         isLoading -> "正在同步帖子"
@@ -370,7 +683,7 @@ private fun NoteDetailSummaryRow(
     ) {
         Text(
             text = "$authorText$usernameText · $replyText",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -400,8 +713,8 @@ private fun NoteDetailSummaryRow(
 @Composable
 private fun NoteReplyTreeHeader(
     replyCount: Int,
-    isLoading: Boolean,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -409,22 +722,15 @@ private fun NoteReplyTreeHeader(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = "回复树",
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = if (isLoading) "按父级关系整理中" else "回复直接展示在对应父帖下方",
-                color = LocalHhhlColors.current.subtleText,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+        Text(
+            text = "回复树",
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
         Text(
             text = if (replyCount == 0) "0" else replyCount.toString(),
-            color = MaterialTheme.colorScheme.secondary,
+            color = colors.textSecondary,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
         )
@@ -437,9 +743,8 @@ private fun ReplyTreeNoteRow(
     presentation: NoteReplyTreePresentation,
     content: @Composable () -> Unit,
 ) {
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val secondaryColor = MaterialTheme.colorScheme.secondary
-    val dividerColor = LocalHhhlColors.current.divider
+    val colors = LocalHhhlColors.current
+    val treeLineColor = colors.noteTreeLine
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -455,9 +760,9 @@ private fun ReplyTreeNoteRow(
                         val x = (strokeWidth / 2f) + index * (strokeWidth + railSpacing)
                         drawLine(
                             color = when {
-                                presentation.isDepthCollapsed -> secondaryColor.copy(alpha = 0.10f)
-                                isActiveRail -> primaryColor.copy(alpha = 0.16f)
-                                else -> dividerColor.copy(alpha = 0.58f)
+                                presentation.isDepthCollapsed -> treeLineColor.copy(alpha = 0.18f)
+                                isActiveRail -> treeLineColor.copy(alpha = 0.78f)
+                                else -> treeLineColor.copy(alpha = 0.46f)
                             },
                             start = Offset(x, railTopInset),
                             end = Offset(x, size.height - railBottomInset),

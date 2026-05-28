@@ -44,9 +44,12 @@ class FlashStateHolder(
 ) {
     private val mutableState = MutableStateFlow(FlashUiState())
     val state: StateFlow<FlashUiState> = mutableState
+    private var flashesRequestId = 0
+    private var detailRequestId = 0
 
     fun refreshFlashes(kind: FlashListKind = state.value.selectedKind) {
         if (state.value.isLoadingFlashes) return
+        val requestId = ++flashesRequestId
 
         mutableState.update {
             it.copy(
@@ -64,6 +67,8 @@ class FlashStateHolder(
             applyFlashesResult(
                 result = repository.refreshFlashes(kind),
                 loadingMore = false,
+                requestId = requestId,
+                kind = kind,
             )
         }
     }
@@ -83,6 +88,8 @@ class FlashStateHolder(
         ) {
             return
         }
+        val requestId = ++flashesRequestId
+        val kind = current.selectedKind
 
         mutableState.update {
             it.copy(isLoadingMore = true, errorMessage = null, requiresRelogin = false)
@@ -90,17 +97,21 @@ class FlashStateHolder(
 
         scope.launch {
             applyFlashesResult(
-                result = repository.loadMoreFlashes(current.selectedKind, current.flashes),
+                result = repository.loadMoreFlashes(kind, current.flashes),
                 loadingMore = true,
+                requestId = requestId,
+                kind = kind,
             )
         }
     }
 
     fun openFlash(flashId: String) {
-        if (flashId.isBlank() || state.value.isLoadingDetail) return
+        if (flashId.isBlank()) return
+        val requestId = ++detailRequestId
 
         mutableState.update {
             it.copy(
+                selectedFlash = it.selectedFlash?.takeIf { flash -> flash.id == flashId },
                 isLoadingDetail = true,
                 detailErrorMessage = null,
                 requiresRelogin = false,
@@ -110,6 +121,7 @@ class FlashStateHolder(
         scope.launch {
             when (val result = repository.showFlash(flashId)) {
                 is FlashRepositoryResult.Success -> mutableState.update {
+                    if (requestId != detailRequestId || result.flash.id != flashId) return@update it
                     it.copy(
                         selectedFlash = result.flash,
                         isLoadingDetail = false,
@@ -118,6 +130,7 @@ class FlashStateHolder(
                     )
                 }
                 FlashRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != detailRequestId) return@update it
                     it.copy(
                         isLoadingDetail = false,
                         detailErrorMessage = "登录已失效，请重新登录",
@@ -125,6 +138,7 @@ class FlashStateHolder(
                     )
                 }
                 is FlashRepositoryResult.Error -> mutableState.update {
+                    if (requestId != detailRequestId) return@update it
                     it.copy(
                         isLoadingDetail = false,
                         detailErrorMessage = result.message,
@@ -136,6 +150,7 @@ class FlashStateHolder(
     }
 
     fun closeDetail() {
+        detailRequestId += 1
         mutableState.update {
             it.copy(
                 selectedFlash = null,
@@ -251,9 +266,12 @@ class FlashStateHolder(
     private fun applyFlashesResult(
         result: FlashesRepositoryResult,
         loadingMore: Boolean,
+        requestId: Int,
+        kind: FlashListKind,
     ) {
         when (result) {
             is FlashesRepositoryResult.Success -> mutableState.update {
+                if (requestId != flashesRequestId || it.selectedKind != kind) return@update it
                 it.copy(
                     flashes = result.flashes,
                     isLoadingFlashes = false,
@@ -264,6 +282,7 @@ class FlashStateHolder(
                 )
             }
             FlashesRepositoryResult.Unauthorized -> mutableState.update {
+                if (requestId != flashesRequestId || it.selectedKind != kind) return@update it
                 it.copy(
                     isLoadingFlashes = false,
                     isLoadingMore = false,
@@ -272,6 +291,7 @@ class FlashStateHolder(
                 )
             }
             is FlashesRepositoryResult.Error -> mutableState.update {
+                if (requestId != flashesRequestId || it.selectedKind != kind) return@update it
                 it.copy(
                     isLoadingFlashes = if (loadingMore) it.isLoadingFlashes else false,
                     isLoadingMore = false,

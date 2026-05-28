@@ -24,9 +24,12 @@ import cc.hhhl.client.repository.SettingsManagementMutationRepositoryResult
 import cc.hhhl.client.repository.SettingsManagementRepositoryResult
 import cc.hhhl.client.repository.SettingsRepository
 import cc.hhhl.client.repository.SettingsRepositoryResult
+import cc.hhhl.client.repository.SettingsSharedAccessLoginRepositoryResult
 import cc.hhhl.client.repository.SettingsWebhookDetailRepositoryResult
 import cc.hhhl.client.theme.HhhlThemePreset
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -267,6 +270,46 @@ class SettingsStateHolderTest {
         assertEquals("token-1", revokedTokenId)
         assertEquals(0, holder.state.value.managementSection?.items?.size)
         assertEquals("操作已完成", holder.state.value.managementMessage)
+    }
+
+    @Test
+    fun openingAnotherManagementSectionInvalidatesPendingSectionLoad() = runTest {
+        val tokenLoad = CompletableDeferred<SettingsManagementRepositoryResult>()
+        val repository = object : SettingsRepository() {
+            override suspend fun loadManagementSection(key: SettingsManagementSectionKey): SettingsManagementRepositoryResult {
+                return if (key == SettingsManagementSectionKey.ApiTokens) {
+                    tokenLoad.await()
+                } else {
+                    SettingsManagementRepositoryResult.Success(
+                        SettingsManagementSection(
+                            key = key,
+                            title = "Webhook",
+                            items = listOf(SettingsManagementItem(id = "webhook-1", title = "Deploy")),
+                        ),
+                    )
+                }
+            }
+        }
+        val holder = SettingsStateHolder(repository = repository, scope = this)
+
+        holder.openManagement(SettingsManagementSectionKey.ApiTokens)
+        runCurrent()
+        holder.openManagement(SettingsManagementSectionKey.Webhooks)
+        advanceUntilIdle()
+        tokenLoad.complete(
+            SettingsManagementRepositoryResult.Success(
+                SettingsManagementSection(
+                    key = SettingsManagementSectionKey.ApiTokens,
+                    title = "访问令牌",
+                    items = listOf(SettingsManagementItem(id = "token-1", title = "Desktop app")),
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(SettingsManagementSectionKey.Webhooks, holder.state.value.openedManagementKey)
+        assertEquals("Webhook", holder.state.value.managementSection?.title)
+        assertEquals(listOf("webhook-1"), holder.state.value.managementSection?.items?.map { it.id })
     }
 
     @Test
@@ -517,6 +560,105 @@ class SettingsStateHolderTest {
         assertEquals(listOf("note", "reply"), holder.state.value.editingWebhook?.events)
         assertFalse(holder.state.value.isWebhookEditorLoading)
         assertEquals(null, holder.state.value.managementMessage)
+    }
+
+    @Test
+    fun sharedAccessLoginImportsReturnedSessionToken() = runTest {
+        var loginGrantId: String? = null
+        var importedToken: String? = null
+        var importedUserId: String? = null
+        val repository = object : SettingsRepository() {
+            override suspend fun loadManagementSection(key: SettingsManagementSectionKey): SettingsManagementRepositoryResult {
+                return SettingsManagementRepositoryResult.Success(
+                    SettingsManagementSection(
+                        key = key,
+                        title = "共享访问",
+                        items = listOf(
+                            SettingsManagementItem(
+                                id = "grant-1",
+                                title = "Mobile",
+                                actions = listOf(
+                                    SettingsManagementItemAction(
+                                        type = SettingsManagementAction.LoginSharedAccess,
+                                        label = "进入",
+                                        enabled = true,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+            }
+
+            override suspend fun loginSharedAccess(grantId: String): SettingsSharedAccessLoginRepositoryResult {
+                loginGrantId = grantId
+                return SettingsSharedAccessLoginRepositoryResult.Success(
+                    userId = "user-2",
+                    token = "session-token-2",
+                )
+            }
+        }
+        val holder = SettingsStateHolder(
+            repository = repository,
+            scope = this,
+            onSharedAccessLogin = { token, userId ->
+                importedToken = token
+                importedUserId = userId
+            },
+        )
+
+        holder.openManagement(SettingsManagementSectionKey.SharedAccess)
+        advanceUntilIdle()
+        holder.performManagementAction(SettingsManagementAction.LoginSharedAccess, "grant-1")
+        advanceUntilIdle()
+
+        assertEquals("grant-1", loginGrantId)
+        assertEquals("session-token-2", importedToken)
+        assertEquals("user-2", importedUserId)
+        assertEquals("共享访问已导入，正在切换账号", holder.state.value.managementMessage)
+        assertFalse(holder.state.value.isManagementMutating)
+    }
+
+    @Test
+    fun closingWebhookEditorInvalidatesPendingDetailLoad() = runTest {
+        val pending = CompletableDeferred<SettingsWebhookDetailRepositoryResult>()
+        val repository = object : SettingsRepository() {
+            override suspend fun loadManagementSection(key: SettingsManagementSectionKey): SettingsManagementRepositoryResult {
+                return SettingsManagementRepositoryResult.Success(
+                    SettingsManagementSection(
+                        key = key,
+                        title = "Webhook",
+                        items = listOf(SettingsManagementItem(id = "webhook-1", title = "Deploy")),
+                    ),
+                )
+            }
+
+            override suspend fun loadWebhook(webhookId: String): SettingsWebhookDetailRepositoryResult {
+                return pending.await()
+            }
+        }
+        val holder = SettingsStateHolder(repository = repository, scope = this)
+
+        holder.openManagement(SettingsManagementSectionKey.Webhooks)
+        advanceUntilIdle()
+        holder.openWebhookEditor("webhook-1")
+        runCurrent()
+        assertTrue(holder.state.value.isWebhookEditorLoading)
+
+        holder.closeWebhookEditor()
+        pending.complete(
+            SettingsWebhookDetailRepositoryResult.Success(
+                SettingsWebhookDetail(
+                    id = "webhook-1",
+                    name = "Deploy detail",
+                    url = "https://example.com/detail",
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isWebhookEditorLoading)
+        assertEquals(null, holder.state.value.editingWebhook)
     }
 
     private fun fakeRepository(

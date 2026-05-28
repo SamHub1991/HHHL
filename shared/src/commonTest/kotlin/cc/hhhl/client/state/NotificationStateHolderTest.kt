@@ -213,6 +213,40 @@ class NotificationStateHolderTest {
     }
 
     @Test
+    fun sendTestNotificationStoresSuccessMessage() = runTest {
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(emptyList()),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.sendTestNotification()
+        assertTrue(holder.state.value.isMarkingAllRead)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMarkingAllRead)
+        assertEquals("测试通知已发送", holder.state.value.message)
+    }
+
+    @Test
+    fun createReminderNotificationStoresSuccessMessage() = runTest {
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(emptyList()),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.createLocalReminderNotification()
+        assertTrue(holder.state.value.isMarkingAllRead)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMarkingAllRead)
+        assertEquals("提醒通知已发送", holder.state.value.message)
+    }
+
+    @Test
     fun dismissFollowRequestNotificationRemovesMatchingActorRequestsOnly() = runTest {
         val actor = FakeData.me
         val followRequest = NotificationItem(
@@ -369,6 +403,85 @@ class NotificationStateHolderTest {
         holder.addSpecialCareNotification(notification.copy(text = "duplicate"))
 
         assertEquals(1, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun addChatAttentionNotificationShowsInMentionsFilterWithoutMarkingSpecialCare() {
+        val notification = FakeData.notifications[0].copy(
+            id = "chat-mention-1",
+            type = NotificationType.Mention,
+            text = "有人 @ 你 · 在聊天中发来了新消息",
+            chatUserId = "chat-user-1",
+            chatMessageId = "chat-message-1",
+        )
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(NotificationRepositoryResult.Success(emptyList())),
+            scope = TestScope(),
+        )
+
+        holder.addChatAttentionNotification(notification)
+        holder.selectFilter(NotificationFilter.Mentions)
+
+        assertEquals(listOf("chat-mention-1"), holder.state.value.notifications.map { it.id })
+        assertFalse(holder.state.value.notifications.single().isSpecialCare)
+        assertEquals(1, holder.state.value.unreadCount)
+        assertEquals(0, holder.state.value.specialCareUnreadCount)
+    }
+
+    @Test
+    fun allFilterMergesChatAttentionAheadOfOlderRemoteNotifications() = runTest {
+        val remote = FakeData.notifications[0].copy(
+            id = "remote-older",
+            createdAtEpochMillis = 1_000L,
+        )
+        val chatAttention = FakeData.notifications[1].copy(
+            id = "chat-reply-new",
+            type = NotificationType.Reply,
+            text = "有人回复你 · 在聊天中发来了新消息",
+            createdAtEpochMillis = 2_000L,
+            chatUserId = "chat-user-2",
+            chatMessageId = "chat-message-2",
+        )
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(NotificationRepositoryResult.Success(listOf(remote))),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.addChatAttentionNotification(chatAttention)
+
+        assertEquals(listOf("chat-reply-new", "remote-older"), holder.state.value.notifications.map { it.id })
+        assertEquals(2, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun loadMoreUsesRemoteNotificationsAsPagingBaseWhenAllFilterContainsLocalChatAttention() = runTest {
+        val remote = FakeData.notifications[0].copy(id = "remote-base")
+        var loadMoreIds: List<String> = emptyList()
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(listOf(remote)),
+                loadMoreResult = NotificationRepositoryResult.Success(listOf(remote)),
+                onLoadMoreNotifications = { notifications -> loadMoreIds = notifications.map { it.id } },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.addChatAttentionNotification(
+            FakeData.notifications[1].copy(
+                id = "chat-local-load-more",
+                type = NotificationType.Mention,
+                chatUserId = "chat-user-load-more",
+                chatMessageId = "chat-message-load-more",
+            ),
+        )
+        holder.loadMore()
+        advanceUntilIdle()
+
+        assertEquals(listOf("remote-base"), loadMoreIds)
     }
 
     @Test
@@ -614,6 +727,7 @@ class NotificationStateHolderTest {
         markAllResult: NotificationRepositoryResult = NotificationRepositoryResult.AllRead,
         onRefresh: (NotificationFilter) -> Unit = {},
         onLoadMore: () -> Unit = {},
+        onLoadMoreNotifications: (List<NotificationItem>) -> Unit = {},
         onMarkAll: () -> Unit = {},
     ): NotificationRepository {
         return object : NotificationRepository(
@@ -627,6 +741,23 @@ class NotificationStateHolderTest {
                 ): NotificationLoadResult = NotificationLoadResult.Success(emptyList())
 
                 override suspend fun markAllAsRead(token: String): cc.hhhl.client.api.NotificationActionResult {
+                    return cc.hhhl.client.api.NotificationActionResult.Success
+                }
+
+                override suspend fun flush(token: String): cc.hhhl.client.api.NotificationActionResult {
+                    return cc.hhhl.client.api.NotificationActionResult.Success
+                }
+
+                override suspend fun createNotification(
+                    token: String,
+                    body: String,
+                    header: String?,
+                    icon: String?,
+                ): cc.hhhl.client.api.NotificationActionResult {
+                    return cc.hhhl.client.api.NotificationActionResult.Success
+                }
+
+                override suspend fun sendTestNotification(token: String): cc.hhhl.client.api.NotificationActionResult {
                     return cc.hhhl.client.api.NotificationActionResult.Success
                 }
             },
@@ -646,6 +777,7 @@ class NotificationStateHolderTest {
                 filter: NotificationFilter,
             ): NotificationRepositoryResult {
                 onLoadMore()
+                onLoadMoreNotifications(currentNotifications)
                 return loadMoreResult
             }
 
@@ -671,6 +803,23 @@ class NotificationStateHolderTest {
                 ): NotificationLoadResult = NotificationLoadResult.Success(emptyList())
 
                 override suspend fun markAllAsRead(token: String): cc.hhhl.client.api.NotificationActionResult {
+                    return cc.hhhl.client.api.NotificationActionResult.Success
+                }
+
+                override suspend fun flush(token: String): cc.hhhl.client.api.NotificationActionResult {
+                    return cc.hhhl.client.api.NotificationActionResult.Success
+                }
+
+                override suspend fun createNotification(
+                    token: String,
+                    body: String,
+                    header: String?,
+                    icon: String?,
+                ): cc.hhhl.client.api.NotificationActionResult {
+                    return cc.hhhl.client.api.NotificationActionResult.Success
+                }
+
+                override suspend fun sendTestNotification(token: String): cc.hhhl.client.api.NotificationActionResult {
                     return cc.hhhl.client.api.NotificationActionResult.Success
                 }
             },

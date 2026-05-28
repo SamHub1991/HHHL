@@ -1,6 +1,7 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelDefaultColorHex
 import cc.hhhl.client.model.ChannelDraft
 import cc.hhhl.client.model.ChannelListKind
 import cc.hhhl.client.model.Note
@@ -393,7 +394,7 @@ private data class ChannelMutationRequest(
                 channelId = channelId,
                 name = draft.name.trim(),
                 description = draft.description.trim(),
-                color = draft.color.trim().ifBlank { "#40c057" },
+                color = draft.color.trim().ifBlank { ChannelDefaultColorHex },
                 bannerId = draft.bannerId?.trim()?.takeIf { it.isNotBlank() },
                 isArchived = draft.isArchived,
                 isSensitive = draft.isSensitive,

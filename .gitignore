@@ -3,6 +3,7 @@ local.properties
 
 # Gradle / Kotlin build output
 .gradle/
+.gradle-user-home/
 .kotlin/
 build/
 **/build/
@@ -18,6 +19,7 @@ build/
 
 # Logs and temp files
 *.log
+hhhl-crash-log*.txt
 *.tmp
 *.temp
 

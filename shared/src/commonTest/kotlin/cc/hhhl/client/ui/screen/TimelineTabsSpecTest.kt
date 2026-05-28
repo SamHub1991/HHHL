@@ -15,6 +15,8 @@ class TimelineTabsSpecTest {
                 TimelineKind.Local,
                 TimelineKind.Global,
                 TimelineKind.Bubble,
+                TimelineKind.Featured,
+                TimelineKind.Mentions,
             ),
             availableTimelineKinds(
                 InstanceCapabilities(
@@ -29,7 +31,7 @@ class TimelineTabsSpecTest {
     @Test
     fun timelineTabsRespectInstanceTimelineCapabilities() {
         assertEquals(
-            listOf(TimelineKind.Home, TimelineKind.Social),
+            listOf(TimelineKind.Home, TimelineKind.Social, TimelineKind.Featured, TimelineKind.Mentions),
             availableTimelineKinds(
                 InstanceCapabilities(
                     localTimelineAvailable = false,
@@ -48,6 +50,8 @@ class TimelineTabsSpecTest {
             TimelineKind.Local,
             TimelineKind.Global,
             TimelineKind.Bubble,
+            TimelineKind.Featured,
+            TimelineKind.Mentions,
         )
 
         assertEquals(
@@ -55,7 +59,7 @@ class TimelineTabsSpecTest {
             timelinePrimaryKinds(available),
         )
         assertEquals(
-            listOf(TimelineKind.Global, TimelineKind.Bubble),
+            listOf(TimelineKind.Global, TimelineKind.Bubble, TimelineKind.Featured, TimelineKind.Mentions),
             timelineOverflowKinds(available),
         )
     }
@@ -67,6 +71,7 @@ class TimelineTabsSpecTest {
             TimelineKind.Social,
             TimelineKind.Local,
             TimelineKind.Global,
+            TimelineKind.Featured,
         )
 
         assertEquals(

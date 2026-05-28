@@ -86,6 +86,64 @@ class SharkeyUserRelationshipApiTest {
     }
 
     @Test
+    fun updatesFollowingPreferencesFromFollowingUpdateEndpoint() = runTest {
+        val api = SharkeyUserRelationshipApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/following/update", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""userId":"user-1""""))
+                assertTrue(body.contains(""""notify":"normal""""))
+                assertTrue(body.contains(""""withReplies":true""""))
+                respondOk()
+            },
+        )
+
+        assertIs<UserRelationshipResult.Success>(
+            api.updateFollowing("token-123", "user-1", notify = "normal", withReplies = true),
+        )
+    }
+
+    @Test
+    fun invalidatesFollowingFromFollowingInvalidateEndpoint() = runTest {
+        val api = SharkeyUserRelationshipApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/following/invalidate", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""userId":"user-1""""))
+                respondOk()
+            },
+        )
+
+        assertIs<UserRelationshipResult.Success>(api.invalidateFollowing("token-123", "user-1"))
+    }
+
+    @Test
+    fun updatesAllFollowingPreferencesFromUpdateAllEndpoint() = runTest {
+        val api = SharkeyUserRelationshipApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/following/update-all", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""notify":"none""""))
+                assertTrue(body.contains(""""withReplies":false""""))
+                respondOk()
+            },
+        )
+
+        assertIs<UserRelationshipResult.Success>(
+            api.updateAllFollowing("token-123", notify = "none", withReplies = false),
+        )
+    }
+
+    @Test
     fun mutesAndUnmutesUserFromMuteEndpoints() = runTest {
         val calls = mutableListOf<String>()
         val api = SharkeyUserRelationshipApi(

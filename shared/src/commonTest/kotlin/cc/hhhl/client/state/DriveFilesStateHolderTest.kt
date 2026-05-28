@@ -24,9 +24,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -248,6 +250,41 @@ class DriveFilesStateHolderTest {
     }
 
     @Test
+    fun changingFolderInvalidatesPendingLoadMoreFiles() = runTest {
+        val first = sampleFile("file-1")
+        val stale = sampleFile("file-stale")
+        val folder = sampleFolder("folder-next")
+        val pending = CompletableDeferred<DriveFilesRepositoryResult>()
+        var refreshCount = 0
+        val holder = DriveFilesStateHolder(
+            repository = fakeRepository(
+                refreshResult = DriveFilesRepositoryResult.Success(listOf(first)),
+                refreshResultProvider = {
+                    refreshCount += 1
+                    DriveFilesRepositoryResult.Success(if (refreshCount == 1) listOf(first) else emptyList())
+                },
+                loadMoreResultProvider = { pending.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.loadMore()
+        runCurrent()
+        assertTrue(holder.state.value.isLoadingMore)
+
+        holder.openFolder(folder)
+        pending.complete(DriveFilesRepositoryResult.Success(listOf(first, stale)))
+        advanceUntilIdle()
+
+        assertEquals(folder.id, holder.state.value.folderId)
+        assertFalse(holder.state.value.isLoadingMore)
+        assertEquals(emptyList(), holder.state.value.files)
+        assertEquals(false, holder.state.value.files.any { it.id == stale.id })
+    }
+
+    @Test
     fun openFolderLoadsFolderContentsAndTracksPath() = runTest {
         val rootFolder = sampleFolder("folder-root")
         val childFile = sampleFile("file-child")
@@ -413,6 +450,32 @@ class DriveFilesStateHolderTest {
 
         assertFalse(holder.state.value.isUploading)
         assertEquals(listOf(uploaded, existing), holder.state.value.files)
+    }
+
+    @Test
+    fun changingFolderInvalidatesPendingUploadResult() = runTest {
+        val folder = sampleFolder("folder-next")
+        val uploaded = sampleFile("uploaded")
+        val pending = CompletableDeferred<DriveFileRepositoryResult>()
+        val holder = DriveFilesStateHolder(
+            repository = fakeRepository(
+                refreshResult = DriveFilesRepositoryResult.Success(emptyList()),
+                uploadResultProvider = { pending.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.upload(sampleUpload())
+        runCurrent()
+        assertTrue(holder.state.value.isUploading)
+
+        holder.openFolder(folder)
+        pending.complete(DriveFileRepositoryResult.Success(uploaded))
+        advanceUntilIdle()
+
+        assertEquals(folder.id, holder.state.value.folderId)
+        assertFalse(holder.state.value.isUploading)
+        assertEquals(emptyList(), holder.state.value.files)
     }
 
     @Test
@@ -762,8 +825,11 @@ class DriveFilesStateHolderTest {
         fileDetailsResult: DriveFileDetailsRepositoryResult = DriveFileDetailsRepositoryResult.Error("unused"),
         onRefresh: (String?, DriveFileSort, String) -> Unit = { _, _, _ -> },
         onUpload: (DriveFileUpload) -> Unit = {},
-        refreshResultProvider: (() -> DriveFilesRepositoryResult)? = null,
-        refreshFoldersResultProvider: (() -> DriveFoldersRepositoryResult)? = null,
+        refreshResultProvider: (suspend () -> DriveFilesRepositoryResult)? = null,
+        refreshFoldersResultProvider: (suspend () -> DriveFoldersRepositoryResult)? = null,
+        loadMoreResultProvider: suspend () -> DriveFilesRepositoryResult = { loadMoreResult },
+        loadMoreFoldersResultProvider: suspend () -> DriveFoldersRepositoryResult = { loadMoreFoldersResult },
+        uploadResultProvider: suspend () -> DriveFileRepositoryResult = { uploadResult },
     ): DriveFileRepository {
         return object : DriveFileRepository(
             tokenProvider = { "token-123" },
@@ -848,7 +914,7 @@ class DriveFilesStateHolderTest {
                 sort: DriveFileSort,
                 searchQuery: String,
             ): DriveFilesRepositoryResult {
-                return loadMoreResult
+                return loadMoreResultProvider()
             }
 
             override suspend fun refreshFolders(
@@ -863,12 +929,12 @@ class DriveFilesStateHolderTest {
                 folderId: String?,
                 searchQuery: String,
             ): DriveFoldersRepositoryResult {
-                return loadMoreFoldersResult
+                return loadMoreFoldersResultProvider()
             }
 
             override suspend fun upload(upload: DriveFileUpload): DriveFileRepositoryResult {
                 onUpload(upload)
-                return uploadResult
+                return uploadResultProvider()
             }
 
             override suspend fun updateFile(

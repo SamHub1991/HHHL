@@ -6,12 +6,15 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -39,13 +42,11 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -59,10 +60,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -75,21 +79,30 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import coil3.compose.AsyncImage
+import cc.hhhl.client.model.AvatarDecoration
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageQuote
 import cc.hhhl.client.model.ChatRoom
+import cc.hhhl.client.model.CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX
+import cc.hhhl.client.model.ChatRoomInvitation
 import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.ChatUserConversation
 import cc.hhhl.client.model.CustomEmoji
+import cc.hhhl.client.model.User
 import cc.hhhl.client.model.commonEmojiOptions
+import cc.hhhl.client.state.ChatAttentionKind
 import cc.hhhl.client.state.ChatUiState
 import cc.hhhl.client.state.SpecialCareChatToast
 import cc.hhhl.client.state.primaryChatAttachmentFile
@@ -104,7 +117,10 @@ import cc.hhhl.client.ui.component.CustomEmojiReactionLabel
 import cc.hhhl.client.ui.component.DriveFilePreview
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
+import cc.hhhl.client.ui.component.HhhlCheckbox
 import cc.hhhl.client.ui.component.HhhlDivider
+import cc.hhhl.client.ui.component.HhhlDropdownMenu
+import cc.hhhl.client.ui.component.HhhlDropdownMenuItem
 import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
@@ -115,15 +131,28 @@ import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
 import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.ui.component.MediaPreviewSession
-import cc.hhhl.client.ui.component.chatMessageBodyText
+import cc.hhhl.client.presentation.chatMessageBodyText
+import cc.hhhl.client.api.toApiInstantOrNull
+import cc.hhhl.client.ui.component.containsValidMfmSyntax
 import cc.hhhl.client.ui.component.driveFileMediaPreviewSession
 import cc.hhhl.client.ui.component.hhhlNeutralControlBorderColor
 import cc.hhhl.client.ui.component.hhhlNeutralControlContainerColor
+import cc.hhhl.client.ui.component.hhhlReadableOnControlColor
 import cc.hhhl.client.ui.component.mediaTypeDisplayName
+import cc.hhhl.client.presentation.richTextPlainPreviewText
+import kotlinx.datetime.Clock
 
 private data class ChatOlderLoadAnchor(
     val messageId: String,
     val scrollOffset: Int,
+)
+
+private data class ChatSearchAuthorFilter(
+    val userId: String,
+    val displayName: String,
+    val avatarInitial: String,
+    val avatarUrl: String?,
+    val avatarDecorations: List<AvatarDecoration> = emptyList(),
 )
 
 private enum class ChatHomeTab {
@@ -131,9 +160,54 @@ private enum class ChatHomeTab {
     Users,
 }
 
-private val ChatMessageBubbleTailWidth = 9.dp
-private val ChatMessageBubbleTailHeight = 8.dp
-private val ChatMessageBubbleTailEdgeOverlap = 1.dp
+internal data class ChatMessageUiFilterState(
+    val hideMfmSyntaxMessages: Boolean = false,
+    val hiddenUserIds: Set<String> = emptySet(),
+    val hiddenUserDraft: String = "",
+    val regexPatterns: List<String> = emptyList(),
+    val regexDraft: String = "",
+) {
+    val activeCount: Int
+        get() = (if (hideMfmSyntaxMessages) 1 else 0) + hiddenUserIds.size + regexPatterns.size
+
+    val isActive: Boolean
+        get() = activeCount > 0
+
+    fun reset(): ChatMessageUiFilterState = copy(
+        hideMfmSyntaxMessages = false,
+        hiddenUserIds = emptySet(),
+        hiddenUserDraft = "",
+        regexPatterns = emptyList(),
+        regexDraft = "",
+    )
+
+    fun activeRulesOnly(): ChatMessageUiFilterState = if (hiddenUserDraft.isBlank() && regexDraft.isBlank()) {
+        this
+    } else {
+        copy(
+            hiddenUserDraft = "",
+            regexDraft = "",
+        )
+    }
+}
+
+private const val CHAT_MESSAGE_UI_FILTER_MAX_HIDDEN_USERS = 64
+private const val CHAT_MESSAGE_UI_FILTER_MAX_USER_RULE_LENGTH = 128
+
+private const val CHAT_MESSAGE_UI_FILTER_MAX_REGEX_RULES = 24
+private const val CHAT_MESSAGE_UI_FILTER_MAX_REGEX_LENGTH = 160
+private const val CHAT_MEMBER_ACTIVE_WINDOW_MILLIS = 30 * 60 * 1000L
+private const val CHAT_MEMBER_ACTIVE_FALLBACK_MESSAGE_LIMIT = 48
+private const val CHAT_MEMBER_ACTIVE_FALLBACK_USER_LIMIT = 8
+private const val CHAT_MESSAGE_UI_FILTER_MAX_MATCH_TEXT_LENGTH = 4_096
+
+private val ChatMessageTelegramTailWidth = 12.dp
+private val ChatMessageTelegramTailHeight = 10.dp
+private val ChatMessageTelegramTailAnchorY = 8.dp
+private val ChatMessageTelegramBubbleRadius = 21.dp
+private val ChatMessageIncomingAvatarTopPadding = 12.dp
+private val ChatMessageBubbleMaxWidth = 332.dp
+private val ChatMessageMetaNameMaxWidth = 176.dp
 
 @Composable
 private fun rememberChatPresslessInteractionSource(): MutableInteractionSource {
@@ -144,6 +218,7 @@ private fun rememberChatPresslessInteractionSource(): MutableInteractionSource {
 fun ChatScreen(
     state: ChatUiState,
     currentUserId: String? = null,
+    blockedUserIds: Set<String> = emptySet(),
     onRefresh: () -> Unit = {},
     onLoadMore: () -> Unit = {},
     onOpenRoom: (ChatRoom) -> Unit = {},
@@ -152,6 +227,9 @@ fun ChatScreen(
     onToggleUserConversationPinned: (String) -> Unit = {},
     onDeleteUserConversation: (String) -> Unit = {},
     onCreateRoom: (String, String) -> Unit = { _, _ -> },
+    onRefreshRoomExtras: () -> Unit = {},
+    onJoinRoomInvitation: (ChatRoomInvitation) -> Unit = {},
+    onIgnoreRoomInvitation: (String) -> Unit = {},
     onBackToRooms: () -> Unit = {},
     onRefreshMessages: () -> Unit = {},
     onLoadOlderMessages: () -> Unit = {},
@@ -200,6 +278,7 @@ fun ChatScreen(
             room = selectedRoom,
             userConversation = selectedUserConversation,
             state = state,
+            blockedUserIds = blockedUserIds,
             onBack = onBackToRooms,
             onRefresh = onRefreshMessages,
             onLoadOlderMessages = onLoadOlderMessages,
@@ -251,8 +330,10 @@ fun ChatScreen(
     val visibleRooms = remember(state.rooms, roomSearchQuery) {
         state.rooms.filterByChatRoomQuery(roomSearchQuery)
     }
-    val visibleUserConversations = remember(state.userConversations, userSearchQuery) {
-        state.userConversations.filterByChatUserConversationQuery(userSearchQuery)
+    val visibleUserConversations = remember(state.userConversations, blockedUserIds, userSearchQuery) {
+        state.userConversations
+            .filterNot { conversation -> conversation.user.id in blockedUserIds }
+            .filterByChatUserConversationQuery(userSearchQuery)
     }
     val unreadRoomCount = remember(state.rooms) {
         state.rooms.count { it.unreadCount > 0 }
@@ -280,18 +361,12 @@ fun ChatScreen(
             onTabSelected = { homeTab = it },
             onRefresh = onRefresh,
             onCreateRoom = onCreateRoom,
+            onRefreshRoomExtras = onRefreshRoomExtras,
         )
         state.roomManagementMessage?.let { message ->
             ChatStatusRow(
                 text = message,
                 loading = state.isManagingRoom,
-            )
-        }
-        state.specialCareToast?.let { toast ->
-            ChatSpecialCareToast(
-                toast = toast,
-                onOpen = onOpenSpecialCareToast,
-                onDismiss = onDismissSpecialCareToast,
             )
         }
         HhhlDivider()
@@ -317,12 +392,12 @@ fun ChatScreen(
         HhhlDivider()
         LazyColumn(state = homeListState) {
             if (state.isLoading && state.rooms.isEmpty() && state.userConversations.isEmpty()) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-home-loading", contentType = ChatListContentType.Status) {
                     ChatStatusRow(text = "正在加载聊天...", loading = true)
                 }
             }
             state.errorMessage?.let { message ->
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-home-error", contentType = ChatListContentType.Status) {
                     ChatStatusRow(
                         text = message,
                         actionText = if (state.chatAvailable) "重试" else null,
@@ -336,7 +411,7 @@ fun ChatScreen(
                 state.rooms.isEmpty() &&
                 state.errorMessage == null
             ) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-home-rooms-empty", contentType = ChatListContentType.Status) {
                     ChatStatusRow(
                         text = if (state.chatAvailable) "还没有加入的聊天室" else "实例未启用聊天",
                     )
@@ -349,7 +424,7 @@ fun ChatScreen(
                 state.rooms.isNotEmpty() &&
                 state.errorMessage == null
             ) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-home-rooms-search-empty", contentType = ChatListContentType.Status) {
                     ChatStatusRow(text = "没有匹配的聊天室")
                 }
             }
@@ -359,7 +434,7 @@ fun ChatScreen(
                 state.userConversations.isEmpty() &&
                 state.errorMessage == null
             ) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-home-users-empty", contentType = ChatListContentType.Status) {
                     ChatStatusRow(text = if (state.chatAvailable) "还没有单聊记录" else "实例未启用聊天")
                 }
             }
@@ -370,11 +445,27 @@ fun ChatScreen(
                 state.userConversations.isNotEmpty() &&
                 state.errorMessage == null
             ) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-home-users-search-empty", contentType = ChatListContentType.Status) {
                     ChatStatusRow(text = "没有匹配的用户")
                 }
             }
             if (homeTab == ChatHomeTab.Rooms) {
+                if (
+                    state.roomInvitationInbox.isNotEmpty() ||
+                    state.roomInvitationOutbox.isNotEmpty() ||
+                    state.ownedRooms.isNotEmpty() ||
+                    state.isLoadingRoomExtras
+                ) {
+                    item(key = "chat-room-extras", contentType = ChatListContentType.Status) {
+                        ChatRoomExtrasPanel(
+                            state = state,
+                            onOpenRoom = onOpenRoom,
+                            onJoinRoomInvitation = onJoinRoomInvitation,
+                            onIgnoreRoomInvitation = onIgnoreRoomInvitation,
+                        )
+                        HhhlDivider()
+                    }
+                }
                 items(
                     items = visibleRooms,
                     key = { it.membershipId },
@@ -382,6 +473,7 @@ fun ChatScreen(
                 ) { room ->
                     ChatRoomRow(
                         room = room,
+                        attentionKind = state.roomAttentionKinds[room.id],
                         isPinned = room.id in state.pinnedRoomIds,
                         onClick = { onOpenRoom(room) },
                         onTogglePinned = { onToggleRoomPinned(room.id) },
@@ -397,6 +489,7 @@ fun ChatScreen(
                     ChatUserConversationRow(
                         conversation = conversation,
                         currentUserId = currentUserId,
+                        attentionKind = state.userConversationAttentionKinds[conversation.user.id],
                         isPinned = conversation.user.id in state.pinnedUserConversationIds,
                         onClick = { onOpenUserConversation(conversation) },
                         onTogglePinned = { onToggleUserConversationPinned(conversation.user.id) },
@@ -406,7 +499,7 @@ fun ChatScreen(
                 }
             }
             if (homeTab == ChatHomeTab.Rooms && roomSearchQuery.isBlank() && state.rooms.isNotEmpty() && !state.endReached) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-home-rooms-loading-more", contentType = ChatListContentType.Status) {
                     if (state.isLoadingMore) {
                         ChatStatusRow(
                             text = "正在加载更多...",
@@ -426,8 +519,10 @@ private fun ChatRoomSummaryRow(
     onTabSelected: (ChatHomeTab) -> Unit,
     onRefresh: () -> Unit,
     onCreateRoom: (String, String) -> Unit,
+    onRefreshRoomExtras: () -> Unit,
 ) {
     var createDialogOpen by remember { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
     val titleText = if (state.chatAvailable) "已加入的聊天室" else "聊天不可用"
     val stateText = when {
         state.isLoading -> "正在同步聊天室列表"
@@ -447,7 +542,7 @@ private fun ChatRoomSummaryRow(
         ) {
             Text(
                 text = "$titleText · $stateText",
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
@@ -469,7 +564,10 @@ private fun ChatRoomSummaryRow(
                     contentDescription = if (state.isLoading || state.isLoadingMore) "同步中" else "刷新聊天",
                     emphasized = true,
                     enabled = state.chatAvailable && !state.isLoading && !state.isLoadingMore,
-                    onClick = onRefresh,
+                    onClick = {
+                        onRefresh()
+                        onRefreshRoomExtras()
+                    },
                 )
             }
         }
@@ -518,6 +616,7 @@ private fun ChatRoomSearchPanel(
     unreadRoomCount: Int,
     totalUnreadCount: Int,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -535,7 +634,7 @@ private fun ChatRoomSearchPanel(
                 Icon(
                     imageVector = Icons.Filled.Search,
                     contentDescription = null,
-                    tint = LocalHhhlColors.current.subtleText,
+                    tint = colors.textMuted,
                     modifier = Modifier.size(18.dp),
                 )
             },
@@ -560,6 +659,139 @@ private fun ChatRoomSearchPanel(
 }
 
 @Composable
+private fun ChatRoomExtrasPanel(
+    state: ChatUiState,
+    onOpenRoom: (ChatRoom) -> Unit,
+    onJoinRoomInvitation: (ChatRoomInvitation) -> Unit,
+    onIgnoreRoomInvitation: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (state.isLoadingRoomExtras) {
+            Text(
+                text = "正在同步邀请和管理的聊天室",
+                color = colors.textMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+        if (state.roomInvitationInbox.isNotEmpty()) {
+            ChatExtraSectionTitle(title = "邀请", count = state.roomInvitationInbox.size)
+            state.roomInvitationInbox.take(3).forEach { invitation ->
+                ChatRoomInvitationRow(
+                    invitation = invitation,
+                    isManaging = state.isManagingRoom,
+                    onJoin = { onJoinRoomInvitation(invitation) },
+                    onIgnore = { onIgnoreRoomInvitation(invitation.room.id) },
+                )
+            }
+        }
+        if (state.ownedRooms.isNotEmpty()) {
+            ChatExtraSectionTitle(title = "我管理的", count = state.ownedRooms.size)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                state.ownedRooms.take(6).forEach { room ->
+                    HhhlActionChip(
+                        label = room.name.ifBlank { "聊天室" },
+                        onClick = { onOpenRoom(room) },
+                    )
+                }
+            }
+        }
+        if (state.roomInvitationOutbox.isNotEmpty()) {
+            Text(
+                text = "已发出 ${state.roomInvitationOutbox.size} 个邀请",
+                color = colors.textMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatExtraSectionTitle(
+    title: String,
+    count: Int,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = count.toString(),
+            color = colors.textSecondary,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun ChatRoomInvitationRow(
+    invitation: ChatRoomInvitation,
+    isManaging: Boolean,
+    onJoin: () -> Unit,
+    onIgnore: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.inputBackground.copy(alpha = 0.48f))
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ChatRoomAvatar(room = invitation.room, unreadCount = 0)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = invitation.room.name.ifBlank { "聊天室" },
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = invitation.inviter?.let { "${it.displayName} 邀请你" } ?: "新的聊天室邀请",
+                color = colors.textMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        HhhlActionChip(
+            label = if (isManaging) "处理中" else "加入",
+            emphasized = true,
+            enabled = !isManaging,
+            onClick = onJoin,
+        )
+        HhhlActionChip(
+            label = "忽略",
+            enabled = !isManaging,
+            onClick = onIgnore,
+        )
+    }
+}
+
+@Composable
 private fun ChatUserSearchPanel(
     query: String,
     onQueryChanged: (String) -> Unit,
@@ -568,6 +800,7 @@ private fun ChatUserSearchPanel(
     unreadUserCount: Int,
     totalUnreadCount: Int,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -585,7 +818,7 @@ private fun ChatUserSearchPanel(
                 Icon(
                     imageVector = Icons.Filled.Search,
                     contentDescription = null,
-                    tint = LocalHhhlColors.current.subtleText,
+                    tint = colors.textMuted,
                     modifier = Modifier.size(18.dp),
                 )
             },
@@ -616,12 +849,13 @@ private fun ChatOverviewPill(
     modifier: Modifier = Modifier,
     emphasized: Boolean = false,
 ) {
+    val colors = LocalHhhlColors.current
     val containerColor = hhhlNeutralControlContainerColor(selected = emphasized)
     val borderColor = hhhlNeutralControlBorderColor(selected = emphasized)
     val contentColor = if (emphasized) {
-        MaterialTheme.colorScheme.primary
+        hhhlReadableOnControlColor(containerColor, colors.accent)
     } else {
-        LocalHhhlColors.current.subtleText
+        colors.textMuted
     }
     Row(
         modifier = modifier
@@ -652,11 +886,13 @@ private fun ChatOverviewPill(
 @OptIn(ExperimentalFoundationApi::class)
 private fun ChatRoomRow(
     room: ChatRoom,
+    attentionKind: ChatAttentionKind?,
     isPinned: Boolean,
     onClick: () -> Unit,
     onTogglePinned: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
     val interactionSource = rememberChatPresslessInteractionSource()
     val unreadCount = room.unreadCount.coerceAtLeast(0)
     val hasUnread = unreadCount > 0
@@ -666,7 +902,7 @@ private fun ChatRoomRow(
             .clip(RoundedCornerShape(18.dp))
             .background(
                 if (isPinned) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.055f)
+                    colors.buttonSelectedBackground.copy(alpha = 0.48f)
                 } else {
                     Color.Transparent
                 },
@@ -695,7 +931,7 @@ private fun ChatRoomRow(
                 ) {
                     Text(
                         text = room.name.ifBlank { "聊天室" },
-                        color = if (hasUnread) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
+                        color = if (hasUnread) colors.accent else colors.textPrimary,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.SemiBold,
                         maxLines = 1,
@@ -708,25 +944,32 @@ private fun ChatRoomRow(
                     ChatRoomMuteGlyph(isMuted = room.isMuted)
                 }
                 if (room.description.isNotBlank()) {
-                    Text(
+                    InlineRichText(
                         text = room.description,
                         color = if (hasUnread) {
-                            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.74f)
+                            colors.textPrimary.copy(alpha = 0.74f)
                         } else {
-                            MaterialTheme.colorScheme.secondary
+                            colors.textSecondary
                         },
                         style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Text(
-                    text = "${room.memberCount} 位成员 · ${room.joinMode.toDisplayJoinMode()}",
-                    color = LocalHhhlColors.current.subtleText,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    attentionKind?.let { kind ->
+                        ChatAttentionInlineBadge(kind = kind)
+                    }
+                    Text(
+                        text = "${room.memberCount} 位成员 · ${room.joinMode.toDisplayJoinMode()}",
+                        color = colors.textMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
             }
             Column(
                 modifier = Modifier.widthIn(min = 46.dp, max = 96.dp),
@@ -755,12 +998,14 @@ private fun ChatRoomRow(
 private fun ChatUserConversationRow(
     conversation: ChatUserConversation,
     currentUserId: String?,
+    attentionKind: ChatAttentionKind?,
     isPinned: Boolean,
     onClick: () -> Unit,
     onTogglePinned: () -> Unit,
     onDeleteConversation: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
     val interactionSource = rememberChatPresslessInteractionSource()
     val unreadCount = conversation.unreadCount.coerceAtLeast(0)
     val hasUnread = unreadCount > 0
@@ -776,7 +1021,7 @@ private fun ChatUserConversationRow(
             .clip(RoundedCornerShape(18.dp))
             .background(
                 if (isPinned) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.055f)
+                    colors.buttonSelectedBackground.copy(alpha = 0.48f)
                 } else {
                     Color.Transparent
                 },
@@ -816,7 +1061,7 @@ private fun ChatUserConversationRow(
                 ) {
                     Text(
                         text = conversation.user.displayName.ifBlank { conversation.user.username },
-                        color = if (hasUnread) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
+                        color = if (hasUnread) colors.accent else colors.textPrimary,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.SemiBold,
                         maxLines = 1,
@@ -827,24 +1072,32 @@ private fun ChatUserConversationRow(
                         ChatPinnedBadge()
                     }
                 }
-                Text(
+                InlineRichText(
                     text = preview,
                     color = if (hasUnread) {
-                        MaterialTheme.colorScheme.onBackground.copy(alpha = 0.74f)
+                        colors.textPrimary.copy(alpha = 0.74f)
                     } else {
-                        MaterialTheme.colorScheme.secondary
+                        colors.textSecondary
                     },
                     style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    maxChars = 140,
                 )
-                Text(
-                    text = "@${conversation.user.username}${conversation.user.host?.let { "@$it" }.orEmpty()}",
-                    color = LocalHhhlColors.current.subtleText,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    attentionKind?.let { kind ->
+                        ChatAttentionInlineBadge(kind = kind)
+                    }
+                    Text(
+                        text = "@${conversation.user.username}${conversation.user.host?.let { "@$it" }.orEmpty()}",
+                        color = colors.textMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
             }
             Column(
                 modifier = Modifier.widthIn(min = 46.dp, max = 96.dp),
@@ -872,14 +1125,48 @@ private fun ChatUserConversationRow(
 private fun ChatConversationTimeText(
     text: String,
 ) {
+    val colors = LocalHhhlColors.current
     Text(
         text = text.ifBlank { " " },
-        color = LocalHhhlColors.current.subtleText,
+        color = colors.textMuted,
         style = MaterialTheme.typography.bodySmall,
         maxLines = 1,
         overflow = TextOverflow.Clip,
         softWrap = false,
     )
+}
+
+@Composable
+private fun ChatAttentionInlineBadge(
+    kind: ChatAttentionKind,
+) {
+    val colors = LocalHhhlColors.current
+    val container = colors.accentSoft.copy(alpha = 0.88f)
+    val border = colors.focusRing.copy(alpha = 0.24f)
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(container)
+            .border(1.dp, border, RoundedCornerShape(999.dp))
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = kind.icon,
+            color = colors.accent,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+        Text(
+            text = kind.shortLabel,
+            color = colors.accent,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
 }
 
 @Composable
@@ -891,19 +1178,16 @@ private fun ChatConversationContextMenu(
     onTogglePinned: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    DropdownMenu(
+    val colors = LocalHhhlColors.current
+    HhhlDropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
         offset = DpOffset(x = 12.dp, y = (-4).dp),
+        shape = RoundedCornerShape(18.dp),
+        containerColor = colors.surfaceElevated.copy(alpha = 0.98f),
+        borderColor = colors.border.copy(alpha = 0.34f),
         modifier = Modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.98f))
-            .widthIn(min = 188.dp, max = 232.dp)
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.34f),
-                shape = RoundedCornerShape(18.dp),
-            ),
+            .widthIn(min = 188.dp, max = 232.dp),
     ) {
         ChatConversationContextMenuItem(
             label = if (isPinned) "取消置顶" else "置顶",
@@ -934,8 +1218,9 @@ private fun ChatConversationContextMenuItem(
     destructive: Boolean = false,
     onClick: () -> Unit,
 ) {
-    val contentColor = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-    DropdownMenuItem(
+    val colors = LocalHhhlColors.current
+    val contentColor = if (destructive) colors.danger else colors.textPrimary
+    HhhlDropdownMenuItem(
         text = {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -957,13 +1242,14 @@ private fun ChatConversationContextMenuItem(
                 )
             }
         },
+        destructive = destructive,
         onClick = onClick,
         modifier = Modifier
             .padding(horizontal = 6.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(13.dp))
             .background(
                 if (destructive) {
-                    MaterialTheme.colorScheme.error.copy(alpha = 0.07f)
+                    colors.danger.copy(alpha = 0.07f)
                 } else {
                     Color.Transparent
                 },
@@ -973,13 +1259,14 @@ private fun ChatConversationContextMenuItem(
 
 @Composable
 private fun ChatPinnedBadge() {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+            .background(colors.buttonSelectedBackground)
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                color = colors.focusRing.copy(alpha = 0.18f),
                 shape = RoundedCornerShape(999.dp),
             )
             .padding(horizontal = 6.dp, vertical = 2.dp),
@@ -989,12 +1276,12 @@ private fun ChatPinnedBadge() {
         Icon(
             imageVector = Icons.Filled.PushPin,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = colors.accent,
             modifier = Modifier.size(11.dp),
         )
         Text(
             text = "置顶",
-            color = MaterialTheme.colorScheme.primary,
+            color = colors.accent,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -1007,22 +1294,30 @@ private fun ChatRoomUnreadCountBadge(
     unreadCount: Int,
     modifier: Modifier = Modifier,
 ) {
+    val colors = LocalHhhlColors.current
     val label = if (unreadCount > 99) "99+" else unreadCount.toString()
+    val fontScale = LocalDensity.current.fontScale.coerceIn(1f, 1.7f)
+    val badgeHeight = 22.dp + ((fontScale - 1f) * 10f).dp
+    val minWidth = when {
+        unreadCount > 99 -> 34.dp
+        unreadCount > 9 -> 30.dp
+        else -> 24.dp
+    } + ((fontScale - 1f) * 8f).dp
     val badgeBrush = Brush.verticalGradient(
         colors = listOf(
-            MaterialTheme.colorScheme.error.copy(alpha = 0.96f),
-            MaterialTheme.colorScheme.error.copy(alpha = 0.84f),
+            colors.unreadBadge.copy(alpha = 0.96f),
+            colors.unreadBadge.copy(alpha = 0.84f),
         ),
     )
     Box(
         modifier = modifier
-            .height(22.dp)
-            .widthIn(min = if (unreadCount > 99) 34.dp else if (unreadCount > 9) 30.dp else 24.dp)
+            .height(badgeHeight)
+            .widthIn(min = minWidth)
             .clip(RoundedCornerShape(999.dp))
             .background(badgeBrush)
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.onError.copy(alpha = 0.30f),
+                color = colors.dangerText.copy(alpha = 0.30f),
                 shape = RoundedCornerShape(999.dp),
             )
             .padding(horizontal = 8.dp)
@@ -1031,7 +1326,7 @@ private fun ChatRoomUnreadCountBadge(
     ) {
         Text(
             text = label,
-            color = MaterialTheme.colorScheme.onError,
+            color = colors.dangerText,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
@@ -1045,8 +1340,12 @@ private object ChatListContentType {
     const val Message = "chat-message"
     const val MessageSearchResult = "chat-message-search-result"
     const val Member = "chat-member"
+    const val MemberHeader = "chat-member-header"
+    const val MemberRow = "chat-member-row"
     const val Status = "chat-status"
 }
+
+private const val CHAT_ROOM_MEMBERS_PER_ROW = 4
 
 private enum class ChatComposerPanel {
     Attachment,
@@ -1080,29 +1379,38 @@ private fun ChatAvatarUnreadBadge(
     unreadCount: Int,
     modifier: Modifier = Modifier,
 ) {
+    val colors = LocalHhhlColors.current
+    val label = if (unreadCount > 99) "99+" else unreadCount.toString()
+    val fontScale = LocalDensity.current.fontScale.coerceIn(1f, 1.7f)
+    val badgeHeight = 18.dp + ((fontScale - 1f) * 8f).dp
+    val minWidth = when {
+        unreadCount > 99 -> 28.dp
+        unreadCount > 9 -> 24.dp
+        else -> 18.dp
+    } + ((fontScale - 1f) * 7f).dp
     val badgeBrush = Brush.verticalGradient(
         colors = listOf(
-            MaterialTheme.colorScheme.error.copy(alpha = 0.96f),
-            MaterialTheme.colorScheme.error.copy(alpha = 0.84f),
+            colors.unreadBadge.copy(alpha = 0.96f),
+            colors.unreadBadge.copy(alpha = 0.84f),
         ),
     )
     Box(
         modifier = modifier
-            .height(18.dp)
-            .widthIn(min = if (unreadCount > 99) 28.dp else if (unreadCount > 9) 24.dp else 18.dp)
+            .height(badgeHeight)
+            .widthIn(min = minWidth)
             .clip(RoundedCornerShape(999.dp))
             .background(badgeBrush)
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.onError.copy(alpha = 0.30f),
+                color = colors.dangerText.copy(alpha = 0.30f),
                 shape = RoundedCornerShape(999.dp),
             )
             .padding(horizontal = if (unreadCount > 9) 5.dp else 0.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = if (unreadCount > 99) "99+" else unreadCount.toString(),
-            color = MaterialTheme.colorScheme.onError,
+            text = label,
+            color = colors.dangerText,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
@@ -1112,9 +1420,10 @@ private fun ChatAvatarUnreadBadge(
 
 @Composable
 private fun ChatRoomMuteGlyph(isMuted: Boolean) {
+    val colors = LocalHhhlColors.current
     Text(
         text = if (isMuted) "🔇" else "🔈",
-        color = LocalHhhlColors.current.subtleText.copy(alpha = if (isMuted) 0.78f else 0.42f),
+        color = colors.textMuted.copy(alpha = if (isMuted) 0.78f else 0.42f),
         style = MaterialTheme.typography.labelSmall,
         maxLines = 1,
         modifier = Modifier.semantics {
@@ -1128,6 +1437,7 @@ private fun ChatDetailScreen(
     room: ChatRoom?,
     userConversation: ChatUserConversation?,
     state: ChatUiState,
+    blockedUserIds: Set<String>,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onLoadOlderMessages: () -> Unit,
@@ -1202,6 +1512,8 @@ private fun ChatDetailScreen(
         }
     }
     var showingMessageSearch by remember(conversationKey) { mutableStateOf(false) }
+    var showingMessageFilters by remember(conversationKey) { mutableStateOf(false) }
+    var messageUiFilter by remember(conversationKey) { mutableStateOf(ChatMessageUiFilterState()) }
     var memberSearchQuery by remember(conversationKey) { mutableStateOf("") }
     var pendingMessageJumpId by remember(conversationKey) { mutableStateOf<String?>(null) }
     var pendingQuoteJump by remember(conversationKey) { mutableStateOf<ChatRenderedQuote?>(null) }
@@ -1209,11 +1521,47 @@ private fun ChatDetailScreen(
     var inviteMemberDialogOpen by remember(conversationKey) { mutableStateOf(false) }
     var leaveRoomDialogOpen by remember(conversationKey) { mutableStateOf(false) }
     var deleteRoomDialogOpen by remember(conversationKey) { mutableStateOf(false) }
-    val messageIndexById = remember(state.messages) {
-        state.messages.withIndex().associate { (index, message) -> message.id to index }
+    val activeMessageUiFilter = remember(
+        messageUiFilter.hideMfmSyntaxMessages,
+        messageUiFilter.hiddenUserIds,
+        messageUiFilter.regexPatterns,
+    ) {
+        messageUiFilter.activeRulesOnly()
+    }
+    val compiledFilterRegexes = remember(messageUiFilter.regexPatterns) {
+        compileChatMessageUiFilterRegexes(messageUiFilter.regexPatterns)
+    }
+    val displayBaseMessages = remember(state.messages, blockedUserIds) {
+        state.messages.filterNot { message -> message.isHiddenByBlockedChatUser(blockedUserIds) }
+    }
+    val visibleMessages = remember(displayBaseMessages, activeMessageUiFilter, compiledFilterRegexes) {
+        displayBaseMessages
+            .filterByChatMessageUiFilter(activeMessageUiFilter, compiledFilterRegexes)
+    }
+    val filteredMessageCount = displayBaseMessages.size - visibleMessages.size
+    val messageIndexById = remember(visibleMessages) {
+        visibleMessages.withIndex().associate { (index, message) -> message.id to index }
+    }
+    val loadedMessageIds = remember(state.messages) {
+        state.messages.loadedChatMessageIdSet()
+    }
+    val loadedMessageFingerprint = remember(state.messages) {
+        state.messages.chatMessageIdFingerprint()
+    }
+    val visibleMessageFingerprint = remember(visibleMessages) {
+        visibleMessages.chatMessageIdFingerprint()
+    }
+    val filterableAuthors = remember(state.messages) {
+        state.messages
+            .map { it.fromUser }
+            .distinctBy { it.id }
+            .sortedBy { it.displayName.ifBlank { it.username } }
     }
     val visibleMembers = remember(state.members, memberSearchQuery) {
         state.members.filterByChatRoomMemberQuery(memberSearchQuery)
+    }
+    val displayBaseSearchResults = remember(state.messageSearchResults, blockedUserIds) {
+        state.messageSearchResults.filterNot { message -> message.isHiddenByBlockedChatUser(blockedUserIds) }
     }
     val canRefreshMessages = !state.isLoadingMessages && !state.isLoadingOlderMessages
     val canRefreshMembers = !state.isLoadingMembers && !state.isLoadingMoreMembers
@@ -1232,8 +1580,8 @@ private fun ChatDetailScreen(
     if (showingMessageSearch) {
         ChatMessageSearchScreen(
             title = title,
-            messages = state.messages,
-            searchResults = state.messageSearchResults,
+            messages = displayBaseMessages,
+            searchResults = displayBaseSearchResults,
             searchQuery = state.messageSearchQuery,
             canLoadOlderMessages = !state.messagesEndReached,
             isLoadingMessages = state.isLoadingMessages,
@@ -1243,6 +1591,8 @@ private fun ChatDetailScreen(
             canLoadMoreSearch = !state.messageSearchEndReached,
             messageErrorMessage = state.messageErrorMessage,
             searchErrorMessage = state.messageSearchErrorMessage,
+            uiFilter = activeMessageUiFilter,
+            uiFilterRegexes = compiledFilterRegexes,
             onBack = { showingMessageSearch = false },
             onRefresh = onRefresh,
             onLoadOlderMessages = onLoadOlderMessages,
@@ -1250,9 +1600,29 @@ private fun ChatDetailScreen(
             onLoadMoreSearch = onLoadMoreMessageSearch,
             onSelectMessage = { messageId ->
                 showingMessageSearch = false
+                if (messageUiFilter.shouldResetForLoadedHiddenMessage(messageId, loadedMessageIds, messageIndexById)) {
+                    messageUiFilter = messageUiFilter.reset()
+                }
                 pendingMessageJumpId = messageId
                 onShowMessages()
             },
+            onOpenFilters = {
+                showingMessageSearch = false
+                showingMessageFilters = true
+            },
+        )
+        return
+    }
+
+    if (showingMessageFilters) {
+        ChatMessageFilterScreen(
+            title = title,
+            filter = messageUiFilter,
+            filteredMessageCount = filteredMessageCount,
+            totalMessageCount = displayBaseMessages.size,
+            authors = filterableAuthors,
+            onBack = { showingMessageFilters = false },
+            onFilterChanged = { messageUiFilter = it },
         )
         return
     }
@@ -1283,6 +1653,10 @@ private fun ChatDetailScreen(
                         onSearchMessages = {
                             closeComposerPanel()
                             showingMessageSearch = true
+                        },
+                        onOpenFilters = {
+                            closeComposerPanel()
+                            showingMessageFilters = true
                         },
                         onEditRoom = {
                             closeComposerPanel()
@@ -1361,7 +1735,7 @@ private fun ChatDetailScreen(
             var lastOlderLoadAnchorId by remember(conversationKey) { mutableStateOf<String?>(null) }
             var pendingOlderLoadAnchor by remember(conversationKey) { mutableStateOf<ChatOlderLoadAnchor?>(null) }
             val olderLoaderItems = if (!state.messagesEndReached) 1 else 0
-            val latestMessageIndex = olderLoaderItems + state.messages.lastIndex
+            val latestMessageIndex = olderLoaderItems + visibleMessages.lastIndex
             val showJumpToLatest by remember(messageListState, latestMessageIndex) {
                 derivedStateOf {
                     val lastVisibleIndex = messageListState.layoutInfo.visibleItemsInfo
@@ -1370,7 +1744,7 @@ private fun ChatDetailScreen(
                     latestMessageIndex >= 0 && latestMessageIndex - lastVisibleIndex >= 3
                 }
             }
-            val latestMessageId = state.messages.lastOrNull()?.id
+            val latestMessageId = visibleMessages.lastOrNull()?.id
             LaunchedEffect(state.isSendingMessage) {
                 if (state.isSendingMessage) {
                     scrollToLatestAfterSend = true
@@ -1391,7 +1765,7 @@ private fun ChatDetailScreen(
                     return@LaunchedEffect
                 }
 
-                val targetIndex = olderLoaderItems + state.messages.lastIndex
+                val targetIndex = olderLoaderItems + visibleMessages.lastIndex
                 if (targetIndex < 0) return@LaunchedEffect
 
                 val shouldAutoScroll = shouldForceScrollAfterSend ||
@@ -1411,8 +1785,12 @@ private fun ChatDetailScreen(
 
                 previousLatestMessageId = targetMessageId
             }
-            LaunchedEffect(state.unreadJumpMessageId, state.messages.size) {
+            LaunchedEffect(state.unreadJumpMessageId, loadedMessageFingerprint, visibleMessageFingerprint) {
                 val targetMessageId = state.unreadJumpMessageId ?: return@LaunchedEffect
+                if (messageUiFilter.shouldResetForLoadedHiddenMessage(targetMessageId, loadedMessageIds, messageIndexById)) {
+                    messageUiFilter = messageUiFilter.reset()
+                    return@LaunchedEffect
+                }
                 val targetIndexInMessages = messageIndexById[targetMessageId]
                 if (targetIndexInMessages != null) {
                     messageListState.animateScrollToItem(
@@ -1422,8 +1800,12 @@ private fun ChatDetailScreen(
                     onUnreadJumpHandled()
                 }
             }
-            LaunchedEffect(pendingMessageJumpId, state.messages.size, state.isLoadingOlderMessages) {
+            LaunchedEffect(pendingMessageJumpId, loadedMessageFingerprint, visibleMessageFingerprint, state.isLoadingOlderMessages) {
                 val targetMessageId = pendingMessageJumpId ?: return@LaunchedEffect
+                if (messageUiFilter.shouldResetForLoadedHiddenMessage(targetMessageId, loadedMessageIds, messageIndexById)) {
+                    messageUiFilter = messageUiFilter.reset()
+                    return@LaunchedEffect
+                }
                 val targetIndexInMessages = messageIndexById[targetMessageId]
                 if (targetIndexInMessages != null) {
                     messageListState.animateScrollToItem(
@@ -1433,21 +1815,22 @@ private fun ChatDetailScreen(
                     pendingMessageJumpId = null
                 } else if (!state.messagesEndReached && !state.isLoadingOlderMessages && !state.isLoadingMessages) {
                     pendingOlderLoadAnchor = messageListState.currentOlderLoadAnchor(
-                        messages = state.messages,
+                        messages = visibleMessages,
                         olderLoaderItems = olderLoaderItems,
                     )
                     onLoadOlderMessages()
                 }
             }
             LaunchedEffect(
-                state.messages.size,
+                loadedMessageFingerprint,
+                visibleMessageFingerprint,
                 state.messagesEndReached,
                 state.isLoadingOlderMessages,
                 state.isLoadingMessages,
                 pendingOlderLoadAnchor?.messageId,
             ) {
                 if (
-                    state.messages.isEmpty() ||
+                    visibleMessages.isEmpty() ||
                     state.messagesEndReached ||
                     state.isLoadingOlderMessages ||
                     state.isLoadingMessages ||
@@ -1458,7 +1841,7 @@ private fun ChatDetailScreen(
                 snapshotFlow { messageListState.firstVisibleItemIndex }
                     .distinctUntilChanged()
                     .collect { firstVisibleItemIndex ->
-                        val anchorMessageId = state.messages.firstOrNull()?.id
+                        val anchorMessageId = visibleMessages.firstOrNull()?.id
                         if (
                             firstVisibleItemIndex <= 1 &&
                             anchorMessageId != null &&
@@ -1467,14 +1850,14 @@ private fun ChatDetailScreen(
                         ) {
                             lastOlderLoadAnchorId = anchorMessageId
                             pendingOlderLoadAnchor = messageListState.currentOlderLoadAnchor(
-                                messages = state.messages,
+                                messages = visibleMessages,
                                 olderLoaderItems = olderLoaderItems,
                             )
                             onLoadOlderMessages()
                         }
                     }
             }
-            LaunchedEffect(state.messages.size, state.isLoadingOlderMessages, olderLoaderItems) {
+            LaunchedEffect(visibleMessageFingerprint, state.isLoadingOlderMessages, olderLoaderItems) {
                 val anchor = pendingOlderLoadAnchor ?: return@LaunchedEffect
                 if (state.isLoadingOlderMessages) return@LaunchedEffect
                 val anchorIndexInMessages = messageIndexById[anchor.messageId] ?: return@LaunchedEffect
@@ -1486,12 +1869,17 @@ private fun ChatDetailScreen(
             }
             LaunchedEffect(
                 state.specialCareJumpMessageId,
-                state.messages.size,
+                loadedMessageFingerprint,
+                visibleMessageFingerprint,
                 state.messagesEndReached,
                 state.isLoadingMessages,
                 state.isLoadingOlderMessages,
             ) {
                 val targetMessageId = state.specialCareJumpMessageId ?: return@LaunchedEffect
+                if (messageUiFilter.shouldResetForLoadedHiddenMessage(targetMessageId, loadedMessageIds, messageIndexById)) {
+                    messageUiFilter = messageUiFilter.reset()
+                    return@LaunchedEffect
+                }
                 val targetIndexInMessages = messageIndexById[targetMessageId]
                 if (targetIndexInMessages != null) {
                     messageListState.animateScrollToItem(
@@ -1505,12 +1893,24 @@ private fun ChatDetailScreen(
                     onSpecialCareJumpHandled()
                 }
             }
-            LaunchedEffect(pendingQuoteJump, state.messages.size, state.isLoadingOlderMessages) {
+            LaunchedEffect(pendingQuoteJump, loadedMessageFingerprint, visibleMessageFingerprint, state.isLoadingOlderMessages) {
                 val quote = pendingQuoteJump ?: return@LaunchedEffect
+                if (
+                    messageUiFilter.shouldResetForLoadedHiddenQuote(
+                        quote = quote,
+                        loadedMessages = state.messages,
+                        visibleMessages = visibleMessages,
+                        loadedMessageIds = loadedMessageIds,
+                        visibleMessageIndexById = messageIndexById,
+                    )
+                ) {
+                    messageUiFilter = messageUiFilter.reset()
+                    return@LaunchedEffect
+                }
                 val targetIndexInMessages = quote.messageId
                     ?.takeIf { it.isNotBlank() }
                     ?.let { messageIndexById[it] }
-                    ?: state.messages.indexOfReferencedQuote(quote)
+                    ?: visibleMessages.indexOfReferencedQuote(quote)
                 if (targetIndexInMessages >= 0) {
                     messageListState.animateScrollToItem(
                         index = olderLoaderItems + targetIndexInMessages,
@@ -1525,9 +1925,12 @@ private fun ChatDetailScreen(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .background(
-                        customTheme.chatBackgroundColorHex.toColorOrNull()
-                            ?: MaterialTheme.colorScheme.background,
+                    .then(
+                        if (LocalHhhlColors.current.chatBackground.alpha > 0.01f) {
+                            Modifier.background(LocalHhhlColors.current.chatBackground)
+                        } else {
+                            Modifier
+                        },
                     )
                     .clickable(
                         enabled = composerPanel != null,
@@ -1546,7 +1949,13 @@ private fun ChatDetailScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.58f)),
+                            .then(
+                                if (LocalHhhlColors.current.chatBackground.alpha > 0.01f) {
+                                    Modifier.background(LocalHhhlColors.current.chatBackground.copy(alpha = 0.58f))
+                                } else {
+                                    Modifier.background(LocalHhhlColors.current.pageBackground.copy(alpha = 0.18f))
+                                },
+                            ),
                     )
                 }
                 LazyColumn(
@@ -1554,12 +1963,12 @@ private fun ChatDetailScreen(
                     state = messageListState,
                 ) {
                     if (state.isLoadingMessages && state.messages.isEmpty()) {
-                        item(contentType = ChatListContentType.Status) {
+                        item(key = "chat-detail-loading-$conversationKey", contentType = ChatListContentType.Status) {
                             ChatStatusRow(text = "正在加载消息...", loading = true)
                         }
                     }
                     state.messageErrorMessage?.let { message ->
-                        item(contentType = ChatListContentType.Status) {
+                        item(key = "chat-detail-error-$conversationKey", contentType = ChatListContentType.Status) {
                             ChatStatusRow(
                                 text = message,
                                 actionText = "重试",
@@ -1568,12 +1977,30 @@ private fun ChatDetailScreen(
                         }
                     }
                     if (!state.isLoadingMessages && state.messages.isEmpty() && state.messageErrorMessage == null) {
-                        item(contentType = ChatListContentType.Status) {
+                        item(key = "chat-detail-empty-$conversationKey", contentType = ChatListContentType.Status) {
                             ChatStatusRow(text = "还没有消息")
                         }
                     }
+                    if (state.messages.isNotEmpty() && visibleMessages.isEmpty() && state.messageErrorMessage == null) {
+                        item(key = "chat-detail-filter-empty-$conversationKey", contentType = ChatListContentType.Status) {
+                            ChatStatusRow(
+                                text = "当前过滤条件隐藏了全部消息",
+                                actionText = "重置过滤",
+                                onAction = { messageUiFilter = messageUiFilter.reset() },
+                            )
+                        }
+                    }
+                    if (filteredMessageCount > 0 && visibleMessages.isNotEmpty()) {
+                        item(key = "chat-detail-filter-summary-$conversationKey", contentType = ChatListContentType.Status) {
+                            ChatStatusRow(
+                                text = "已在本界面隐藏 $filteredMessageCount 条消息",
+                                actionText = "过滤设置",
+                                onAction = { showingMessageFilters = true },
+                            )
+                        }
+                    }
                     if (state.messages.isNotEmpty() && !state.messagesEndReached) {
-                        item(contentType = ChatListContentType.Status) {
+                        item(key = "chat-detail-loading-older-$conversationKey", contentType = ChatListContentType.Status) {
                             if (state.isLoadingOlderMessages) {
                                 ChatStatusRow(
                                     text = "正在加载更早消息...",
@@ -1583,7 +2010,7 @@ private fun ChatDetailScreen(
                         }
                     }
                     items(
-                        items = state.messages,
+                        items = visibleMessages,
                         key = { it.id },
                         contentType = { ChatListContentType.Message },
                     ) { message ->
@@ -1805,13 +2232,14 @@ private fun ChatDetailScreen(
         )
     }
     if (removeAttachedFileDialogOpen) {
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { removeAttachedFileDialogOpen = false },
             title = { Text("移除附件") },
             text = {
+                val colors = LocalHhhlColors.current
                 Text(
                     text = "附件会从当前消息草稿移除，不会删除云端文件。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -1847,7 +2275,7 @@ private fun ChatRoomEditDialog(
 ) {
     var name by remember(initialName) { mutableStateOf(initialName) }
     var description by remember(initialDescription) { mutableStateOf(initialDescription) }
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
@@ -1889,7 +2317,7 @@ private fun ChatRoomInviteDialog(
     onSubmit: (String) -> Unit,
 ) {
     var userId by remember { mutableStateOf("") }
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("邀请成员") },
         text = {
@@ -1924,13 +2352,14 @@ private fun ChatRoomConfirmDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
+            val colors = LocalHhhlColors.current
             Text(
                 text = text,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
@@ -1973,6 +2402,7 @@ fun chatDetailSummaryActions(
     onRefresh: () -> Unit,
     onAddMedia: () -> Unit,
     onSearchMessages: () -> Unit = {},
+    onOpenFilters: () -> Unit = {},
     onEditRoom: () -> Unit = {},
     onInviteMember: () -> Unit = {},
     onLeaveRoom: () -> Unit = {},
@@ -1993,6 +2423,12 @@ fun chatDetailSummaryActions(
         HhhlOverflowMenuAction(
             label = "搜索消息",
             onClick = onSearchMessages,
+        ),
+    )
+    add(
+        HhhlOverflowMenuAction(
+            label = "过滤设置",
+            onClick = onOpenFilters,
         ),
     )
     if (canManageRoom) {
@@ -2059,17 +2495,24 @@ private fun ChatDetailModeBar(
     onShowMessages: () -> Unit,
     onShowMembers: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val shape = RoundedCornerShape(18.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 5.dp)
-            .shadow(2.dp, shape, clip = false)
+            .shadow(
+                elevation = 2.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = colors.shadow,
+                spotColor = colors.shadow,
+            )
             .clip(shape)
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.98f))
+            .background(colors.surfaceElevated.copy(alpha = 0.98f))
             .border(
                 width = 1.dp,
-                color = LocalHhhlColors.current.divider.copy(alpha = 0.52f),
+                color = colors.border.copy(alpha = 0.52f),
                 shape = shape,
             )
             .padding(2.dp),
@@ -2098,6 +2541,7 @@ private fun ChatDetailModeItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = LocalHhhlColors.current
     val interactionSource = rememberChatPresslessInteractionSource()
     val shape = RoundedCornerShape(14.dp)
     Box(
@@ -2106,7 +2550,7 @@ private fun ChatDetailModeItem(
             .clip(shape)
             .background(
                 if (selected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                    colors.buttonSelectedBackground
                 } else {
                     Color.Transparent
                 },
@@ -2114,7 +2558,7 @@ private fun ChatDetailModeItem(
             .border(
                 width = 1.dp,
                 color = if (selected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+                    colors.focusRing.copy(alpha = 0.24f)
                 } else {
                     Color.Transparent
                 },
@@ -2130,9 +2574,9 @@ private fun ChatDetailModeItem(
         Text(
             text = text,
             color = if (selected) {
-                MaterialTheme.colorScheme.primary
+                colors.accent
             } else {
-                LocalHhhlColors.current.subtleText
+                colors.textMuted
             },
             style = MaterialTheme.typography.labelLarge,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
@@ -2142,6 +2586,386 @@ private fun ChatDetailModeItem(
 
 fun chatDetailModeLabel(label: String, count: Int): String {
     return if (count > 0) "$label $count" else label
+}
+
+@Composable
+private fun ChatMessageFilterScreen(
+    title: String,
+    filter: ChatMessageUiFilterState,
+    filteredMessageCount: Int,
+    totalMessageCount: Int,
+    authors: List<User>,
+    onBack: () -> Unit,
+    onFilterChanged: (ChatMessageUiFilterState) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val invalidRegex = filter.regexDraft
+        .takeIf { it.isNotBlank() }
+        ?.let { pattern ->
+            pattern.trim().length > CHAT_MESSAGE_UI_FILTER_MAX_REGEX_LENGTH ||
+                !pattern.trim().isSafeChatMessageUiFilterRegex()
+        }
+        ?: false
+    val canAddRegex = filter.regexDraft.isNotBlank() &&
+        !invalidRegex &&
+        filter.regexPatterns.size < CHAT_MESSAGE_UI_FILTER_MAX_REGEX_RULES
+    val cleanHiddenUserDraft = filter.hiddenUserDraft.cleanChatMessageUiHiddenUserRule()
+    val invalidHiddenUser = filter.hiddenUserDraft.isNotBlank() && cleanHiddenUserDraft == null
+    val canAddHiddenUser = cleanHiddenUserDraft != null &&
+        cleanHiddenUserDraft !in filter.hiddenUserIds &&
+        filter.hiddenUserIds.size < CHAT_MESSAGE_UI_FILTER_MAX_HIDDEN_USERS
+    val normalizedHiddenUserIds = remember(filter.hiddenUserIds) {
+        filter.hiddenUserIds.normalizedChatMessageUiHiddenUserRules()
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colors.pageBackground),
+    ) {
+        HhhlTopBar(
+            title = "过滤设置",
+            supportingText = "$title · 仅影响当前界面显示",
+            navigation = { HhhlBackButton(onClick = onBack) },
+            action = {
+                HhhlTextButton(
+                    onClick = { onFilterChanged(filter.reset()) },
+                    enabled = filter.isActive || filter.regexDraft.isNotBlank() || filter.hiddenUserDraft.isNotBlank(),
+                ) {
+                    Text("重置")
+                }
+            },
+        )
+        HhhlDivider()
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item(key = "filter-summary", contentType = "filter-summary") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(colors.mediaBackground.copy(alpha = 0.72f))
+                        .border(1.dp, colors.border.copy(alpha = 0.32f), RoundedCornerShape(22.dp))
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Text(
+                        text = if (filter.isActive) "已启用 ${filter.activeCount} 条过滤条件" else "未启用过滤",
+                        color = colors.textPrimary,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "当前隐藏 $filteredMessageCount / $totalMessageCount 条消息。过滤只影响这个聊天界面，不影响通知、未读、缓存和实际消息。",
+                        color = colors.textMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            item(key = "filter-mfm", contentType = "filter-mfm") {
+                ChatFilterToggleRow(
+                    title = "隐藏 MFM 语法消息",
+                    description = "匹配包含 $[ ... ] 或 ${'$'}{ ... } 的消息。",
+                    checked = filter.hideMfmSyntaxMessages,
+                    onCheckedChange = {
+                        onFilterChanged(filter.copy(hideMfmSyntaxMessages = it))
+                    },
+                )
+            }
+            item(key = "filter-regex-editor", contentType = "filter-regex-editor") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(colors.mediaBackground.copy(alpha = 0.58f))
+                        .border(1.dp, colors.border.copy(alpha = 0.28f), RoundedCornerShape(22.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = "正则过滤",
+                        color = colors.textPrimary,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    HhhlTextInput(
+                        value = filter.regexDraft,
+                        onValueChange = { onFilterChanged(filter.copy(regexDraft = it)) },
+                        placeholder = "输入正则，例如：广告|刷屏",
+                        singleLine = true,
+                    )
+                    if (invalidRegex) {
+                        Text(
+                            text = "正则语法无效、过长或可能导致列表卡顿，不会添加。",
+                            color = colors.danger,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (filter.regexPatterns.size >= CHAT_MESSAGE_UI_FILTER_MAX_REGEX_RULES) {
+                        Text(
+                            text = "最多添加 ${CHAT_MESSAGE_UI_FILTER_MAX_REGEX_RULES} 条正则规则，避免聊天列表卡顿。",
+                            color = colors.textMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        HhhlActionChip(
+                            label = "添加",
+                            enabled = canAddRegex,
+                            onClick = {
+                                val pattern = filter.regexDraft.trim().take(CHAT_MESSAGE_UI_FILTER_MAX_REGEX_LENGTH)
+                                if (pattern.isNotEmpty() && pattern !in filter.regexPatterns) {
+                                    onFilterChanged(
+                                        filter.copy(
+                                            regexPatterns = filter.regexPatterns + pattern,
+                                            regexDraft = "",
+                                        ),
+                                    )
+                                }
+                            },
+                        )
+                        HhhlActionChip(
+                            label = "清空正则",
+                            enabled = filter.regexPatterns.isNotEmpty(),
+                            onClick = { onFilterChanged(filter.copy(regexPatterns = emptyList())) },
+                        )
+                    }
+                    filter.regexPatterns.forEach { pattern ->
+                        ChatFilterRemovableRow(
+                            title = pattern,
+                            description = "正则规则",
+                            onRemove = {
+                                onFilterChanged(filter.copy(regexPatterns = filter.regexPatterns - pattern))
+                            },
+                        )
+                    }
+                }
+            }
+            item(key = "filter-users-title", contentType = "filter-users-title") {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = "隐藏指定用户",
+                        color = colors.textMuted,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    Text(
+                        text = "可从下方勾选，也可手动添加用户 ID、username 或 @username@host。",
+                        color = colors.textMuted.copy(alpha = 0.76f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            item(key = "filter-user-manual-editor", contentType = "filter-user-manual-editor") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(colors.mediaBackground.copy(alpha = 0.52f))
+                        .border(1.dp, colors.border.copy(alpha = 0.26f), RoundedCornerShape(22.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    HhhlTextInput(
+                        value = filter.hiddenUserDraft,
+                        onValueChange = { onFilterChanged(filter.copy(hiddenUserDraft = it)) },
+                        placeholder = "用户 ID / username / @name@host",
+                        singleLine = true,
+                    )
+                    if (invalidHiddenUser) {
+                        Text(
+                            text = "用户规则为空、过长或包含空白字符，不能添加。",
+                            color = colors.danger,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (filter.hiddenUserIds.size >= CHAT_MESSAGE_UI_FILTER_MAX_HIDDEN_USERS) {
+                        Text(
+                            text = "最多添加 ${CHAT_MESSAGE_UI_FILTER_MAX_HIDDEN_USERS} 个用户规则，避免列表匹配成本过高。",
+                            color = colors.textMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        HhhlActionChip(
+                            label = "添加用户",
+                            enabled = canAddHiddenUser,
+                            onClick = {
+                                val rule = cleanHiddenUserDraft
+                                if (rule != null) {
+                                    onFilterChanged(
+                                        filter.copy(
+                                            hiddenUserIds = filter.hiddenUserIds + rule,
+                                            hiddenUserDraft = "",
+                                        ),
+                                    )
+                                }
+                            },
+                        )
+                        HhhlActionChip(
+                            label = "清空用户",
+                            enabled = filter.hiddenUserIds.isNotEmpty(),
+                            onClick = { onFilterChanged(filter.copy(hiddenUserIds = emptySet())) },
+                        )
+                    }
+                    filter.hiddenUserIds.sorted().forEach { rule ->
+                        ChatFilterRemovableRow(
+                            title = rule,
+                            description = "用户规则",
+                            onRemove = { onFilterChanged(filter.copy(hiddenUserIds = filter.hiddenUserIds - rule)) },
+                        )
+                    }
+                }
+            }
+            if (authors.isEmpty()) {
+                item(key = "filter-users-empty", contentType = "filter-users-empty") {
+                    ChatStatusRow(text = "暂无可过滤用户")
+                }
+            }
+            items(
+                items = authors,
+                key = { it.id },
+                contentType = { "filter-user" },
+            ) { user ->
+                val hidden = user.matchesHiddenChatMessageUiFilterUser(normalizedHiddenUserIds)
+                ChatFilterUserRow(
+                    user = user,
+                    hidden = hidden,
+                    onToggle = {
+                        onFilterChanged(
+                            filter.withToggledHiddenUser(user = user, hidden = hidden),
+                        )
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatFilterToggleRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(colors.mediaBackground.copy(alpha = 0.58f))
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HhhlCheckbox(checked = checked, onCheckedChange = onCheckedChange)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = title,
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = description,
+                color = colors.textMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatFilterRemovableRow(
+    title: String,
+    description: String,
+    onRemove: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.surfaceElevated.copy(alpha = 0.46f))
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = title,
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = description,
+                color = colors.textMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        HhhlTextButton(onClick = onRemove, destructive = true) {
+            Text("删除")
+        }
+    }
+}
+
+@Composable
+private fun ChatFilterUserRow(
+    user: User,
+    hidden: Boolean,
+    onToggle: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(colors.mediaBackground.copy(alpha = if (hidden) 0.72f else 0.44f))
+            .clickable { onToggle() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Avatar(
+            initial = user.avatarInitial,
+            avatarUrl = user.avatarUrl,
+            avatarDecorations = user.avatarDecorations,
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = user.displayName.ifBlank { user.username },
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = if (hidden) "当前已隐藏该用户消息" else "@${user.username}",
+                color = colors.textMuted,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        HhhlActionChip(
+            label = if (hidden) "取消隐藏" else "隐藏",
+            emphasized = hidden,
+            onClick = onToggle,
+        )
+    }
 }
 
 @Composable
@@ -2158,36 +2982,55 @@ private fun ChatMessageSearchScreen(
     canLoadMoreSearch: Boolean,
     messageErrorMessage: String?,
     searchErrorMessage: String?,
+    uiFilter: ChatMessageUiFilterState,
+    uiFilterRegexes: List<Regex>,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onLoadOlderMessages: () -> Unit,
     onSearch: (String) -> Unit,
     onLoadMoreSearch: () -> Unit,
     onSelectMessage: (String) -> Unit,
+    onOpenFilters: () -> Unit,
 ) {
     var query by remember(title) { mutableStateOf("") }
     var dateQuery by remember(title) { mutableStateOf("") }
+    var authorFilterUserId by remember(title) { mutableStateOf<String?>(null) }
     val cleanQuery = query.trim()
     val cleanSearchQuery = searchQuery.trim()
     val hasPendingQuery = cleanQuery.isNotBlank() && cleanQuery != cleanSearchQuery
-    val baseResults = if (cleanQuery.isBlank()) messages else searchResults
-    val results = remember(baseResults, query, dateQuery) {
-        if (cleanQuery.isBlank() && dateQuery.isBlank()) {
-            emptyList()
+    val sourceResults = if (cleanQuery.isBlank()) messages else searchResults
+    val baseResults = remember(sourceResults, uiFilter, uiFilterRegexes) {
+        sourceResults.filterByChatMessageUiFilter(uiFilter, uiFilterRegexes)
+    }
+    val uiFilteredSearchCount = sourceResults.size - baseResults.size
+    val authorFilters = remember(messages, searchResults) {
+        buildChatSearchAuthorFilters(messages, searchResults)
+    }
+    val selectedAuthor = authorFilters.firstOrNull { it.userId == authorFilterUserId }
+    LaunchedEffect(authorFilters, authorFilterUserId) {
+        if (authorFilterUserId != null && authorFilters.none { it.userId == authorFilterUserId }) {
+            authorFilterUserId = null
+        }
+    }
+    val results = remember(baseResults, query, dateQuery, authorFilterUserId) {
+        val filtered = if (cleanQuery.isBlank() && dateQuery.isBlank()) {
+            if (authorFilterUserId == null) emptyList() else baseResults
         } else if (dateQuery.isBlank()) {
             baseResults
         } else {
             baseResults.filterByChatMessageSearch("", dateQuery)
         }
+        filtered
+            .let { messages ->
+                authorFilterUserId?.let { userId -> messages.filter { it.fromUser.id == userId } }
+                    ?: messages
+            }
+            .asReversed()
     }
     val dateSuggestions = remember(messages) {
-        messages
-            .asReversed()
-            .mapNotNull { it.chatMessageSearchDateSuggestion() }
-            .distinct()
-            .take(6)
+        buildChatMessageDateSuggestions(messages)
     }
-    val hasFilter = cleanQuery.isNotBlank() || dateQuery.isNotBlank()
+    val hasFilter = cleanQuery.isNotBlank() || dateQuery.isNotBlank() || authorFilterUserId != null
     val canSubmitSearch = cleanQuery.isNotBlank() && !isSearchingMessages
     val searchListState = rememberLazyListState()
     var lastOlderSearchAutoLoadCount by remember(title) { mutableStateOf(0) }
@@ -2217,6 +3060,7 @@ private fun ChatMessageSearchScreen(
     )
 
     Column(modifier = Modifier.fillMaxSize()) {
+        val colors = LocalHhhlColors.current
         HhhlTopBar(
             title = "搜索消息",
             supportingText = title,
@@ -2226,7 +3070,7 @@ private fun ChatMessageSearchScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.background)
+                .background(colors.pageBackground)
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -2247,17 +3091,21 @@ private fun ChatMessageSearchScreen(
                         Icon(
                             imageVector = Icons.Filled.Search,
                             contentDescription = null,
-                            tint = LocalHhhlColors.current.subtleText,
+                            tint = colors.textMuted,
                             modifier = Modifier.size(18.dp),
                         )
                     },
                 )
                 Text(
-                    text = if (cleanQuery.isBlank() && dateQuery.isBlank()) "取消" else "搜索",
+                    text = when {
+                        canSubmitSearch -> "搜索"
+                        hasFilter -> "完成"
+                        else -> "取消"
+                    },
                     color = if (canSubmitSearch) {
-                        MaterialTheme.colorScheme.primary
+                        colors.accent
                     } else {
-                        LocalHhhlColors.current.subtleText
+                        colors.textMuted
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
@@ -2270,6 +3118,7 @@ private fun ChatMessageSearchScreen(
                             } else {
                                 query = ""
                                 dateQuery = ""
+                                authorFilterUserId = null
                                 onSearch("")
                                 onBack()
                             }
@@ -2298,12 +3147,18 @@ private fun ChatMessageSearchScreen(
                         onClick = {
                             query = ""
                             dateQuery = ""
+                            authorFilterUserId = null
                             onSearch("")
                         },
                         size = 32.dp,
                     )
                 }
             }
+            ChatMessageAuthorFilterRow(
+                authors = authorFilters,
+                selectedUserId = authorFilterUserId,
+                onSelected = { userId -> authorFilterUserId = userId },
+            )
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2337,11 +3192,12 @@ private fun ChatMessageSearchScreen(
                     hasFilter = hasFilter,
                     isRemoteSearch = cleanQuery.isNotBlank(),
                     hasPendingQuery = hasPendingQuery,
+                    authorName = selectedAuthor?.displayName,
                     isSearching = isSearchingMessages || isLoadingMoreSearch,
                     resultCount = results.size,
-                    loadedCount = if (cleanQuery.isBlank()) messages.size else searchResults.size,
+                    loadedCount = baseResults.size,
                 ),
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -2354,12 +3210,12 @@ private fun ChatMessageSearchScreen(
             state = searchListState,
         ) {
             if (isLoadingMessages && messages.isEmpty()) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-search-loading", contentType = ChatListContentType.Status) {
                     ChatStatusRow(text = "正在加载消息...", loading = true)
                 }
             }
             messageErrorMessage?.let { message ->
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-search-message-error", contentType = ChatListContentType.Status) {
                     ChatStatusRow(
                         text = message,
                         actionText = "重试",
@@ -2368,7 +3224,7 @@ private fun ChatMessageSearchScreen(
                 }
             }
             searchErrorMessage?.let { message ->
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-search-error", contentType = ChatListContentType.Status) {
                     ChatStatusRow(
                         text = message,
                         actionText = if (cleanQuery.isNotBlank()) "重试搜索" else null,
@@ -2381,13 +3237,22 @@ private fun ChatMessageSearchScreen(
                 }
             }
             if (isSearchingMessages && searchResults.isEmpty()) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-search-remote-loading", contentType = ChatListContentType.Status) {
                     ChatStatusRow(text = "正在搜索服务器消息...", loading = true)
                 }
             }
             if (!hasFilter && messages.isNotEmpty()) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-search-hint", contentType = ChatListContentType.Status) {
                     ChatStatusRow(text = "输入关键词或日期开始搜索")
+                }
+            }
+            if (uiFilteredSearchCount > 0) {
+                item(key = "chat-search-ui-filter-summary", contentType = ChatListContentType.Status) {
+                    ChatStatusRow(
+                        text = "当前过滤条件在搜索范围内隐藏了 $uiFilteredSearchCount 条消息",
+                        actionText = "过滤设置",
+                        onAction = onOpenFilters,
+                    )
                 }
             }
             if (
@@ -2397,7 +3262,7 @@ private fun ChatMessageSearchScreen(
                 messageErrorMessage == null &&
                 searchErrorMessage == null
             ) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-search-empty", contentType = ChatListContentType.Status) {
                     ChatStatusRow(
                         text = if (cleanQuery.isNotBlank()) {
                             "没有匹配的服务器消息"
@@ -2408,7 +3273,7 @@ private fun ChatMessageSearchScreen(
                 }
             }
             if (!isLoadingMessages && messages.isEmpty() && messageErrorMessage == null) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-search-no-messages", contentType = ChatListContentType.Status) {
                     ChatStatusRow(text = "还没有消息")
                 }
             }
@@ -2424,7 +3289,7 @@ private fun ChatMessageSearchScreen(
                 HhhlDivider()
             }
             if (messages.isNotEmpty() && canLoadOlderMessages) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-search-loading-older", contentType = ChatListContentType.Status) {
                     if (isLoadingOlderMessages) {
                         ChatStatusRow(
                             text = "正在加载更早消息...",
@@ -2434,7 +3299,7 @@ private fun ChatMessageSearchScreen(
                 }
             }
             if (cleanQuery.isNotBlank() && searchResults.isNotEmpty() && canLoadMoreSearch) {
-                item(contentType = ChatListContentType.Status) {
+                item(key = "chat-search-loading-more", contentType = ChatListContentType.Status) {
                     if (isLoadingMoreSearch) {
                         ChatStatusRow(
                             text = "正在加载更多搜索结果...",
@@ -2448,10 +3313,93 @@ private fun ChatMessageSearchScreen(
 }
 
 @Composable
+private fun ChatMessageAuthorFilterRow(
+    authors: List<ChatSearchAuthorFilter>,
+    selectedUserId: String?,
+    onSelected: (String?) -> Unit,
+) {
+    if (authors.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HhhlActionChip(
+            label = "全部",
+            emphasized = selectedUserId == null,
+            onClick = { onSelected(null) },
+        )
+        authors.forEach { author ->
+            ChatMessageAuthorFilterChip(
+                author = author,
+                selected = selectedUserId == author.userId,
+                onClick = {
+                    onSelected(if (selectedUserId == author.userId) null else author.userId)
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatMessageAuthorFilterChip(
+    author: ChatSearchAuthorFilter,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val shape = RoundedCornerShape(999.dp)
+    Row(
+        modifier = Modifier
+            .height(34.dp)
+            .clip(shape)
+            .background(
+                if (selected) {
+                    colors.buttonSelectedBackground
+                } else {
+                    colors.buttonBackground.copy(alpha = 0.68f)
+                },
+            )
+            .border(
+                width = 1.dp,
+                color = if (selected) {
+                    colors.focusRing.copy(alpha = 0.28f)
+                } else {
+                    colors.border.copy(alpha = 0.42f)
+                },
+                shape = shape,
+            )
+            .clickable(onClick = onClick)
+            .padding(start = 4.dp, end = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Avatar(
+            initial = author.avatarInitial,
+            avatarUrl = author.avatarUrl,
+            avatarDecorations = author.avatarDecorations,
+            size = 24.dp,
+        )
+        Text(
+            text = author.displayName,
+            color = if (selected) colors.accent else colors.textPrimary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 112.dp),
+        )
+    }
+}
+
+@Composable
 private fun ChatMessageSearchResultRow(
     message: ChatMessage,
     onClick: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val presentation = remember(message.id, message.text, message.file?.id, message.file?.name) {
         chatMessagePresentation(message)
     }
@@ -2483,7 +3431,7 @@ private fun ChatMessageSearchResultRow(
             ) {
                 Text(
                     text = message.fromUser.displayName.ifBlank { message.fromUser.username },
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -2492,29 +3440,27 @@ private fun ChatMessageSearchResultRow(
                 )
                 Text(
                     text = message.createdAtLabel,
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                    text = previewText,
-                color = LocalHhhlColors.current.subtleText,
+            InlineRichText(
+                text = previewText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
             message.file?.let { file ->
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                        .background(colors.accentSoft)
                         .padding(horizontal = 7.dp, vertical = 3.dp),
                 ) {
                     Text(
                         text = file.name.ifBlank { mediaTypeDisplayName(file.type) },
-                        color = MaterialTheme.colorScheme.primary,
+                        color = colors.accent,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -2522,12 +3468,10 @@ private fun ChatMessageSearchResultRow(
                 }
             }
             presentation.quote?.let { quote ->
-                Text(
+                InlineRichText(
                     text = "引用 ${quote.author}: ${quote.preview}",
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.86f),
+                    color = colors.accent.copy(alpha = 0.86f),
                     style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -2542,6 +3486,7 @@ private fun ChatMemberSearchPanel(
     visibleMemberCount: Int,
     onClear: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -2561,7 +3506,7 @@ private fun ChatMemberSearchPanel(
                 Icon(
                     imageVector = Icons.Filled.Search,
                     contentDescription = null,
-                    tint = LocalHhhlColors.current.subtleText,
+                    tint = colors.textMuted,
                     modifier = Modifier.size(18.dp),
                 )
             },
@@ -2570,9 +3515,9 @@ private fun ChatMemberSearchPanel(
             Text(
                 text = "$visibleMemberCount/$totalMemberCount",
                 color = if (visibleMemberCount > 0) {
-                    MaterialTheme.colorScheme.primary
+                    colors.accent
                 } else {
-                    LocalHhhlColors.current.subtleText
+                    colors.textMuted
                 },
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
@@ -2599,15 +3544,44 @@ private fun ChatRoomMembersList(
     modifier: Modifier = Modifier,
 ) {
     val memberListState = rememberLazyListState()
+    val recentActiveUserIds = remember(state.selectedRoom?.id, state.messages) {
+        state.messages.recentlyActiveChatMemberIds(roomId = state.selectedRoom?.id)
+    }
+    val onlineMembers = remember(visibleMembers, recentActiveUserIds) {
+        visibleMembers
+            .filter { member -> member.isOnlineChatMember(recentActiveUserIds) }
+            .sortedWith(chatRoomOnlineMemberComparator(recentActiveUserIds))
+    }
+    val offlineMembers = remember(visibleMembers, recentActiveUserIds) {
+        visibleMembers
+            .filterNot { member -> member.isOnlineChatMember(recentActiveUserIds) }
+            .sortedWith(chatRoomMemberNameComparator)
+    }
+    val onlineMemberRows = remember(onlineMembers) { onlineMembers.chunked(CHAT_ROOM_MEMBERS_PER_ROW) }
+    val offlineMemberRows = remember(offlineMembers) { offlineMembers.chunked(CHAT_ROOM_MEMBERS_PER_ROW) }
+    val memberLazyItemCount = chatRoomMembersLazyItemCount(
+        isInitialLoading = state.isLoadingMembers && state.members.isEmpty(),
+        hasError = state.memberErrorMessage != null,
+        isEmpty = !state.isLoadingMembers && state.members.isEmpty() && state.memberErrorMessage == null,
+        isSearchEmpty = searchQuery.isNotBlank() &&
+            visibleMembers.isEmpty() &&
+            state.members.isNotEmpty() &&
+            state.memberErrorMessage == null,
+        hasMembers = visibleMembers.isNotEmpty(),
+        onlineMemberCount = onlineMembers.size,
+        offlineMemberCount = offlineMembers.size,
+        hasLoadMoreRow = state.members.isNotEmpty() && !state.membersEndReached,
+    )
 
     AutoLoadMoreEffect(
         listState = memberListState,
-        itemCount = visibleMembers.size,
+        itemCount = memberLazyItemCount,
         isLoadingMore = state.isLoadingMoreMembers ||
             state.membersEndReached ||
             state.members.isEmpty() ||
             searchQuery.isNotBlank(),
         onLoadMore = onLoadMoreMembers,
+        threshold = 3,
     )
 
     LazyColumn(
@@ -2615,12 +3589,12 @@ private fun ChatRoomMembersList(
         state = memberListState,
     ) {
         if (state.isLoadingMembers && state.members.isEmpty()) {
-            item(contentType = ChatListContentType.Status) {
+            item(key = "chat-members-loading", contentType = ChatListContentType.Status) {
                 ChatStatusRow(text = "正在加载成员...", loading = true)
             }
         }
         state.memberErrorMessage?.let { message ->
-            item(contentType = ChatListContentType.Status) {
+            item(key = "chat-members-error", contentType = ChatListContentType.Status) {
                 ChatStatusRow(
                     text = message,
                     actionText = "重试",
@@ -2629,7 +3603,7 @@ private fun ChatRoomMembersList(
             }
         }
         if (!state.isLoadingMembers && state.members.isEmpty() && state.memberErrorMessage == null) {
-            item(contentType = ChatListContentType.Status) {
+            item(key = "chat-members-empty", contentType = ChatListContentType.Status) {
                 ChatStatusRow(text = "还没有成员信息")
             }
         }
@@ -2639,20 +3613,33 @@ private fun ChatRoomMembersList(
             state.members.isNotEmpty() &&
             state.memberErrorMessage == null
         ) {
-            item(contentType = ChatListContentType.Status) {
+            item(key = "chat-members-search-empty", contentType = ChatListContentType.Status) {
                 ChatStatusRow(text = "没有匹配的成员")
             }
         }
-        items(
-            items = visibleMembers,
-            key = { it.membershipId },
-            contentType = { ChatListContentType.Member },
-        ) { member ->
-            ChatRoomMemberRow(member)
-            HhhlDivider()
+        if (visibleMembers.isNotEmpty()) {
+            chatRoomMemberSectionItems(
+                title = "在线 ${onlineMembers.size} 人",
+                subtitle = "当前活跃成员",
+                memberRows = onlineMemberRows,
+                emptyText = "当前没有在线成员",
+                online = true,
+                keyPrefix = "online",
+            )
+            item(key = "chat-members-offline-divider", contentType = ChatListContentType.Status) {
+                HhhlDivider()
+            }
+            chatRoomMemberSectionItems(
+                title = "已加入但不在线 ${offlineMembers.size} 人",
+                subtitle = "聊天室成员",
+                memberRows = offlineMemberRows,
+                emptyText = "没有离线成员",
+                online = false,
+                keyPrefix = "offline",
+            )
         }
         if (state.members.isNotEmpty() && !state.membersEndReached) {
-            item(contentType = ChatListContentType.Status) {
+            item(key = "chat-members-loading-more", contentType = ChatListContentType.Status) {
                 if (state.isLoadingMoreMembers) {
                     ChatStatusRow(
                         text = "正在加载更多成员...",
@@ -2664,169 +3651,199 @@ private fun ChatRoomMembersList(
     }
 }
 
+private fun androidx.compose.foundation.lazy.LazyListScope.chatRoomMemberSectionItems(
+    title: String,
+    subtitle: String,
+    memberRows: List<List<ChatRoomMember>>,
+    emptyText: String,
+    online: Boolean,
+    keyPrefix: String,
+) {
+    item(key = "chat-members-$keyPrefix-header", contentType = ChatListContentType.MemberHeader) {
+        ChatRoomMemberSectionHeader(
+            title = title,
+            subtitle = subtitle,
+        )
+    }
+    if (memberRows.isEmpty()) {
+        item(key = "chat-members-$keyPrefix-empty", contentType = ChatListContentType.Status) {
+            ChatRoomMemberEmptyRow(text = emptyText)
+        }
+        return
+    }
+    items(
+        items = memberRows,
+        key = { row -> "chat-members-$keyPrefix-row-${row.firstOrNull()?.membershipId.orEmpty()}" },
+        contentType = { ChatListContentType.MemberRow },
+    ) { rowMembers ->
+        ChatRoomMemberGridRow(
+            members = rowMembers,
+            online = online,
+        )
+    }
+}
+
+private fun chatRoomMembersLazyItemCount(
+    isInitialLoading: Boolean,
+    hasError: Boolean,
+    isEmpty: Boolean,
+    isSearchEmpty: Boolean,
+    hasMembers: Boolean,
+    onlineMemberCount: Int,
+    offlineMemberCount: Int,
+    hasLoadMoreRow: Boolean,
+): Int {
+    var count = 0
+    if (isInitialLoading) count += 1
+    if (hasError) count += 1
+    if (isEmpty) count += 1
+    if (isSearchEmpty) count += 1
+    if (hasMembers) {
+        count += chatRoomMemberSectionLazyItemCount(onlineMemberCount)
+        count += 1 // divider between online and offline sections
+        count += chatRoomMemberSectionLazyItemCount(offlineMemberCount)
+    }
+    if (hasLoadMoreRow) count += 1
+    return count
+}
+
+private fun chatRoomMemberSectionLazyItemCount(memberCount: Int): Int {
+    val rowCount = if (memberCount == 0) {
+        1
+    } else {
+        (memberCount + CHAT_ROOM_MEMBERS_PER_ROW - 1) / CHAT_ROOM_MEMBERS_PER_ROW
+    }
+    return 1 + rowCount
+}
+
 @Composable
-private fun ChatRoomMemberRow(member: ChatRoomMember) {
+private fun ChatRoomMemberSectionHeader(
+    title: String,
+    subtitle: String,
+) {
+    val colors = LocalHhhlColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .padding(top = 10.dp, bottom = 8.dp),
+    ) {
+        Text(
+            text = title,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = subtitle,
+            color = colors.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun ChatRoomMemberEmptyRow(text: String) {
+    val colors = LocalHhhlColors.current
+    Text(
+        text = text,
+        color = colors.textMuted,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.mediaBackground.copy(alpha = 0.62f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    )
+}
+
+@Composable
+private fun ChatRoomMemberGridRow(
+    members: List<ChatRoomMember>,
+    online: Boolean,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 12.dp, vertical = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Avatar(
-            initial = member.user.avatarInitial,
-            avatarUrl = member.user.avatarUrl,
-            avatarDecorations = member.user.avatarDecorations,
-        )
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            Text(
-                text = member.user.displayName,
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
+        members.forEach { member ->
+            ChatRoomMemberCard(
+                member = member,
+                online = online,
+                modifier = Modifier.weight(1f),
             )
-            Text(
-                text = "@${member.user.username} · 加入 ${member.joinedAtLabel}",
-                color = LocalHhhlColors.current.subtleText,
-                style = MaterialTheme.typography.bodySmall,
-            )
+        }
+        repeat(CHAT_ROOM_MEMBERS_PER_ROW - members.size) {
+            Spacer(modifier = Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun ChatMessageBubbleTail(
-    isOutgoing: Boolean,
-    fillBrush: Brush,
-    borderColor: Color,
+private fun ChatRoomMemberCard(
+    member: ChatRoomMember,
+    online: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    Canvas(modifier = modifier.size(width = ChatMessageBubbleTailWidth, height = ChatMessageBubbleTailHeight)) {
-        val strokeWidth = 1.dp.toPx()
-        val strokeInset = strokeWidth / 2f
-        val left = strokeInset
-        val right = size.width - strokeInset
-        val top = strokeInset
-        val bottom = size.height - strokeInset
-        val path = Path().apply {
-            if (isOutgoing) {
-                moveTo(0f, 0f)
-                cubicTo(
-                    size.width * 0.24f,
-                    size.height * 0.02f,
-                    size.width * 0.46f,
-                    size.height * 0.28f,
-                    size.width * 0.58f,
-                    size.height * 0.48f,
-                )
-                cubicTo(
-                    size.width * 0.72f,
-                    size.height * 0.70f,
-                    size.width * 0.88f,
-                    size.height * 0.80f,
-                    size.width,
-                    size.height * 0.76f,
-                )
-                cubicTo(
-                    size.width * 0.70f,
-                    size.height * 1.02f,
-                    size.width * 0.26f,
-                    size.height * 0.94f,
-                    0f,
-                    size.height,
-                )
-            } else {
-                moveTo(size.width, 0f)
-                cubicTo(
-                    size.width * 0.76f,
-                    size.height * 0.02f,
-                    size.width * 0.54f,
-                    size.height * 0.28f,
-                    size.width * 0.42f,
-                    size.height * 0.48f,
-                )
-                cubicTo(
-                    size.width * 0.28f,
-                    size.height * 0.70f,
-                    size.width * 0.12f,
-                    size.height * 0.80f,
-                    0f,
-                    size.height * 0.76f,
-                )
-                cubicTo(
-                    size.width * 0.30f,
-                    size.height * 1.02f,
-                    size.width * 0.74f,
-                    size.height * 0.94f,
-                    size.width,
-                    size.height,
-                )
-            }
-            close()
+    val colors = LocalHhhlColors.current
+    val borderColor = if (online) colors.success.copy(alpha = 0.34f) else colors.border.copy(alpha = 0.52f)
+    val backgroundColor = if (online) colors.success.copy(alpha = 0.07f) else colors.surfaceElevated.copy(alpha = 0.78f)
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(backgroundColor)
+            .border(1.dp, borderColor, RoundedCornerShape(10.dp))
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Box {
+            Avatar(
+                initial = member.user.avatarInitial,
+                avatarUrl = member.user.avatarUrl,
+                avatarDecorations = member.user.avatarDecorations,
+                size = 32.dp,
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(9.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (online) colors.success else colors.textMuted)
+                    .border(1.dp, colors.surfaceElevated, RoundedCornerShape(50)),
+            )
         }
-        drawPath(path = path, brush = fillBrush)
-        val borderPath = Path().apply {
-            if (isOutgoing) {
-                moveTo(left, top)
-                cubicTo(
-                    size.width * 0.24f,
-                    top,
-                    size.width * 0.46f,
-                    size.height * 0.28f,
-                    size.width * 0.58f,
-                    size.height * 0.48f,
-                )
-                cubicTo(
-                    size.width * 0.72f,
-                    size.height * 0.70f,
-                    size.width * 0.88f,
-                    size.height * 0.80f,
-                    right,
-                    size.height * 0.76f,
-                )
-                cubicTo(
-                    size.width * 0.70f,
-                    bottom,
-                    size.width * 0.26f,
-                    size.height * 0.94f,
-                    left,
-                    bottom,
-                )
-            } else {
-                moveTo(right, top)
-                cubicTo(
-                    size.width * 0.76f,
-                    top,
-                    size.width * 0.54f,
-                    size.height * 0.28f,
-                    size.width * 0.42f,
-                    size.height * 0.48f,
-                )
-                cubicTo(
-                    size.width * 0.28f,
-                    size.height * 0.70f,
-                    size.width * 0.12f,
-                    size.height * 0.80f,
-                    left,
-                    size.height * 0.76f,
-                )
-                cubicTo(
-                    size.width * 0.30f,
-                    bottom,
-                    size.width * 0.74f,
-                    size.height * 0.94f,
-                    right,
-                    bottom,
-                )
-            }
-        }
-        drawPath(
-            path = borderPath,
-            color = borderColor,
-            style = Stroke(width = strokeWidth),
+        Text(
+            text = member.user.displayName,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = "@${member.user.username}",
+            color = colors.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        val memberMeta = if (member.isInferredActiveChatMember()) "刚刚活跃" else "加入 ${member.joinedAtLabel}"
+        Text(
+            text = memberMeta,
+            color = colors.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -2834,9 +3851,313 @@ private fun ChatMessageBubbleTail(
 @Composable
 private fun chatDarkMessageBubbleColor(isOutgoing: Boolean): Color {
     return if (isOutgoing) {
-        LocalHhhlColors.current.cardBackground.copy(alpha = 0.92f)
+        LocalHhhlColors.current.chatOutgoingBubble.copy(alpha = 0.98f)
     } else {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.86f)
+        LocalHhhlColors.current.chatIncomingBubble.copy(alpha = 0.98f)
+    }
+}
+
+@Composable
+private fun ChatMessageTelegramBubbleSurface(
+    isOutgoing: Boolean,
+    fillBrush: Brush,
+    borderColor: Color,
+    shadowColor: Color,
+    isDarkSurface: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val radius = ChatMessageTelegramBubbleRadius
+    val bubbleShape = remember(isOutgoing, radius) {
+        ChatMessageTelegramBubbleShape(
+            isOutgoing = isOutgoing,
+            cornerRadius = radius,
+            tailWidth = ChatMessageTelegramTailWidth,
+            tailHeight = ChatMessageTelegramTailHeight,
+            tailAnchorY = ChatMessageTelegramTailAnchorY,
+        )
+    }
+    Box(
+        modifier = modifier
+            .shadow(
+                elevation = if (isDarkSurface) 3.dp else 5.dp,
+                shape = bubbleShape,
+                clip = false,
+                ambientColor = shadowColor.copy(alpha = if (isDarkSurface) 0.20f else 0.13f),
+                spotColor = shadowColor.copy(alpha = if (isDarkSurface) 0.30f else 0.20f),
+            ),
+    ) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+            drawTelegramChatBubble(
+                isOutgoing = isOutgoing,
+                fillBrush = fillBrush,
+                borderColor = borderColor,
+                shadowColor = shadowColor,
+                cornerRadius = radius.toPx(),
+                tailWidth = ChatMessageTelegramTailWidth.toPx(),
+                tailHeight = ChatMessageTelegramTailHeight.toPx(),
+                tailAnchorY = ChatMessageTelegramTailAnchorY.toPx(),
+                isDarkSurface = isDarkSurface,
+            )
+        }
+        Box(
+            modifier = Modifier.padding(
+                start = if (isOutgoing) 14.dp else 22.dp,
+                top = 9.dp,
+                end = if (isOutgoing) 22.dp else 14.dp,
+                bottom = 8.dp,
+            ),
+        ) {
+            content()
+        }
+    }
+}
+
+private class ChatMessageTelegramBubbleShape(
+    private val isOutgoing: Boolean,
+    private val cornerRadius: Dp,
+    private val tailWidth: Dp,
+    private val tailHeight: Dp,
+    private val tailAnchorY: Dp,
+) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        return Outline.Generic(
+            with(density) {
+                createTelegramChatBubblePath(
+                    size = size,
+                    isOutgoing = isOutgoing,
+                    cornerRadius = cornerRadius.toPx(),
+                    tailWidth = tailWidth.toPx(),
+                    tailHeight = tailHeight.toPx(),
+                    tailAnchorY = tailAnchorY.toPx(),
+                    strokeWidth = 0f,
+                )
+            },
+        )
+    }
+}
+
+private fun DrawScope.drawTelegramChatBubble(
+    isOutgoing: Boolean,
+    fillBrush: Brush,
+    borderColor: Color,
+    shadowColor: Color,
+    cornerRadius: Float,
+    tailWidth: Float,
+    tailHeight: Float,
+    tailAnchorY: Float,
+    isDarkSurface: Boolean,
+) {
+    val strokeWidth = 0.42.dp.toPx()
+    val path = createTelegramChatBubblePath(
+        size = size,
+        isOutgoing = isOutgoing,
+        cornerRadius = cornerRadius,
+        tailWidth = tailWidth,
+        tailHeight = tailHeight,
+        tailAnchorY = tailAnchorY,
+        strokeWidth = strokeWidth,
+    )
+    drawPath(path = path, brush = fillBrush)
+    val topGlowHeight = 9.dp.toPx().coerceAtMost(size.height * 0.36f)
+    if (topGlowHeight > 0f) {
+        drawPath(
+            path = path,
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = if (isDarkSurface) 0.035f else 0.18f),
+                    Color.Transparent,
+                ),
+                startY = 0f,
+                endY = topGlowHeight,
+            ),
+        )
+    }
+    val bottomShadeHeight = 7.dp.toPx().coerceAtMost(size.height * 0.24f)
+    if (bottomShadeHeight > 0f) {
+        drawPath(
+            path = path,
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.Transparent,
+                    shadowColor.copy(alpha = if (isDarkSurface) 0.040f else 0.026f),
+                ),
+                startY = size.height - bottomShadeHeight,
+                endY = size.height,
+            ),
+        )
+    }
+    val bottomEdgeColor = if (borderColor.alpha > 0.01f) {
+        borderColor
+    } else {
+        shadowColor.copy(alpha = if (isDarkSurface) 0.20f else 0.12f)
+    }
+    drawLine(
+        color = bottomEdgeColor,
+        start = androidx.compose.ui.geometry.Offset(x = tailWidth + cornerRadius * 0.55f, y = size.height - strokeWidth),
+        end = androidx.compose.ui.geometry.Offset(x = size.width - tailWidth - cornerRadius * 0.55f, y = size.height - strokeWidth),
+        strokeWidth = 0.55.dp.toPx(),
+    )
+    if (borderColor.alpha > 0.01f) {
+        drawPath(
+            path = path,
+            color = borderColor,
+            style = Stroke(width = strokeWidth),
+        )
+    }
+}
+
+private fun Density.createTelegramChatBubblePath(
+    size: Size,
+    isOutgoing: Boolean,
+    cornerRadius: Float,
+    tailWidth: Float,
+    tailHeight: Float,
+    tailAnchorY: Float,
+    strokeWidth: Float,
+): Path {
+    val left = if (isOutgoing) strokeWidth / 2f else tailWidth
+    val right = if (isOutgoing) size.width - tailWidth else size.width - strokeWidth / 2f
+    val top = strokeWidth / 2f
+    val bottom = size.height - strokeWidth / 2f
+    val bodyWidth = (right - left).coerceAtLeast(0f)
+    val bodyHeight = (bottom - top).coerceAtLeast(0f)
+    val radius = cornerRadius.coerceAtMost(minOf(bodyWidth, bodyHeight) / 2f)
+    val tailRootY = (top + tailAnchorY).coerceIn(top + 2.dp.toPx(), top + radius * 0.86f)
+    val tailUpperY = (tailRootY - tailHeight * 0.42f).coerceAtLeast(top + 0.4.dp.toPx())
+    val tailLowerY = (tailRootY + tailHeight * 0.64f).coerceAtMost(top + radius * 1.10f)
+    val tailTipInset = 0.25.dp.toPx() + strokeWidth / 2f
+    val tailTipRound = 0.9.dp.toPx()
+    val tailShoulder = tailWidth * 0.20f
+    val tailNeck = tailWidth * 0.92f
+    val cornerK = 0.55228475f
+    return Path().apply {
+        if (isOutgoing) {
+            moveTo(left + radius, top)
+            lineTo(right - radius, top)
+            cubicTo(
+                right - radius * (1f - cornerK),
+                top,
+                right,
+                tailUpperY - radius * 0.03f,
+                right,
+                tailUpperY,
+            )
+            cubicTo(
+                right + tailShoulder,
+                tailUpperY - tailHeight * 0.08f,
+                right + tailNeck,
+                tailRootY - tailHeight * 0.58f,
+                size.width - tailTipInset,
+                top + 0.65.dp.toPx(),
+            )
+            cubicTo(
+                size.width + tailTipInset * 0.12f,
+                top + tailTipRound * 0.45f,
+                size.width + tailTipInset * 0.12f,
+                top + tailTipRound * 1.55f,
+                size.width - tailTipInset,
+                top + tailTipRound * 2.0f,
+            )
+            cubicTo(
+                right + tailNeck,
+                tailRootY + tailHeight * 0.12f,
+                right + tailShoulder,
+                tailLowerY - tailHeight * 0.05f,
+                right,
+                tailLowerY,
+            )
+            lineTo(right, bottom - radius)
+            cubicTo(
+                right,
+                bottom - radius * (1f - cornerK),
+                right - radius * (1f - cornerK),
+                bottom,
+                right - radius,
+                bottom,
+            )
+            lineTo(left + radius, bottom)
+            cubicTo(
+                left + radius * (1f - cornerK),
+                bottom,
+                left,
+                bottom - radius * (1f - cornerK),
+                left,
+                bottom - radius,
+            )
+            lineTo(left, top + radius)
+            cubicTo(
+                left,
+                top + radius * (1f - cornerK),
+                left + radius * (1f - cornerK),
+                top,
+                left + radius,
+                top,
+            )
+        } else {
+            moveTo(left + radius, top)
+            lineTo(right - radius, top)
+            cubicTo(
+                right - radius * (1f - cornerK),
+                top,
+                right,
+                top + radius * (1f - cornerK),
+                right,
+                top + radius,
+            )
+            lineTo(right, bottom - radius)
+            cubicTo(
+                right,
+                bottom - radius * (1f - cornerK),
+                right - radius * (1f - cornerK),
+                bottom,
+                right - radius,
+                bottom,
+            )
+            lineTo(left + radius, bottom)
+            cubicTo(
+                left + radius * (1f - cornerK),
+                bottom,
+                left,
+                bottom - radius * (1f - cornerK),
+                left,
+                bottom - radius,
+            )
+            lineTo(left, tailLowerY)
+            cubicTo(
+                left - tailShoulder,
+                tailLowerY - tailHeight * 0.05f,
+                left - tailNeck,
+                tailRootY + tailHeight * 0.12f,
+                tailTipInset,
+                top + tailTipRound * 2.0f,
+            )
+            cubicTo(
+                -tailTipInset * 0.12f,
+                top + tailTipRound * 1.55f,
+                -tailTipInset * 0.12f,
+                top + tailTipRound * 0.45f,
+                tailTipInset,
+                top + 0.65.dp.toPx(),
+            )
+            cubicTo(
+                left - tailNeck,
+                tailRootY - tailHeight * 0.58f,
+                left - tailShoulder,
+                tailUpperY - tailHeight * 0.08f,
+                left,
+                tailUpperY,
+            )
+            cubicTo(
+                left,
+                tailUpperY - radius * 0.03f,
+                left + radius * (1f - cornerK),
+                top,
+                left + radius,
+                top,
+            )
+        }
+        close()
     }
 }
 
@@ -2901,82 +4222,73 @@ private fun ChatMessageRow(
             onReport = onReport,
         )
     }
-    val bubbleShape = remember(isOutgoing) {
-        if (isOutgoing) {
-            RoundedCornerShape(19.dp, 9.dp, 19.dp, 19.dp)
-        } else {
-            RoundedCornerShape(9.dp, 19.dp, 19.dp, 19.dp)
-        }
-    }
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val surfaceColor = MaterialTheme.colorScheme.surface
-    val inputBackgroundColor = LocalHhhlColors.current.inputBackground
-    val isDarkSurface = MaterialTheme.colorScheme.background.luminance() < 0.18f
+    val colors = LocalHhhlColors.current
+    val outgoingBubbleColor = colors.chatOutgoingBubble
+    val incomingBubbleColor = colors.chatIncomingBubble
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
     val darkIncomingBubbleColor = chatDarkMessageBubbleColor(isOutgoing = false)
     val bubbleBrush = remember(
         isOutgoing,
-        primaryColor,
-        surfaceColor,
-        inputBackgroundColor,
+        outgoingBubbleColor,
+        incomingBubbleColor,
         isDarkSurface,
         darkIncomingBubbleColor,
     ) {
         if (isOutgoing) {
             Brush.verticalGradient(
                 listOf(
-                    primaryColor.copy(alpha = if (isDarkSurface) 0.98f else 0.96f),
-                    primaryColor.copy(alpha = if (isDarkSurface) 0.92f else 0.88f),
-                    primaryColor.copy(alpha = if (isDarkSurface) 0.86f else 0.82f),
+                    outgoingBubbleColor.copy(alpha = if (isDarkSurface) 0.98f else 1.00f),
+                    outgoingBubbleColor.copy(alpha = if (isDarkSurface) 0.94f else 0.96f),
                 )
             )
         } else if (isDarkSurface) {
-            SolidColor(darkIncomingBubbleColor)
+            Brush.verticalGradient(
+                listOf(
+                    darkIncomingBubbleColor.copy(alpha = 0.99f),
+                    darkIncomingBubbleColor.copy(alpha = 0.93f),
+                )
+            )
         } else {
             Brush.verticalGradient(
                 listOf(
-                    surfaceColor.copy(alpha = 1.00f),
-                    surfaceColor.copy(alpha = 0.94f),
-                    inputBackgroundColor.copy(alpha = 0.84f),
-                ),
+                    incomingBubbleColor.copy(alpha = 1.00f),
+                    incomingBubbleColor.copy(alpha = 0.95f),
+                )
             )
         }
     }
-    val bubbleBorderColor = if (isOutgoing) {
-        MaterialTheme.colorScheme.onPrimary.copy(alpha = if (isDarkSurface) 0.20f else 0.16f)
-    } else if (isDarkSurface) {
-        Color.White.copy(alpha = 0.06f)
-    } else {
-        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.66f)
-    }
+    val bubbleBorderColor = colors.chatBubbleBorder.copy(alpha = if (isDarkSurface) 0.26f else 0.18f)
     val bubbleContentColor = if (isOutgoing) {
-        MaterialTheme.colorScheme.onPrimary
+        colors.chatOutgoingText
     } else {
-        MaterialTheme.colorScheme.onBackground
+        colors.chatIncomingText
     }
     val bubbleMetaColor = if (isOutgoing) {
-        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.72f)
+        colors.chatOutgoingText.copy(alpha = 0.72f)
     } else {
-        LocalHhhlColors.current.subtleText
+        colors.textMuted
     }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         horizontalArrangement = if (isOutgoing) {
-            Arrangement.spacedBy(10.dp, Alignment.End)
+            Arrangement.End
         } else {
-            Arrangement.spacedBy(10.dp)
+            Arrangement.spacedBy(7.dp, Alignment.Start)
         },
         verticalAlignment = Alignment.Top,
     ) {
         if (!isOutgoing) {
             Box(
-                modifier = Modifier.combinedClickable(
-                    interactionSource = presslessInteractionSource,
-                    indication = null,
-                    onClick = { onOpenUser(message.fromUser.id) },
-                    onLongClick = { onMentionUser(message.fromUser) },
-                ),
+                modifier = Modifier
+                    .padding(top = ChatMessageIncomingAvatarTopPadding)
+                    .combinedClickable(
+                        interactionSource = presslessInteractionSource,
+                        indication = null,
+                        onClick = { onOpenUser(message.fromUser.id) },
+                        onLongClick = { onMentionUser(message.fromUser) },
+                    ),
             ) {
                 Avatar(
                     initial = message.fromUser.avatarInitial,
@@ -2988,193 +4300,124 @@ private fun ChatMessageRow(
         Column(
             modifier = Modifier
                 .weight(1f, fill = false)
-                .widthIn(max = 320.dp),
+                .widthIn(max = ChatMessageBubbleMaxWidth),
             horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
-            verticalArrangement = Arrangement.spacedBy(5.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            Box(
-                modifier = Modifier.widthIn(max = 320.dp),
+            ChatMessageMetaRow(
+                message = message,
+                isOutgoing = isOutgoing,
+                isDarkSurface = isDarkSurface,
+                overflowActions = overflowActions,
+                onOpenUser = onOpenUser,
+                presslessInteractionSource = presslessInteractionSource,
+                modifier = Modifier.widthIn(max = ChatMessageBubbleMaxWidth),
+            )
+            ChatMessageTelegramBubbleSurface(
+                isOutgoing = isOutgoing,
+                fillBrush = bubbleBrush,
+                borderColor = bubbleBorderColor,
+                shadowColor = colors.shadow,
+                isDarkSurface = isDarkSurface,
+                modifier = Modifier.widthIn(max = ChatMessageBubbleMaxWidth),
             ) {
                 Column(
-                    modifier = Modifier
-                        .widthIn(max = 320.dp)
-                        .shadow(
-                            elevation = if (isDarkSurface) 1.dp else 3.dp,
-                            shape = bubbleShape,
-                            clip = false,
-                        )
-                        .clip(bubbleShape)
-                        .background(bubbleBrush)
-                        .border(
-                            width = 1.dp,
-                            color = bubbleBorderColor,
-                            shape = bubbleShape,
-                        )
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(7.dp),
-                    horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                    horizontalAlignment = Alignment.Start,
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Row(
-                            modifier = Modifier.weight(1f),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (!isOutgoing) {
+                        presentation.quote?.let { quote ->
+                            ChatMessageQuoteBlock(
+                                quote = quote,
+                                isOutgoing = isOutgoing,
+                                onClick = { onOpenQuote(quote) },
+                            )
+                        }
+                        message.reply?.let { reference ->
+                            ChatMessageReferenceBlock(
+                                label = "回复",
+                                reference = reference,
+                                isOutgoing = isOutgoing,
+                                onClick = { onOpenQuote(reference.toRenderedQuote()) },
+                            )
+                        } ?: if (message.replyUnavailable) {
+                            ChatMessageMissingReferenceBlock(label = "回复", isOutgoing = isOutgoing)
+                        } else {
+                            null
+                        }
+                        message.quote?.let { reference ->
+                            ChatMessageReferenceBlock(
+                                label = "引用",
+                                reference = reference,
+                                isOutgoing = isOutgoing,
+                                onClick = { onOpenQuote(reference.toRenderedQuote()) },
+                            )
+                        } ?: if (message.quoteUnavailable) {
+                            ChatMessageMissingReferenceBlock(label = "引用", isOutgoing = isOutgoing)
+                        } else {
+                            null
+                        }
+                        InlineRichText(
+                            text = presentation.body,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = bubbleContentColor,
+                            accentColor = if (isOutgoing) {
+                                colors.chatOutgoingText
+                            } else {
+                                colors.accent
+                            },
+                            onOpenUrl = onOpenUrl,
+                            onOpenMention = onOpenMention,
+                            onOpenHashtag = onOpenHashtag,
+                        )
+                        message.file?.let { file ->
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                DriveFilePreview(
+                                    file = file,
+                                    onOpenUrl = { openUrl ->
+                                        val session = driveFileMediaPreviewSession(
+                                            files = listOf(file),
+                                            selectedId = file.id,
+                                        )
+                                        if (session.items.isNotEmpty() && onOpenMediaPreview != null) {
+                                            onOpenMediaPreview(session)
+                                        } else {
+                                            onOpenUrl(openUrl)
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(96.dp),
+                                )
                                 Text(
-                                    text = chatMiddleEllipsize(
-                                        value = message.fromUser.displayName.ifBlank { message.fromUser.username },
-                                        maxLength = 16,
-                                    ),
-                                    color = bubbleContentColor,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
+                                    text = mediaTypeDisplayName(file.type, file.name),
+                                    color = bubbleMetaColor,
+                                    style = MaterialTheme.typography.bodySmall,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Clip,
-                                    modifier = Modifier.clickable(
-                                        interactionSource = presslessInteractionSource,
-                                        indication = null,
-                                    ) { onOpenUser(message.fromUser.id) },
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                            Text(
-                                text = message.createdAtLabel,
-                                color = bubbleMetaColor,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Clip,
-                                softWrap = false,
-                            )
                         }
-                        Box {
-                            HhhlOverflowMenu(
-                                actions = overflowActions,
-                                label = "消息操作",
-                                buttonContainerColor = if (isOutgoing) {
-                                    MaterialTheme.colorScheme.onPrimary.copy(alpha = if (isDarkSurface) 0.16f else 0.12f)
-                                } else {
-                                    null
-                                },
-                                iconTint = if (isOutgoing) {
-                                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.86f)
-                                } else {
-                                    null
-                                },
-                            )
-                            ChatMessageReactionMenu(
-                                customEmojis = customEmojis,
-                                recentEmojiCodes = recentEmojiCodes,
-                                expanded = reactionPickerExpanded,
-                                isOutgoing = isOutgoing,
-                                onDismiss = { reactionPickerExpanded = false },
-                                onSelectReaction = { reaction ->
-                                    reactionPickerExpanded = false
-                                    val existingReaction = message.reactions.firstOrNull { it.reaction == reaction }
-                                    if (existingReaction?.isReactedBy(currentUserId) == true) {
-                                        onUnreact(message.id, reaction)
-                                    } else {
-                                        onReact(message.id, reaction)
-                                    }
-                                },
-                            )
-                        }
-                    }
-                    presentation.quote?.let { quote ->
-                        ChatMessageQuoteBlock(
-                            quote = quote,
-                            isOutgoing = isOutgoing,
-                            onClick = { onOpenQuote(quote) },
-                        )
-                    }
-                    message.reply?.let { reference ->
-                        ChatMessageReferenceBlock(
-                            label = "回复",
-                            reference = reference,
-                            isOutgoing = isOutgoing,
-                            onClick = { onOpenQuote(reference.toRenderedQuote()) },
-                        )
-                    } ?: if (message.replyUnavailable) {
-                        ChatMessageMissingReferenceBlock(label = "回复", isOutgoing = isOutgoing)
-                    } else {
-                        null
-                    }
-                    message.quote?.let { reference ->
-                        ChatMessageReferenceBlock(
-                            label = "引用",
-                            reference = reference,
-                            isOutgoing = isOutgoing,
-                            onClick = { onOpenQuote(reference.toRenderedQuote()) },
-                        )
-                    } ?: if (message.quoteUnavailable) {
-                        ChatMessageMissingReferenceBlock(label = "引用", isOutgoing = isOutgoing)
-                    } else {
-                        null
-                    }
-                    InlineRichText(
-                        text = presentation.body,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = bubbleContentColor,
-                        accentColor = if (isOutgoing) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        },
-                        onOpenUrl = onOpenUrl,
-                        onOpenMention = onOpenMention,
-                        onOpenHashtag = onOpenHashtag,
-                    )
-                    message.file?.let { file ->
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            DriveFilePreview(
-                                file = file,
-                                onOpenUrl = { openUrl ->
-                                    val session = driveFileMediaPreviewSession(
-                                        files = listOf(file),
-                                        selectedId = file.id,
-                                    )
-                                    if (session.items.isNotEmpty() && onOpenMediaPreview != null) {
-                                        onOpenMediaPreview(session)
-                                    } else {
-                                        onOpenUrl(openUrl)
-                                    }
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(96.dp),
-                            )
-                            Text(
-                                text = mediaTypeDisplayName(file.type, file.name),
-                                color = bubbleMetaColor,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
                 }
-                ChatMessageBubbleTail(
-                    isOutgoing = isOutgoing,
-                    fillBrush = bubbleBrush,
-                    borderColor = bubbleBorderColor,
-                    modifier = Modifier
-                        .align(if (isOutgoing) Alignment.TopEnd else Alignment.TopStart)
-                        .offset(
-                            x = if (isOutgoing) {
-                                ChatMessageBubbleTailWidth - ChatMessageBubbleTailEdgeOverlap
-                            } else {
-                                -ChatMessageBubbleTailWidth + ChatMessageBubbleTailEdgeOverlap
-                            },
-                            y = 9.dp,
-                        ),
-                )
             }
+            ChatMessageReactionMenu(
+                customEmojis = customEmojis,
+                recentEmojiCodes = recentEmojiCodes,
+                expanded = reactionPickerExpanded,
+                isOutgoing = isOutgoing,
+                onDismiss = { reactionPickerExpanded = false },
+                onSelectReaction = { reaction ->
+                    reactionPickerExpanded = false
+                    val existingReaction = message.reactions.firstOrNull { it.reaction == reaction }
+                    if (existingReaction?.isReactedBy(currentUserId) == true) {
+                        onUnreact(message.id, reaction)
+                    } else {
+                        onReact(message.id, reaction)
+                    }
+                },
+            )
             if (message.reactionCount > 0) {
                 ChatMessageReactionStrip(
                     message = message,
@@ -3186,16 +4429,169 @@ private fun ChatMessageRow(
                 )
             }
         }
-        if (isOutgoing) {
-            Avatar(
-                initial = message.fromUser.avatarInitial,
-                avatarUrl = message.fromUser.avatarUrl,
-                avatarDecorations = message.fromUser.avatarDecorations,
-                modifier = Modifier.clickable(
+    }
+}
+
+@Composable
+private fun ChatMessageMetaRow(
+    message: ChatMessage,
+    isOutgoing: Boolean,
+    isDarkSurface: Boolean,
+    overflowActions: List<HhhlOverflowMenuAction>,
+    onOpenUser: (String) -> Unit,
+    presslessInteractionSource: MutableInteractionSource,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalHhhlColors.current
+    val name = chatMiddleEllipsize(
+        value = message.fromUser.displayName.ifBlank { message.fromUser.username },
+        maxLength = 22,
+    )
+    val metaTextColor = if (isOutgoing) {
+        colors.textMuted.copy(alpha = if (isDarkSurface) 0.92f else 0.82f)
+    } else {
+        colors.textMuted
+    }
+    val nameColor = if (isOutgoing) {
+        colors.textSecondary
+    } else {
+        colors.accent
+    }
+
+    Row(
+        modifier = modifier.padding(
+            start = if (isOutgoing) 0.dp else 8.dp,
+            end = if (isOutgoing) 8.dp else 0.dp,
+            bottom = 1.dp,
+        ),
+        horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = name,
+            color = nameColor,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .widthIn(max = ChatMessageMetaNameMaxWidth)
+                .clickable(
                     interactionSource = presslessInteractionSource,
                     indication = null,
                 ) { onOpenUser(message.fromUser.id) },
+        )
+        if (message.createdAtLabel.isNotBlank()) {
+            Text(
+                text = " · ${message.createdAtLabel}",
+                color = metaTextColor,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                softWrap = false,
+                modifier = Modifier.widthIn(max = 108.dp),
             )
+        }
+        ChatMessageTinyOverflowMenu(
+            actions = overflowActions,
+            isOutgoing = isOutgoing,
+            isDarkSurface = isDarkSurface,
+        )
+    }
+}
+
+@Composable
+private fun ChatMessageTinyOverflowMenu(
+    actions: List<HhhlOverflowMenuAction>,
+    isOutgoing: Boolean,
+    isDarkSurface: Boolean,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
+    val buttonShape = RoundedCornerShape(999.dp)
+    val buttonContainer = if (isOutgoing) {
+        colors.chatOutgoingText.copy(alpha = if (expanded) 0.075f else if (isDarkSurface) 0.040f else 0.032f)
+    } else {
+        colors.textSecondary.copy(alpha = if (expanded) 0.080f else if (isDarkSurface) 0.040f else 0.030f)
+    }
+    val dotColor = if (isOutgoing) {
+        colors.chatOutgoingText.copy(alpha = if (expanded) 0.52f else 0.34f)
+    } else {
+        colors.textSecondary.copy(alpha = if (expanded) 0.56f else 0.38f)
+    }
+    Box(
+        modifier = Modifier.padding(start = 4.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .height(13.dp)
+                .width(18.dp)
+                .shadow(
+                    elevation = 0.dp,
+                    shape = buttonShape,
+                    clip = false,
+                    ambientColor = colors.shadow,
+                    spotColor = colors.shadow,
+                )
+                .clip(buttonShape)
+                .background(buttonContainer)
+                .clickable(enabled = actions.isNotEmpty()) { expanded = true }
+                .semantics { contentDescription = "消息操作" },
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            repeat(3) {
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 0.9.dp)
+                        .size(2.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(dotColor),
+                )
+            }
+        }
+        HhhlDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            offset = DpOffset(x = 0.dp, y = 6.dp),
+            modifier = Modifier.widthIn(min = 184.dp, max = 240.dp),
+        ) {
+            actions.forEach { action ->
+                HhhlDropdownMenuItem(
+                    text = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            action.icon?.let { icon ->
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = null,
+                                    tint = if (action.destructive) colors.danger else colors.textSecondary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            Text(
+                                text = action.label,
+                                color = if (action.destructive) colors.danger else colors.textPrimary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    },
+                    enabled = action.enabled,
+                    destructive = action.destructive,
+                    onClick = {
+                        expanded = false
+                        action.onClick()
+                    },
+                    modifier = Modifier
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (action.destructive) colors.danger.copy(alpha = 0.07f) else Color.Transparent),
+                )
+            }
         }
     }
 }
@@ -3240,6 +4636,7 @@ private fun ChatMessageReactionMenu(
     onSelectReaction: (String) -> Unit,
 ) {
     if (!expanded) return
+    val colors = LocalHhhlColors.current
     val density = LocalDensity.current
     Popup(
         onDismissRequest = onDismiss,
@@ -3254,12 +4651,18 @@ private fun ChatMessageReactionMenu(
             modifier = Modifier
                 .width(292.dp)
                 .height(318.dp)
-                .shadow(12.dp, RoundedCornerShape(20.dp), clip = false)
+                .shadow(
+                    elevation = 12.dp,
+                    shape = RoundedCornerShape(20.dp),
+                    clip = false,
+                    ambientColor = colors.shadow,
+                    spotColor = colors.shadow,
+                )
                 .clip(RoundedCornerShape(20.dp))
-                .background(MaterialTheme.colorScheme.surface)
+                .background(colors.surfaceElevated)
                 .border(
                     width = 1.dp,
-                    color = LocalHhhlColors.current.divider.copy(alpha = 0.42f),
+                    color = colors.border.copy(alpha = 0.42f),
                     shape = RoundedCornerShape(20.dp),
                 ),
         ) {
@@ -3284,29 +4687,36 @@ private fun ChatMessageReactionMenuButton(
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(999.dp)
-    val isDarkSurface = MaterialTheme.colorScheme.background.luminance() < 0.18f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
     Box(
         modifier = Modifier
             .size(40.dp)
-            .shadow(if (selected) 2.dp else 1.dp, shape, clip = false)
+            .shadow(
+                elevation = if (selected) 2.dp else 1.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = colors.shadow,
+                spotColor = colors.shadow,
+            )
             .clip(shape)
             .background(
                 when {
-                    !enabled -> LocalHhhlColors.current.inputBackground.copy(alpha = 0.56f)
-                    selected && isOutgoing && isDarkSurface -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                    selected && isOutgoing -> MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.18f)
-                    selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                    isDarkSurface -> MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
-                    else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+                    !enabled -> colors.inputBackground.copy(alpha = 0.56f)
+                    selected && isOutgoing && isDarkSurface -> colors.chatOutgoingBubble.copy(alpha = 0.14f)
+                    selected && isOutgoing -> colors.chatOutgoingText.copy(alpha = 0.18f)
+                    selected -> colors.noteReactionBackground.copy(alpha = 0.92f)
+                    isDarkSurface -> colors.surfaceElevated.copy(alpha = 0.82f)
+                    else -> colors.surface.copy(alpha = 0.96f)
                 },
             )
             .border(
                 width = 1.dp,
                 color = when {
-                    selected && isOutgoing && isDarkSurface -> MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
-                    selected && isOutgoing -> MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.28f)
-                    selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
-                    else -> LocalHhhlColors.current.divider.copy(alpha = 0.34f)
+                    selected && isOutgoing && isDarkSurface -> colors.focusRing.copy(alpha = 0.54f)
+                    selected && isOutgoing -> colors.chatOutgoingText.copy(alpha = 0.28f)
+                    selected -> colors.focusRing.copy(alpha = 0.54f)
+                    else -> colors.border.copy(alpha = 0.34f)
                 },
                 shape = shape,
             )
@@ -3325,7 +4735,8 @@ private fun ChatMessageReactionChip(
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(999.dp)
-    val isDarkSurface = MaterialTheme.colorScheme.background.luminance() < 0.18f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -3333,23 +4744,23 @@ private fun ChatMessageReactionChip(
             .clip(shape)
             .background(
                 if (isOutgoing && isDarkSurface) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                    colors.noteReactionBackground.copy(alpha = 0.70f)
                 } else if (isOutgoing) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                    colors.noteReactionBackground.copy(alpha = 0.82f)
                 } else if (isDarkSurface) {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
+                    colors.surfaceElevated.copy(alpha = 0.78f)
                 } else {
-                    LocalHhhlColors.current.inputBackground.copy(alpha = 0.86f)
+                    colors.inputBackground.copy(alpha = 0.86f)
                 },
             )
             .border(
                 width = 1.dp,
                 color = if (isOutgoing && isDarkSurface) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                    colors.focusRing.copy(alpha = 0.46f)
                 } else if (isOutgoing) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                    colors.focusRing.copy(alpha = 0.46f)
                 } else {
-                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.56f)
+                    colors.border.copy(alpha = 0.56f)
                 },
                 shape = shape,
             )
@@ -3360,9 +4771,9 @@ private fun ChatMessageReactionChip(
         Text(
             text = reaction.reactionSummaryLabel(),
             color = if (isOutgoing) {
-                MaterialTheme.colorScheme.primary
+                colors.accent
             } else {
-                MaterialTheme.colorScheme.onBackground
+                colors.textPrimary
             },
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
@@ -3407,32 +4818,33 @@ private fun ChatMessageReferenceShell(
     onClick: (() -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(10.dp)
-    val isDarkSurface = MaterialTheme.colorScheme.background.luminance() < 0.18f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(
                 if (isOutgoing && isDarkSurface) {
-                    MaterialTheme.colorScheme.background.copy(alpha = 0.36f)
+                    colors.quoteBackground.copy(alpha = 0.36f)
                 } else if (isOutgoing) {
-                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f)
+                    colors.chatOutgoingText.copy(alpha = 0.12f)
                 } else if (isDarkSurface) {
-                    MaterialTheme.colorScheme.background.copy(alpha = 0.34f)
+                    colors.quoteBackground.copy(alpha = 0.34f)
                 } else {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                    colors.quoteBackground.copy(alpha = 0.72f)
                 },
             )
             .border(
                 width = 1.dp,
                 color = if (isOutgoing && isDarkSurface) {
-                    Color.White.copy(alpha = 0.06f)
+                    colors.chatBubbleBorder.copy(alpha = 0.42f)
                 } else if (isOutgoing) {
-                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f)
+                    colors.chatOutgoingText.copy(alpha = 0.14f)
                 } else if (isDarkSurface) {
-                    Color.White.copy(alpha = 0.055f)
+                    colors.chatBubbleBorder.copy(alpha = 0.40f)
                 } else {
-                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.56f)
+                    colors.border.copy(alpha = 0.56f)
                 },
                 shape = shape,
             )
@@ -3450,23 +4862,23 @@ private fun ChatMessageReferenceShell(
         Text(
             text = label,
             color = if (isOutgoing) {
-                MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.76f)
+                colors.chatOutgoingText.copy(alpha = 0.76f)
             } else {
-                MaterialTheme.colorScheme.primary
+                colors.accent
             },
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
         )
-        Text(
+        InlineRichText(
             text = preview,
             color = if (isOutgoing) {
-                MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f)
+                colors.chatOutgoingText.copy(alpha = 0.78f)
             } else {
-                LocalHhhlColors.current.subtleText
+                colors.textMuted
             },
             style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+            maxChars = 180,
         )
     }
 }
@@ -3531,19 +4943,19 @@ private fun ChatSpecialCareJumpButton(
                 indication = null,
                 onClick = onClick,
             )
-            .semantics { contentDescription = "跳到特别关心消息" }
+            .semantics { contentDescription = "跳到${toast.kind.label}消息" }
             .padding(horizontal = 11.dp, vertical = 7.dp)
             .widthIn(max = 150.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "💗",
+            text = toast.kind.icon,
             style = MaterialTheme.typography.bodyMedium,
             maxLines = 1,
         )
         Text(
-            text = toast.displayName,
+            text = "${toast.kind.shortLabel} · ${toast.displayName}",
             color = surface.content,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
@@ -3555,28 +4967,13 @@ private fun ChatSpecialCareJumpButton(
 
 @Composable
 private fun chatFloatingButtonSurfaceColors(): ChatFloatingButtonSurfaceColors {
-    val isDarkSurface = MaterialTheme.colorScheme.background.luminance() < 0.18f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
     return ChatFloatingButtonSurfaceColors(
-        container = if (isDarkSurface) {
-            Color(0xFF171A1F).copy(alpha = 0.86f)
-        } else {
-            Color.White.copy(alpha = 0.88f)
-        },
-        border = if (isDarkSurface) {
-            Color.White.copy(alpha = 0.13f)
-        } else {
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.58f)
-        },
-        content = if (isDarkSurface) {
-            Color.White.copy(alpha = 0.92f)
-        } else {
-            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.86f)
-        },
-        shadow = if (isDarkSurface) {
-            Color.Black.copy(alpha = 0.38f)
-        } else {
-            Color.Black.copy(alpha = 0.16f)
-        },
+        container = colors.surfaceElevated.copy(alpha = 0.88f),
+        border = colors.border.copy(alpha = 0.58f),
+        content = colors.textPrimary.copy(alpha = 0.86f),
+        shadow = colors.shadow.copy(alpha = if (isDarkSurface) 0.82f else 0.68f),
     )
 }
 
@@ -3594,15 +4991,16 @@ private fun ChatQuoteComposerPreview(
     cancelLabel: String,
     onCancel: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.72f))
+            .background(colors.quoteBackground.copy(alpha = 0.72f))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f),
+                color = colors.border.copy(alpha = 0.72f),
                 shape = RoundedCornerShape(8.dp),
             )
             .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -3614,7 +5012,7 @@ private fun ChatQuoteComposerPreview(
                 .width(3.dp)
                 .height(46.dp)
                 .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.34f)),
+                .background(colors.accent.copy(alpha = 0.34f)),
         )
         Column(
             modifier = Modifier.weight(1f),
@@ -3622,15 +5020,15 @@ private fun ChatQuoteComposerPreview(
         ) {
             Text(
                 text = chatQuoteComposerTitle(actionLabel, quote),
-                color = MaterialTheme.colorScheme.primary,
+                color = colors.accent,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
             )
-            Text(
+            InlineRichText(
                 text = quote.previewText,
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
+                maxChars = 220,
             )
         }
         ChatComposerIconButton(
@@ -3648,16 +5046,17 @@ private fun ChatMessageQuoteBlock(
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(10.dp)
-    val isDarkSurface = MaterialTheme.colorScheme.background.luminance() < 0.18f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
     val contentColor = if (isOutgoing) {
-        MaterialTheme.colorScheme.onPrimary
+        colors.chatOutgoingText
     } else {
-        MaterialTheme.colorScheme.onBackground
+        colors.chatIncomingText
     }
     val supportingColor = if (isOutgoing) {
-        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.72f)
+        colors.chatOutgoingText.copy(alpha = 0.72f)
     } else {
-        LocalHhhlColors.current.subtleText
+        colors.textMuted
     }
     Row(
         modifier = Modifier
@@ -3665,25 +5064,25 @@ private fun ChatMessageQuoteBlock(
             .clip(shape)
             .background(
                 if (isOutgoing && isDarkSurface) {
-                    MaterialTheme.colorScheme.background.copy(alpha = 0.36f)
+                    colors.quoteBackground.copy(alpha = 0.36f)
                 } else if (isOutgoing) {
-                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f)
+                    colors.chatOutgoingText.copy(alpha = 0.12f)
                 } else if (isDarkSurface) {
-                    MaterialTheme.colorScheme.background.copy(alpha = 0.34f)
+                    colors.quoteBackground.copy(alpha = 0.34f)
                 } else {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                    colors.quoteBackground.copy(alpha = 0.72f)
                 },
             )
             .border(
                 width = 1.dp,
                 color = if (isOutgoing && isDarkSurface) {
-                    Color.White.copy(alpha = 0.06f)
+                    colors.chatBubbleBorder.copy(alpha = 0.42f)
                 } else if (isOutgoing) {
-                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f)
+                    colors.chatOutgoingText.copy(alpha = 0.14f)
                 } else if (isDarkSurface) {
-                    Color.White.copy(alpha = 0.055f)
+                    colors.chatBubbleBorder.copy(alpha = 0.40f)
                 } else {
-                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.56f)
+                    colors.border.copy(alpha = 0.56f)
                 },
                 shape = shape,
             )
@@ -3699,13 +5098,13 @@ private fun ChatMessageQuoteBlock(
                 .clip(RoundedCornerShape(2.dp))
                 .background(
                     if (isOutgoing && isDarkSurface) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.34f)
+                        colors.accent.copy(alpha = 0.34f)
                     } else if (isOutgoing) {
-                        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.58f)
+                        colors.chatOutgoingText.copy(alpha = 0.58f)
                     } else if (isDarkSurface) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                        colors.accent.copy(alpha = 0.30f)
                     } else {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.34f)
+                        colors.accent.copy(alpha = 0.34f)
                     },
                 ),
         )
@@ -3719,11 +5118,11 @@ private fun ChatMessageQuoteBlock(
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
             )
-            Text(
+            InlineRichText(
                 text = quote.preview,
                 color = supportingColor,
                 style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
+                maxChars = 220,
             )
         }
     }
@@ -3736,12 +5135,13 @@ private fun ChatComposerAttachmentPreview(
     isUploading: Boolean,
     onRemove: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(LocalHhhlColors.current.inputBackground)
+            .background(colors.chatComposerBackground)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -3752,18 +5152,18 @@ private fun ChatComposerAttachmentPreview(
         ) {
             Text(
                 text = if (attachmentCount > 1) "已附加 $attachmentCount 个文件" else "已附加文件",
-                color = MaterialTheme.colorScheme.primary,
+                color = colors.accent,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 text = file.name.ifBlank { "附件" },
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
                 text = if (isUploading) "上传处理中" else mediaTypeDisplayName(file.type, file.name),
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -3783,10 +5183,11 @@ private fun ChatAttachmentPanel(
     onOpenDrivePicker: () -> Unit,
     onOpenEmoji: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     FlowRow(
         modifier = Modifier
             .fillMaxWidth()
-            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.34f))
+            .background(colors.chatComposerBackground.copy(alpha = 0.34f))
             .padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -3830,6 +5231,7 @@ private fun ChatAttachmentAction(
     selected: Boolean = false,
     disabledLabel: String? = null,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = modifier
             .width(46.dp)
@@ -3843,16 +5245,16 @@ private fun ChatAttachmentAction(
                 .clip(RoundedCornerShape(11.dp))
                 .background(
                     when {
-                        selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                        else -> MaterialTheme.colorScheme.surface.copy(alpha = if (enabled) 0.92f else 0.52f)
+                        selected -> colors.buttonSelectedBackground
+                        else -> colors.surface.copy(alpha = if (enabled) 0.92f else 0.52f)
                     },
                 )
                 .border(
                     width = 1.dp,
                     color = if (selected) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+                        colors.focusRing.copy(alpha = 0.54f)
                     } else {
-                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.50f)
+                        colors.border.copy(alpha = 0.50f)
                     },
                     shape = RoundedCornerShape(11.dp),
                 )
@@ -3863,16 +5265,16 @@ private fun ChatAttachmentAction(
                 imageVector = icon,
                 contentDescription = null,
                 tint = when {
-                    !enabled -> LocalHhhlColors.current.subtleText
-                    selected -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.onBackground
+                    !enabled -> colors.textMuted
+                    selected -> colors.accent
+                    else -> colors.textPrimary
                 },
                 modifier = Modifier.size(20.dp),
             )
         }
         Text(
             text = if (!enabled) disabledLabel ?: label else label,
-            color = if (enabled) MaterialTheme.colorScheme.secondary else LocalHhhlColors.current.subtleText,
+            color = if (enabled) colors.textSecondary else colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -3915,31 +5317,46 @@ private fun ChatComposerIconButton(
     enabled: Boolean = true,
     selected: Boolean = false,
 ) {
+    val colors = LocalHhhlColors.current
     val shape = RoundedCornerShape(999.dp)
+    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
+    val neutralContainer = if (isDarkSurface) {
+        Color.White.copy(alpha = if (enabled) 0.075f else 0.035f)
+    } else {
+        colors.surfaceElevated.copy(alpha = if (enabled) 0.94f else 0.54f)
+    }
+    val activeContainer = colors.accent.copy(alpha = if (isDarkSurface) 0.16f else 0.10f)
     val backgroundColor = when {
-        !enabled -> LocalHhhlColors.current.inputBackground.copy(alpha = 0.56f)
-        emphasized -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-        else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+        !enabled -> neutralContainer
+        selected || emphasized -> activeContainer
+        else -> neutralContainer
     }
     val iconTint = when {
-        !enabled -> LocalHhhlColors.current.subtleText
-        emphasized -> MaterialTheme.colorScheme.primary
-        selected -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.onBackground
+        !enabled -> colors.textMuted.copy(alpha = 0.64f)
+        selected || emphasized -> colors.accent
+        else -> colors.textSecondary
     }
     Box(
         modifier = modifier
             .size(size)
-            .shadow(if (enabled) 1.dp else 0.dp, shape, clip = false)
+            .shadow(
+                elevation = if (enabled) 1.dp else 0.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = colors.shadow,
+                spotColor = colors.shadow,
+            )
             .clip(shape)
             .semantics { contentDescription = label }
             .background(backgroundColor)
             .border(
                 width = 1.dp,
-                color = if (emphasized) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+                color = if (selected || emphasized) {
+                    colors.focusRing.copy(alpha = if (isDarkSurface) 0.34f else 0.20f)
+                } else if (isDarkSurface) {
+                    Color.White.copy(alpha = 0.07f)
                 } else {
-                    LocalHhhlColors.current.divider.copy(alpha = 0.28f)
+                    colors.border.copy(alpha = 0.24f)
                 },
                 shape = shape,
             )
@@ -3951,51 +5368,6 @@ private fun ChatComposerIconButton(
             contentDescription = null,
             tint = iconTint,
             modifier = Modifier.size(20.dp),
-        )
-    }
-}
-
-@Composable
-private fun ChatSpecialCareToast(
-    toast: SpecialCareChatToast,
-    onOpen: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
-            .clickable(onClick = onOpen)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                text = "特别关心 · ${toast.displayName}",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = toast.previewText,
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        ChatComposerIconButton(
-            label = "关闭特别关心提醒",
-            icon = Icons.Filled.Close,
-            onClick = onDismiss,
         )
     }
 }
@@ -4012,19 +5384,22 @@ data class ChatRenderedMessage(
 )
 
 fun chatMessagePresentation(message: ChatMessage): ChatRenderedMessage {
-    val raw = chatMessageBodyText(message)
+    val raw = message.text
+    val fallbackBody = message.chatMessageFallbackBody()
     val messageId = raw.lineSequence()
         .mapNotNull { it.trim().chatQuoteMarkerMessageIdOrNull() }
         .firstOrNull()
-        ?: return ChatRenderedMessage(null, raw)
+        ?: return ChatRenderedMessage(null, raw.takeIf { it.isNotBlank() } ?: fallbackBody)
     val firstLineEnd = raw.indexOf('\n').takeIf { it >= 0 } ?: raw.length
     val first = raw.substring(0, firstLineEnd).trim()
-    if (!first.startsWith(">")) return ChatRenderedMessage(null, raw)
+    if (!first.startsWith(">")) {
+        return ChatRenderedMessage(null, raw.withoutChatQuoteMarkerLines().takeIf { it.isNotBlank() } ?: fallbackBody)
+    }
 
     val quoteLine = first.removePrefix(">").trim()
     val parts = quoteLine.split(":", limit = 2)
     val author = parts.firstOrNull()?.trim().orEmpty().ifBlank { "引用" }
-    val preview = parts.getOrNull(1)?.trim().orEmpty().ifBlank { "引用消息" }
+    val preview = parts.getOrNull(1)?.toChatReferencePreviewBody().orEmpty().ifBlank { "引用消息" }
     val remaining = if (firstLineEnd < raw.length) raw.substring(firstLineEnd + 1) else ""
     var bodyStarted = false
     val bodyBuilder = StringBuilder()
@@ -4043,6 +5418,18 @@ fun chatMessagePresentation(message: ChatMessage): ChatRenderedMessage {
         quote = ChatRenderedQuote(messageId = messageId, author = author, preview = preview),
         body = body,
     )
+}
+
+private fun ChatMessage.chatMessageFallbackBody(): String {
+    return file?.name?.trim().takeIf { !it.isNullOrEmpty() } ?: "[附件消息]"
+}
+
+private fun String.withoutChatQuoteMarkerLines(): String {
+    if (!contains("hhhl-chat-quote:")) return this
+    return lineSequence()
+        .filterNot { line -> line.trim().chatQuoteMarkerMessageIdOrNull() != null }
+        .joinToString(separator = "\n")
+        .trim()
 }
 
 fun chatQuoteComposerTitle(
@@ -4185,6 +5572,364 @@ fun chatMessageCopyText(message: ChatMessage): String {
         ?: "附件消息"
 }
 
+internal fun List<ChatMessage>.filterByChatMessageUiFilter(
+    filter: ChatMessageUiFilterState,
+    regexes: List<Regex>,
+): List<ChatMessage> {
+    if (!filter.isActive) return this
+    val normalizedHiddenUserIds = filter.hiddenUserIds.normalizedChatMessageUiHiddenUserRules()
+    return filterNot { message ->
+        message.isHiddenByChatMessageUiFilter(filter, regexes, normalizedHiddenUserIds)
+    }
+}
+
+internal fun List<ChatMessage>.loadedChatMessageIdSet(): Set<String> {
+    return asSequence().map { it.id }.toSet()
+}
+
+internal fun ChatMessageUiFilterState.shouldResetForLoadedHiddenMessage(
+    messageId: String?,
+    loadedMessageIds: Set<String>,
+    visibleMessageIndexById: Map<String, Int>,
+): Boolean {
+    val cleanId = messageId?.takeIf { it.isNotBlank() } ?: return false
+    return isActive && cleanId in loadedMessageIds && cleanId !in visibleMessageIndexById
+}
+
+internal fun ChatMessageUiFilterState.shouldResetForLoadedHiddenQuote(
+    quote: ChatRenderedQuote,
+    loadedMessages: List<ChatMessage>,
+    visibleMessages: List<ChatMessage>,
+    loadedMessageIds: Set<String>,
+    visibleMessageIndexById: Map<String, Int>,
+): Boolean {
+    quote.messageId?.takeIf { it.isNotBlank() }?.let { messageId ->
+        return shouldResetForLoadedHiddenMessage(messageId, loadedMessageIds, visibleMessageIndexById)
+    }
+    return isActive && loadedMessages.indexOfReferencedQuote(quote) >= 0 && visibleMessages.indexOfReferencedQuote(quote) < 0
+}
+
+internal fun List<ChatMessage>.chatMessageIdFingerprint(): String {
+    if (isEmpty()) return "0"
+    val firstId = first().id
+    val middleId = this[size / 2].id
+    val lastId = last().id
+    return "$size\u0000$firstId\u0000$middleId\u0000$lastId"
+}
+
+internal fun compileChatMessageUiFilterRegexes(patterns: List<String>): List<Regex> {
+    return patterns
+        .asSequence()
+        .map { it.trim() }
+        .filter { it.isSafeChatMessageUiFilterRegex() }
+        .distinct()
+        .take(CHAT_MESSAGE_UI_FILTER_MAX_REGEX_RULES)
+        .mapNotNull { pattern -> runCatching { Regex(pattern, RegexOption.IGNORE_CASE) }.getOrNull() }
+        .toList()
+}
+
+internal fun String.isSafeChatMessageUiFilterRegex(): Boolean {
+    val pattern = trim()
+    if (pattern.isEmpty() || pattern.length > CHAT_MESSAGE_UI_FILTER_MAX_REGEX_LENGTH) return false
+    if (runCatching { Regex(pattern) }.isFailure) return false
+    return !pattern.hasNestedOrAmbiguousRegexQuantifier() && !pattern.hasAdvancedBacktrackingRegexConstruct()
+}
+
+private fun String.hasAdvancedBacktrackingRegexConstruct(): Boolean {
+    var escaped = false
+    var inCharacterClass = false
+    forEachIndexed { index, char ->
+        if (escaped) {
+            escaped = false
+            if (char.isDigit() || char == 'k') return true
+            return@forEachIndexed
+        }
+        when (char) {
+            '\\' -> {
+                escaped = true
+                return@forEachIndexed
+            }
+            '[' -> if (!inCharacterClass) {
+                inCharacterClass = true
+                return@forEachIndexed
+            }
+            ']' -> if (inCharacterClass) {
+                inCharacterClass = false
+                return@forEachIndexed
+            }
+        }
+        if (inCharacterClass) return@forEachIndexed
+        if (char == '(' && getOrNull(index + 1) == '?') return true
+    }
+    return false
+}
+
+private fun String.hasNestedOrAmbiguousRegexQuantifier(): Boolean {
+    var escaped = false
+    var inCharacterClass = false
+    var groupDepth = 0
+    var groupStart = -1
+    var groupHasQuantifier = false
+    var lastTokenWasQuantified = false
+    forEachIndexed { index, char ->
+        if (escaped) {
+            escaped = false
+            lastTokenWasQuantified = false
+            return@forEachIndexed
+        }
+        when (char) {
+            '\\' -> {
+                escaped = true
+                return@forEachIndexed
+            }
+            '[' -> if (!inCharacterClass) {
+                inCharacterClass = true
+                lastTokenWasQuantified = false
+                return@forEachIndexed
+            }
+            ']' -> if (inCharacterClass) {
+                inCharacterClass = false
+                lastTokenWasQuantified = false
+                return@forEachIndexed
+            }
+        }
+        if (inCharacterClass) return@forEachIndexed
+        when (char) {
+            '(' -> if (groupDepth == 0) {
+                groupStart = index
+                groupHasQuantifier = false
+                lastTokenWasQuantified = false
+                groupDepth = 1
+            } else {
+                groupDepth += 1
+                lastTokenWasQuantified = false
+            }
+            ')' -> if (groupDepth > 0) {
+                groupDepth -= 1
+                lastTokenWasQuantified = false
+            }
+            '*', '+', '?' -> {
+                if (lastTokenWasQuantified) return true
+                if (groupDepth > 0) groupHasQuantifier = true
+                if (groupDepth == 0 && groupStart >= 0 && groupHasQuantifier && index > groupStart) return true
+                lastTokenWasQuantified = true
+            }
+            '{' -> {
+                val closeIndex = indexOf('}', startIndex = index + 1)
+                if (closeIndex > index && substring(index + 1, closeIndex).isRegexRepeatRange()) {
+                    if (lastTokenWasQuantified) return true
+                    if (groupDepth > 0) groupHasQuantifier = true
+                    if (groupDepth == 0 && groupStart >= 0 && groupHasQuantifier && index > groupStart) return true
+                    lastTokenWasQuantified = true
+                } else {
+                    lastTokenWasQuantified = false
+                }
+            }
+            '|', '.' -> {
+                if (char == '|' && groupDepth > 0) groupHasQuantifier = true
+                lastTokenWasQuantified = false
+            }
+            else -> lastTokenWasQuantified = false
+        }
+    }
+    return false
+}
+
+private fun String.isRegexRepeatRange(): Boolean {
+    if (isEmpty()) return false
+    val commaIndex = indexOf(',')
+    return if (commaIndex < 0) {
+        all { it.isDigit() }
+    } else {
+        substring(0, commaIndex).all { it.isDigit() } &&
+            substring(commaIndex + 1).all { it.isDigit() }
+    }
+}
+
+internal fun ChatMessage.isHiddenByChatMessageUiFilter(
+    filter: ChatMessageUiFilterState,
+    regexes: List<Regex>,
+    normalizedHiddenUserIds: Set<String> = filter.hiddenUserIds.normalizedChatMessageUiHiddenUserRules(),
+): Boolean {
+    if (fromUser.matchesHiddenChatMessageUiFilterUser(normalizedHiddenUserIds)) return true
+    if (filter.hideMfmSyntaxMessages && containsChatMessageMfmSyntax()) return true
+    if (regexes.isEmpty()) return false
+    val matchText = chatMessageUiFilterMatchText()
+    return regexes.any { regex -> regex.containsMatchIn(matchText) }
+}
+
+internal fun ChatMessageUiFilterState.withToggledHiddenUser(
+    user: User,
+    hidden: Boolean,
+): ChatMessageUiFilterState {
+    return copy(
+        hiddenUserIds = if (hidden) {
+            hiddenUserIds.withoutChatMessageUiRulesForUser(user)
+        } else {
+            hiddenUserIds + user.id
+        },
+    )
+}
+
+private fun Set<String>.withoutChatMessageUiRulesForUser(user: User): Set<String> {
+    if (isEmpty()) return this
+    val userKeys = user.chatMessageUiFilterUserKeys().normalizedChatMessageUiHiddenUserRules()
+    return filterNot { rule ->
+        val cleanRule = rule.trim()
+        cleanRule in userKeys || cleanRule.lowercase() in userKeys
+    }.toSet()
+}
+
+private fun User.matchesHiddenChatMessageUiFilterUser(hiddenUserIds: Set<String>): Boolean {
+    if (hiddenUserIds.isEmpty()) return false
+    return chatMessageUiFilterUserKeys().any { key ->
+        key in hiddenUserIds || key.lowercase() in hiddenUserIds
+    }
+}
+
+private fun Set<String>.normalizedChatMessageUiHiddenUserRules(): Set<String> {
+    if (isEmpty()) return emptySet()
+    return asSequence()
+        .flatMap { rule -> sequenceOf(rule, rule.lowercase()) }
+        .toSet()
+}
+
+private fun User.chatMessageUiFilterUserKeys(): Set<String> {
+    return buildSet {
+        id.trim().takeIf { it.isNotEmpty() }?.let(::add)
+        username.trim().takeIf { it.isNotEmpty() }?.let { name ->
+            add(name)
+            add("@$name")
+            add(name.lowercase())
+            add("@${name.lowercase()}")
+            host?.trim()?.takeIf { it.isNotEmpty() }?.let { host ->
+                add("$name@$host")
+                add("@$name@$host")
+                add("${name.lowercase()}@${host.lowercase()}")
+                add("@${name.lowercase()}@${host.lowercase()}")
+            }
+        }
+    }
+}
+
+internal fun String.cleanChatMessageUiHiddenUserRule(): String? {
+    val clean = trim()
+    if (clean.length > CHAT_MESSAGE_UI_FILTER_MAX_USER_RULE_LENGTH) return null
+    if (clean.isBlank() || clean.any { it.isWhitespace() }) return null
+    return clean
+}
+
+private fun ChatMessage.containsChatMessageMfmSyntax(): Boolean {
+    return text.containsValidMfmSyntax() ||
+        reply?.text?.containsValidMfmSyntax() == true ||
+        quote?.text?.containsValidMfmSyntax() == true
+}
+
+private fun ChatMessage.chatMessageUiFilterMatchText(): String {
+    val builder = ChatMessageUiFilterMatchTextBuilder(CHAT_MESSAGE_UI_FILTER_MAX_MATCH_TEXT_LENGTH)
+    builder.appendPart(text)
+    reply?.text?.takeIf { it.isNotBlank() }?.let { referenceText ->
+        builder.appendPart(referenceText)
+    }
+    quote?.text?.takeIf { it.isNotBlank() }?.let { referenceText ->
+        builder.appendPart(referenceText)
+    }
+    file?.name?.takeIf { it.isNotBlank() }?.let { fileName ->
+        builder.appendPart(fileName)
+    }
+    if (builder.isFullTextEmpty) {
+        builder.appendPart(chatMessageBodyText(this))
+    }
+    return builder.build()
+}
+
+private class ChatMessageUiFilterMatchTextBuilder(
+    private val maxLength: Int,
+) {
+    private val head = StringBuilder(maxLength + 1)
+    private val tail = StringBuilder(maxLength / 2 + 1)
+    private val edgeLength = maxLength / 2
+    private var fullLength = 0
+
+    val isFullTextEmpty: Boolean
+        get() = fullLength == 0
+
+    fun appendPart(value: String) {
+        if (value.isBlank()) return
+        if (fullLength > 0) appendChunk("\n")
+        appendChunk(value)
+    }
+
+    fun build(): String {
+        if (fullLength <= maxLength) return head.toString()
+        return head.substring(0, edgeLength.coerceAtMost(head.length)) + "\n" + tail.toString()
+    }
+
+    private fun appendChunk(value: String) {
+        if (value.isEmpty()) return
+        val headRemaining = maxLength - head.length
+        if (headRemaining > 0) {
+            head.append(value.take(headRemaining))
+        }
+        if (value.length >= edgeLength) {
+            tail.clear()
+            tail.append(value.takeLast(edgeLength))
+        } else {
+            tail.append(value)
+            if (tail.length > edgeLength) {
+                tail.delete(0, tail.length - edgeLength)
+            }
+        }
+        fullLength += value.length
+    }
+}
+
+internal fun ChatMessage.isHiddenByBlockedChatUser(blockedUserIds: Set<String>): Boolean {
+    if (blockedUserIds.isEmpty()) return false
+    return fromUser.id in blockedUserIds ||
+        toUser?.id?.let { it in blockedUserIds } == true ||
+        reply?.fromUser?.id?.let { it in blockedUserIds } == true ||
+        quote?.fromUser?.id?.let { it in blockedUserIds } == true
+}
+
+private fun buildChatSearchAuthorFilters(
+    messages: List<ChatMessage>,
+    searchResults: List<ChatMessage>,
+): List<ChatSearchAuthorFilter> {
+    val seenUserIds = HashSet<String>(16)
+    val filters = ArrayList<ChatSearchAuthorFilter>(16)
+    fun visit(message: ChatMessage) {
+        if (filters.size >= 16) return
+        val user = message.fromUser
+        if (user.id.isBlank() || !seenUserIds.add(user.id)) return
+        filters += ChatSearchAuthorFilter(
+            userId = user.id,
+            displayName = user.displayName.ifBlank { user.username },
+            avatarInitial = user.avatarInitial,
+            avatarUrl = user.avatarUrl,
+            avatarDecorations = user.avatarDecorations,
+        )
+    }
+    for (index in searchResults.indices.reversed()) visit(searchResults[index])
+    if (filters.size < 16) {
+        for (index in messages.indices.reversed()) visit(messages[index])
+    }
+    return filters
+}
+
+private fun buildChatMessageDateSuggestions(messages: List<ChatMessage>): List<String> {
+    val seenDates = HashSet<String>(6)
+    val suggestions = ArrayList<String>(6)
+    for (index in messages.indices.reversed()) {
+        val suggestion = messages[index].chatMessageSearchDateSuggestion() ?: continue
+        if (seenDates.add(suggestion)) {
+            suggestions += suggestion
+            if (suggestions.size >= 6) break
+        }
+    }
+    return suggestions
+}
+
 fun String.withAppendedChatMention(user: cc.hhhl.client.model.User): String {
     val name = user.displayName.trim().ifBlank { user.username.trim() }.ifBlank { return this }
     val mention = "@$name "
@@ -4213,17 +5958,17 @@ private fun cc.hhhl.client.model.ChatMessageReaction.isReactedBy(currentUserId: 
 private fun cc.hhhl.client.model.ChatMessageReference.toReferencePreviewText(): String {
     val author = fromUser?.displayName?.takeIf { it.isNotBlank() }
         ?: fromUser?.username?.takeIf { it.isNotBlank() }
-    val body = text.trim().takeIf { it.isNotBlank() }
+    val body = text.toChatReferencePreviewBody().takeIf { it.isNotBlank() }
         ?: file?.name?.takeIf { it.isNotBlank() }
         ?: "附件"
     return if (author.isNullOrBlank()) body else "$author: $body"
 }
 
-private fun cc.hhhl.client.model.ChatMessageReference.toRenderedQuote(): ChatRenderedQuote {
+fun cc.hhhl.client.model.ChatMessageReference.toRenderedQuote(): ChatRenderedQuote {
     val author = fromUser?.displayName?.takeIf { it.isNotBlank() }
         ?: fromUser?.username?.takeIf { it.isNotBlank() }
         ?: "引用"
-    val preview = text.trim().takeIf { it.isNotBlank() }
+    val preview = text.toChatReferencePreviewBody().takeIf { it.isNotBlank() }
         ?: file?.name?.takeIf { it.isNotBlank() }
         ?: "附件"
     return ChatRenderedQuote(
@@ -4231,6 +5976,10 @@ private fun cc.hhhl.client.model.ChatMessageReference.toRenderedQuote(): ChatRen
         author = author,
         preview = preview,
     )
+}
+
+private fun String.toChatReferencePreviewBody(): String {
+    return richTextPlainPreviewText(this)
 }
 
 enum class ChatMessageAlignment {
@@ -4287,7 +6036,7 @@ private fun ChatRoom.matchesChatRoomQuery(query: String): Boolean {
         owner.host.orEmpty().contains(query, ignoreCase = true)
 }
 
-private fun List<ChatMessage>.filterByChatMessageSearch(
+internal fun List<ChatMessage>.filterByChatMessageSearch(
     query: String,
     dateQuery: String,
 ): List<ChatMessage> {
@@ -4330,7 +6079,7 @@ private fun ChatUserConversation.matchesChatUserConversationQuery(query: String)
         message?.file?.name.orEmpty().contains(query, ignoreCase = true)
 }
 
-private fun chatUserConversationPreview(
+internal fun chatUserConversationPreview(
     message: ChatMessage,
     sentByMe: Boolean,
 ): String {
@@ -4360,6 +6109,7 @@ private fun chatMessageSearchSummary(
     hasFilter: Boolean,
     isRemoteSearch: Boolean,
     hasPendingQuery: Boolean,
+    authorName: String? = null,
     isSearching: Boolean,
     resultCount: Int,
     loadedCount: Int,
@@ -4367,6 +6117,10 @@ private fun chatMessageSearchSummary(
     return when {
         isSearching -> "正在搜索..."
         hasPendingQuery -> "关键词已修改，点击搜索同步服务器"
+        !authorName.isNullOrBlank() && hasFilter && isRemoteSearch -> {
+            "服务器结果 $resultCount 条 · $authorName · 已取回 $loadedCount 条"
+        }
+        !authorName.isNullOrBlank() && hasFilter -> "找到 $resultCount 条 · $authorName · 已加载 $loadedCount 条消息"
         hasFilter && isRemoteSearch -> "服务器结果 $resultCount 条 · 已取回 $loadedCount 条"
         hasFilter -> "找到 $resultCount 条 · 已加载 $loadedCount 条消息"
         else -> "已加载 $loadedCount 条消息"
@@ -4377,7 +6131,7 @@ private fun chatMessageSearchPreview(
     message: ChatMessage,
     presentation: ChatRenderedMessage,
 ): String {
-    val body = presentation.body.trim()
+    val body = presentation.body.toChatReferencePreviewBody()
     if (body.isNotBlank()) return body
     return message.file?.name?.takeIf { it.isNotBlank() }
         ?: message.file?.type?.takeIf { it.isNotBlank() }
@@ -4398,7 +6152,74 @@ private fun ChatRoomMember.matchesChatRoomMemberQuery(query: String): Boolean {
         user.host.orEmpty().contains(query, ignoreCase = true)
 }
 
-private fun List<ChatMessage>.indexOfReferencedQuote(quote: ChatRenderedQuote): Int {
+private fun ChatRoomMember.isOnlineChatMember(recentlyActiveUserIds: Set<String>): Boolean {
+    val status = user.onlineStatus.trim()
+    val recentlyActive = user.id in recentlyActiveUserIds || isInferredActiveChatMember()
+    return when {
+        recentlyActive -> true
+        status.equals("online", ignoreCase = true) ||
+            status.equals("active", ignoreCase = true) -> true
+        status.equals("offline", ignoreCase = true) -> false
+        else -> false
+    }
+}
+
+private fun ChatRoomMember.isInferredActiveChatMember(): Boolean {
+    return membershipId.startsWith(CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX)
+}
+
+private fun chatRoomOnlineMemberComparator(recentlyActiveUserIds: Set<String>): Comparator<ChatRoomMember> {
+    return compareByDescending<ChatRoomMember> { member -> member.user.onlineStatus.equals("online", ignoreCase = true) }
+        .thenByDescending { member -> member.user.id in recentlyActiveUserIds || member.isInferredActiveChatMember() }
+        .then(chatRoomMemberNameComparator)
+}
+
+private val chatRoomMemberNameComparator = compareBy<ChatRoomMember, String>(String.CASE_INSENSITIVE_ORDER) { member ->
+    member.user.displayName.ifBlank { member.user.username }
+}.thenBy { member -> member.user.id }
+
+private fun List<ChatMessage>.recentlyActiveChatMemberIds(roomId: String?): Set<String> {
+    if (isEmpty()) return emptySet()
+    val currentRoomId = roomId?.trim().orEmpty()
+
+    val nowEpochMillis = Clock.System.now().toEpochMilliseconds()
+    val recentIds = linkedSetOf<String>()
+    var fallbackScannedMessages = 0
+    val fallbackIds = linkedSetOf<String>()
+    var matchedRoomMessage = false
+    for (index in indices.reversed()) {
+        val message = this[index]
+        if (currentRoomId.isNotBlank() && message.roomId != currentRoomId) continue
+        matchedRoomMessage = true
+        val userId = message.fromUser.id.takeIf { it.isNotBlank() } ?: continue
+        if (fallbackScannedMessages < CHAT_MEMBER_ACTIVE_FALLBACK_MESSAGE_LIMIT) {
+            fallbackScannedMessages += 1
+            fallbackIds += userId
+        }
+        val createdAtEpochMillis = message.createdAt.toApiInstantOrNull()?.toEpochMilliseconds()
+        if (createdAtEpochMillis != null) {
+            if (nowEpochMillis - createdAtEpochMillis <= CHAT_MEMBER_ACTIVE_WINDOW_MILLIS) {
+                recentIds += userId
+                if (recentIds.size >= CHAT_MEMBER_ACTIVE_FALLBACK_USER_LIMIT) break
+                continue
+            }
+            if (recentIds.isNotEmpty()) break
+        }
+        if (fallbackScannedMessages >= CHAT_MEMBER_ACTIVE_FALLBACK_MESSAGE_LIMIT &&
+            fallbackIds.size >= CHAT_MEMBER_ACTIVE_FALLBACK_USER_LIMIT
+        ) {
+            break
+        }
+    }
+    if (!matchedRoomMessage) return emptySet()
+    if (recentIds.isNotEmpty()) return recentIds
+    if (fallbackIds.size > CHAT_MEMBER_ACTIVE_FALLBACK_USER_LIMIT) {
+        return fallbackIds.take(CHAT_MEMBER_ACTIVE_FALLBACK_USER_LIMIT).toSet()
+    }
+    return fallbackIds
+}
+
+internal fun List<ChatMessage>.indexOfReferencedQuote(quote: ChatRenderedQuote): Int {
     quote.messageId?.takeIf { it.isNotBlank() }?.let { messageId ->
         val exactIndex = indexOfFirst { it.id == messageId }
         if (exactIndex >= 0) return exactIndex
@@ -4408,10 +6229,14 @@ private fun List<ChatMessage>.indexOfReferencedQuote(quote: ChatRenderedQuote): 
     if (cleanPreview.isBlank()) return -1
     return indexOfFirst { message ->
         val presentation = chatMessagePresentation(message)
+        val plainBody = presentation.body.toChatReferencePreviewBody()
         val authorMatches = cleanAuthor.isBlank() ||
             message.fromUser.displayName.equals(cleanAuthor, ignoreCase = true) ||
             message.fromUser.username.equals(cleanAuthor, ignoreCase = true)
-        authorMatches && presentation.body.contains(cleanPreview, ignoreCase = true)
+        authorMatches && (
+            presentation.body.contains(cleanPreview, ignoreCase = true) ||
+                plainBody.contains(cleanPreview, ignoreCase = true)
+            )
     }
 }
 

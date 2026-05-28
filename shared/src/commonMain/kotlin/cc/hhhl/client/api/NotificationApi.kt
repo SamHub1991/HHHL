@@ -3,13 +3,16 @@ package cc.hhhl.client.api
 import cc.hhhl.client.model.NotificationItem
 import cc.hhhl.client.model.NotificationType
 import cc.hhhl.client.model.User
+import cc.hhhl.client.presentation.notePreviewText
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
 import io.ktor.http.appendPathSegments
@@ -28,6 +31,17 @@ interface NotificationApi {
     ): NotificationLoadResult
 
     suspend fun markAllAsRead(token: String): NotificationActionResult
+
+    suspend fun flush(token: String): NotificationActionResult
+
+    suspend fun createNotification(
+        token: String,
+        body: String,
+        header: String? = null,
+        icon: String? = null,
+    ): NotificationActionResult
+
+    suspend fun sendTestNotification(token: String): NotificationActionResult
 }
 
 sealed interface NotificationLoadResult {
@@ -103,13 +117,76 @@ class SharkeyNotificationApi(
     }
 
     override suspend fun markAllAsRead(token: String): NotificationActionResult {
+        return postNotificationAction(token, "notifications", "mark-all-as-read")
+    }
+
+    override suspend fun flush(token: String): NotificationActionResult {
+        return postNotificationAction(token, "notifications", "flush")
+    }
+
+    override suspend fun createNotification(
+        token: String,
+        body: String,
+        header: String?,
+        icon: String?,
+    ): NotificationActionResult {
+        val cleanBody = body.trim()
+        if (cleanBody.isEmpty()) return NotificationActionResult.ServerError(400, "通知内容不能为空")
+        return postNotificationAction(
+            token = token,
+            endpoint = arrayOf("notifications", "create"),
+            payload = NotificationCreateRequest(
+                i = token.trim(),
+                body = cleanBody,
+                header = header?.trim()?.takeIf { it.isNotBlank() },
+                icon = icon?.trim()?.takeIf { it.isNotBlank() },
+            ),
+        )
+    }
+
+    override suspend fun sendTestNotification(token: String): NotificationActionResult {
+        return postNotificationAction(token, "notifications", "test-notification")
+    }
+
+    private suspend fun postNotificationAction(
+        token: String,
+        endpoint: Array<out String>,
+        payload: Any,
+    ): NotificationActionResult {
         val cleanToken = token.trim()
         if (cleanToken.isEmpty()) return NotificationActionResult.Unauthorized
 
         return try {
-            val response = client.post(apiUrl("notifications", "mark-all-as-read")) {
+            val response = client.post(apiUrl(*endpoint)) {
                 contentType(ContentType.Application.Json)
-                setBody(NotificationActionRequest(i = cleanToken))
+                setBody(payload)
+            }
+
+            when {
+                response.status.value in 200..299 -> NotificationActionResult.Success
+                response.isSharkeyUnauthorized() -> NotificationActionResult.Unauthorized
+                else -> NotificationActionResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            NotificationActionResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    private suspend fun postNotificationAction(
+        token: String,
+        vararg endpoint: String,
+    ): NotificationActionResult {
+        val cleanToken = token.trim()
+        if (cleanToken.isEmpty()) return NotificationActionResult.Unauthorized
+
+        return try {
+            val response = client.post(apiUrl(*endpoint)) {
+                header(HttpHeaders.Authorization, "Bearer $cleanToken")
             }
 
             when {
@@ -147,8 +224,11 @@ private data class NotificationRequest(
 )
 
 @Serializable
-private data class NotificationActionRequest(
+private data class NotificationCreateRequest(
     val i: String,
+    val body: String,
+    val header: String? = null,
+    val icon: String? = null,
 )
 
 @Serializable
@@ -190,7 +270,10 @@ private data class NotificationDto(
             createdAtLabel = createdAt.toLocalCompactDateLabel(),
             createdAtEpochMillis = createdAt.toApiInstantOrNull()?.toEpochMilliseconds() ?: 0L,
             noteId = note?.id,
-            notePreviewText = note?.text?.takeIf { it.isNotBlank() },
+            notePreviewText = note?.let { note ->
+                notePreviewText(text = note.text.orEmpty(), cw = note.cw, fallback = "")
+                    .takeIf { it.isNotBlank() }
+            },
             isRead = isRead ?: read ?: false,
         )
     }
@@ -261,6 +344,7 @@ private data class NotificationUserDto(
 private data class NotificationNoteDto(
     val id: String,
     val text: String? = null,
+    val cw: String? = null,
 )
 
 @Serializable
@@ -345,8 +429,8 @@ private fun NotificationType.toSharkeyType(): String? {
         NotificationType.SharedAccessGranted -> "sharedAccessGranted"
         NotificationType.SharedAccessRevoked -> "sharedAccessRevoked"
         NotificationType.SharedAccessLogin -> "sharedAccessLogin"
-        NotificationType.ReactionGrouped -> "reaction:grouped"
-        NotificationType.RenoteGrouped -> "renote:grouped"
+        NotificationType.ReactionGrouped,
+        NotificationType.RenoteGrouped -> null
         NotificationType.Test -> "test"
         NotificationType.Unknown -> null
     }

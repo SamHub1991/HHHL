@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,6 +35,7 @@ import cc.hhhl.client.model.SettingsWebhookDetail
 import cc.hhhl.client.model.SettingsWebhookUpdateInput
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.HhhlActionChip
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlIconActionButton
@@ -83,6 +83,15 @@ fun SettingsManagementScreen(
                             onClick = { showWebhookCreateDialog = true },
                         )
                     }
+                    if (section?.key == SettingsManagementSectionKey.Invites && section.supportsPrimaryAction) {
+                        HhhlIconActionButton(
+                            icon = Icons.Filled.Add,
+                            contentDescription = "创建邀请码",
+                            enabled = !isLoading && !isMutating,
+                            emphasized = true,
+                            onClick = { onPerformAction(SettingsManagementAction.CreateInvite, "") },
+                        )
+                    }
                     HhhlIconActionButton(
                         icon = Icons.Filled.Refresh,
                         contentDescription = if (isLoading) "同步中" else "刷新",
@@ -103,22 +112,22 @@ fun SettingsManagementScreen(
         }
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             message?.let {
-                item(contentType = "settings-management-message") {
+                item(key = "settings-management-message", contentType = "settings-management-message") {
                     SettingsManagementStatusRow(text = it)
                 }
             }
             if (isLoading) {
-                item(contentType = "settings-management-loading") {
+                item(key = "settings-management-loading", contentType = "settings-management-loading") {
                     SettingsManagementStatusRow(text = "正在加载...", loading = true)
                 }
             }
             if (!isLoading && section != null && section.items.isEmpty()) {
-                item(contentType = "settings-management-empty") {
+                item(key = "settings-management-empty-${section.key.name}", contentType = "settings-management-empty") {
                     SettingsManagementStatusRow(text = "暂无可显示内容")
                 }
             }
             section?.errorMessage?.let { error ->
-                item(contentType = "settings-management-error") {
+                item(key = "settings-management-error-${section.key.name}", contentType = "settings-management-error") {
                     SettingsManagementStatusRow(text = error)
                 }
             }
@@ -168,6 +177,7 @@ private fun SettingsManagementSummaryRow(
     text: String,
     isMutating: Boolean,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -177,7 +187,7 @@ private fun SettingsManagementSummaryRow(
     ) {
         Text(
             text = text,
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.weight(1f),
         )
@@ -200,6 +210,7 @@ private fun SettingsManagementItemRow(
     onOpenWebhookEditor: (String) -> Unit,
 ) {
     var pendingAction by remember { mutableStateOf<SettingsManagementItemAction?>(null) }
+    val colors = LocalHhhlColors.current
     HhhlInlinePanel(
         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -215,7 +226,7 @@ private fun SettingsManagementItemRow(
             ) {
                 Text(
                     text = item.title,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -224,7 +235,7 @@ private fun SettingsManagementItemRow(
                 item.subtitle.takeIf { it.isNotBlank() }?.let { subtitle ->
                     Text(
                         text = subtitle,
-                        color = LocalHhhlColors.current.subtleText,
+                        color = colors.textMuted,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -233,7 +244,7 @@ private fun SettingsManagementItemRow(
                 item.meta.takeIf { it.isNotBlank() }?.let { meta ->
                     Text(
                         text = meta,
-                        color = LocalHhhlColors.current.subtleText,
+                        color = colors.textMuted,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -293,7 +304,7 @@ private fun SettingsManagementItemRow(
     HhhlDivider()
 
     pendingAction?.let { action ->
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { pendingAction = null },
             title = { Text(settingsManagementActionTitle(action)) },
             text = { Text(settingsManagementActionMessage(action)) },
@@ -326,13 +337,14 @@ private fun SettingsWebhookCreateDialog(
     onDismiss: () -> Unit,
     onCreate: (SettingsWebhookCreateInput) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     var secret by remember { mutableStateOf("") }
     var selectedEvents by remember { mutableStateOf(listOf("note")) }
     val canCreate = name.trim().isNotEmpty() && url.trim().isNotEmpty() && selectedEvents.isNotEmpty() && !isMutating
 
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("创建 Webhook") },
         text = {
@@ -363,7 +375,7 @@ private fun SettingsWebhookCreateDialog(
                 )
                 Text(
                     text = "触发事件",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 WebhookEventPicker(
@@ -407,6 +419,7 @@ private fun SettingsWebhookEditDialog(
     onDismiss: () -> Unit,
     onSave: (SettingsWebhookUpdateInput) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     var name by remember(webhook.id) { mutableStateOf(webhook.name) }
     var url by remember(webhook.id) { mutableStateOf(webhook.url) }
     var secret by remember(webhook.id) { mutableStateOf(webhook.secret) }
@@ -415,7 +428,7 @@ private fun SettingsWebhookEditDialog(
     }
     val canSave = name.trim().isNotEmpty() && url.trim().isNotEmpty() && selectedEvents.isNotEmpty() && !isMutating
 
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("编辑 Webhook") },
         text = {
@@ -446,7 +459,7 @@ private fun SettingsWebhookEditDialog(
                 )
                 Text(
                     text = "触发事件",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
                 WebhookEventPicker(
@@ -533,6 +546,9 @@ private val webhookEventOptions = listOf(
 private fun settingsManagementActionTitle(action: SettingsManagementItemAction): String {
     return when (action.type) {
         SettingsManagementAction.RevokeToken -> "确认撤销"
+        SettingsManagementAction.CreateInvite -> "创建邀请码"
+        SettingsManagementAction.DeleteInvite -> "确认删除"
+        SettingsManagementAction.LoginSharedAccess -> "授权登录"
         SettingsManagementAction.EditWebhook -> "编辑 Webhook"
         SettingsManagementAction.EnableWebhook -> "确认启用"
         SettingsManagementAction.DisableWebhook -> "确认停用"
@@ -544,6 +560,9 @@ private fun settingsManagementActionTitle(action: SettingsManagementItemAction):
 private fun settingsManagementActionMessage(action: SettingsManagementItemAction): String {
     return when (action.type) {
         SettingsManagementAction.RevokeToken -> "撤销后该令牌将无法继续访问。"
+        SettingsManagementAction.CreateInvite -> "将生成一个新的邀请码。"
+        SettingsManagementAction.DeleteInvite -> "删除后该邀请码将无法继续注册使用。"
+        SettingsManagementAction.LoginSharedAccess -> "需要通过授权登录重新确认共享访问。"
         SettingsManagementAction.EditWebhook -> "请在 Webhook 编辑表单中保存更改。"
         SettingsManagementAction.EnableWebhook -> "启用后该 Webhook 会重新接收事件推送。"
         SettingsManagementAction.DisableWebhook -> "停用后该 Webhook 将暂停接收事件推送。"

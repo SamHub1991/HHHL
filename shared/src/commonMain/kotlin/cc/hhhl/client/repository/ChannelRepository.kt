@@ -7,6 +7,7 @@ import cc.hhhl.client.api.ChannelMutationResult
 import cc.hhhl.client.api.ChannelTimelineLoadResult
 import cc.hhhl.client.api.SharkeyChannelApi
 import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelDefaultColorHex
 import cc.hhhl.client.model.ChannelDraft
 import cc.hhhl.client.model.ChannelListKind
 import cc.hhhl.client.model.Note
@@ -185,7 +186,7 @@ open class ChannelRepository(
         return copy(
             name = name.trim(),
             description = description.trim(),
-            color = color.trim().ifBlank { "#40c057" },
+            color = color.trim().ifBlank { ChannelDefaultColorHex },
             bannerId = bannerId?.trim()?.takeIf { it.isNotBlank() },
         )
     }

@@ -4,6 +4,7 @@ import cc.hhhl.client.api.SharkeyUserProfileApi
 import cc.hhhl.client.api.USER_PROFILE_DESCRIPTION_MAX_LENGTH
 import cc.hhhl.client.api.USER_PROFILE_NAME_MAX_LENGTH
 import cc.hhhl.client.api.UserProfileApi
+import cc.hhhl.client.api.UserAvailabilityResult
 import cc.hhhl.client.api.UserProfileLoadResult
 import cc.hhhl.client.api.UserProfileUpdateDraft
 import cc.hhhl.client.api.UserProfileUpdateResult
@@ -56,6 +57,18 @@ open class UserProfileRepository(
             description = description,
             bannerId = cleanBannerId,
         )
+    }
+
+    open suspend fun checkUsernameAvailable(username: String): UserProfileAvailabilityRepositoryResult {
+        val cleanUsername = username.trim().removePrefix("@")
+        if (cleanUsername.isBlank()) return UserProfileAvailabilityRepositoryResult.Error("请输入用户名")
+        return mapAvailabilityResult(api.checkUsernameAvailable(cleanUsername))
+    }
+
+    open suspend fun checkEmailAddressAvailable(emailAddress: String): UserProfileAvailabilityRepositoryResult {
+        val cleanEmailAddress = emailAddress.trim()
+        if (cleanEmailAddress.isBlank()) return UserProfileAvailabilityRepositoryResult.Error("请输入邮箱")
+        return mapAvailabilityResult(api.checkEmailAddressAvailable(cleanEmailAddress))
     }
 
     private suspend fun updateProfileFields(
@@ -112,6 +125,19 @@ open class UserProfileRepository(
             is UserProfileUpdateResult.ServerError -> UserProfileRepositoryResult.Error(result.message)
         }
     }
+
+    private fun mapAvailabilityResult(result: UserAvailabilityResult): UserProfileAvailabilityRepositoryResult {
+        return when (result) {
+            is UserAvailabilityResult.Success -> UserProfileAvailabilityRepositoryResult.Success(
+                available = result.available,
+                reason = result.reason,
+            )
+            is UserAvailabilityResult.NetworkError -> {
+                UserProfileAvailabilityRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is UserAvailabilityResult.ServerError -> UserProfileAvailabilityRepositoryResult.Error(result.message)
+        }
+    }
 }
 
 sealed interface UserProfileRepositoryResult {
@@ -120,4 +146,13 @@ sealed interface UserProfileRepositoryResult {
     data object Unauthorized : UserProfileRepositoryResult
 
     data class Error(val message: String) : UserProfileRepositoryResult
+}
+
+sealed interface UserProfileAvailabilityRepositoryResult {
+    data class Success(
+        val available: Boolean,
+        val reason: String? = null,
+    ) : UserProfileAvailabilityRepositoryResult
+
+    data class Error(val message: String) : UserProfileAvailabilityRepositoryResult
 }

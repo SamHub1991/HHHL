@@ -6,6 +6,7 @@ import cc.hhhl.client.api.ChatMessageDeleteResult
 import cc.hhhl.client.api.ChatMessageLoadResult
 import cc.hhhl.client.api.ChatMessageReactionResult
 import cc.hhhl.client.api.ChatRoomActionResult
+import cc.hhhl.client.api.ChatRoomInvitationLoadResult
 import cc.hhhl.client.api.ChatRoomMemberLoadResult
 import cc.hhhl.client.api.ChatRoomLoadResult
 import cc.hhhl.client.api.ChatRoomMutationResult
@@ -17,7 +18,9 @@ import cc.hhhl.client.cache.ChatMessageCacheConversationType
 import cc.hhhl.client.cache.ChatMessageCacheKey
 import cc.hhhl.client.cache.NoopChatMessageCache
 import cc.hhhl.client.model.ChatMessage
+import cc.hhhl.client.model.CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX
 import cc.hhhl.client.model.ChatRoom
+import cc.hhhl.client.model.ChatRoomInvitation
 import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.ChatUserConversation
 import cc.hhhl.client.model.User
@@ -46,6 +49,67 @@ open class ChatRepository(
             currentRooms = currentRooms,
             untilId = currentRooms.lastOrNull()?.membershipId,
         )
+    }
+
+    open suspend fun refreshOwnedRooms(): ChatRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return ChatRepositoryResult.Unauthorized
+        return when (val result = api.loadOwnedRooms(token, DEFAULT_PAGE_SIZE)) {
+            is ChatRoomLoadResult.Success -> ChatRepositoryResult.Success(result.rooms, endReached = result.rooms.isEmpty())
+            ChatRoomLoadResult.Unauthorized -> ChatRepositoryResult.Unauthorized
+            is ChatRoomLoadResult.NetworkError -> ChatRepositoryResult.Error("无法连接服务器：${result.message}")
+            is ChatRoomLoadResult.ServerError -> result.toRepositoryResult()
+        }
+    }
+
+    open suspend fun refreshInvitationInbox(): ChatRoomInvitationRepositoryResult {
+        return loadInvitations(inbox = true)
+    }
+
+    open suspend fun refreshInvitationOutbox(): ChatRoomInvitationRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return ChatRoomInvitationRepositoryResult.Unauthorized
+        val ownedRooms = when (val ownedResult = api.loadOwnedRooms(token, DEFAULT_PAGE_SIZE)) {
+            is ChatRoomLoadResult.Success -> ownedResult.rooms
+            ChatRoomLoadResult.Unauthorized -> return ChatRoomInvitationRepositoryResult.Unauthorized
+            is ChatRoomLoadResult.NetworkError -> {
+                return ChatRoomInvitationRepositoryResult.Error("无法连接服务器：${ownedResult.message}")
+            }
+            is ChatRoomLoadResult.ServerError -> {
+                return ChatRoomInvitationRepositoryResult.Error(ownedResult.message)
+            }
+        }
+        if (ownedRooms.isEmpty()) {
+            return ChatRoomInvitationRepositoryResult.Success(emptyList())
+        }
+
+        val invitations = mutableListOf<ChatRoomInvitation>()
+        for (room in ownedRooms) {
+            when (val result = api.loadInvitationOutbox(token, room.id, DEFAULT_PAGE_SIZE)) {
+                is ChatRoomInvitationLoadResult.Success -> invitations += result.invitations
+                ChatRoomInvitationLoadResult.Unauthorized -> return ChatRoomInvitationRepositoryResult.Unauthorized
+                is ChatRoomInvitationLoadResult.NetworkError -> {
+                    return ChatRoomInvitationRepositoryResult.Error("无法连接服务器：${result.message}")
+                }
+                is ChatRoomInvitationLoadResult.ServerError -> {
+                    return ChatRoomInvitationRepositoryResult.Error(result.message)
+                }
+            }
+        }
+        return ChatRoomInvitationRepositoryResult.Success(invitations.distinctBy { it.id })
+    }
+
+    open suspend fun ignoreInvitation(roomId: String): ChatRoomMutationRepositoryResult {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isBlank()) return ChatRoomMutationRepositoryResult.ValidationError("请选择聊天室")
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return ChatRoomMutationRepositoryResult.Unauthorized
+        return when (val result = api.ignoreRoomInvitation(token, cleanRoomId)) {
+            ChatRoomActionResult.Success -> ChatRoomMutationRepositoryResult.ActionCompleted("已忽略邀请")
+            ChatRoomActionResult.Unauthorized -> ChatRoomMutationRepositoryResult.Unauthorized
+            is ChatRoomActionResult.NetworkError -> ChatRoomMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            is ChatRoomActionResult.ServerError -> ChatRoomMutationRepositoryResult.Error(result.message)
+        }
     }
 
     open suspend fun refreshUserConversations(): ChatUserConversationRepositoryResult {
@@ -159,7 +223,7 @@ open class ChatRepository(
         return loadMembers(
             roomId = roomId,
             currentMembers = currentMembers,
-            untilId = currentMembers.lastOrNull()?.membershipId,
+            untilId = currentMembers.lastOfficialMembershipId(),
         )
     }
 
@@ -434,6 +498,22 @@ open class ChatRepository(
         }
     }
 
+    private suspend fun loadInvitations(inbox: Boolean): ChatRoomInvitationRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return ChatRoomInvitationRepositoryResult.Unauthorized
+        val result = if (inbox) {
+            api.loadInvitationInbox(token, DEFAULT_PAGE_SIZE)
+        } else {
+            return ChatRoomInvitationRepositoryResult.Error("聊天室邀请发件箱需要指定聊天室")
+        }
+        return when (result) {
+            is ChatRoomInvitationLoadResult.Success -> ChatRoomInvitationRepositoryResult.Success(result.invitations)
+            ChatRoomInvitationLoadResult.Unauthorized -> ChatRoomInvitationRepositoryResult.Unauthorized
+            is ChatRoomInvitationLoadResult.NetworkError -> ChatRoomInvitationRepositoryResult.Error("无法连接服务器：${result.message}")
+            is ChatRoomInvitationLoadResult.ServerError -> ChatRoomInvitationRepositoryResult.Error(result.message)
+        }
+    }
+
     private suspend fun loadMessages(
         roomId: String,
         currentMessages: List<ChatMessage>,
@@ -696,7 +776,7 @@ open class ChatRepository(
         ) {
             is ChatRoomMemberLoadResult.Success -> ChatRoomMemberRepositoryResult.Success(
                 members = currentMembers.appendDistinctBy(result.members) { it.membershipId },
-                endReached = result.members.isEmpty(),
+                endReached = result.members.size < DEFAULT_MEMBER_PAGE_SIZE,
             )
             ChatRoomMemberLoadResult.Unauthorized -> ChatRoomMemberRepositoryResult.Unauthorized
             is ChatRoomMemberLoadResult.NetworkError -> {
@@ -950,8 +1030,13 @@ open class ChatRepository(
         const val DEFAULT_UNREAD_COUNT_MESSAGE_LIMIT = 100
         const val DEFAULT_HISTORY_INDEX_PAGE_SIZE = 100
         const val DEFAULT_MESSAGE_SEARCH_PAGE_SIZE = 30
-        const val DEFAULT_MEMBER_PAGE_SIZE = 30
+        const val DEFAULT_MEMBER_PAGE_SIZE = 100
     }
+}
+
+private fun List<ChatRoomMember>.lastOfficialMembershipId(): String? {
+    return lastOrNull { member -> !member.membershipId.startsWith(CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX) }
+        ?.membershipId
 }
 
 private fun ChatRoomLoadResult.ServerError.toRepositoryResult(): ChatRepositoryResult {
@@ -1026,8 +1111,9 @@ private fun List<ChatMessage>.mergeReplacingRepositoryMessages(incoming: List<Ch
     if (incoming.isEmpty()) return dedupeSortedMessages()
     if (isEmpty()) return incoming.dedupeSortedMessages()
     val incomingById = incoming.associateBy { it.id }
+    val existingIds = mapTo(HashSet(size)) { it.id }
     return (map { message -> incomingById[message.id] ?: message } + incoming.filterNot { incomingMessage ->
-        any { it.id == incomingMessage.id }
+        incomingMessage.id in existingIds
     }).dedupeSortedMessages()
 }
 
@@ -1203,6 +1289,16 @@ sealed interface ChatRoomMemberRepositoryResult {
     data object Unauthorized : ChatRoomMemberRepositoryResult
 
     data class Error(val message: String) : ChatRoomMemberRepositoryResult
+}
+
+sealed interface ChatRoomInvitationRepositoryResult {
+    data class Success(
+        val invitations: List<ChatRoomInvitation>,
+    ) : ChatRoomInvitationRepositoryResult
+
+    data object Unauthorized : ChatRoomInvitationRepositoryResult
+
+    data class Error(val message: String) : ChatRoomInvitationRepositoryResult
 }
 
 sealed interface ChatRoomMutationRepositoryResult {

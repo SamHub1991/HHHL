@@ -19,7 +19,7 @@ class NoteActionRepositoryTest {
         val result = repository.perform(NoteActionRequest.React("note-1"))
 
         assertEquals(NoteActionRepositoryResult.Success("已发送反应"), result)
-        assertEquals(listOf(ApiCall("react", "token-123", "note-1", "❤️")), calls)
+        assertEquals(listOf(ApiCall("like", "token-123", "note-1", "❤️")), calls)
     }
 
     @Test
@@ -33,7 +33,7 @@ class NoteActionRepositoryTest {
         val result = repository.perform(NoteActionRequest.React("note-1", "🚀"))
 
         assertEquals(NoteActionRepositoryResult.Success("已发送反应"), result)
-        assertEquals(listOf(ApiCall("react", "token-123", "note-1", "🚀")), calls)
+        assertEquals(listOf(ApiCall("like", "token-123", "note-1", "🚀")), calls)
     }
 
     @Test
@@ -48,6 +48,20 @@ class NoteActionRepositoryTest {
 
         assertEquals(NoteActionRepositoryResult.Success("已转发"), result)
         assertEquals(listOf(ApiCall("renote", "token-123", "note-1", null)), calls)
+    }
+
+    @Test
+    fun unrenoteUsesTokenAndNoteId() = runTest {
+        val calls = mutableListOf<ApiCall>()
+        val repository = NoteActionRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(calls = calls, result = NoteActionApiResult.Success),
+        )
+
+        val result = repository.perform(NoteActionRequest.Unrenote("note-1"))
+
+        assertEquals(NoteActionRepositoryResult.Success("已取消转发"), result)
+        assertEquals(listOf(ApiCall("unrenote", "token-123", "note-1", null)), calls)
     }
 
     @Test
@@ -129,6 +143,16 @@ class NoteActionRepositoryTest {
                 return result
             }
 
+            override suspend fun likeNote(
+                token: String,
+                noteId: String,
+                override: String?,
+            ): NoteActionApiResult {
+                onCall()
+                calls.add(ApiCall("like", token, noteId, override))
+                return result
+            }
+
             override suspend fun deleteReaction(
                 token: String,
                 noteId: String,
@@ -162,6 +186,15 @@ class NoteActionRepositoryTest {
             ): NoteActionApiResult {
                 onCall()
                 calls.add(ApiCall("renote", token, noteId, null))
+                return result
+            }
+
+            override suspend fun deleteRenote(
+                token: String,
+                noteId: String,
+            ): NoteActionApiResult {
+                onCall()
+                calls.add(ApiCall("unrenote", token, noteId, null))
                 return result
             }
 
@@ -201,6 +234,33 @@ class NoteActionRepositoryTest {
             ): NoteActionApiResult {
                 onCall()
                 calls.add(ApiCall("mute", token, noteId, null))
+                return result
+            }
+
+            override suspend fun unmuteNote(
+                token: String,
+                noteId: String,
+            ): NoteActionApiResult {
+                onCall()
+                calls.add(ApiCall("unmute", token, noteId, null))
+                return result
+            }
+
+            override suspend fun muteRenotes(
+                token: String,
+                userId: String,
+            ): NoteActionApiResult {
+                onCall()
+                calls.add(ApiCall("muteRenotes", token, userId, null))
+                return result
+            }
+
+            override suspend fun unmuteRenotes(
+                token: String,
+                userId: String,
+            ): NoteActionApiResult {
+                onCall()
+                calls.add(ApiCall("unmuteRenotes", token, userId, null))
                 return result
             }
         }

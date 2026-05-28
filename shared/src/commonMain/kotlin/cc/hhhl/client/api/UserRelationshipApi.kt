@@ -40,15 +40,44 @@ interface UserRelationshipApi {
         untilId: String? = null,
     ): UserRelationshipListResult
 
+    suspend fun loadRenoteMutedUsers(
+        token: String,
+        limit: Int = 30,
+        untilId: String? = null,
+    ): UserRelationshipListResult =
+        UserRelationshipListResult.ServerError(501, "转发屏蔽用户接口未实现")
+
     suspend fun follow(
         token: String,
         userId: String,
+        withReplies: Boolean? = null,
     ): UserRelationshipResult
 
     suspend fun unfollow(
         token: String,
         userId: String,
     ): UserRelationshipResult
+
+    suspend fun updateFollowing(
+        token: String,
+        userId: String,
+        notify: String? = null,
+        withReplies: Boolean? = null,
+    ): UserRelationshipResult =
+        UserRelationshipResult.ServerError(501, "关注设置接口未实现")
+
+    suspend fun updateAllFollowing(
+        token: String,
+        notify: String? = null,
+        withReplies: Boolean? = null,
+    ): UserRelationshipResult =
+        UserRelationshipResult.ServerError(501, "批量关注设置接口未实现")
+
+    suspend fun invalidateFollowing(
+        token: String,
+        userId: String,
+    ): UserRelationshipResult =
+        UserRelationshipResult.ServerError(501, "关注缓存刷新接口未实现")
 
     suspend fun mute(
         token: String,
@@ -160,11 +189,13 @@ class SharkeyUserRelationshipApi(
     override suspend fun follow(
         token: String,
         userId: String,
+        withReplies: Boolean?,
     ): UserRelationshipResult {
-        return postRelationship(
+        return postFollowing(
             endpoint = arrayOf("following", "create"),
             token = token,
             userId = userId,
+            withReplies = withReplies,
         )
     }
 
@@ -192,6 +223,19 @@ class SharkeyUserRelationshipApi(
             limit = limit,
             untilId = untilId,
         ) { it.toBlockedEntry() }
+    }
+
+    override suspend fun loadRenoteMutedUsers(
+        token: String,
+        limit: Int,
+        untilId: String?,
+    ): UserRelationshipListResult {
+        return loadRelationshipList(
+            endpoint = arrayOf("renote-mute", "list"),
+            token = token,
+            limit = limit,
+            untilId = untilId,
+        ) { it.toRenoteMutedEntry() }
     }
 
     override suspend fun mute(
@@ -263,6 +307,65 @@ class SharkeyUserRelationshipApi(
         )
     }
 
+    override suspend fun updateFollowing(
+        token: String,
+        userId: String,
+        notify: String?,
+        withReplies: Boolean?,
+    ): UserRelationshipResult {
+        return postFollowing(
+            endpoint = arrayOf("following", "update"),
+            token = token,
+            userId = userId,
+            notify = notify,
+            withReplies = withReplies,
+        )
+    }
+
+    override suspend fun updateAllFollowing(
+        token: String,
+        notify: String?,
+        withReplies: Boolean?,
+    ): UserRelationshipResult {
+        val cleanToken = token.trim()
+        if (cleanToken.isEmpty()) return UserRelationshipResult.Unauthorized
+        return try {
+            val response = client.post(apiUrl("following", "update-all")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    FollowingUpdateAllRequest(
+                        i = cleanToken,
+                        notify = notify?.trim()?.takeIf { it in FollowingNotifyValues },
+                        withReplies = withReplies,
+                    ),
+                )
+            }
+            when {
+                response.status.value in 200..299 -> UserRelationshipResult.Success
+                response.isSharkeyUnauthorized() -> UserRelationshipResult.Unauthorized
+                else -> UserRelationshipResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            UserRelationshipResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun invalidateFollowing(
+        token: String,
+        userId: String,
+    ): UserRelationshipResult {
+        return postRelationship(
+            endpoint = arrayOf("following", "invalidate"),
+            token = token,
+            userId = userId,
+        )
+    }
+
     private suspend fun postRelationship(
         endpoint: Array<String>,
         token: String,
@@ -273,6 +376,26 @@ class SharkeyUserRelationshipApi(
             token = token,
             userId = userId,
             body = UserRelationshipRequest(i = token.trim(), userId = userId.trim()),
+        )
+    }
+
+    private suspend fun postFollowing(
+        endpoint: Array<String>,
+        token: String,
+        userId: String,
+        notify: String? = null,
+        withReplies: Boolean? = null,
+    ): UserRelationshipResult {
+        return postAction(
+            endpoint = endpoint,
+            token = token,
+            userId = userId,
+            body = FollowingUpdateRequest(
+                i = token.trim(),
+                userId = userId.trim(),
+                notify = notify?.trim()?.takeIf { it in FollowingNotifyValues },
+                withReplies = withReplies,
+            ),
         )
     }
 
@@ -375,6 +498,28 @@ private data class UserRelationshipRequest(
 )
 
 @Serializable
+private data class UserRelationshipTokenRequest(
+    val i: String,
+)
+
+@Serializable
+private data class FollowingUpdateRequest(
+    val i: String,
+    val userId: String,
+    val notify: String? = null,
+    val withReplies: Boolean? = null,
+)
+
+@Serializable
+private data class FollowingUpdateAllRequest(
+    val i: String,
+    val notify: String? = null,
+    val withReplies: Boolean? = null,
+)
+
+private val FollowingNotifyValues = setOf("normal", "none")
+
+@Serializable
 private data class UserReportRequest(
     val i: String,
     val userId: String,
@@ -434,10 +579,14 @@ private data class UserRelationshipListDto(
     val createdAt: String = "",
     val mutee: RelationshipUserDto? = null,
     val blockee: RelationshipUserDto? = null,
+    val muteeId: String? = null,
+    val user: RelationshipUserDto? = null,
 ) {
     fun toMutedEntry(): UserRelationshipListEntry? = mutee?.toEntry(id, createdAt)
 
     fun toBlockedEntry(): UserRelationshipListEntry? = blockee?.toEntry(id, createdAt)
+
+    fun toRenoteMutedEntry(): UserRelationshipListEntry? = (mutee ?: user)?.toEntry(id, createdAt)
 }
 
 @Serializable

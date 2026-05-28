@@ -15,12 +15,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import cc.hhhl.client.theme.LocalHhhlColors
 
 @Composable
 fun CustomEmojiReactionLabel(
     reaction: String,
     modifier: Modifier = Modifier,
 ) {
+    val colors = LocalHhhlColors.current
     val emojiUrl = LocalCustomEmojiUrls.current[reaction]
     var imageLoaded by remember(emojiUrl) { mutableStateOf(false) }
     if (emojiUrl != null) {
@@ -39,7 +41,7 @@ fun CustomEmojiReactionLabel(
             if (!imageLoaded) {
                 Text(
                     text = reaction,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = colors.accent,
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
                 )
@@ -48,7 +50,7 @@ fun CustomEmojiReactionLabel(
     } else {
         Text(
             text = reaction,
-            color = MaterialTheme.colorScheme.primary,
+            color = colors.accent,
             style = MaterialTheme.typography.labelMedium,
             maxLines = 1,
             modifier = modifier,

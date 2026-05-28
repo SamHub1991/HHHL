@@ -12,10 +12,9 @@ import androidx.compose.foundation.layout.safeContentPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -28,8 +27,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import cc.hhhl.client.automation.AppAutomationActionExecutor
+import cc.hhhl.client.automation.AutomationStore
+import cc.hhhl.client.automation.AutomationStateHolder
+import cc.hhhl.client.automation.NoopAutomationStore
+import cc.hhhl.client.automation.toAutomationChatEvent
+import cc.hhhl.client.automation.toAutomationNotificationEvent
 import cc.hhhl.client.api.TimelineKind
 import cc.hhhl.client.api.MainStreamingEvent
 import cc.hhhl.client.api.toApiInstantOrNull
@@ -56,14 +63,18 @@ import cc.hhhl.client.display.TimelineDensity
 import cc.hhhl.client.media.MediaPicker
 import cc.hhhl.client.model.Clip
 import cc.hhhl.client.model.ClipListKind
+import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.InstanceCapabilities
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NotificationItem
 import cc.hhhl.client.model.NotificationType
+import cc.hhhl.client.model.User
+import cc.hhhl.client.model.UserRelationshipListEntry
 import cc.hhhl.client.repository.AntennaRepository
 import cc.hhhl.client.repository.AnnouncementRepository
 import cc.hhhl.client.repository.AdminRepository
 import cc.hhhl.client.repository.AchievementRepository
+import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ChatStreamingRepository
 import cc.hhhl.client.repository.ChannelRepository
@@ -102,6 +113,7 @@ import cc.hhhl.client.state.ComposeCompletionStateHolder
 import cc.hhhl.client.state.ComposeStateHolder
 import cc.hhhl.client.state.ComposeDraftStore
 import cc.hhhl.client.state.DiscoverStateHolder
+import cc.hhhl.client.state.ChatAttentionKind
 import cc.hhhl.client.state.ChatUiState
 import cc.hhhl.client.state.DriveFilesUiState
 import cc.hhhl.client.state.DriveFilesStateHolder
@@ -120,6 +132,7 @@ import cc.hhhl.client.state.NotificationReadStore
 import cc.hhhl.client.state.NotificationStateHolder
 import cc.hhhl.client.state.PageStateHolder
 import cc.hhhl.client.state.RecentReactionStore
+import cc.hhhl.client.state.RelationshipManagementTab
 import cc.hhhl.client.state.RelationshipManagementStateHolder
 import cc.hhhl.client.state.RelationshipManagementUiState
 import cc.hhhl.client.state.SettingsItemKey
@@ -144,17 +157,24 @@ import cc.hhhl.client.navigation.visibleRootRoutes
 import cc.hhhl.client.theme.HhhlTheme
 import cc.hhhl.client.theme.HhhlCustomTheme
 import cc.hhhl.client.theme.HhhlThemePreset
+import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.theme.NoopThemeStore
 import cc.hhhl.client.theme.ThemeStore
 import cc.hhhl.client.theme.ThemeStateHolder
 import cc.hhhl.client.ui.component.HhhlBottomNav
+import cc.hhhl.client.ui.component.HhhlAlertDialog
+import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.ui.component.LocalCustomEmojiUrls
+import cc.hhhl.client.ui.component.LocalBlockedNoteAuthorIds
 import cc.hhhl.client.ui.component.LocalNoteRowActions
 import cc.hhhl.client.ui.component.MediaPreviewOverlay
+import cc.hhhl.client.presentation.notePreviewText
 import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.NoteRowDensity
 import cc.hhhl.client.ui.component.NoteRowActions
 import cc.hhhl.client.ui.screen.AnnouncementScreen
+import cc.hhhl.client.ui.screen.AutomationScreen
 import cc.hhhl.client.ui.screen.AdminDashboardScreen
 import cc.hhhl.client.ui.screen.AchievementScreen
 import cc.hhhl.client.ui.screen.AntennaScreen
@@ -180,6 +200,7 @@ import cc.hhhl.client.ui.screen.SettingsScreen
 import cc.hhhl.client.ui.screen.SettingsManagementScreen
 import cc.hhhl.client.ui.screen.settingsWebManagementPath
 import cc.hhhl.client.ui.screen.settingsManagementSectionKey
+import cc.hhhl.client.ui.screen.ThemeCustomizationScreen
 import cc.hhhl.client.ui.screen.TimelineScreen
 import cc.hhhl.client.ui.screen.UserListScreen
 import cc.hhhl.client.ui.screen.UserSocialScreen
@@ -191,6 +212,7 @@ import kotlinx.datetime.Clock
 @Composable
 fun HhhlApp(
     openUrl: (String) -> Unit = {},
+    shareUrl: (String) -> Unit = {},
     downloadUrl: (String, String, String) -> Unit = { url, _, _ -> openUrl(url) },
     mediaPicker: MediaPicker? = null,
     authCallbackSession: String? = null,
@@ -199,6 +221,7 @@ fun HhhlApp(
     displayPreferenceStore: DisplayPreferenceStore = NoopDisplayPreferenceStore,
     recentReactionStore: RecentReactionStore = NoopRecentReactionStore,
     specialCareStore: SpecialCareStore = NoopSpecialCareStore,
+    automationStore: AutomationStore = NoopAutomationStore,
     composeDraftStore: ComposeDraftStore = NoopComposeDraftStore,
     chatMessageCache: ChatMessageCache = NoopChatMessageCache,
     chatUnreadStore: ChatUnreadStore = NoopChatUnreadStore,
@@ -209,6 +232,10 @@ fun HhhlApp(
     specialCareBackgroundNotificationsEnabled: Boolean = true,
     onBackgroundNotificationsChanged: (Boolean) -> Unit = {},
     onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit = {},
+    onSpecialCareUsersChanged: (Set<String>) -> Unit = {},
+    onSpecialCareSystemNotification: (NotificationItem) -> Unit = {},
+    onAutomationSystemNotification: ((String, String) -> Boolean?)? = null,
+    onCheckForUpdates: (((String) -> Unit) -> Unit) = { report -> report("当前平台暂不支持应用内更新") },
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit) = {},
     onAuthCallbackConsumed: () -> Unit = {},
 ) {
@@ -221,6 +248,7 @@ fun HhhlApp(
                 chatMessageCache.clearAccount(accountId)
                 chatUnreadStore.clearAccount(accountId)
                 specialCareStore.clearAccount(accountId)
+                automationStore.clearAccount(accountId)
                 notificationCache.clearAccount(accountId)
                 notificationReadStore.clearAccount(accountId)
             },
@@ -277,11 +305,13 @@ fun HhhlApp(
                     accounts = loginState.accounts,
                     currentAccountId = loginState.currentAccountId,
                     openUrl = openUrl,
+                    shareUrl = shareUrl,
                     downloadUrl = downloadUrl,
                     mediaPicker = mediaPicker,
                     timelineCache = timelineCache,
                     recentReactionStore = recentReactionStore,
                     specialCareStore = specialCareStore,
+                    automationStore = automationStore,
                     composeDraftStore = composeDraftStore,
                     chatMessageCache = chatMessageCache,
                     chatUnreadStore = chatUnreadStore,
@@ -306,11 +336,16 @@ fun HhhlApp(
                     specialCareBackgroundNotificationsEnabled = specialCareBackgroundNotificationsEnabled,
                     onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
                     onSpecialCareBackgroundNotificationsChanged = onSpecialCareBackgroundNotificationsChanged,
+                    onSpecialCareUsersChanged = onSpecialCareUsersChanged,
+                    onSpecialCareSystemNotification = onSpecialCareSystemNotification,
+                    onAutomationSystemNotification = onAutomationSystemNotification,
+                    onCheckForUpdates = onCheckForUpdates,
                     onBackHandlerChanged = onBackHandlerChanged,
                     onSwitchAccount = loginStateHolder::switchAccount,
                     onRemoveAccount = loginStateHolder::removeAccount,
                     onAddAccount = { loginStateHolder.startBrowserLogin(openUrl) },
                     onAuthInvalid = loginStateHolder::logout,
+                    onSharedAccessLogin = loginStateHolder::importSessionToken,
                 )
             }
         }
@@ -348,6 +383,95 @@ internal fun loadedNotesForActions(
     }
 }
 
+private fun relationshipSpecialCareEntries(
+    userIds: Set<String>,
+    accountUser: AuthenticatedUser?,
+    userProfileState: cc.hhhl.client.state.UserProfileUiState,
+    viewedProfileState: cc.hhhl.client.state.UserProfileUiState,
+    loadedNotes: List<Note>,
+    chatState: ChatUiState,
+): List<UserRelationshipListEntry> {
+    if (userIds.isEmpty()) return emptyList()
+    val usersById = linkedMapOf<String, User>()
+
+    fun addUser(user: User?) {
+        if (user == null || user.id !in userIds) return
+        usersById.putIfAbsent(user.id, user)
+    }
+
+    accountUser?.let { user ->
+        addUser(
+            User(
+                id = user.id,
+                displayName = user.displayName.ifBlank { user.username },
+                username = user.username,
+                avatarInitial = user.displayName.ifBlank { user.username }.take(1).uppercase().ifBlank { "?" },
+                avatarUrl = user.avatarUrl,
+            ),
+        )
+    }
+    addUser(userProfileState.user)
+    addUser(viewedProfileState.user)
+    loadedNotes.forEach { note ->
+        addUser(note.author)
+        note.quotedNote?.let { addUser(it.author) }
+    }
+    chatState.rooms.forEach { addUser(it.owner) }
+    chatState.userConversations.forEach { conversation ->
+        addUser(conversation.user)
+        conversation.latestMessage?.let { message ->
+            addUser(message.fromUser)
+            addUser(message.toUser)
+        }
+    }
+    chatState.messages.forEach { message ->
+        addUser(message.fromUser)
+        addUser(message.toUser)
+        addUser(message.reply?.fromUser)
+        addUser(message.quote?.fromUser)
+    }
+
+    return userIds.map { userId ->
+        val user = usersById[userId] ?: relationshipPlaceholderUser(userId)
+        UserRelationshipListEntry(
+            id = "special-care-$userId",
+            user = user,
+        )
+    }
+}
+
+private fun relationshipPlaceholderUser(userId: String): User {
+    val label = userId.takeIf { it.isNotBlank() } ?: "unknown"
+    return User(
+        id = userId,
+        displayName = label,
+        username = label,
+        avatarInitial = label.take(1).uppercase().ifBlank { "?" },
+    )
+}
+
+private fun relationshipEntryForUser(
+    user: User,
+    prefix: String,
+): UserRelationshipListEntry {
+    return UserRelationshipListEntry(
+        id = "$prefix-${user.id}",
+        user = user,
+    )
+}
+
+private fun AuthenticatedUser.toDomainUser(host: String? = null): User {
+    val display = displayName.ifBlank { username }
+    return User(
+        id = id,
+        displayName = display,
+        username = username,
+        avatarInitial = display.take(1).uppercase().ifBlank { "?" },
+        avatarUrl = avatarUrl,
+        host = host,
+    )
+}
+
 private fun Note.toSpecialCareNotification(fallbackEpochMillis: Long): NotificationItem {
     return NotificationItem(
         id = "special-care-note-$id",
@@ -358,8 +482,45 @@ private fun Note.toSpecialCareNotification(fallbackEpochMillis: Long): Notificat
         createdAtEpochMillis = createdAt.toApiInstantOrNull()?.toEpochMilliseconds()
             ?: fallbackEpochMillis,
         noteId = id,
-        notePreviewText = text.takeIf { it.isNotBlank() } ?: cw,
+        notePreviewText = notePreviewText(text = text, cw = cw),
         isSpecialCare = true,
+    )
+}
+
+private fun cc.hhhl.client.state.SpecialCareChatToast.toChatAttentionNotification(
+    fallbackEpochMillis: Long,
+): NotificationItem {
+    val notificationType = when (kind) {
+        ChatAttentionKind.SpecialCare -> NotificationType.App
+        ChatAttentionKind.Mention -> NotificationType.Mention
+        ChatAttentionKind.Reply -> NotificationType.Reply
+        ChatAttentionKind.Quote -> NotificationType.Quote
+    }
+    val actorDisplayName = displayName.ifBlank { userId }
+    val prefix = when (kind) {
+        ChatAttentionKind.SpecialCare -> "特别关心"
+        ChatAttentionKind.Mention -> "有人 @ 你"
+        ChatAttentionKind.Reply -> "有人回复你"
+        ChatAttentionKind.Quote -> "有人引用你"
+    }
+    return NotificationItem(
+        id = "chat-attention-${kind.name.lowercase()}-${chatUserId ?: roomId}-$messageId",
+        type = notificationType,
+        actor = cc.hhhl.client.model.User(
+            id = userId,
+            displayName = actorDisplayName,
+            username = actorDisplayName,
+            avatarInitial = actorDisplayName.trim().firstOrNull()?.toString()?.uppercase() ?: "聊",
+            avatarUrl = avatarUrl,
+        ),
+        text = "$prefix · 在聊天中发来了新消息",
+        createdAtLabel = createdAtLabel.ifBlank { "刚刚" },
+        createdAtEpochMillis = fallbackEpochMillis,
+        notePreviewText = previewText,
+        isSpecialCare = kind == ChatAttentionKind.SpecialCare,
+        chatRoomId = roomId.takeIf { it.isNotBlank() },
+        chatUserId = chatUserId,
+        chatMessageId = messageId,
     )
 }
 
@@ -389,12 +550,42 @@ private const val CHAT_ROOM_REFRESH_INTERVAL_MS = 15_000L
 private const val CHAT_MESSAGE_REFRESH_INTERVAL_MS = 5_000L
 private const val STREAMING_CHAT_REFRESH_INTERVAL_MS = 60_000L
 private const val CHAT_STREAM_RECONNECT_DELAY_MS = 3_000L
+private const val CHAT_EVENT_RECHECK_DELAY_MS = 1_500L
 private const val TIMELINE_REFRESH_INTERVAL_MS = 12_000L
 private const val STREAMING_TIMELINE_FALLBACK_REFRESH_INTERVAL_MS = 60_000L
 private const val STREAMING_TIMELINE_REFRESH_DEBOUNCE_MS = 2_000L
 private const val TREND_REFRESH_INTERVAL_MS = 5_000L
 private const val NOTIFICATION_REFRESH_INTERVAL_MS = 20_000L
 private const val STREAMING_NOTIFICATION_FALLBACK_REFRESH_INTERVAL_MS = 60_000L
+private const val MAX_AUTOMATION_SEEN_CHAT_EVENTS = 240
+private const val MAX_AUTOMATION_CHAT_SOURCES = 120
+private const val AUTOMATION_ROOM_SCAN_LIMIT = 8
+
+private fun Set<String>.takeLastSet(limit: Int): Set<String> {
+    if (size <= limit) return this
+    return toList().takeLast(limit).toSet()
+}
+
+private fun Map<String, String>.takeLastEntries(limit: Int): Map<String, String> {
+    if (size <= limit) return this
+    return entries.toList().takeLast(limit).associate { it.key to it.value }
+}
+
+private fun ChatMessage.automationMessageKey(): String {
+    return id.ifBlank { createdAt.ifBlank { createdAtLabel } }
+}
+
+private data class AutomationRoomScanTarget(
+    val sourceId: String,
+    val roomId: String,
+    val marker: String,
+)
+
+private fun List<ChatMessage>.automationMessagesAfterBaseline(baselineId: String): List<ChatMessage> {
+    if (baselineId.isBlank()) return emptyList()
+    val baselineIndex = indexOfLast { message -> message.automationMessageKey() == baselineId }
+    return if (baselineIndex >= 0) drop(baselineIndex + 1) else listOfNotNull(lastOrNull())
+}
 
 @Composable
 private fun MainShellBottomNav(
@@ -405,10 +596,11 @@ private fun MainShellBottomNav(
     unreadNotificationCount: Int,
     onSelected: (RootRoute) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.background),
+            .background(colors.pageBackground),
     ) {
         HhhlBottomNav(
             selected = selected,
@@ -431,23 +623,24 @@ private fun AuthInvalidConfirmationDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
-    AlertDialog(
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("登录状态需要确认") },
         text = {
             Text(
                 text = "服务器返回未授权。当前页面不会立刻退出登录；确认后会回到登录授权流程。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            HhhlTextButton(onClick = onConfirm) {
                 Text("重新登录")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            HhhlTextButton(onClick = onDismiss) {
                 Text("稍后")
             }
         },
@@ -458,6 +651,7 @@ private fun AuthInvalidConfirmationDialog(
 private fun ChatRouteContent(
     state: ChatUiState,
     currentUserId: String?,
+    blockedUserIds: Set<String>,
     stateHolder: ChatStateHolder,
     mediaPicker: MediaPicker?,
     onOpenUser: (String) -> Unit,
@@ -473,6 +667,7 @@ private fun ChatRouteContent(
     ChatScreen(
         state = state,
         currentUserId = currentUserId,
+        blockedUserIds = blockedUserIds,
         onRefresh = stateHolder::refresh,
         onLoadMore = stateHolder::loadMore,
         onOpenRoom = stateHolder::selectRoom,
@@ -481,6 +676,9 @@ private fun ChatRouteContent(
         onToggleUserConversationPinned = stateHolder::toggleUserConversationPinned,
         onDeleteUserConversation = stateHolder::deleteUserConversation,
         onCreateRoom = stateHolder::createRoom,
+        onRefreshRoomExtras = stateHolder::refreshRoomExtras,
+        onJoinRoomInvitation = stateHolder::joinInvitedRoom,
+        onIgnoreRoomInvitation = stateHolder::ignoreRoomInvitation,
         onBackToRooms = stateHolder::closeRoom,
         onRefreshMessages = stateHolder::refreshMessages,
         onLoadOlderMessages = stateHolder::loadOlderMessages,
@@ -554,6 +752,7 @@ private fun DriveRouteContent(
         onLoadMoreFolders = stateHolder::loadMoreFolders,
         onQueryChanged = stateHolder::updateSearchQuery,
         onSearch = stateHolder::search,
+        onStreamModeChanged = stateHolder::setStreamMode,
         onSortSelected = stateHolder::selectSort,
         onTypeFilterSelected = stateHolder::selectTypeFilter,
         onUpload = {
@@ -615,6 +814,7 @@ private fun DriveRouteContent(
 private fun SettingsRouteContent(
     state: SettingsUiState,
     stateHolder: SettingsStateHolder,
+    instanceMetaState: cc.hhhl.client.state.InstanceMetaUiState,
     accounts: List<AccountSession>,
     currentAccountId: String?,
     onBack: () -> Unit,
@@ -631,7 +831,9 @@ private fun SettingsRouteContent(
     onNotificationBadgeModeSelected: (NotificationBadgeMode) -> Unit,
     onBackgroundNotificationsChanged: (Boolean) -> Unit,
     onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit,
+    onCheckForUpdates: (((String) -> Unit) -> Unit),
     onClearChatMessageCache: () -> Unit,
+    onOpenThemeCustomization: () -> Unit,
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit),
     onSwitchAccount: (String) -> Unit,
     onRemoveAccount: (String) -> Unit,
@@ -642,6 +844,8 @@ private fun SettingsRouteContent(
 ) {
     SettingsScreen(
         state = state,
+        instanceMeta = instanceMetaState.meta,
+        isInstanceMetaLoading = instanceMetaState.isLoading,
         onBack = onBack,
         onThemeSelected = onThemeSelected,
         customTheme = customTheme,
@@ -656,7 +860,9 @@ private fun SettingsRouteContent(
         onNotificationBadgeModeSelected = onNotificationBadgeModeSelected,
         onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
         onSpecialCareBackgroundNotificationsChanged = onSpecialCareBackgroundNotificationsChanged,
+        onCheckForUpdates = onCheckForUpdates,
         onClearChatMessageCache = onClearChatMessageCache,
+        onOpenThemeCustomization = onOpenThemeCustomization,
         accounts = accounts,
         currentAccountId = currentAccountId,
         onSwitchAccount = onSwitchAccount,
@@ -684,6 +890,7 @@ private fun SettingsRouteContent(
 private fun RelationshipManagementRouteContent(
     state: RelationshipManagementUiState,
     stateHolder: RelationshipManagementStateHolder,
+    onRemoveSpecialCareUser: (String) -> Unit,
     onBack: () -> Unit,
     onOpenUser: (String) -> Unit,
 ) {
@@ -694,7 +901,13 @@ private fun RelationshipManagementRouteContent(
         onLoadMore = stateHolder::loadMore,
         onTabSelected = stateHolder::selectTab,
         onOpenUser = onOpenUser,
-        onRemoveRelationship = stateHolder::removeRelationship,
+        onRemoveRelationship = { userId ->
+            if (state.selectedTab == RelationshipManagementTab.SpecialCare) {
+                onRemoveSpecialCareUser(userId)
+            }
+            stateHolder.removeRelationship(userId)
+        },
+        onUpdateAllFollowing = stateHolder::updateAllFollowing,
     )
 }
 
@@ -709,15 +922,17 @@ private fun ClipTargetDialog(
     onOpenClips: () -> Unit,
     onSelectClip: (Clip) -> Unit,
 ) {
-    AlertDialog(
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("添加到剪辑") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = note.text.ifBlank { "这条动态" }.take(48),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                InlineRichText(
+                    text = notePreviewText(note, fallback = "这条动态"),
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodySmall,
+                    maxChars = 96,
                 )
                 when {
                     isLoading -> Text("正在加载我的剪辑...")
@@ -728,7 +943,7 @@ private fun ClipTargetDialog(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         items(clips, key = { it.id }) { clip ->
-                            TextButton(
+                            HhhlTextButton(
                                 onClick = { onSelectClip(clip) },
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -740,12 +955,12 @@ private fun ClipTargetDialog(
                                 ) {
                                     Text(
                                         text = clip.name,
-                                        color = MaterialTheme.colorScheme.onSurface,
+                                        color = colors.textPrimary,
                                         style = MaterialTheme.typography.bodyMedium,
                                     )
                                     Text(
                                         text = "${clip.visibilityLabel} · ${clip.notesCount} 条动态",
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = colors.textSecondary,
                                         style = MaterialTheme.typography.labelSmall,
                                     )
                                 }
@@ -756,14 +971,14 @@ private fun ClipTargetDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            HhhlTextButton(
                 onClick = if (errorMessage != null || clips.isEmpty()) onRefresh else onOpenClips,
             ) {
                 Text(if (errorMessage != null) "重试" else "管理剪辑")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            HhhlTextButton(onClick = onDismiss) {
                 Text("取消")
             }
         },
@@ -777,11 +992,13 @@ private fun MainShell(
     accounts: List<AccountSession>,
     currentAccountId: String?,
     openUrl: (String) -> Unit,
+    shareUrl: (String) -> Unit,
     downloadUrl: (String, String, String) -> Unit,
     mediaPicker: MediaPicker?,
     timelineCache: TimelineCache?,
     recentReactionStore: RecentReactionStore,
     specialCareStore: SpecialCareStore,
+    automationStore: AutomationStore,
     composeDraftStore: ComposeDraftStore,
     chatMessageCache: ChatMessageCache,
     chatUnreadStore: ChatUnreadStore,
@@ -806,11 +1023,16 @@ private fun MainShell(
     specialCareBackgroundNotificationsEnabled: Boolean,
     onBackgroundNotificationsChanged: (Boolean) -> Unit,
     onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit,
+    onSpecialCareUsersChanged: (Set<String>) -> Unit,
+    onSpecialCareSystemNotification: (NotificationItem) -> Unit,
+    onAutomationSystemNotification: ((String, String) -> Boolean?)?,
+    onCheckForUpdates: (((String) -> Unit) -> Unit),
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit),
     onSwitchAccount: (String) -> Unit,
     onRemoveAccount: (String) -> Unit,
     onAddAccount: () -> Unit,
     onAuthInvalid: () -> Unit,
+    onSharedAccessLogin: (String, String?) -> Unit,
 ) {
     val appScope = rememberCoroutineScope()
     var rootRoute by remember { mutableStateOf(RootRoute.Timeline) }
@@ -822,9 +1044,12 @@ private fun MainShell(
     var authInvalidDialogOpen by remember { mutableStateOf(false) }
     var lastStreamingTimelineRefreshAt by remember { mutableStateOf<Map<TimelineKind, Long>>(emptyMap()) }
     var notifiedSpecialCareNoteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var automationSeenChatMessageIds by remember(currentAccountId) { mutableStateOf<Set<String>>(emptySet()) }
+    var automationChatSourceBaselines by remember(currentAccountId) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var automationRoomSourceMarkers by remember(currentAccountId) { mutableStateOf<Map<String, String>>(emptyMap()) }
     val fallbackTimelineCache = remember { InMemoryTimelineCache() }
     val activeTimelineCache = timelineCache ?: fallbackTimelineCache
-    val specialCareStateHolder = remember {
+    val specialCareStateHolder = remember(currentAccountId) {
         SpecialCareStateHolder(
             store = specialCareStore,
             accountId = currentAccountId,
@@ -873,19 +1098,27 @@ private fun MainShell(
         )
     }
     val discoverState by discoverStateHolder.state.collectAsState()
+    val currentAccountHost = remember(accounts, currentAccountId, accountUser?.id) {
+        accounts.firstOrNull { account -> account.id == currentAccountId }?.host
+            ?: currentAccountId?.substringBefore(':')?.takeIf { host -> host.isNotBlank() && !host.startsWith("legacy-") }
+    }
+    val chatRepository = remember(sessionToken, currentAccountId, accountUser?.id, chatMessageCache) {
+        ChatRepository(
+            tokenProvider = { sessionToken },
+            currentUserIdProvider = { accountUser?.id },
+            cacheAccountIdProvider = { currentAccountId },
+            messageCache = chatMessageCache,
+        )
+    }
     val chatStateHolder = remember {
         ChatStateHolder(
-            repository = ChatRepository(
-                tokenProvider = { sessionToken },
-                currentUserIdProvider = { accountUser?.id },
-                cacheAccountIdProvider = { currentAccountId },
-                messageCache = chatMessageCache,
-            ),
+            repository = chatRepository,
             driveFileRepository = DriveFileRepository(tokenProvider = { sessionToken }),
             streamingRepository = ChatStreamingRepository(tokenProvider = { sessionToken }),
             relationshipRepository = UserRelationshipRepository(tokenProvider = { sessionToken }),
             accountIdProvider = { currentAccountId },
             unreadStore = chatUnreadStore,
+            currentUserProvider = { accountUser?.toDomainUser(host = currentAccountHost) },
             scope = appScope,
         )
     }
@@ -924,9 +1157,12 @@ private fun MainShell(
         )
     }
     val noteActionState by noteActionStateHolder.state.collectAsState()
+    val notificationRepository = remember(sessionToken) {
+        NotificationRepository(tokenProvider = { sessionToken })
+    }
     val notificationStateHolder = remember {
         NotificationStateHolder(
-            repository = NotificationRepository(tokenProvider = { sessionToken }),
+            repository = notificationRepository,
             readStore = notificationReadStore,
             notificationCache = notificationCache,
             accountId = currentAccountId,
@@ -934,6 +1170,37 @@ private fun MainShell(
         )
     }
     val notificationState by notificationStateHolder.state.collectAsState()
+    val latestAutomationSystemNotification by rememberUpdatedState(onAutomationSystemNotification)
+    val automationSystemNotificationPublisher: ((String, String) -> Boolean?)? = remember(
+        onAutomationSystemNotification != null,
+    ) {
+        if (onAutomationSystemNotification == null) {
+            null
+        } else {
+            { title: String, body: String ->
+                latestAutomationSystemNotification?.invoke(title, body)
+            }
+        }
+    }
+    val automationStateHolder = remember(
+        currentAccountId,
+        automationStore,
+        chatRepository,
+        notificationRepository,
+        automationSystemNotificationPublisher != null,
+    ) {
+        AutomationStateHolder(
+            store = automationStore,
+            accountId = currentAccountId,
+            executor = AppAutomationActionExecutor(
+                chatRepository = chatRepository,
+                notificationRepository = notificationRepository,
+                systemNotificationPublisher = automationSystemNotificationPublisher,
+            ),
+            scope = appScope,
+        )
+    }
+    val automationState by automationStateHolder.state.collectAsState()
     val mainStreamingRepository = remember {
         MainStreamingRepository(tokenProvider = { sessionToken })
     }
@@ -1079,6 +1346,7 @@ private fun MainShell(
         SettingsStateHolder(
             repository = SettingsRepository(tokenProvider = { sessionToken }),
             scope = appScope,
+            onSharedAccessLogin = onSharedAccessLogin,
         )
     }
     val settingsState by settingsStateHolder.state.collectAsState()
@@ -1097,23 +1365,63 @@ private fun MainShell(
         channelState = channelState,
     )
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(currentAccountId) {
         instanceMetaStateHolder.load()
         specialCareStateHolder.restoreStoredSpecialCare()
         composeStateHolder.restoreStoredDraft()
         noteActionStateHolder.restoreRecentReactions()
         noteActionStateHolder.loadReactionOptions()
+        automationStateHolder.restore()
         timelineStateHolder.refresh()
         notificationStateHolder.refresh()
         settingsStateHolder.refreshRemote()
+        relationshipManagementStateHolder.refreshBlockedUsers()
     }
 
     LaunchedEffect(specialCareState.userIds) {
         chatStateHolder.updateSpecialCareUsers(specialCareState.userIds)
         notificationStateHolder.updateSpecialCareUsers(specialCareState.userIds)
+        onSpecialCareUsersChanged(specialCareState.userIds)
         notifiedSpecialCareNoteIds += loadedNotes
             .filter { it.author.id in specialCareState.userIds }
             .map { it.id }
+    }
+
+    LaunchedEffect(
+        specialCareState.userIds,
+        accountUser,
+        userProfileState.user,
+        viewedProfileState.user,
+        loadedNotes,
+        chatState.rooms,
+        chatState.userConversations,
+        chatState.messages,
+    ) {
+        relationshipManagementStateHolder.updateSpecialCareUsers(
+            relationshipSpecialCareEntries(
+                userIds = specialCareState.userIds,
+                accountUser = accountUser,
+                userProfileState = userProfileState,
+                viewedProfileState = viewedProfileState,
+                loadedNotes = loadedNotes,
+                chatState = chatState,
+            ),
+        )
+    }
+
+    LaunchedEffect(userSocialState.message) {
+        if (userSocialState.message == "已屏蔽") {
+            relationshipManagementStateHolder.refreshBlockedUsers()
+        }
+    }
+
+    LaunchedEffect(viewedProfileState.user?.id, viewedProfileState.relationship?.isBlocking) {
+        val user = viewedProfileState.user ?: return@LaunchedEffect
+        val blocked = viewedProfileState.relationship?.isBlocking ?: return@LaunchedEffect
+        relationshipManagementStateHolder.updateBlockedUser(
+            entry = relationshipEntryForUser(user, prefix = "blocked"),
+            blocked = blocked,
+        )
     }
 
     LaunchedEffect(
@@ -1271,6 +1579,12 @@ private fun MainShell(
         }
     }
 
+    LaunchedEffect(route) {
+        if (route == AppRoute.Discover) {
+            discoverStateHolder.refreshPinnedUsersQuietly()
+        }
+    }
+
     LaunchedEffect(notificationState.requiresRelogin, route, mainStreamingConnected) {
         if (notificationState.requiresRelogin) return@LaunchedEffect
         notificationStateHolder.refreshQuietly()
@@ -1303,11 +1617,14 @@ private fun MainShell(
                             streamingNote.author.id in latestSpecialCareUserIds &&
                             streamingNote.id !in notifiedSpecialCareNoteIds
                         ) {
-                            notificationStateHolder.addSpecialCareNotification(
-                                streamingNote.toSpecialCareNotification(
-                                    fallbackEpochMillis = now,
-                                ),
+                            val notification = streamingNote.toSpecialCareNotification(
+                                fallbackEpochMillis = now,
                             )
+                            notificationStateHolder.addSpecialCareNotification(
+                                notification,
+                            )
+                            automationStateHolder.emit(notification.toAutomationNotificationEvent())
+                            onSpecialCareSystemNotification(notification)
                             notifiedSpecialCareNoteIds += streamingNote.id
                         }
                         if (
@@ -1343,6 +1660,18 @@ private fun MainShell(
                                     chatState.selectedUserConversation != null,
                             )
                             chatStateHolder.refreshSelectedMessagesQuietly()
+                            chatStateHolder.refreshSpecialCareMessagesQuietly()
+                            appScope.launch {
+                                delay(CHAT_EVENT_RECHECK_DELAY_MS)
+                                chatStateHolder.refreshRoomsQuietly(
+                                    markSelectedRoomRead = route == AppRoute.Chat && chatState.selectedRoom != null,
+                                )
+                                chatStateHolder.refreshUserConversationsQuietly(
+                                    markSelectedUserRead = route == AppRoute.Chat &&
+                                        chatState.selectedUserConversation != null,
+                                )
+                                chatStateHolder.refreshSpecialCareMessagesQuietly()
+                            }
                         }
                     }
                     MainStreamingEvent.Unauthorized -> {
@@ -1404,29 +1733,174 @@ private fun MainShell(
         chatStateHolder.updateReactionOptions(noteActionState.reactionOptions)
     }
 
-    LaunchedEffect(chatState.specialCareToast?.messageId) {
-        chatState.specialCareToast?.let { toast ->
-            notificationStateHolder.addSpecialCareNotification(
-                NotificationItem(
-                    id = "special-care-chat-${toast.chatUserId ?: toast.roomId}-${toast.messageId}",
-                    type = NotificationType.App,
-                    actor = cc.hhhl.client.model.User(
-                        id = toast.userId,
-                        displayName = toast.displayName,
-                        username = toast.displayName,
-                        avatarInitial = toast.displayName.trim().firstOrNull()?.toString()?.uppercase() ?: "特",
-                        avatarUrl = toast.avatarUrl,
-                    ),
-                    text = "在聊天中发来了新消息",
-                    createdAtLabel = toast.createdAtLabel.ifBlank { "刚刚" },
-                    createdAtEpochMillis = Clock.System.now().toEpochMilliseconds(),
-                    notePreviewText = toast.previewText,
-                    isSpecialCare = true,
-                    chatRoomId = toast.roomId.takeIf { it.isNotBlank() },
-                    chatUserId = toast.chatUserId,
-                    chatMessageId = toast.messageId,
+    LaunchedEffect(
+        chatState.selectedRoom?.id,
+        chatState.selectedUserConversation?.user?.id,
+        chatState.messages.map { message -> message.id },
+        chatState.userConversations.map { conversation ->
+            conversation.user.id to conversation.latestMessage?.automationMessageKey()
+        },
+        chatState.rooms.take(AUTOMATION_ROOM_SCAN_LIMIT).map { room ->
+            room.id to room.latestMessageMarker.ifBlank { room.latestMessageAtLabel }
+        },
+    ) {
+        val currentUser = accountUser?.toDomainUser(host = currentAccountHost)
+        val selectedSourceId = chatState.selectedUserConversation?.user?.id
+            ?.let { userId -> "user:$userId" }
+            ?: chatState.selectedRoom?.id?.let { roomId -> "room:$roomId" }
+        val selectedLatestMessage = chatState.messages.lastOrNull()
+        val selectedLatestMessageId = selectedLatestMessage?.automationMessageKey().orEmpty()
+        val selectedBaselineId = selectedSourceId?.let { sourceId -> automationChatSourceBaselines[sourceId] }
+        val selectedMessagesAfterBaseline = if (
+            selectedSourceId != null &&
+            selectedBaselineId != null &&
+            selectedLatestMessageId.isNotBlank() &&
+            selectedBaselineId != selectedLatestMessageId
+        ) {
+            chatState.messages.automationMessagesAfterBaseline(selectedBaselineId)
+        } else {
+            emptyList()
+        }
+        val selectedMessageEvents = selectedMessagesAfterBaseline.mapNotNull { message ->
+            val messageId = message.automationMessageKey()
+            if (messageId.isBlank() || selectedSourceId == null) return@mapNotNull null
+            val eventKey = "$selectedSourceId:$messageId"
+            if (eventKey in automationSeenChatMessageIds) null else eventKey to message
+        }
+        val userEvents = chatState.userConversations.mapNotNull { conversation ->
+            val message = conversation.latestMessage ?: return@mapNotNull null
+            val messageId = message.automationMessageKey()
+            if (messageId.isBlank()) return@mapNotNull null
+            val sourceId = "user:${conversation.user.id}"
+            if (automationChatSourceBaselines[sourceId] == null) return@mapNotNull null
+            if (automationChatSourceBaselines[sourceId] == messageId) return@mapNotNull null
+            if (sourceId == selectedSourceId && messageId == selectedLatestMessageId) return@mapNotNull null
+            val eventKey = "$sourceId:$messageId"
+            if (eventKey in automationSeenChatMessageIds) return@mapNotNull null
+            eventKey to (conversation to message)
+        }
+        val nextBaselines = buildMap {
+            putAll(automationChatSourceBaselines)
+            if (selectedSourceId != null && selectedLatestMessageId.isNotBlank()) {
+                put(selectedSourceId, selectedLatestMessageId)
+            }
+            chatState.userConversations.forEach { conversation ->
+                val latestId = conversation.latestMessage?.automationMessageKey().orEmpty()
+                if (latestId.isNotBlank()) {
+                    put("user:${conversation.user.id}", latestId)
+                }
+            }
+        }.takeLastEntries(MAX_AUTOMATION_CHAT_SOURCES)
+        automationChatSourceBaselines = nextBaselines
+
+        val roomSourceIdsToScan = chatState.rooms
+            .take(AUTOMATION_ROOM_SCAN_LIMIT)
+            .mapNotNull { room ->
+                val sourceId = "room:${room.id}"
+                val marker = room.latestMessageMarker.ifBlank { room.latestMessageAtLabel }
+                val baseline = automationRoomSourceMarkers[sourceId]
+                if (
+                    sourceId != selectedSourceId &&
+                    baseline != null &&
+                    marker.isNotBlank() &&
+                    marker != baseline
+                ) {
+                    AutomationRoomScanTarget(
+                        sourceId = sourceId,
+                        roomId = room.id,
+                        marker = marker,
+                    )
+                } else {
+                    null
+                }
+            }
+        automationRoomSourceMarkers = buildMap {
+            putAll(automationRoomSourceMarkers)
+            chatState.rooms.take(AUTOMATION_ROOM_SCAN_LIMIT).forEach { room ->
+                val sourceId = "room:${room.id}"
+                val marker = room.latestMessageMarker.ifBlank { room.latestMessageAtLabel }
+                if (marker.isNotBlank() && sourceId !in automationRoomSourceMarkers) {
+                    put(sourceId, marker)
+                }
+            }
+        }.takeLastEntries(MAX_AUTOMATION_CHAT_SOURCES)
+
+        if (selectedMessageEvents.isEmpty() && userEvents.isEmpty() && roomSourceIdsToScan.isEmpty()) return@LaunchedEffect
+
+        automationSeenChatMessageIds = (automationSeenChatMessageIds + selectedMessageEvents.map { it.first } + userEvents.map { it.first })
+            .takeLastSet(MAX_AUTOMATION_SEEN_CHAT_EVENTS)
+
+        selectedMessageEvents.forEach { (_, message) ->
+            automationStateHolder.emit(
+                message.toAutomationChatEvent(
+                    roomId = chatState.selectedRoom?.id ?: message.roomId,
+                    directUserId = chatState.selectedUserConversation?.user?.id,
+                    currentUser = currentUser,
                 ),
             )
+        }
+        userEvents.forEach { (_, pair) ->
+            val (conversation, message) = pair
+            automationStateHolder.emit(
+                message.toAutomationChatEvent(
+                    roomId = message.roomId,
+                    directUserId = conversation.user.id,
+                    currentUser = currentUser,
+                ),
+            )
+        }
+        roomSourceIdsToScan.forEach { target ->
+            val baselineId = automationChatSourceBaselines[target.sourceId].orEmpty()
+            val result = chatRepository.refreshMessages(target.roomId)
+            if (result !is ChatMessageRepositoryResult.Success) return@forEach
+            val roomMessageEvents = result.messages
+                .let { messages ->
+                    messages.automationMessagesAfterBaseline(baselineId).ifEmpty {
+                        if (baselineId.isBlank()) listOfNotNull(messages.lastOrNull()) else emptyList()
+                    }
+                }
+                .mapNotNull { message ->
+                    val messageId = message.automationMessageKey()
+                    if (messageId.isBlank()) return@mapNotNull null
+                    val eventKey = "${target.sourceId}:$messageId"
+                    if (eventKey in automationSeenChatMessageIds) null else eventKey to message
+                }
+            if (roomMessageEvents.isEmpty()) {
+                result.messages.lastOrNull()?.automationMessageKey()?.takeIf { it.isNotBlank() }?.let { latestId ->
+                    automationChatSourceBaselines = (automationChatSourceBaselines + (target.sourceId to latestId))
+                        .takeLastEntries(MAX_AUTOMATION_CHAT_SOURCES)
+                }
+                return@forEach
+            }
+            automationSeenChatMessageIds = (automationSeenChatMessageIds + roomMessageEvents.map { it.first })
+                .takeLastSet(MAX_AUTOMATION_SEEN_CHAT_EVENTS)
+            automationChatSourceBaselines = (automationChatSourceBaselines + (target.sourceId to roomMessageEvents.last().second.automationMessageKey()))
+                .takeLastEntries(MAX_AUTOMATION_CHAT_SOURCES)
+            automationRoomSourceMarkers = (automationRoomSourceMarkers + (target.sourceId to target.marker))
+                .takeLastEntries(MAX_AUTOMATION_CHAT_SOURCES)
+            roomMessageEvents.forEach { (_, message) ->
+                automationStateHolder.emit(
+                    message.toAutomationChatEvent(
+                        roomId = target.roomId,
+                        currentUser = currentUser,
+                    ),
+                )
+            }
+        }
+    }
+
+    LaunchedEffect(chatState.specialCareToast?.messageId) {
+        chatState.specialCareToast?.let { toast ->
+            val notification = toast.toChatAttentionNotification(
+                fallbackEpochMillis = Clock.System.now().toEpochMilliseconds(),
+            )
+            if (toast.kind == ChatAttentionKind.SpecialCare) {
+                notificationStateHolder.addSpecialCareNotification(notification)
+            } else {
+                notificationStateHolder.addChatAttentionNotification(notification)
+            }
+            automationStateHolder.emit(notification.toAutomationNotificationEvent())
+            onSpecialCareSystemNotification(notification)
         }
     }
 
@@ -1439,11 +1913,11 @@ private fun MainShell(
             .filter { it.author.id in specialCareState.userIds }
             .filter { it.id !in notifiedSpecialCareNoteIds }
         newSpecialCareNotes.forEach { note ->
-            notificationStateHolder.addSpecialCareNotification(
-                note.toSpecialCareNotification(
-                    fallbackEpochMillis = Clock.System.now().toEpochMilliseconds(),
-                ),
+            val notification = note.toSpecialCareNotification(
+                fallbackEpochMillis = Clock.System.now().toEpochMilliseconds(),
             )
+            notificationStateHolder.addSpecialCareNotification(notification)
+            automationStateHolder.emit(notification.toAutomationNotificationEvent())
         }
         if (newSpecialCareNotes.isNotEmpty()) {
             notifiedSpecialCareNoteIds += newSpecialCareNotes.map { it.id }
@@ -1593,6 +2067,8 @@ private fun MainShell(
                 composeStateHolder.startReply(currentRoute.replyToId)
             } else if (currentRoute.renoteId != null) {
                 composeStateHolder.startQuote(currentRoute.renoteId)
+            } else if (currentRoute.channelId != null) {
+                composeStateHolder.startChannelNote(currentRoute.channelId)
             } else {
                 composeStateHolder.startNewNote()
             }
@@ -1601,10 +2077,17 @@ private fun MainShell(
 
     LaunchedEffect(composeState.createdNoteId) {
         if (composeState.createdNoteId != null) {
+            val channelId = composeState.draft.channelId?.takeIf { it.isNotBlank() }
             composeStateHolder.consumeCreatedNote()
-            rootRoute = RootRoute.Timeline
-            route = AppRoute.Timeline
-            timelineStateHolder.refresh(TimelineKind.Home)
+            if (channelId != null) {
+                rootRoute = RootRoute.Discover
+                route = AppRoute.Channels
+                channelStateHolder.refreshTimeline()
+            } else {
+                rootRoute = RootRoute.Timeline
+                route = AppRoute.Timeline
+                timelineStateHolder.refresh(TimelineKind.Home)
+            }
         }
     }
 
@@ -1642,7 +2125,8 @@ private fun MainShell(
         noteActionStateHolder.perform(NoteActionRequest.DeleteReaction(noteId))
     }
     val onFavoriteNote: (String) -> Unit = { noteId ->
-        val isFavorited = findLoadedNote(noteId)?.isFavorited == true
+        val loadedNote = findLoadedNote(noteId)
+        val isFavorited = loadedNote?.isFavorited == true
         applyNoteMutation(
             if (isFavorited) {
                 NoteLocalMutation.Unfavorite(noteId)
@@ -1650,6 +2134,9 @@ private fun MainShell(
                 NoteLocalMutation.Favorite(noteId)
             },
         )
+        if (!isFavorited && loadedNote != null) {
+            favoriteNoteStateHolder.addLocalFavorite(loadedNote)
+        }
         noteActionStateHolder.perform(
             if (isFavorited) {
                 NoteActionRequest.Unfavorite(noteId)
@@ -1667,6 +2154,15 @@ private fun MainShell(
     }
     val onMuteNote: (String) -> Unit = { noteId ->
         noteActionStateHolder.perform(NoteActionRequest.Mute(noteId))
+    }
+    val onUnmuteNote: (String) -> Unit = { noteId ->
+        noteActionStateHolder.perform(NoteActionRequest.Unmute(noteId))
+    }
+    val onMuteRenotes: (String, String) -> Unit = { noteId, userId ->
+        noteActionStateHolder.perform(NoteActionRequest.MuteRenotes(noteId, userId))
+    }
+    val onUnmuteRenotes: (String, String) -> Unit = { noteId, userId ->
+        noteActionStateHolder.perform(NoteActionRequest.UnmuteRenotes(noteId, userId))
     }
     val onReportNote: (String, String) -> Unit = { noteId, userId ->
         noteActionStateHolder.perform(
@@ -1924,6 +2420,16 @@ private fun MainShell(
                 rootRoute = RootRoute.Profile
                 true
             }
+            AppRoute.ThemeCustomization -> {
+                route = AppRoute.Settings
+                rootRoute = RootRoute.Profile
+                true
+            }
+            AppRoute.Automation -> {
+                route = AppRoute.Profile
+                rootRoute = RootRoute.Profile
+                true
+            }
             AppRoute.AdminDashboard -> {
                 route = AppRoute.Settings
                 rootRoute = RootRoute.Profile
@@ -1976,12 +2482,27 @@ private fun MainShell(
         onDispose { onBackHandlerChanged(null) }
     }
 
+    var noteActionToast by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(noteActionState.message, noteActionState.errorMessage) {
+        val message = noteActionState.message ?: noteActionState.errorMessage ?: return@LaunchedEffect
+        noteActionToast = message
+        delay(2_200)
+        if (noteActionToast == message) {
+            noteActionToast = null
+        }
+    }
+    val blockedUserIds = relationshipManagementState.blockedUserIds
+
     CompositionLocalProvider(
         LocalCustomEmojiUrls provides noteActionState.customEmojiUrls,
+        LocalBlockedNoteAuthorIds provides blockedUserIds,
         LocalNoteRowActions provides NoteRowActions(
-            onShareNote = openUrl,
+            onShareNote = { url -> shareUrl(url) },
             onHideFromList = onHideNoteFromList,
             onMuteNote = onMuteNote,
+            onUnmuteNote = onUnmuteNote,
+            onMuteRenotes = onMuteRenotes,
+            onUnmuteRenotes = onUnmuteRenotes,
             onReportNote = onReportNote,
         ),
     ) {
@@ -2076,6 +2597,7 @@ private fun MainShell(
                     onCloseFederationInstanceDetails = discoverStateHolder::closeFederationInstance,
                     onToggleFederationSilence = discoverStateHolder::toggleFederationSilence,
                     onToggleFederationBlock = discoverStateHolder::toggleFederationBlock,
+                    onOpenRole = discoverStateHolder::openRole,
                     reactionOptions = noteActionState.reactionOptions,
                     recentReactions = noteActionState.recentReactions,
                     isActionPending = isNoteActionPending,
@@ -2085,6 +2607,7 @@ private fun MainShell(
                 AppRoute.Chat -> ChatRouteContent(
                     state = chatState,
                     currentUserId = accountUser?.id,
+                    blockedUserIds = blockedUserIds,
                     stateHolder = chatStateHolder,
                     mediaPicker = mediaPicker,
                     onOpenUser = onOpenUser,
@@ -2144,6 +2667,7 @@ private fun MainShell(
                     onRefresh = notificationStateHolder::refresh,
                     onLoadMore = notificationStateHolder::loadMore,
                     onMarkAllAsRead = notificationStateHolder::markAllAsRead,
+                    onFlush = notificationStateHolder::flush,
                     onMarkNotificationRead = notificationStateHolder::markNotificationRead,
                     onFilterSelected = notificationStateHolder::selectFilter,
                     onRefreshAnnouncements = announcementStateHolder::refresh,
@@ -2161,6 +2685,8 @@ private fun MainShell(
                     onRejectFollowRequest = onRejectFollowRequestFromNotification,
                     onOpenChat = onOpenChatFromNotification,
                     onOpenChatUser = onOpenChatUserById,
+                    onSendTestNotification = notificationStateHolder::sendTestNotification,
+                    onSendReminderNotification = notificationStateHolder::createLocalReminderNotification,
                 )
                 AppRoute.UserLists -> UserListScreen(
                     state = userListState,
@@ -2202,6 +2728,7 @@ private fun MainShell(
                     onLoadMore = followRequestStateHolder::loadMore,
                     onAccept = followRequestStateHolder::accept,
                     onReject = followRequestStateHolder::reject,
+                    onCancel = followRequestStateHolder::cancel,
                     onOpenUser = onOpenUser,
                 )
                 AppRoute.Antennas -> AntennaScreen(
@@ -2288,8 +2815,7 @@ private fun MainShell(
                     onUpdateSelectedChannel = channelStateHolder::updateSelectedChannel,
                     onArchiveSelectedChannel = channelStateHolder::archiveSelectedChannel,
                     onComposeInChannel = { channel ->
-                        composeStateHolder.startChannelNote(channel.id)
-                        route = AppRoute.Compose()
+                        route = AppRoute.Compose(channelId = channel.id)
                     },
                     onLoadMore = channelStateHolder::loadMore,
                     onOpenNote = { route = AppRoute.NoteDetail(it) },
@@ -2453,6 +2979,7 @@ private fun MainShell(
                     onOpenDrive = { route = AppRoute.Drive },
                     onOpenAchievements = { route = AppRoute.Achievements },
                     onOpenSettings = { route = AppRoute.Settings },
+                    onOpenAutomation = { route = AppRoute.Automation },
                     onOpenFavoriteNotes = { route = AppRoute.FavoriteNotes },
                     onOpenLists = { route = AppRoute.UserLists },
                     onOpenFollowRequests = { route = AppRoute.FollowRequests },
@@ -2500,6 +3027,7 @@ private fun MainShell(
                 AppRoute.Settings -> SettingsRouteContent(
                     state = settingsState,
                     stateHolder = settingsStateHolder,
+                    instanceMetaState = instanceMetaState,
                     accounts = accounts,
                     currentAccountId = currentAccountId,
                     onBack = { route = AppRoute.Profile },
@@ -2526,6 +3054,7 @@ private fun MainShell(
                     onNotificationBadgeModeSelected = onNotificationBadgeModeSelected,
                     onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
                     onSpecialCareBackgroundNotificationsChanged = onSpecialCareBackgroundNotificationsChanged,
+                    onCheckForUpdates = onCheckForUpdates,
                     onClearChatMessageCache = {
                         currentAccountId?.let { accountId ->
                             appScope.launch {
@@ -2534,6 +3063,7 @@ private fun MainShell(
                             chatUnreadStore.clearAccount(accountId)
                         }
                     },
+                    onOpenThemeCustomization = { route = AppRoute.ThemeCustomization },
                     onBackHandlerChanged = onBackHandlerChanged,
                     onSwitchAccount = onSwitchAccount,
                     onRemoveAccount = onRemoveAccount,
@@ -2548,6 +3078,49 @@ private fun MainShell(
                         settingsStateHolder.openManagement(key)
                         route = AppRoute.SettingsManagement(key)
                     },
+                )
+                AppRoute.ThemeCustomization -> ThemeCustomizationScreen(
+                    customTheme = customTheme,
+                    onCustomThemeChanged = onCustomThemeChanged,
+                    onReset = onResetCustomTheme,
+                    onPickGlobalBackgroundImage = {
+                        mediaPicker?.pickImages(
+                            onPicked = onSetGlobalBackgroundImage,
+                            onError = {},
+                        )
+                    },
+                    onClearGlobalBackgroundImage = onClearGlobalBackgroundImage,
+                    onPickChatBackgroundImage = {
+                        mediaPicker?.pickImages(
+                            onPicked = onSetChatBackgroundImage,
+                            onError = {},
+                        )
+                    },
+                    onClearChatBackgroundImage = onClearChatBackgroundImage,
+                    onBack = { route = AppRoute.Settings },
+                )
+                AppRoute.Automation -> AutomationScreen(
+                    state = automationState,
+                    onBack = { route = AppRoute.Profile },
+                    onCreateRule = automationStateHolder::createRule,
+                    onOpenRule = automationStateHolder::openRule,
+                    onCloseEditor = automationStateHolder::closeEditor,
+                    onToggleRule = automationStateHolder::toggleRule,
+                    onDeleteRule = automationStateHolder::deleteRule,
+                    onDuplicateRule = automationStateHolder::duplicateRule,
+                    onUpdateRuleName = automationStateHolder::updateRuleName,
+                    onUpdateRuleTrigger = automationStateHolder::updateRuleTrigger,
+                    onUpdateConditionMode = automationStateHolder::updateRuleConditionMode,
+                    onUpdateActionMode = automationStateHolder::updateRuleActionMode,
+                    onUpdateIgnoreOwnMessages = automationStateHolder::updateRuleIgnoreOwnMessages,
+                    onUpdateCooldown = automationStateHolder::updateRuleCooldown,
+                    onAddCondition = automationStateHolder::addCondition,
+                    onUpdateCondition = automationStateHolder::updateCondition,
+                    onRemoveCondition = automationStateHolder::removeCondition,
+                    onAddAction = automationStateHolder::addAction,
+                    onUpdateAction = automationStateHolder::updateAction,
+                    onRemoveAction = automationStateHolder::removeAction,
+                    onClearLogs = automationStateHolder::clearLogs,
                 )
                 is AppRoute.SettingsManagement -> SettingsManagementScreen(
                     section = settingsState.managementSection,
@@ -2585,6 +3158,11 @@ private fun MainShell(
                 AppRoute.RelationshipManagement -> RelationshipManagementRouteContent(
                     state = relationshipManagementState,
                     stateHolder = relationshipManagementStateHolder,
+                    onRemoveSpecialCareUser = { userId ->
+                        if (specialCareStateHolder.isSpecialCare(userId)) {
+                            specialCareStateHolder.toggleSpecialCare(userId)
+                        }
+                    },
                     onBack = { route = AppRoute.Profile },
                     onOpenUser = onOpenUser,
                 )
@@ -2685,6 +3263,12 @@ private fun MainShell(
                     state = noteDetailState,
                     onRefresh = { noteDetailStateHolder.load(current.noteId) },
                     onLoadMoreReplies = noteDetailStateHolder::loadMoreReplies,
+                    onLoadConversation = noteDetailStateHolder::loadConversation,
+                    onLoadRenotes = noteDetailStateHolder::loadRenotes,
+                    onLoadReactionUsers = noteDetailStateHolder::loadReactionUsers,
+                    onLoadVersions = noteDetailStateHolder::loadVersions,
+                    onRefreshPollRecommendation = noteDetailStateHolder::refreshPollRecommendation,
+                    onTranslate = noteDetailStateHolder::translate,
                     onToggleChildReplies = noteDetailStateHolder::toggleChildReplies,
                     onOpenNote = { route = AppRoute.NoteDetail(it) },
                     onOpenUser = onOpenUser,
@@ -2794,7 +3378,7 @@ private fun MainShell(
                     onSessionChanged = { mediaPreviewSession = it },
                     onOpenExternal = openUrl,
                     onDownload = { item ->
-                        openUrl(item.openUrl)
+                        downloadUrl(item.openUrl, item.label, item.type)
                     },
                 )
             }
@@ -2826,6 +3410,23 @@ private fun MainShell(
                         onAuthInvalid()
                     },
                 )
+            }
+            noteActionToast?.let { message ->
+                val colors = LocalHhhlColors.current
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 20.dp, vertical = 78.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(colors.toastBackground)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                ) {
+                    Text(
+                        text = message,
+                        color = colors.toastText,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
         }
     }

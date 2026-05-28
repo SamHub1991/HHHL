@@ -221,6 +221,21 @@ class TimelineStateHolderTest {
                         limit: Int,
                         untilId: String?,
                     ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
+
+                    override suspend fun loadMentions(
+                        token: String,
+                        limit: Int,
+                        untilId: String?,
+                    ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
+
+                    override suspend fun loadPollRecommendations(
+                        token: String,
+                        limit: Int,
+                        offset: Int,
+                        excludeChannels: Boolean,
+                        local: Boolean?,
+                        expired: Boolean,
+                    ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
                 },
             ) {
                 override suspend fun restore(kind: TimelineKind): TimelineRepositoryResult {
@@ -257,6 +272,21 @@ class TimelineStateHolderTest {
                     limit: Int,
                     untilId: String?,
                 ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
+
+                override suspend fun loadMentions(
+                    token: String,
+                    limit: Int,
+                    untilId: String?,
+                ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
+
+                override suspend fun loadPollRecommendations(
+                    token: String,
+                    limit: Int,
+                    offset: Int,
+                    excludeChannels: Boolean,
+                    local: Boolean?,
+                    expired: Boolean,
+                ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
             },
         ) {
             override suspend fun restore(kind: TimelineKind): TimelineRepositoryResult {
@@ -291,6 +321,21 @@ class TimelineStateHolderTest {
                     token: String,
                     limit: Int,
                     untilId: String?,
+                ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
+
+                override suspend fun loadMentions(
+                    token: String,
+                    limit: Int,
+                    untilId: String?,
+                ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
+
+                override suspend fun loadPollRecommendations(
+                    token: String,
+                    limit: Int,
+                    offset: Int,
+                    excludeChannels: Boolean,
+                    local: Boolean?,
+                    expired: Boolean,
                 ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
             },
         ) {

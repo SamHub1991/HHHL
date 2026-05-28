@@ -25,3 +25,21 @@ data class FederationInstance(
     val latestRequestReceivedAtLabel: String = "",
     val infoUpdatedAtLabel: String = "",
 )
+
+@Immutable
+data class FederationFollow(
+    val id: String,
+    val createdAtLabel: String = "",
+    val followeeId: String,
+    val followerId: String,
+    val followee: User? = null,
+    val follower: User? = null,
+)
+
+@Immutable
+data class FederationStats(
+    val topSubInstances: List<FederationInstance>,
+    val otherFollowersCount: Int,
+    val topPubInstances: List<FederationInstance>,
+    val otherFollowingCount: Int,
+)

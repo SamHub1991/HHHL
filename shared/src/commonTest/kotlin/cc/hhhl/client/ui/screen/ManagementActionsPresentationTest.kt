@@ -73,21 +73,25 @@ class ManagementActionsPresentationTest {
     fun driveSummaryKeepsSecondaryActionsInOverflow() {
         val rootActions = driveSummaryActions(
             inFolder = false,
+            isStreamMode = false,
             isLoading = false,
             actionsEnabled = true,
             onRefresh = {},
             onNavigateUp = {},
+            onStreamModeChanged = {},
         )
         val folderActions = driveSummaryActions(
             inFolder = true,
+            isStreamMode = false,
             isLoading = false,
             actionsEnabled = true,
             onRefresh = {},
             onNavigateUp = {},
+            onStreamModeChanged = {},
         )
 
-        assertEquals(listOf("刷新"), rootActions.map { it.label })
-        assertEquals(listOf("刷新", "返回上级"), folderActions.map { it.label })
+        assertEquals(listOf("刷新", "最近文件流"), rootActions.map { it.label })
+        assertEquals(listOf("刷新", "最近文件流", "返回上级"), folderActions.map { it.label })
     }
 
     @Test

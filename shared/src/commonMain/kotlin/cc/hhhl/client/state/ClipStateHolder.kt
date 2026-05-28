@@ -40,6 +40,7 @@ class ClipStateHolder(
 ) {
     private val mutableState = MutableStateFlow(ClipUiState())
     val state: StateFlow<ClipUiState> = mutableState
+    private var notesRequestId = 0
 
     fun refreshClips(kind: ClipListKind = state.value.selectedKind) {
         if (state.value.isLoadingClips) return
@@ -119,10 +120,13 @@ class ClipStateHolder(
             )
         }
 
+        val requestId = nextNotesRequestId()
         scope.launch {
             applyNotesResult(
                 result = repository.refreshNotes(clip.id),
                 loadingMore = false,
+                clipId = clip.id,
+                requestId = requestId,
             )
         }
     }
@@ -153,10 +157,13 @@ class ClipStateHolder(
             )
         }
 
+        val requestId = nextNotesRequestId()
         scope.launch {
             applyNotesResult(
                 result = repository.loadMoreNotes(clipId, current.notes),
                 loadingMore = true,
+                clipId = clipId,
+                requestId = requestId,
             )
         }
     }
@@ -424,10 +431,13 @@ class ClipStateHolder(
             )
         }
 
+        val requestId = nextNotesRequestId()
         scope.launch {
             applyNotesResult(
                 result = repository.refreshNotes(clipId),
                 loadingMore = false,
+                clipId = clipId,
+                requestId = requestId,
             )
         }
     }
@@ -435,7 +445,10 @@ class ClipStateHolder(
     private fun applyNotesResult(
         result: ClipNotesRepositoryResult,
         loadingMore: Boolean,
+        clipId: String,
+        requestId: Int,
     ) {
+        if (!isCurrentNotesRequest(clipId, requestId)) return
         when (result) {
             is ClipNotesRepositoryResult.Success -> mutableState.update {
                 it.copy(
@@ -464,6 +477,18 @@ class ClipStateHolder(
                 )
             }
         }
+    }
+
+    private fun nextNotesRequestId(): Int {
+        notesRequestId += 1
+        return notesRequestId
+    }
+
+    private fun isCurrentNotesRequest(
+        clipId: String,
+        requestId: Int,
+    ): Boolean {
+        return requestId == notesRequestId && state.value.selectedClip?.id == clipId
     }
 
     private fun applyFavoriteResult(

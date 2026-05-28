@@ -35,9 +35,12 @@ class GalleryStateHolder(
 ) {
     private val mutableState = MutableStateFlow(GalleryUiState())
     val state: StateFlow<GalleryUiState> = mutableState
+    private var postsRequestId = 0
+    private var detailRequestId = 0
 
     fun refreshPosts(kind: GalleryListKind = state.value.selectedKind) {
         if (state.value.isLoadingPosts) return
+        val requestId = ++postsRequestId
 
         mutableState.update {
             it.copy(
@@ -55,6 +58,8 @@ class GalleryStateHolder(
             applyPostsResult(
                 result = repository.refreshPosts(kind),
                 loadingMore = false,
+                requestId = requestId,
+                kind = kind,
             )
         }
     }
@@ -74,6 +79,8 @@ class GalleryStateHolder(
         ) {
             return
         }
+        val requestId = ++postsRequestId
+        val kind = current.selectedKind
 
         mutableState.update {
             it.copy(isLoadingMore = true, errorMessage = null, requiresRelogin = false)
@@ -81,17 +88,21 @@ class GalleryStateHolder(
 
         scope.launch {
             applyPostsResult(
-                result = repository.loadMorePosts(current.selectedKind, current.posts),
+                result = repository.loadMorePosts(kind, current.posts),
                 loadingMore = true,
+                requestId = requestId,
+                kind = kind,
             )
         }
     }
 
     fun openPost(postId: String) {
-        if (postId.isBlank() || state.value.isLoadingDetail) return
+        if (postId.isBlank()) return
+        val requestId = ++detailRequestId
 
         mutableState.update {
             it.copy(
+                selectedPost = it.selectedPost?.takeIf { post -> post.id == postId },
                 isLoadingDetail = true,
                 detailErrorMessage = null,
                 requiresRelogin = false,
@@ -101,6 +112,7 @@ class GalleryStateHolder(
         scope.launch {
             when (val result = repository.showPost(postId)) {
                 is GalleryPostRepositoryResult.Success -> mutableState.update {
+                    if (requestId != detailRequestId || result.post.id != postId) return@update it
                     it.copy(
                         selectedPost = result.post,
                         isLoadingDetail = false,
@@ -109,6 +121,7 @@ class GalleryStateHolder(
                     )
                 }
                 GalleryPostRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != detailRequestId) return@update it
                     it.copy(
                         isLoadingDetail = false,
                         detailErrorMessage = "登录已失效，请重新登录",
@@ -116,6 +129,7 @@ class GalleryStateHolder(
                     )
                 }
                 is GalleryPostRepositoryResult.Error -> mutableState.update {
+                    if (requestId != detailRequestId) return@update it
                     it.copy(
                         isLoadingDetail = false,
                         detailErrorMessage = result.message,
@@ -127,6 +141,7 @@ class GalleryStateHolder(
     }
 
     fun closeDetail() {
+        detailRequestId += 1
         mutableState.update {
             it.copy(
                 selectedPost = null,
@@ -217,9 +232,12 @@ class GalleryStateHolder(
     private fun applyPostsResult(
         result: GalleryPostsRepositoryResult,
         loadingMore: Boolean,
+        requestId: Int,
+        kind: GalleryListKind,
     ) {
         when (result) {
             is GalleryPostsRepositoryResult.Success -> mutableState.update {
+                if (requestId != postsRequestId || it.selectedKind != kind) return@update it
                 it.copy(
                     posts = result.posts,
                     isLoadingPosts = false,
@@ -230,6 +248,7 @@ class GalleryStateHolder(
                 )
             }
             GalleryPostsRepositoryResult.Unauthorized -> mutableState.update {
+                if (requestId != postsRequestId || it.selectedKind != kind) return@update it
                 it.copy(
                     isLoadingPosts = false,
                     isLoadingMore = false,
@@ -238,6 +257,7 @@ class GalleryStateHolder(
                 )
             }
             is GalleryPostsRepositoryResult.Error -> mutableState.update {
+                if (requestId != postsRequestId || it.selectedKind != kind) return@update it
                 it.copy(
                     isLoadingPosts = if (loadingMore) it.isLoadingPosts else false,
                     isLoadingMore = false,

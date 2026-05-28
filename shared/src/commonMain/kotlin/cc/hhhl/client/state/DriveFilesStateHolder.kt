@@ -30,6 +30,7 @@ data class DriveFilesUiState(
     val searchQuery: String = "",
     val selectedFile: DriveFile? = null,
     val selectedFileDetails: DriveFileDetails? = null,
+    val isStreamMode: Boolean = false,
     val isLoadingFileDetails: Boolean = false,
     val fileDetailsErrorMessage: String? = null,
     val isLoading: Boolean = false,
@@ -97,11 +98,16 @@ class DriveFilesStateHolder(
     private val mutableState = MutableStateFlow(DriveFilesUiState())
     val state: StateFlow<DriveFilesUiState> = mutableState
     private var refreshRequestId = 0
+    private var filesPageRequestId = 0
+    private var foldersPageRequestId = 0
+    private var uploadRequestId = 0
     private val fileDetailsCache = LinkedHashMap<String, DriveFileDetails>()
 
     fun refresh() {
         val current = state.value
         val requestId = ++refreshRequestId
+        filesPageRequestId += 1
+        foldersPageRequestId += 1
 
         mutableState.update {
             it.copy(
@@ -114,6 +120,16 @@ class DriveFilesStateHolder(
         }
 
         scope.launch {
+            if (current.isStreamMode) {
+                val filesResult = repository.refreshStream(type = current.typeFilter.streamMimeType())
+                if (requestId == refreshRequestId) {
+                    applyFilesResult(
+                        result = filesResult,
+                        loadingMore = false,
+                    )
+                }
+                return@launch
+            }
             when (
                 val foldersResult = repository.refreshFolders(
                     folderId = current.folderId,
@@ -159,6 +175,9 @@ class DriveFilesStateHolder(
         ) {
             return
         }
+        val requestId = ++foldersPageRequestId
+        val folderId = current.folderId
+        val searchQuery = current.searchQuery.trim()
 
         mutableState.update {
             it.copy(
@@ -169,14 +188,14 @@ class DriveFilesStateHolder(
         }
 
         scope.launch {
-            applyFoldersResult(
-                result = repository.loadMoreFolders(
-                    currentFolders = current.folders,
-                    folderId = current.folderId,
-                    searchQuery = current.searchQuery.trim(),
-                ),
-                loadingMore = true,
+            val result = repository.loadMoreFolders(
+                currentFolders = current.folders,
+                folderId = folderId,
+                searchQuery = searchQuery,
             )
+            if (requestId == foldersPageRequestId && state.value.folderId == folderId) {
+                applyFoldersResult(result = result, loadingMore = true)
+            }
         }
     }
 
@@ -190,6 +209,12 @@ class DriveFilesStateHolder(
         ) {
             return
         }
+        val requestId = ++filesPageRequestId
+        val folderId = current.folderId
+        val sort = current.sort
+        val searchQuery = current.searchQuery.trim()
+        val isStreamMode = current.isStreamMode
+        val type = current.typeFilter.streamMimeType()
 
         mutableState.update {
             it.copy(
@@ -200,19 +225,32 @@ class DriveFilesStateHolder(
         }
 
         scope.launch {
-            applyFilesResult(
-                result = repository.loadMoreFiles(
+            val result = if (isStreamMode) {
+                repository.loadMoreStream(currentFiles = current.files, type = type)
+            } else {
+                repository.loadMoreFiles(
                     currentFiles = current.files,
-                    folderId = current.folderId,
-                    sort = current.sort,
-                    searchQuery = current.searchQuery.trim(),
-                ),
-                loadingMore = true,
-            )
+                    folderId = folderId,
+                    sort = sort,
+                    searchQuery = searchQuery,
+                )
+            }
+            val latest = state.value
+            if (
+                requestId == filesPageRequestId &&
+                latest.folderId == folderId &&
+                latest.isStreamMode == isStreamMode &&
+                latest.sort == sort &&
+                latest.searchQuery.trim() == searchQuery
+            ) {
+                applyFilesResult(result = result, loadingMore = true)
+            }
         }
     }
 
     fun updateSearchQuery(query: String) {
+        filesPageRequestId += 1
+        foldersPageRequestId += 1
         mutableState.update {
             it.copy(
                 searchQuery = query,
@@ -226,7 +264,33 @@ class DriveFilesStateHolder(
         refresh()
     }
 
+    fun setStreamMode(enabled: Boolean) {
+        if (state.value.isStreamMode == enabled) return
+        filesPageRequestId += 1
+        foldersPageRequestId += 1
+        uploadRequestId += 1
+        mutableState.update {
+            it.copy(
+                isStreamMode = enabled,
+                folderId = if (enabled) null else it.folderId,
+                folderPath = if (enabled) emptyList() else it.folderPath,
+                files = emptyList(),
+                folders = emptyList(),
+                selectedFile = null,
+                selectedFileDetails = null,
+                isLoadingFileDetails = false,
+                fileDetailsErrorMessage = null,
+                endReached = false,
+                foldersEndReached = enabled,
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+        refresh()
+    }
+
     fun selectSort(sort: DriveFileSort) {
+        filesPageRequestId += 1
         mutableState.update {
             it.copy(
                 sort = sort,
@@ -279,6 +343,7 @@ class DriveFilesStateHolder(
                         current
                     } else {
                         fileDetailsCache[file.id] = result.details
+                        trimFileDetailsCache()
                         current.copy(
                             selectedFile = result.details.file,
                             selectedFileDetails = result.details,
@@ -318,8 +383,12 @@ class DriveFilesStateHolder(
     }
 
     fun openFolder(folder: DriveFolder) {
+        filesPageRequestId += 1
+        foldersPageRequestId += 1
+        uploadRequestId += 1
         mutableState.update {
             it.copy(
+                isStreamMode = false,
                 folderId = folder.id,
                 folderPath = it.folderPath + folder,
                 files = emptyList(),
@@ -342,8 +411,12 @@ class DriveFilesStateHolder(
         if (current.folderPath.isEmpty()) return
         val nextPath = current.folderPath.dropLast(1)
         val nextFolderId = nextPath.lastOrNull()?.id
+        filesPageRequestId += 1
+        foldersPageRequestId += 1
+        uploadRequestId += 1
         mutableState.update {
             it.copy(
+                isStreamMode = false,
                 folderId = nextFolderId,
                 folderPath = nextPath,
                 files = emptyList(),
@@ -369,8 +442,12 @@ class DriveFilesStateHolder(
             else -> current.folderPath.take(index + 1)
         }
         val nextFolderId = nextPath.lastOrNull()?.id
+        filesPageRequestId += 1
+        foldersPageRequestId += 1
+        uploadRequestId += 1
         mutableState.update {
             it.copy(
+                isStreamMode = false,
                 folderId = nextFolderId,
                 folderPath = nextPath,
                 files = emptyList(),
@@ -391,6 +468,7 @@ class DriveFilesStateHolder(
     fun upload(upload: DriveFileUpload) {
         if (state.value.isUploading) return
         val folderId = state.value.folderId
+        val requestId = ++uploadRequestId
 
         mutableState.update {
             it.copy(isUploading = true, errorMessage = null, requiresRelogin = false)
@@ -404,6 +482,9 @@ class DriveFilesStateHolder(
             }
             when (val result = repository.upload(scopedUpload)) {
                 is DriveFileRepositoryResult.Success -> mutableState.update {
+                    if (requestId != uploadRequestId || it.folderId != folderId) {
+                        return@update it.copy(isUploading = false)
+                    }
                     it.copy(
                         files = it.files.prependDistinctBy(result.file) { file -> file.id },
                         isUploading = false,
@@ -412,6 +493,9 @@ class DriveFilesStateHolder(
                     )
                 }
                 DriveFileRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != uploadRequestId || it.folderId != folderId) {
+                        return@update it.copy(isUploading = false)
+                    }
                     it.copy(
                         isUploading = false,
                         errorMessage = "登录已失效，请重新登录",
@@ -419,6 +503,9 @@ class DriveFilesStateHolder(
                     )
                 }
                 is DriveFileRepositoryResult.ValidationError -> mutableState.update {
+                    if (requestId != uploadRequestId || it.folderId != folderId) {
+                        return@update it.copy(isUploading = false)
+                    }
                     it.copy(
                         isUploading = false,
                         errorMessage = result.message.toFriendlyDriveErrorMessage(),
@@ -426,6 +513,9 @@ class DriveFilesStateHolder(
                     )
                 }
                 is DriveFileRepositoryResult.Error -> mutableState.update {
+                    if (requestId != uploadRequestId || it.folderId != folderId) {
+                        return@update it.copy(isUploading = false)
+                    }
                     it.copy(
                         isUploading = false,
                         errorMessage = result.message.toFriendlyDriveErrorMessage(),
@@ -692,6 +782,13 @@ class DriveFilesStateHolder(
             }
         }
     }
+
+    private fun trimFileDetailsCache() {
+        while (fileDetailsCache.size > MAX_FILE_DETAILS_CACHE_ENTRIES) {
+            val oldestKey = fileDetailsCache.keys.firstOrNull() ?: return
+            fileDetailsCache.remove(oldestKey)
+        }
+    }
 }
 
 private fun String.toFriendlyDriveErrorMessage(): String {
@@ -715,3 +812,16 @@ private fun Double.roundOne(): String {
     val rounded = kotlin.math.round(this * 10) / 10
     return if (rounded % 1.0 == 0.0) rounded.toInt().toString() else rounded.toString()
 }
+
+private fun DriveFileTypeFilter.streamMimeType(): String? {
+    return when (this) {
+        DriveFileTypeFilter.All,
+        DriveFileTypeFilter.Document,
+        DriveFileTypeFilter.Other -> null
+        DriveFileTypeFilter.Image -> "image/*"
+        DriveFileTypeFilter.Video -> "video/*"
+        DriveFileTypeFilter.Audio -> "audio/*"
+    }
+}
+
+private const val MAX_FILE_DETAILS_CACHE_ENTRIES = 64

@@ -18,10 +18,12 @@ data class User(
     val avatarDecorations: List<AvatarDecoration> = emptyList(),
     val bannerUrl: String? = null,
     val host: String? = null,
+    val onlineStatus: String = "unknown",
 )
 
 @Immutable
 data class AvatarDecoration(
+    val id: String = "",
     val url: String,
     val angle: Float = 0f,
     val flipH: Boolean = false,

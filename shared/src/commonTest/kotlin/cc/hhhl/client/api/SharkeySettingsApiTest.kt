@@ -118,6 +118,67 @@ class SharkeySettingsApiTest {
     }
 
     @Test
+    fun logsInSharedAccessThroughRealEndpoint() = runTest {
+        val api = SharkeySettingsApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/i/shared-access/login", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""grantId":"grant-1""""))
+                respondJson("""{"userId":"user-2","token":"shared-session-token"}""")
+            },
+        )
+
+        val result = api.loginSharedAccess("token-123", "grant-1")
+
+        assertEquals(
+            SettingsSharedAccessLoginResult.Success(
+                userId = "user-2",
+                token = "shared-session-token",
+            ),
+            result,
+        )
+    }
+
+    @Test
+    fun loadsInviteCountAndRemainingLimitFromRealEndpoints() = runTest {
+        val requestedUrls = mutableListOf<String>()
+        val api = SharkeySettingsApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                requestedUrls += request.url.toString()
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                when (request.url.toString()) {
+                    "https://dc.hhhl.cc/api/invite/list" -> respondJson(
+                        """
+                            [
+                              {"id":"invite-1","code":"abc","usedAt":null},
+                              {"id":"invite-2","code":"def","usedAt":"2026-05-27T15:49:00.000Z"}
+                            ]
+                        """.trimIndent(),
+                    )
+                    "https://dc.hhhl.cc/api/invite/limit" -> respondJson("""{"remaining":3}""")
+                    else -> error("Unexpected request ${request.url}")
+                }
+            },
+        )
+
+        val result = api.loadInvites("token-123")
+
+        assertEquals(
+            listOf(
+                "https://dc.hhhl.cc/api/invite/list",
+                "https://dc.hhhl.cc/api/invite/limit",
+            ),
+            requestedUrls,
+        )
+        assertEquals(SettingsCapabilityResult.Count(total = 2, active = 3), result)
+    }
+
+    @Test
     fun loadsWebhookCountAndActiveCount() = runTest {
         val api = SharkeySettingsApi(
             baseUrl = "https://dc.hhhl.cc/",
@@ -257,6 +318,41 @@ class SharkeySettingsApiTest {
         )
 
         val result = api.revokeApiToken("token-123", "token-1")
+
+        assertEquals(SettingsManagementMutationResult.Success, result)
+    }
+
+    @Test
+    fun createsInviteThroughCreateEndpoint() = runTest {
+        val api = SharkeySettingsApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/invite/create", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                respondJson("""{"id":"invite-1","code":"abc"}""")
+            },
+        )
+
+        val result = api.createInvite("token-123")
+
+        assertEquals(SettingsManagementMutationResult.Success, result)
+    }
+
+    @Test
+    fun deletesInviteThroughDeleteEndpoint() = runTest {
+        val api = SharkeySettingsApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/invite/delete", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""inviteId":"invite-1""""))
+                respondJson("""{}""")
+            },
+        )
+
+        val result = api.deleteInvite("token-123", "invite-1")
 
         assertEquals(SettingsManagementMutationResult.Success, result)
     }

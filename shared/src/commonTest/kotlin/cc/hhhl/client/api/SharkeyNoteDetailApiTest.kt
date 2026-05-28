@@ -76,6 +76,61 @@ class SharkeyNoteDetailApiTest {
         assertIs<NoteDetailLoadResult.ServerError>(api.loadNote("token-123", " "))
     }
 
+    @Test
+    fun refreshesPollFromPollsRefreshEndpoint() = runTest {
+        val api = SharkeyNoteDetailApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notes/polls/refresh", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""noteId":"note-1""""))
+                respond("{}", status = HttpStatusCode.OK, headers = jsonHeaders)
+            },
+        )
+
+        assertIs<NoteActionOnlyResult.Success>(
+            api.refreshPollRecommendation("token-123", "note-1"),
+        )
+    }
+
+    @Test
+    fun loadsNoteStateFromNotesStateEndpoint() = runTest {
+        val api = SharkeyNoteDetailApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notes/state", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""noteId":"note-1""""))
+                respond(
+                    content = """
+                        {
+                          "isFavorited": true,
+                          "isMutedThread": true,
+                          "isMutedNote": true,
+                          "isRenoted": true
+                        }
+                    """.trimIndent(),
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = api.loadState("token-123", "note-1")
+
+        assertIs<NoteStateResult.Success>(result)
+        assertEquals(true, result.state.isFavorited)
+        assertEquals(true, result.state.isMutedThread)
+        assertEquals(true, result.state.isMutedNote)
+        assertEquals(true, result.state.isRenoted)
+    }
+
     private fun MockRequestHandleScope.respondNote(): HttpResponseData {
         return respond(
             content = """

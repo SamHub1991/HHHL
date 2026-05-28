@@ -171,9 +171,13 @@ private fun String.localChatIdAfter(prefix: String): String? {
     return removePrefix(prefix)
         .trim('/')
         .substringBefore('/')
-        .takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
+        .takeWhile { it.isAsciiLetterOrDigit() || it == '-' || it == '_' }
         .trim()
         .takeIf { it.isNotBlank() }
+}
+
+private fun Char.isAsciiLetterOrDigit(): Boolean {
+    return this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'
 }
 
 private fun localPath(url: String): String? {

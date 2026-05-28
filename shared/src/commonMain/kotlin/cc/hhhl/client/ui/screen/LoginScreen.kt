@@ -14,14 +14,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -31,7 +32,9 @@ import cc.hhhl.client.auth.AccountSession
 import cc.hhhl.client.auth.LoginUiState
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.HHHL_BRAND_AVATAR_URL
+import cc.hhhl.client.ui.component.HhhlProgressIndicator
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.hhhlReadableOnControlColor
 import coil3.compose.rememberAsyncImagePainter
 
 @Composable
@@ -42,10 +45,11 @@ fun LoginScreen(
     onRemoveAccount: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(colors.pageBackground)
             .padding(horizontal = 22.dp, vertical = 22.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -90,31 +94,32 @@ fun AccountSwitchPanel(
     onAddAccount: (() -> Unit)? = null,
 ) {
     if (accounts.isEmpty()) return
-    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
     val neutralLayer = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.035f)
+        loginNeutralLayer().copy(alpha = 0.70f)
     } else {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.74f)
+        colors.surfaceElevated.copy(alpha = 0.74f)
     }
     val neutralBorder = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.075f)
+        colors.border.copy(alpha = 0.36f)
     } else {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+        colors.focusRing.copy(alpha = 0.08f)
     }
     val addButtonContainer = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.04f)
+        loginNeutralLayer().copy(alpha = 0.82f)
     } else {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.025f)
+        colors.buttonSelectedBackground.copy(alpha = 0.25f)
     }
     val addButtonBorder = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.075f)
+        colors.border.copy(alpha = 0.38f)
     } else {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.09f)
+        colors.focusRing.copy(alpha = 0.09f)
     }
     val addButtonContent = if (isDarkSurface) {
-        MaterialTheme.colorScheme.onBackground
+        colors.textPrimary
     } else {
-        MaterialTheme.colorScheme.primary
+        colors.accent
     }
     Column(
         modifier = modifier
@@ -159,43 +164,44 @@ private fun AccountSwitchRow(
     onSwitchAccount: (String) -> Unit,
     onRemoveAccount: (String) -> Unit,
 ) {
-    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
-    val markerShape = RoundedCornerShape(8.dp)
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
+    val markerShape = RoundedCornerShape(10.dp)
     val markerContainer = when {
-        selected && isDarkSurface -> Color.White.copy(alpha = 0.08f)
-        selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-        isDarkSurface -> Color.White.copy(alpha = 0.04f)
-        else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+        selected && isDarkSurface -> loginNeutralLayer().copy(alpha = 0.96f)
+        selected -> colors.buttonSelectedBackground.copy(alpha = 0.36f)
+        isDarkSurface -> loginNeutralLayer().copy(alpha = 0.66f)
+        else -> colors.surfaceElevated.copy(alpha = 0.72f)
     }
     val markerBorder = when {
-        selected && isDarkSurface -> Color.White.copy(alpha = 0.12f)
-        selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-        isDarkSurface -> Color.White.copy(alpha = 0.06f)
-        else -> LocalHhhlColors.current.divider.copy(alpha = 0.46f)
+        selected && isDarkSurface -> colors.textMuted.copy(alpha = 0.28f)
+        selected -> colors.focusRing.copy(alpha = 0.16f)
+        isDarkSurface -> colors.border.copy(alpha = 0.34f)
+        else -> colors.border.copy(alpha = 0.46f)
     }
     val markerContent = when {
-        selected -> MaterialTheme.colorScheme.primary
-        else -> LocalHhhlColors.current.subtleText
+        selected -> hhhlReadableOnControlColor(markerContainer, colors.accent)
+        else -> colors.textMuted
     }
     val rowButtonContainer = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.035f)
+        loginNeutralLayer().copy(alpha = 0.78f)
     } else {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.025f)
+        colors.buttonSelectedBackground.copy(alpha = 0.25f)
     }
     val rowButtonBorder = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.065f)
+        colors.textMuted.copy(alpha = 0.20f)
     } else {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.085f)
+        colors.focusRing.copy(alpha = 0.085f)
     }
     val removeButtonContainer = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.028f)
+        colors.danger.copy(alpha = 0.12f)
     } else {
-        MaterialTheme.colorScheme.error.copy(alpha = 0.07f)
+        colors.danger.copy(alpha = 0.07f)
     }
     val removeButtonBorder = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.055f)
+        colors.danger.copy(alpha = 0.22f)
     } else {
-        MaterialTheme.colorScheme.error.copy(alpha = 0.16f)
+        colors.danger.copy(alpha = 0.16f)
     }
     Row(
         modifier = Modifier
@@ -206,18 +212,27 @@ private fun AccountSwitchRow(
     ) {
         Box(
             modifier = Modifier
-                .size(28.dp)
+                .size(26.dp)
                 .clip(markerShape)
                 .background(markerContainer)
                 .border(1.dp, markerBorder, markerShape),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = if (selected) "✓" else accountLabel(account).take(1).uppercase(),
-                color = markerContent,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-            )
+            if (selected) {
+                Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = markerContent,
+                    modifier = Modifier.size(16.dp),
+                )
+            } else {
+                Text(
+                    text = accountLabel(account).take(1).uppercase(),
+                    color = markerContent,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
         Column(
             modifier = Modifier.weight(1f),
@@ -225,7 +240,7 @@ private fun AccountSwitchRow(
         ) {
             Text(
                 text = accountLabel(account),
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -233,7 +248,7 @@ private fun AccountSwitchRow(
             )
             Text(
                 text = account.host,
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -243,7 +258,7 @@ private fun AccountSwitchRow(
             onClick = { onSwitchAccount(account.id) },
             enabled = !selected,
             containerColor = rowButtonContainer,
-            contentColor = if (selected) LocalHhhlColors.current.subtleText else MaterialTheme.colorScheme.onBackground,
+            contentColor = if (selected) colors.textMuted else colors.textPrimary,
             borderColor = rowButtonBorder,
         ) {
             Text(if (selected) "当前" else "切换")
@@ -251,7 +266,7 @@ private fun AccountSwitchRow(
         HhhlTextButton(
             onClick = { onRemoveAccount(account.id) },
             containerColor = removeButtonContainer,
-            contentColor = MaterialTheme.colorScheme.error.copy(alpha = if (isDarkSurface) 0.86f else 1f),
+            contentColor = colors.danger.copy(alpha = if (isDarkSurface) 0.86f else 1f),
             borderColor = removeButtonBorder,
         ) {
             Text("移除")
@@ -265,27 +280,62 @@ private fun accountLabel(account: AccountSession): String {
 }
 
 @Composable
+private fun loginNeutralLayer() = LocalHhhlColors.current.run {
+    surface.blendWith(pageBackground, 0.42f)
+        .blendWith(surfaceElevated, 0.20f)
+        .desaturate(0.46f)
+}
+
+@Composable
 private fun LoginLead() {
+    val colors = LocalHhhlColors.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
             text = "登录 HHHL",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
         )
         Text(
             text = "使用 dc.hhhl.cc 账号继续",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.bodyMedium,
         )
     }
 }
 
+private fun androidx.compose.ui.graphics.Color.blendWith(
+    other: androidx.compose.ui.graphics.Color,
+    otherRatio: Float,
+): androidx.compose.ui.graphics.Color {
+    val ratio = otherRatio.coerceIn(0f, 1f)
+    val selfRatio = 1f - ratio
+    return androidx.compose.ui.graphics.Color(
+        red = red * selfRatio + other.red * ratio,
+        green = green * selfRatio + other.green * ratio,
+        blue = blue * selfRatio + other.blue * ratio,
+        alpha = alpha * selfRatio + other.alpha * ratio,
+    )
+}
+
+private fun androidx.compose.ui.graphics.Color.desaturate(amount: Float): androidx.compose.ui.graphics.Color {
+    val ratio = amount.coerceIn(0f, 1f)
+    val grey = red * 0.299f + green * 0.587f + blue * 0.114f
+    return androidx.compose.ui.graphics.Color(
+        red = red * (1f - ratio) + grey * ratio,
+        green = green * (1f - ratio) + grey * ratio,
+        blue = blue * (1f - ratio) + grey * ratio,
+        alpha = alpha,
+    )
+}
+
 @Composable
 private fun LoginStatusPanel(state: LoginUiState) {
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
     val statusMessage = state.statusMessage
     val errorMessage = state.errorMessage
     if (statusMessage == null && errorMessage == null) return
@@ -294,21 +344,21 @@ private fun LoginStatusPanel(state: LoginUiState) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.72f))
+            .background(if (isDarkSurface) loginNeutralLayer().copy(alpha = 0.72f) else colors.surfaceElevated.copy(alpha = 0.72f))
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         statusMessage?.let { message ->
             Text(
                 text = message,
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
         errorMessage?.let { message ->
             Text(
                 text = message,
-                color = MaterialTheme.colorScheme.error,
+                color = colors.danger,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -320,11 +370,13 @@ private fun LoginEntryPanel(
     state: LoginUiState,
     onLogin: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
-            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.78f))
+            .background(if (isDarkSurface) loginNeutralLayer().copy(alpha = 0.78f) else colors.surfaceElevated.copy(alpha = 0.78f))
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -345,10 +397,9 @@ private fun LoginEntryPanel(
                 .height(52.dp),
         ) {
             if (state.isLoading) {
-                CircularProgressIndicator(
+                HhhlProgressIndicator(
                     modifier = Modifier.size(18.dp),
                     strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onBackground,
                 )
             } else {
                 Text(
@@ -361,7 +412,7 @@ private fun LoginEntryPanel(
         state.statusMessage?.let { message ->
             Text(
                 text = message,
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -376,6 +427,7 @@ private fun LoginMetaRow(
     value: String,
     detail: String? = null,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -383,7 +435,7 @@ private fun LoginMetaRow(
     ) {
         Text(
             text = label,
-            color = MaterialTheme.colorScheme.secondary,
+            color = colors.textSecondary,
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.padding(top = 2.dp),
         )
@@ -393,7 +445,7 @@ private fun LoginMetaRow(
         ) {
             Text(
                 text = value,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -402,7 +454,7 @@ private fun LoginMetaRow(
             detail?.let {
                 Text(
                     text = it,
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -412,6 +464,7 @@ private fun LoginMetaRow(
 
 @Composable
 private fun HhhlIdentity() {
+    val colors = LocalHhhlColors.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -420,7 +473,7 @@ private fun HhhlIdentity() {
             modifier = Modifier
                 .size(68.dp)
                 .clip(RoundedCornerShape(20.dp))
-                .background(Color(0xFF08090B)),
+                .background(colors.mediaBackground),
             contentAlignment = Alignment.Center,
         ) {
             Image(
@@ -432,7 +485,7 @@ private fun HhhlIdentity() {
         }
         Text(
             text = "HHHL",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
         )

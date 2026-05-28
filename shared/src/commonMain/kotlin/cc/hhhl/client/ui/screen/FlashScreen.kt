@@ -18,13 +18,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +55,7 @@ import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
+import cc.hhhl.client.ui.component.InlineRichText
 
 @Composable
 fun FlashScreen(
@@ -135,7 +136,7 @@ fun FlashScreen(
                         onClick = onStartCreateFlash,
                     )
                     if (overflowActions.isNotEmpty()) {
-                        HhhlOverflowMenu(actions = overflowActions)
+                        HhhlOverflowMenu(actions = overflowActions, buttonText = "更多")
                     }
                 }
             },
@@ -158,7 +159,7 @@ fun FlashScreen(
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item(contentType = "flash-status") {
+                item(key = "flash-error-${selectedKind.name}", contentType = "flash-status") {
                     FlashStatusRow(
                         text = message,
                         actionText = "重试",
@@ -167,12 +168,14 @@ fun FlashScreen(
                 }
             }
             if (state?.isLoadingFlashes == true && flashes.isEmpty()) {
-                item(contentType = "flash-status") {
+                item(key = "flash-loading-${selectedKind.name}", contentType = "flash-status") {
                     FlashStatusRow(text = "正在加载 Play...", loading = true)
                 }
             }
             if (state != null && !state.isLoadingFlashes && flashes.isEmpty() && state.errorMessage == null) {
-                item(contentType = "flash-status") { FlashStatusRow(text = "还没有 Play") }
+                item(key = "flash-empty-${selectedKind.name}", contentType = "flash-status") {
+                    FlashStatusRow(text = "还没有 Play")
+                }
             }
             items(
                 items = flashes,
@@ -186,7 +189,7 @@ fun FlashScreen(
                 )
             }
             if (state != null && flashes.isNotEmpty() && state.isLoadingMore) {
-                item(contentType = "flash-status") {
+                item(key = "flash-loading-more-${selectedKind.name}", contentType = "flash-status") {
                     FlashStatusRow(
                         text = "正在加载更多...",
                         loading = state.isLoadingMore,
@@ -230,9 +233,11 @@ private fun FlashDraftView(
         HhhlDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             errorMessage?.let { message ->
-                item(contentType = "flash-edit-status") { FlashStatusRow(text = message) }
+                item(key = "flash-edit-error", contentType = "flash-edit-status") {
+                    FlashStatusRow(text = message)
+                }
             }
-            item(contentType = "flash-edit-form") {
+            item(key = "flash-edit-form", contentType = "flash-edit-form") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -289,7 +294,7 @@ private fun FlashDraftView(
                     )
                     Text(
                         text = "移动端暂不执行 Play 脚本，下方仅显示代码预览。",
-                        color = LocalHhhlColors.current.subtleText,
+                        color = LocalHhhlColors.current.textMuted,
                         style = MaterialTheme.typography.bodySmall,
                     )
                     FlashCodeBlock(scriptPreview.ifBlank { "暂无脚本" })
@@ -308,7 +313,7 @@ private fun FlashVisibilityEditor(
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
             text = "可见性",
-            color = LocalHhhlColors.current.subtleText,
+            color = LocalHhhlColors.current.textMuted,
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(start = 2.dp),
         )
@@ -335,6 +340,7 @@ private fun FlashSummaryRow(
     isLoading: Boolean,
     onRefreshFlashes: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val stateText = if (isLoading) "加载中" else "${flashCount} 项"
     Row(
         modifier = Modifier
@@ -345,7 +351,7 @@ private fun FlashSummaryRow(
     ) {
         Text(
             text = "${selectedKind.label} · $stateText",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -394,6 +400,7 @@ private fun FlashRow(
     onOpenFlash: (String) -> Unit,
     onOpenUser: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -412,22 +419,23 @@ private fun FlashRow(
         ) {
             Text(
                 text = flash.title.ifBlank { "未命名 Play" },
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = flash.summary,
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (flash.summary.isNotBlank()) {
+                InlineRichText(
+                    text = flash.summary,
+                    color = colors.textSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxChars = 280,
+                )
+            }
             Text(
                 text = "@${flash.author.username} · ${flash.visibilityLabel} · ${flash.likedCount} 喜欢",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -452,6 +460,7 @@ private fun FlashDetailView(
     onOpenFlashInWeb: (String) -> Unit,
 ) {
     var deleteConfirmOpen by remember(flash.id) { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
     val codePreview = remember(flash.script) {
         flash.script.lineSequence()
             .take(120)
@@ -481,20 +490,23 @@ private fun FlashDetailView(
                             onClick = { deleteConfirmOpen = true },
                         ),
                     ),
+                    buttonText = "更多",
                 )
             },
         )
         HhhlDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             if (isLoading) {
-                item(contentType = "flash-detail-status") {
+                item(key = "flash-detail-loading-${flash.id}", contentType = "flash-detail-status") {
                     FlashStatusRow(text = "正在加载 Play...", loading = true)
                 }
             }
             errorMessage?.let { message ->
-                item(contentType = "flash-detail-status") { FlashStatusRow(text = message) }
+                item(key = "flash-detail-error-${flash.id}", contentType = "flash-detail-status") {
+                    FlashStatusRow(text = message)
+                }
             }
-            item(contentType = "flash-detail") {
+            item(key = "flash-detail-${flash.id}", contentType = "flash-detail") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -503,7 +515,7 @@ private fun FlashDetailView(
                 ) {
                     Text(
                         text = flash.title.ifBlank { "未命名 Play" },
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = colors.textPrimary,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                     )
@@ -526,13 +538,13 @@ private fun FlashDetailView(
                             Column {
                                 Text(
                                     text = flash.author.displayName,
-                                    color = MaterialTheme.colorScheme.onBackground,
+                                    color = colors.textPrimary,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
                                     text = "@${flash.author.username} · ${flash.visibilityLabel} · ${flash.updatedAtLabel}",
-                                    color = LocalHhhlColors.current.subtleText,
+                                    color = colors.textMuted,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -549,9 +561,9 @@ private fun FlashDetailView(
                         )
                     }
                     if (flash.summary.isNotBlank()) {
-                        Text(
+                        InlineRichText(
                             text = flash.summary,
-                            color = MaterialTheme.colorScheme.onBackground,
+                            color = colors.textPrimary,
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
@@ -562,7 +574,7 @@ private fun FlashDetailView(
                     )
                     Text(
                         text = "${flash.likedCount} 喜欢 · 创建 ${flash.createdAtLabel.ifBlank { "未知" }}",
-                        color = LocalHhhlColors.current.subtleText,
+                        color = colors.textMuted,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -571,13 +583,13 @@ private fun FlashDetailView(
         }
     }
     if (deleteConfirmOpen) {
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { if (!isDeleting) deleteConfirmOpen = false },
             title = { Text("删除 Play") },
             text = {
                 Text(
                     text = "删除后无法在移动端恢复。服务器会校验权限。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -607,23 +619,24 @@ private fun FlashRuntimePreview(
     hasScript: Boolean,
     onOpenInWeb: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(LocalHhhlColors.current.mediaBackground)
+            .background(colors.mediaBackground)
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
             text = "运行预览",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
         )
         Text(
             text = "移动端暂未内置 AiScript Play 运行器，当前不会执行脚本。",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.bodySmall,
         )
         HhhlActionChip(
@@ -642,16 +655,17 @@ fun flashWebPath(flashId: String): String {
 
 @Composable
 private fun FlashCodeBlock(text: String) {
+    val colors = LocalHhhlColors.current
     Text(
         text = text,
-        color = MaterialTheme.colorScheme.secondary,
+        color = colors.textSecondary,
         style = MaterialTheme.typography.bodySmall,
         fontFamily = FontFamily.Monospace,
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(max = 280.dp)
             .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f))
+            .background(colors.surfaceElevated.copy(alpha = 0.72f))
             .padding(10.dp),
     )
 }

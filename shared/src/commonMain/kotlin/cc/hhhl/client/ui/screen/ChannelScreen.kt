@@ -19,11 +19,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelDefaultColorHex
 import cc.hhhl.client.model.ChannelDraft
 import cc.hhhl.client.model.ChannelListKind
 import cc.hhhl.client.model.Note
@@ -44,6 +44,7 @@ import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
+import cc.hhhl.client.ui.component.HhhlCheckbox
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlIconActionButton
@@ -51,6 +52,7 @@ import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
+import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.NoteRow
 import cc.hhhl.client.ui.component.NoteRowDensity
@@ -145,8 +147,8 @@ fun ChannelScreen(
             state = listState,
         ) {
             selectedChannel?.let { channel ->
-                item(contentType = "channel-header") { ChannelHeader(channel = channel) }
-                item(contentType = "channel-actions") {
+                item(key = "channel-header-${channel.id}", contentType = "channel-header") { ChannelHeader(channel = channel) }
+                item(key = "channel-actions-${channel.id}", contentType = "channel-actions") {
                     ChannelActionRow(
                         channel = channel,
                         isChangingFollow = state?.isChangingFollow == true,
@@ -160,7 +162,7 @@ fun ChannelScreen(
                     )
                 }
                 if (channel.pinnedNotes.isNotEmpty()) {
-                    item(contentType = "channel-status") { ChannelStatusRow(text = "置顶动态") }
+                    item(key = "channel-pinned-title-${channel.id}", contentType = "channel-status") { ChannelStatusRow(text = "置顶动态") }
                     items(
                         items = channel.pinnedNotes,
                         key = { "channel-pinned-${it.id}" },
@@ -193,7 +195,7 @@ fun ChannelScreen(
                 }
             }
             state?.errorMessage?.let { message ->
-                item(contentType = "channel-status") {
+                item(key = "channel-error", contentType = "channel-status") {
                     ChannelStatusRow(
                         text = message,
                         actionText = "重试",
@@ -202,20 +204,20 @@ fun ChannelScreen(
                 }
             }
             if (state?.isLoadingChannels == true && channels.isEmpty()) {
-                item(contentType = "channel-status") {
+                item(key = "channel-loading", contentType = "channel-status") {
                     ChannelStatusRow(text = "正在加载频道...", loading = true)
                 }
             }
             if (state != null && !state.isLoadingChannels && channels.isEmpty() && state.errorMessage == null) {
-                item(contentType = "channel-status") { ChannelStatusRow(text = "还没有频道") }
+                item(key = "channel-empty", contentType = "channel-status") { ChannelStatusRow(text = "还没有频道") }
             }
             if (state?.isLoadingTimeline == true && notes.isEmpty()) {
-                item(contentType = "channel-status") {
+                item(key = "channel-timeline-loading-${selectedChannel?.id.orEmpty()}", contentType = "channel-status") {
                     ChannelStatusRow(text = "正在加载频道动态...", loading = true)
                 }
             }
             state?.timelineErrorMessage?.let { message ->
-                item(contentType = "channel-status") {
+                item(key = "channel-timeline-error-${selectedChannel?.id.orEmpty()}", contentType = "channel-status") {
                     ChannelStatusRow(
                         text = message,
                         actionText = "重试",
@@ -230,7 +232,7 @@ fun ChannelScreen(
                 notes.isEmpty() &&
                 state.timelineErrorMessage == null
             ) {
-                item(contentType = "channel-status") { ChannelStatusRow(text = "这个频道还没有动态") }
+                item(key = "channel-timeline-empty-${selectedChannel.id}", contentType = "channel-status") { ChannelStatusRow(text = "这个频道还没有动态") }
             }
             items(
                 items = visibleTimelineNotes,
@@ -262,7 +264,7 @@ fun ChannelScreen(
                 )
             }
             if (state != null && notes.isNotEmpty() && state.isLoadingMore) {
-                item(contentType = "channel-status") {
+                item(key = "channel-loading-more-${selectedChannel?.id.orEmpty()}", contentType = "channel-status") {
                     ChannelStatusRow(
                         text = "正在加载更多...",
                         loading = state.isLoadingMore,
@@ -335,6 +337,7 @@ private fun ChannelActionRow(
     onArchiveChannel: () -> Unit,
     onComposeInChannel: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -378,11 +381,12 @@ private fun ChannelActionRow(
                     onEditChannel = onEditChannel,
                     onArchiveChannel = onArchiveChannel,
                 ),
+                buttonText = "更多",
             )
         }
         Text(
             text = "${channel.usersCount} 人关注 · ${channel.notesCount} 条动态",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -445,16 +449,17 @@ private fun ChannelEditorDialog(
     onDismiss: () -> Unit,
     onSubmit: (ChannelDraft) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     var name by remember(initialChannel?.id) { mutableStateOf(initialChannel?.name.orEmpty()) }
     var description by remember(initialChannel?.id) { mutableStateOf(initialChannel?.description.orEmpty()) }
-    var color by remember(initialChannel?.id) { mutableStateOf(initialChannel?.color.ifNullOrBlank("#40c057")) }
+    var color by remember(initialChannel?.id) { mutableStateOf(initialChannel?.color.ifNullOrBlank(ChannelDefaultColorHex)) }
     var isSensitive by remember(initialChannel?.id) { mutableStateOf(initialChannel?.isSensitive == true) }
     var allowRenoteToExternal by remember(initialChannel?.id) {
         mutableStateOf(initialChannel?.allowRenoteToExternal != false)
     }
     val canSubmit = name.isNotBlank() && !isMutating
 
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
@@ -481,7 +486,7 @@ private fun ChannelEditorDialog(
                     value = color,
                     onValueChange = { color = it },
                     label = "颜色",
-                    placeholder = "#40c057",
+                    placeholder = ChannelDefaultColorHex,
                     singleLine = true,
                     enabled = !isMutating,
                     modifier = Modifier.fillMaxWidth(),
@@ -526,18 +531,19 @@ private fun ChannelCheckRow(
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(
+        HhhlCheckbox(
             checked = checked,
             onCheckedChange = onCheckedChange,
             enabled = enabled,
         )
         Text(
             text = text,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.bodyMedium,
         )
     }
@@ -550,13 +556,14 @@ private fun ArchiveChannelDialog(
     onDismiss: () -> Unit,
     onArchive: () -> Unit,
 ) {
-    AlertDialog(
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("归档频道") },
         text = {
             Text(
                 text = "归档「${channel.name.ifBlank { "未命名频道" }}」后，它会从当前频道列表移除。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
@@ -585,6 +592,7 @@ private fun ChannelSummaryRow(
     onRefreshTimeline: () -> Unit,
     onCreateChannel: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val titleText = listOfNotNull(
         selectedKind.label,
         selectedChannel?.name?.ifBlank { "未命名频道" },
@@ -604,7 +612,7 @@ private fun ChannelSummaryRow(
     ) {
         Text(
             text = "$titleText · $stateText",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -617,14 +625,8 @@ private fun ChannelSummaryRow(
         ) {
             HhhlIconActionButton(
                 icon = Icons.Filled.Refresh,
-                contentDescription = if (isLoadingChannels) "同步频道中" else "刷新频道",
-                emphasized = true,
-                enabled = !isLoadingChannels,
-                onClick = onRefreshChannels,
-            )
-            HhhlIconActionButton(
-                icon = Icons.Filled.Refresh,
                 contentDescription = if (isLoadingTimeline) "同步动态中" else "刷新动态",
+                emphasized = true,
                 enabled = selectedChannel != null && !isLoadingTimeline,
                 onClick = onRefreshTimeline,
             )
@@ -635,9 +637,29 @@ private fun ChannelSummaryRow(
                 enabled = !isMutatingChannel,
                 onClick = onCreateChannel,
             )
+            HhhlOverflowMenu(
+                actions = channelSummaryActions(
+                    isLoadingChannels = isLoadingChannels,
+                    onRefreshChannels = onRefreshChannels,
+                ),
+                label = "频道操作",
+                buttonText = "更多",
+            )
         }
     }
 }
+
+fun channelSummaryActions(
+    isLoadingChannels: Boolean,
+    onRefreshChannels: () -> Unit,
+): List<HhhlOverflowMenuAction> = listOf(
+    HhhlOverflowMenuAction(
+        label = if (isLoadingChannels) "同步频道中" else "刷新频道列表",
+        icon = Icons.Filled.Refresh,
+        enabled = !isLoadingChannels,
+        onClick = onRefreshChannels,
+    ),
+)
 
 fun channelPrimaryKinds(): List<ChannelListKind> = listOf(
     ChannelListKind.Featured,
@@ -681,13 +703,14 @@ private fun ChannelPickerChip(
     active: Boolean,
     onClick: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Box(
         modifier = Modifier
             .widthIn(min = 128.dp, max = 196.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                else LocalHhhlColors.current.inputBackground,
+                if (active) colors.buttonSelectedBackground
+                else colors.buttonBackground,
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -700,9 +723,9 @@ private fun ChannelPickerChip(
                 Text(
                     text = channel.name.ifBlank { "未命名频道" },
                     color = if (active) {
-                        MaterialTheme.colorScheme.primary
+                        colors.accent
                     } else {
-                        MaterialTheme.colorScheme.onBackground
+                        colors.textPrimary
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
@@ -712,14 +735,14 @@ private fun ChannelPickerChip(
                 if (channel.hasUnreadNote) {
                     Text(
                         text = "新",
-                        color = MaterialTheme.colorScheme.error,
+                        color = colors.danger,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
             }
             Text(
                 text = "${channel.usersCount} 人 · ${channel.notesCount} 条",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -730,6 +753,7 @@ private fun ChannelPickerChip(
 
 @Composable
 private fun ChannelHeader(channel: Channel) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -738,20 +762,20 @@ private fun ChannelHeader(channel: Channel) {
     ) {
         Text(
             text = channel.name.ifBlank { "未命名频道" },
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )
         if (channel.description.isNotBlank()) {
-            Text(
+            InlineRichText(
                 text = channel.description,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         Text(
             text = "${channel.statusLabel} · ${channel.usersCount} 人关注 · ${channel.notesCount} 条动态",
-            color = MaterialTheme.colorScheme.secondary,
+            color = colors.textSecondary,
             style = MaterialTheme.typography.bodySmall,
         )
     }

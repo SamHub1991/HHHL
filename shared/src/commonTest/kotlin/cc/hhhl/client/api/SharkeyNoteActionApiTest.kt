@@ -41,6 +41,24 @@ class SharkeyNoteActionApiTest {
     }
 
     @Test
+    fun likesNoteFromNotesLikeEndpoint() = runTest {
+        val api = SharkeyNoteActionApi(
+            client = testClient { request ->
+                assertEndpoint(request, "/api/notes/like")
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""noteId":"note-1""""))
+                assertTrue(body.contains(""""override":"👍""""))
+                respondOk()
+            },
+        )
+
+        assertIs<NoteActionApiResult.Success>(
+            api.likeNote("token-123", "note-1", "👍"),
+        )
+    }
+
+    @Test
     fun deletesReactionFromReactionsDeleteEndpoint() = runTest {
         val api = SharkeyNoteActionApi(
             client = testClient { request ->
@@ -128,6 +146,23 @@ class SharkeyNoteActionApiTest {
     }
 
     @Test
+    fun deletesRenoteFromNotesUnrenoteEndpoint() = runTest {
+        val api = SharkeyNoteActionApi(
+            client = testClient { request ->
+                assertEndpoint(request, "/api/notes/unrenote")
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""noteId":"note-1""""))
+                respondOk()
+            },
+        )
+
+        assertIs<NoteActionApiResult.Success>(
+            api.deleteRenote("token-123", "note-1"),
+        )
+    }
+
+    @Test
     fun deletesNoteFromNotesDeleteEndpoint() = runTest {
         val api = SharkeyNoteActionApi(
             client = testClient { request ->
@@ -158,6 +193,23 @@ class SharkeyNoteActionApiTest {
 
         assertIs<NoteActionApiResult.Success>(
             api.muteNote("token-123", "note-1"),
+        )
+    }
+
+    @Test
+    fun unmutesNoteFromThreadMutingDeleteEndpoint() = runTest {
+        val api = SharkeyNoteActionApi(
+            client = testClient { request ->
+                assertEndpoint(request, "/api/notes/thread-muting/delete")
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""noteId":"note-1""""))
+                respondOk()
+            },
+        )
+
+        assertIs<NoteActionApiResult.Success>(
+            api.unmuteNote("token-123", "note-1"),
         )
     }
 

@@ -55,12 +55,20 @@ class NotificationStateHolder(
     private val restoredReadNotificationIds = restoreReadNotificationIds()
     private val cachedSnapshot = restoreCachedSnapshot()
     private val cachedRemoteNotifications = cachedSnapshot.notifications.withLocalReadState(restoredReadNotificationIds)
+    private val cachedChatAttentionNotifications =
+        cachedSnapshot.chatAttentionNotifications.withLocalReadState(restoredReadNotificationIds)
     private val cachedSpecialCareNotifications =
         cachedSnapshot.specialCareNotifications.withLocalReadState(restoredReadNotificationIds)
     private val mutableState = MutableStateFlow(
         NotificationUiState(
-            notifications = cachedRemoteNotifications.withLocalSpecialCareNotifications(cachedSpecialCareNotifications),
-            unreadCount = cachedRemoteNotifications.countUnread() + cachedSpecialCareNotifications.countUnread(),
+            notifications = cachedRemoteNotifications
+                .withLocalChatAttentionNotifications(cachedChatAttentionNotifications)
+                .withLocalSpecialCareNotifications(cachedSpecialCareNotifications),
+            unreadCount = totalUnreadCount(
+                remoteNotifications = cachedRemoteNotifications,
+                chatAttentionNotifications = cachedChatAttentionNotifications,
+                specialCareNotifications = cachedSpecialCareNotifications,
+            ),
             specialCareNotificationCount = cachedSpecialCareNotifications.size,
             specialCareUnreadCount = cachedSpecialCareNotifications.countUnread(),
             endReached = cachedRemoteNotifications.isNotEmpty(),
@@ -69,9 +77,11 @@ class NotificationStateHolder(
     val state: StateFlow<NotificationUiState> = mutableState
     private var readNotificationIds: Set<String> = restoredReadNotificationIds
     private var remoteNotifications: List<NotificationItem> = cachedRemoteNotifications
+    private var chatAttentionNotifications: List<NotificationItem> = cachedChatAttentionNotifications
     private var specialCareNotifications: List<NotificationItem> = cachedSpecialCareNotifications
     private var specialCareUserIds: Set<String> = emptySet()
     private var isQuietRefreshing: Boolean = false
+    private var notificationRequestId: Int = 0
 
     fun refresh() {
         if (state.value.isLoading) return
@@ -98,8 +108,15 @@ class NotificationStateHolder(
             )
         }
 
+        val filter = state.value.selectedFilter
+        val requestId = nextNotificationRequestId()
         scope.launch {
-            applyResult(repository.refresh(state.value.selectedFilter), loadingMore = false)
+            applyResult(
+                result = repository.refresh(filter),
+                loadingMore = false,
+                requestFilter = filter,
+                requestId = requestId,
+            )
         }
     }
 
@@ -151,8 +168,14 @@ class NotificationStateHolder(
             )
         }
 
+        val requestId = nextNotificationRequestId()
         scope.launch {
-            applyResult(repository.refresh(filter), loadingMore = false)
+            applyResult(
+                result = repository.refresh(filter),
+                loadingMore = false,
+                requestFilter = filter,
+                requestId = requestId,
+            )
         }
     }
 
@@ -172,13 +195,21 @@ class NotificationStateHolder(
             it.copy(isLoadingMore = true, errorMessage = null, requiresRelogin = false)
         }
 
+        val filter = current.selectedFilter
+        val remotePageBase = when (filter) {
+            NotificationFilter.All -> remoteNotifications
+            else -> remoteNotifications.filter { notification -> notification.type in filter.includedTypes }
+        }
+        val requestId = nextNotificationRequestId()
         scope.launch {
             applyResult(
                 repository.loadMore(
-                    currentNotifications = current.notifications,
-                    filter = current.selectedFilter,
+                    currentNotifications = remotePageBase,
+                    filter = filter,
                 ),
                 loadingMore = true,
+                requestFilter = filter,
+                requestId = requestId,
             )
         }
     }
@@ -201,14 +232,119 @@ class NotificationStateHolder(
         }
     }
 
+    fun flush() {
+        val current = state.value
+        if (current.isLoading || current.isMarkingAllRead || current.notifications.isEmpty()) return
+
+        mutableState.update {
+            it.copy(
+                isMarkingAllRead = true,
+                message = null,
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+
+        scope.launch {
+            when (val result = repository.flush()) {
+                NotificationRepositoryResult.AllRead -> mutableState.update {
+                    remoteNotifications = emptyList()
+                    chatAttentionNotifications = emptyList()
+                    specialCareNotifications = emptyList()
+                    persistNotificationCache()
+                    it.copy(
+                        notifications = emptyList(),
+                        isLoading = false,
+                        isLoadingMore = false,
+                        isMarkingAllRead = false,
+                        unreadCount = 0,
+                        endReached = true,
+                        message = "通知已清空",
+                        errorMessage = null,
+                        requiresRelogin = false,
+                    ).withSpecialCareCounts()
+                }
+                else -> applyResult(result, loadingMore = false)
+            }
+        }
+    }
+
+    fun sendTestNotification() {
+        val current = state.value
+        if (current.isLoading || current.isMarkingAllRead) return
+
+        mutableState.update {
+            it.copy(
+                isMarkingAllRead = true,
+                message = null,
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+
+        scope.launch {
+            when (val result = repository.sendTestNotification()) {
+                NotificationRepositoryResult.ActionSuccess -> mutableState.update {
+                    it.copy(
+                        isLoading = false,
+                        isLoadingMore = false,
+                        isMarkingAllRead = false,
+                        message = "测试通知已发送",
+                        errorMessage = null,
+                        requiresRelogin = false,
+                    ).withSpecialCareCounts()
+                }
+                else -> applyResult(result, loadingMore = false)
+            }
+        }
+    }
+
+    fun createLocalReminderNotification(
+        body: String = "回来看看新消息",
+        header: String = "HHHL 提醒",
+        icon: String? = null,
+    ) {
+        val current = state.value
+        if (current.isLoading || current.isMarkingAllRead) return
+
+        mutableState.update {
+            it.copy(
+                isMarkingAllRead = true,
+                message = null,
+                errorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+
+        scope.launch {
+            when (val result = repository.createNotification(body = body, header = header, icon = icon)) {
+                NotificationRepositoryResult.ActionSuccess -> mutableState.update {
+                    it.copy(
+                        isLoading = false,
+                        isLoadingMore = false,
+                        isMarkingAllRead = false,
+                        message = "提醒通知已发送",
+                        errorMessage = null,
+                        requiresRelogin = false,
+                    ).withSpecialCareCounts()
+                }
+                else -> applyResult(result, loadingMore = false)
+            }
+        }
+    }
+
     fun syncAllReadFromStreaming() {
         val current = state.value
         if (current.unreadCount == 0 && current.specialCareUnreadCount == 0) return
         mutableState.update {
             remoteNotifications = remoteNotifications.markAllRead()
+            chatAttentionNotifications = chatAttentionNotifications.markAllRead()
             specialCareNotifications = specialCareNotifications.markAllRead()
             readNotificationIds = readNotificationIds +
                 remoteNotifications.mapTo(LinkedHashSet(remoteNotifications.size)) { notification -> notification.id } +
+                chatAttentionNotifications.mapTo(LinkedHashSet(chatAttentionNotifications.size)) { notification ->
+                    notification.id
+                } +
                 specialCareNotifications.mapTo(LinkedHashSet(specialCareNotifications.size)) { notification -> notification.id }
             persistReadNotificationIds()
             persistNotificationCache()
@@ -234,6 +370,7 @@ class NotificationStateHolder(
 
             readNotificationIds = readNotificationIds.plus(cleanId)
             remoteNotifications = remoteNotifications.markNotificationRead(cleanId)
+            chatAttentionNotifications = chatAttentionNotifications.markNotificationRead(cleanId)
             specialCareNotifications = specialCareNotifications.markNotificationRead(cleanId)
             persistReadNotificationIds()
             persistNotificationCache()
@@ -288,9 +425,43 @@ class NotificationStateHolder(
             val visibleNotifications = if (it.selectedFilter == NotificationFilter.SpecialCare) {
                 result.notifications
             } else if (it.selectedFilter == NotificationFilter.All) {
-                remoteNotifications.withLocalSpecialCareNotifications(result.notifications)
+                remoteNotifications
+                    .withLocalChatAttentionNotifications(chatAttentionNotifications)
+                    .withLocalSpecialCareNotifications(result.notifications)
             } else {
                 it.notifications
+            }
+            it.copy(
+                notifications = visibleNotifications,
+                unreadCount = totalUnreadCount(),
+                requiresRelogin = false,
+            ).withSpecialCareCounts()
+        }
+    }
+
+    fun addChatAttentionNotification(notification: NotificationItem) {
+        val result = insertChatAttentionNotification(
+            current = chatAttentionNotifications,
+            notification = notification,
+            limit = MAX_LOCAL_CHAT_ATTENTION_NOTIFICATIONS,
+        )
+        if (!result.inserted) return
+        chatAttentionNotifications = result.notifications
+        persistNotificationCache()
+
+        mutableState.update {
+            val visibleNotifications = when (it.selectedFilter) {
+                NotificationFilter.All -> remoteNotifications
+                    .withLocalChatAttentionNotifications(result.notifications)
+                    .withLocalSpecialCareNotifications(specialCareNotifications)
+                NotificationFilter.Mentions -> (
+                    remoteNotifications.filter { item -> item.type in NotificationFilter.Mentions.includedTypes } +
+                        result.notifications.filter { item -> item.type in NotificationFilter.Mentions.includedTypes }
+                    )
+                    .distinctBy { item -> item.id }
+                    .sortedByDescending { item -> item.createdAtEpochMillis }
+                NotificationFilter.SpecialCare -> it.notifications
+                else -> it.notifications
             }
             it.copy(
                 notifications = visibleNotifications,
@@ -308,8 +479,22 @@ class NotificationStateHolder(
     private fun applyResult(
         result: NotificationRepositoryResult,
         loadingMore: Boolean,
+        requestFilter: NotificationFilter? = null,
+        requestId: Int? = null,
     ) {
+        if (requestFilter != null && requestId != null && !isCurrentNotificationRequest(requestFilter, requestId)) {
+            return
+        }
         when (result) {
+            NotificationRepositoryResult.ActionSuccess -> mutableState.update {
+                it.copy(
+                    isLoading = false,
+                    isLoadingMore = false,
+                    isMarkingAllRead = false,
+                    errorMessage = null,
+                    requiresRelogin = false,
+                ).withSpecialCareCounts()
+            }
             NotificationRepositoryResult.AllRead -> mutableState.update {
                 remoteNotifications = remoteNotifications.markAllRead()
                 specialCareNotifications = specialCareNotifications.markAllRead()
@@ -345,9 +530,11 @@ class NotificationStateHolder(
                 val totalUnreadCount = totalUnreadCount()
                 it.copy(
                     notifications = when (it.selectedFilter) {
-                        NotificationFilter.All -> remoteNotifications.withLocalSpecialCareNotifications(specialCareNotifications)
+                        NotificationFilter.All -> remoteNotifications
+                            .withLocalChatAttentionNotifications(chatAttentionNotifications)
+                            .withLocalSpecialCareNotifications(specialCareNotifications)
                         NotificationFilter.SpecialCare -> specialCareNotifications
-                        else -> loadedNotifications
+                        else -> notificationsForFilter(it.selectedFilter)
                     },
                     isLoading = false,
                     isLoadingMore = false,
@@ -380,6 +567,18 @@ class NotificationStateHolder(
         }
     }
 
+    private fun nextNotificationRequestId(): Int {
+        notificationRequestId += 1
+        return notificationRequestId
+    }
+
+    private fun isCurrentNotificationRequest(
+        filter: NotificationFilter,
+        requestId: Int,
+    ): Boolean {
+        return requestId == notificationRequestId && state.value.selectedFilter == filter
+    }
+
     private fun applyQuietRefreshResult(result: NotificationRepositoryResult) {
         when (result) {
             is NotificationRepositoryResult.Success -> mutableState.update {
@@ -388,8 +587,10 @@ class NotificationStateHolder(
                 persistNotificationCache()
                 val visibleNotifications = when (it.selectedFilter) {
                     NotificationFilter.SpecialCare -> specialCareNotifications
-                    NotificationFilter.All -> remoteNotifications.withLocalSpecialCareNotifications(specialCareNotifications)
-                    else -> it.notifications
+                    NotificationFilter.All -> remoteNotifications
+                        .withLocalChatAttentionNotifications(chatAttentionNotifications)
+                        .withLocalSpecialCareNotifications(specialCareNotifications)
+                    else -> notificationsForFilter(it.selectedFilter)
                 }
                 it.copy(
                     notifications = visibleNotifications,
@@ -406,6 +607,7 @@ class NotificationStateHolder(
                 ).withSpecialCareCounts()
             }
             NotificationRepositoryResult.AllRead,
+            NotificationRepositoryResult.ActionSuccess,
             is NotificationRepositoryResult.Error,
             -> Unit
         }
@@ -435,9 +637,11 @@ class NotificationStateHolder(
                 notifications = if (it.selectedFilter == NotificationFilter.SpecialCare) {
                     specialCareNotifications
                 } else if (it.selectedFilter == NotificationFilter.All) {
-                    remoteNotifications.withLocalSpecialCareNotifications(specialCareNotifications)
+                    remoteNotifications
+                        .withLocalChatAttentionNotifications(chatAttentionNotifications)
+                        .withLocalSpecialCareNotifications(specialCareNotifications)
                 } else {
-                    it.notifications
+                    notificationsForFilter(it.selectedFilter)
                 },
                 unreadCount = totalUnreadCount(),
                 requiresRelogin = false,
@@ -446,14 +650,29 @@ class NotificationStateHolder(
     }
 
     private fun totalUnreadCount(): Int {
+        return totalUnreadCount(
+            remoteNotifications = remoteNotifications,
+            chatAttentionNotifications = chatAttentionNotifications,
+            specialCareNotifications = specialCareNotifications,
+        )
+    }
+
+    private fun totalUnreadCount(
+        remoteNotifications: List<NotificationItem>,
+        chatAttentionNotifications: List<NotificationItem>,
+        specialCareNotifications: List<NotificationItem>,
+    ): Int {
         val remoteUnreadIds = remoteNotifications
             .asSequence()
             .filterNot { it.isRead }
             .mapTo(LinkedHashSet()) { it.id }
+        val chatAttentionUnreadCount = chatAttentionNotifications.count { notification ->
+            !notification.isRead && notification.id !in remoteUnreadIds
+        }
         val localSpecialCareUnreadCount = specialCareNotifications.count { notification ->
             !notification.isRead && notification.id !in remoteUnreadIds
         }
-        return remoteUnreadIds.size + localSpecialCareUnreadCount
+        return remoteUnreadIds.size + chatAttentionUnreadCount + localSpecialCareUnreadCount
     }
 
     private fun restoreReadNotificationIds(): Set<String> {
@@ -486,6 +705,7 @@ class NotificationStateHolder(
                 cleanAccountId,
                 NotificationCacheSnapshot(
                     notifications = remoteNotifications.take(MAX_LOCAL_CACHED_NOTIFICATIONS),
+                    chatAttentionNotifications = chatAttentionNotifications.take(MAX_LOCAL_CACHED_NOTIFICATIONS),
                     specialCareNotifications = specialCareNotifications.take(MAX_LOCAL_CACHED_NOTIFICATIONS),
                 ),
             )
@@ -494,13 +714,21 @@ class NotificationStateHolder(
 
     private fun notificationsForFilter(filter: NotificationFilter): List<NotificationItem> {
         return when (filter) {
-            NotificationFilter.All -> remoteNotifications.withLocalSpecialCareNotifications(specialCareNotifications)
+            NotificationFilter.All -> remoteNotifications
+                .withLocalChatAttentionNotifications(chatAttentionNotifications)
+                .withLocalSpecialCareNotifications(specialCareNotifications)
             NotificationFilter.SpecialCare -> specialCareNotifications
-            else -> remoteNotifications.filter { notification -> notification.type in filter.includedTypes }
+            else -> (
+                remoteNotifications.filter { notification -> notification.type in filter.includedTypes } +
+                    chatAttentionNotifications.filter { notification -> notification.type in filter.includedTypes }
+                )
+                .distinctBy { notification -> notification.id }
+                .sortedByDescending { notification -> notification.createdAtEpochMillis }
         }
     }
 
     private companion object {
+        const val MAX_LOCAL_CHAT_ATTENTION_NOTIFICATIONS = 120
         const val MAX_LOCAL_SPECIAL_CARE_NOTIFICATIONS = 80
         const val MAX_LOCAL_READ_NOTIFICATION_IDS = 1000
         const val MAX_LOCAL_CACHED_NOTIFICATIONS = 240
@@ -573,7 +801,22 @@ private fun List<NotificationItem>.withLocalSpecialCareNotifications(
         .distinctBy { it.id }
 }
 
+private fun List<NotificationItem>.withLocalChatAttentionNotifications(
+    chatAttentionNotifications: List<NotificationItem>,
+): List<NotificationItem> {
+    if (chatAttentionNotifications.isEmpty()) return this
+    val remoteIds = mapTo(LinkedHashSet(size)) { it.id }
+    return (chatAttentionNotifications.filterNot { it.id in remoteIds } + this)
+        .distinctBy { it.id }
+        .sortedByDescending { it.createdAtEpochMillis }
+}
+
 internal data class SpecialCareNotificationInsertResult(
+    val notifications: List<NotificationItem>,
+    val inserted: Boolean,
+)
+
+internal data class ChatAttentionNotificationInsertResult(
     val notifications: List<NotificationItem>,
     val inserted: Boolean,
 )
@@ -590,6 +833,20 @@ internal fun insertSpecialCareNotification(
         .sortedByDescending { it.createdAtEpochMillis }
         .take(limit)
     return SpecialCareNotificationInsertResult(next, inserted = true)
+}
+
+internal fun insertChatAttentionNotification(
+    current: List<NotificationItem>,
+    notification: NotificationItem,
+    limit: Int,
+): ChatAttentionNotificationInsertResult {
+    if (limit <= 0 || notification.id.isBlank() || current.any { it.id == notification.id }) {
+        return ChatAttentionNotificationInsertResult(current, inserted = false)
+    }
+    val next = (listOf(notification.copy(isSpecialCare = false)) + current)
+        .sortedByDescending { it.createdAtEpochMillis }
+        .take(limit)
+    return ChatAttentionNotificationInsertResult(next, inserted = true)
 }
 
 internal fun mergeRemoteSpecialCareNotifications(

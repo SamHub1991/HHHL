@@ -1,5 +1,6 @@
 package cc.hhhl.client.repository
 
+import cc.hhhl.client.api.FollowingNotesListKind
 import cc.hhhl.client.api.TimelineApi
 import cc.hhhl.client.api.TimelineKind
 import cc.hhhl.client.api.TimelineLoadResult
@@ -112,6 +113,55 @@ class TimelineRepositoryTest {
         assertEquals(listOf(first, second), cache.saved.getValue(TimelineKind.Home))
     }
 
+    @Test
+    fun loadPollRecommendationsUsesOffsetWithoutWritingTimelineCache() = runTest {
+        val calls = mutableListOf<ApiCall>()
+        val cache = FakeTimelineCache()
+        val repository = TimelineRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                calls = calls,
+                result = TimelineLoadResult.Success(listOf(FakeData.timeline[0])),
+            ),
+            cache = cache,
+        )
+
+        val result = repository.loadPollRecommendations(offset = 20, expired = true)
+
+        assertIs<TimelineRepositoryResult.Success>(result)
+        assertEquals(listOf(FakeData.timeline[0]), result.notes)
+        assertEquals(listOf(ApiCall(TimelineKind.Featured, "token-123", "polls:20:true")), calls)
+        assertEquals(emptyMap(), cache.saved)
+    }
+
+    @Test
+    fun loadFollowingNotesUsesLastNoteIdAndDeduplicatesWithoutWritingTimelineCache() = runTest {
+        val calls = mutableListOf<ApiCall>()
+        val cache = FakeTimelineCache()
+        val first = FakeData.timeline[0]
+        val second = FakeData.timeline[1]
+        val repository = TimelineRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                calls = calls,
+                result = TimelineLoadResult.Success(listOf(second, first)),
+            ),
+            cache = cache,
+        )
+
+        val result = repository.loadFollowingNotes(
+            currentNotes = listOf(first),
+            list = FollowingNotesListKind.Mutuals,
+            filesOnly = true,
+            includeReplies = true,
+        )
+
+        assertIs<TimelineRepositoryResult.Success>(result)
+        assertEquals(listOf(first, second), result.notes)
+        assertEquals(listOf(ApiCall(TimelineKind.Social, "token-123", "following:note-1:mutuals:true:true")), calls)
+        assertEquals(emptyMap(), cache.saved)
+    }
+
     private fun fakeApi(
         calls: MutableList<ApiCall> = mutableListOf(),
         result: TimelineLoadResult,
@@ -126,6 +176,51 @@ class TimelineRepositoryTest {
             ): TimelineLoadResult {
                 onCall()
                 calls.add(ApiCall(kind, token, untilId))
+                return result
+            }
+
+            override suspend fun loadMentions(
+                token: String,
+                limit: Int,
+                untilId: String?,
+            ): TimelineLoadResult {
+                onCall()
+                calls.add(ApiCall(TimelineKind.Mentions, token, untilId))
+                return result
+            }
+
+            override suspend fun loadPollRecommendations(
+                token: String,
+                limit: Int,
+                offset: Int,
+                excludeChannels: Boolean,
+                local: Boolean?,
+                expired: Boolean,
+            ): TimelineLoadResult {
+                onCall()
+                calls.add(ApiCall(TimelineKind.Featured, token, "polls:$offset:$expired"))
+                return result
+            }
+
+            override suspend fun loadFollowingNotes(
+                token: String,
+                limit: Int,
+                untilId: String?,
+                list: FollowingNotesListKind,
+                filesOnly: Boolean,
+                includeNonPublic: Boolean,
+                includeReplies: Boolean,
+                includeQuotes: Boolean,
+                includeBots: Boolean,
+            ): TimelineLoadResult {
+                onCall()
+                calls.add(
+                    ApiCall(
+                        TimelineKind.Social,
+                        token,
+                        "following:$untilId:${list.apiValue}:$filesOnly:$includeReplies",
+                    ),
+                )
                 return result
             }
         }

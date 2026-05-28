@@ -12,10 +12,12 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AnnouncementStateHolderTest {
@@ -57,6 +59,68 @@ class AnnouncementStateHolderTest {
         assertFalse(holder.state.value.isLoadingDetail)
         assertEquals(announcement, holder.state.value.selectedAnnouncement)
         assertEquals(listOf("ann-1"), calls)
+    }
+
+    @Test
+    fun openAnnouncementAllowsNewDetailRequestAndIgnoresOlderResult() = runTest {
+        val first = sampleAnnouncement("ann-1")
+        val second = sampleAnnouncement("ann-2")
+        val firstResult = CompletableDeferred<AnnouncementRepositoryResult>()
+        val secondResult = CompletableDeferred<AnnouncementRepositoryResult>()
+        val calls = mutableListOf<String>()
+        val holder = AnnouncementStateHolder(
+            repository = fakeRepository(
+                listResult = AnnouncementsRepositoryResult.Success(emptyList()),
+                onShow = { calls.add(it) },
+                showHandler = { id ->
+                    when (id) {
+                        "ann-1" -> firstResult.await()
+                        "ann-2" -> secondResult.await()
+                        else -> AnnouncementRepositoryResult.Error("missing")
+                    }
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.openAnnouncement("ann-1")
+        runCurrent()
+        holder.openAnnouncement("ann-2")
+        runCurrent()
+        secondResult.complete(AnnouncementRepositoryResult.Success(second))
+        advanceUntilIdle()
+
+        assertEquals(listOf("ann-1", "ann-2"), calls)
+        assertEquals(second, holder.state.value.selectedAnnouncement)
+        assertFalse(holder.state.value.isLoadingDetail)
+
+        firstResult.complete(AnnouncementRepositoryResult.Success(first))
+        advanceUntilIdle()
+
+        assertEquals(second, holder.state.value.selectedAnnouncement)
+    }
+
+    @Test
+    fun closeDetailInvalidatesPendingDetailLoad() = runTest {
+        val pending = CompletableDeferred<AnnouncementRepositoryResult>()
+        val holder = AnnouncementStateHolder(
+            repository = fakeRepository(
+                listResult = AnnouncementsRepositoryResult.Success(emptyList()),
+                showHandler = { pending.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.openAnnouncement("ann-1")
+        runCurrent()
+        assertTrue(holder.state.value.isLoadingDetail)
+
+        holder.closeDetail()
+        pending.complete(AnnouncementRepositoryResult.Success(sampleAnnouncement("ann-1")))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isLoadingDetail)
+        assertEquals(null, holder.state.value.selectedAnnouncement)
     }
 
     @Test
@@ -182,8 +246,58 @@ class AnnouncementStateHolderTest {
         assertEquals(listOf("ann-2"), holder.state.value.announcements.map { it.id })
     }
 
+    @Test
+    fun exitManagementInvalidatesPendingAdminRefresh() = runTest {
+        val pending = CompletableDeferred<AnnouncementsRepositoryResult>()
+        val adminAnnouncement = sampleAnnouncement("admin-1")
+        val holder = AnnouncementStateHolder(
+            repository = fakeRepository(
+                listResult = AnnouncementsRepositoryResult.Success(emptyList()),
+                adminListHandler = { pending.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.enterManagement()
+        runCurrent()
+        assertTrue(holder.state.value.isManaging)
+        assertTrue(holder.state.value.isLoadingAdmin)
+
+        holder.exitManagement()
+        pending.complete(AnnouncementsRepositoryResult.Success(listOf(adminAnnouncement)))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isManaging)
+        assertFalse(holder.state.value.isLoadingAdmin)
+        assertEquals(emptyList(), holder.state.value.announcements)
+    }
+
+    @Test
+    fun enteringManagementInvalidatesPendingPublicRefresh() = runTest {
+        val pending = CompletableDeferred<AnnouncementsRepositoryResult>()
+        val publicAnnouncement = sampleAnnouncement("public-1")
+        val holder = AnnouncementStateHolder(
+            repository = fakeRepository(
+                listHandler = { pending.await() },
+                adminListResult = AnnouncementsRepositoryResult.Success(emptyList()),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        runCurrent()
+        assertTrue(holder.state.value.isLoading)
+
+        holder.enterManagement()
+        pending.complete(AnnouncementsRepositoryResult.Success(listOf(publicAnnouncement)))
+        advanceUntilIdle()
+
+        assertTrue(holder.state.value.isManaging)
+        assertEquals(emptyList(), holder.state.value.announcements)
+    }
+
     private fun fakeRepository(
-        listResult: AnnouncementsRepositoryResult,
+        listResult: AnnouncementsRepositoryResult = AnnouncementsRepositoryResult.Success(emptyList()),
         adminListResult: AnnouncementsRepositoryResult = listResult,
         showResult: AnnouncementRepositoryResult = AnnouncementRepositoryResult.Success(sampleAnnouncement("ann-1")),
         readResult: AnnouncementReadRepositoryResult = AnnouncementReadRepositoryResult.Success,
@@ -195,6 +309,9 @@ class AnnouncementStateHolderTest {
         ),
         deleteResult: AnnouncementDeleteRepositoryResult = AnnouncementDeleteRepositoryResult.Success,
         onShow: (String) -> Unit = {},
+        listHandler: suspend () -> AnnouncementsRepositoryResult = { listResult },
+        adminListHandler: suspend () -> AnnouncementsRepositoryResult = { adminListResult },
+        showHandler: suspend (String) -> AnnouncementRepositoryResult = { showResult },
     ): AnnouncementRepository {
         return object : AnnouncementRepository(
             tokenProvider = { "token-123" },
@@ -257,13 +374,13 @@ class AnnouncementStateHolderTest {
                 }
             },
         ) {
-            override suspend fun refresh(): AnnouncementsRepositoryResult = listResult
+            override suspend fun refresh(): AnnouncementsRepositoryResult = listHandler()
 
-            override suspend fun refreshAdmin(): AnnouncementsRepositoryResult = adminListResult
+            override suspend fun refreshAdmin(): AnnouncementsRepositoryResult = adminListHandler()
 
             override suspend fun show(announcementId: String): AnnouncementRepositoryResult {
                 onShow(announcementId)
-                return showResult
+                return showHandler(announcementId)
             }
 
             override suspend fun markRead(announcementId: String): AnnouncementReadRepositoryResult = readResult

@@ -22,8 +22,6 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.List
@@ -34,13 +32,16 @@ import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -54,6 +55,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -78,9 +80,11 @@ import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
+import cc.hhhl.client.ui.component.HhhlProgressIndicator
 import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
+import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.NoteRow
 import cc.hhhl.client.ui.component.NoteRowDensity
@@ -139,6 +143,7 @@ fun ProfileScreen(
     onOpenSocial: (UserSocialKind) -> Unit = {},
     onOpenDrive: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenAutomation: () -> Unit = {},
     onOpenRelationshipManagement: () -> Unit = {},
     onOpenAchievements: () -> Unit = {},
     onOpenFavoriteNotes: () -> Unit = {},
@@ -188,12 +193,12 @@ fun ProfileScreen(
         }
         LazyColumn {
             if (state?.isLoading == true && user == null) {
-                item(contentType = "profile-status") {
+                item(key = "profile-loading", contentType = "profile-status") {
                     ProfileStatusRow(text = "正在加载资料...", loading = true)
                 }
             }
             state?.errorMessage?.let { message ->
-                item(contentType = "profile-status") {
+                item(key = "profile-error", contentType = "profile-status") {
                     ProfileStatusRow(
                         text = message,
                         actionText = "重试",
@@ -202,9 +207,9 @@ fun ProfileScreen(
                 }
             }
             state?.message?.let { message ->
-                item(contentType = "profile-status") { ProfileStatusRow(text = message) }
+                item(key = "profile-message", contentType = "profile-status") { ProfileStatusRow(text = message) }
             }
-            item(contentType = "profile-header") {
+            item(key = "profile-header-${user?.id.orEmpty()}", contentType = "profile-header") {
                 if (user != null) {
                     Column(
                         modifier = Modifier
@@ -236,13 +241,13 @@ fun ProfileScreen(
                             onChangeBanner = onChangeBanner,
                         )
                         if (user.bio.isNotBlank()) {
-                            Text(
-                                user.bio,
-                                color = MaterialTheme.colorScheme.onBackground,
+                            InlineRichText(
+                                text = user.bio,
+                                color = LocalHhhlColors.current.textPrimary,
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.padding(horizontal = 16.dp),
-                                maxLines = 5,
-                                overflow = TextOverflow.Ellipsis,
+                                onOpenMention = onOpenMention,
+                                onOpenHashtag = onOpenHashtag,
                             )
                         }
                         ProfileSocialStatsRow(user = user, onOpenSocial = onOpenSocial)
@@ -256,6 +261,7 @@ fun ProfileScreen(
                                 onOpenProfileNotes = onOpenProfileNotes,
                                 onOpenDrive = onOpenDrive,
                                 onOpenSettings = onOpenSettings,
+                                onOpenAutomation = onOpenAutomation,
                                 onOpenFlash = onOpenFlash,
                                 onOpenAnnouncements = onOpenAnnouncements,
                                 onOpenRelationshipManagement = onOpenRelationshipManagement,
@@ -452,21 +458,25 @@ private fun LazyListScope.profileNoteItems(
 ) {
     if (state == null) {
         if (showProfileLoadingWhenUserMissing) {
-            item(contentType = "profile-status") { ProfileStatusRow(text = "正在加载资料...", loading = true) }
+            item(key = "profile-notes-state-loading", contentType = "profile-status") {
+                ProfileStatusRow(text = "正在加载资料...", loading = true)
+            }
         }
         return
     }
 
     if (user == null) {
         if (showProfileLoadingWhenUserMissing) {
-            item(contentType = "profile-status") { ProfileStatusRow(text = "正在加载资料...", loading = true) }
+            item(key = "profile-notes-user-loading", contentType = "profile-status") {
+                ProfileStatusRow(text = "正在加载资料...", loading = true)
+            }
         }
         return
     }
 
     val hasPinnedNotes = user.pinnedNotes.isNotEmpty()
     if (hasPinnedNotes) {
-        item(contentType = "profile-status") { ProfileStatusRow(text = "置顶") }
+        item(key = "profile-pinned-title-${user.id}", contentType = "profile-status") { ProfileStatusRow(text = "置顶") }
         items(
             items = user.pinnedNotes,
             key = { "profile-pinned-${it.id}" },
@@ -498,10 +508,12 @@ private fun LazyListScope.profileNoteItems(
         }
     }
     if (state.isLoadingNotes && state.notes.isEmpty()) {
-        item(contentType = "profile-status") { ProfileStatusRow(text = "正在加载帖子...", loading = true) }
+        item(key = "profile-notes-loading-${user.id}", contentType = "profile-status") {
+            ProfileStatusRow(text = "正在加载帖子...", loading = true)
+        }
     }
     state.notesErrorMessage?.let { message ->
-        item(contentType = "profile-status") {
+        item(key = "profile-notes-error-${user.id}", contentType = "profile-status") {
             ProfileStatusRow(
                 text = message,
                 actionText = "重试",
@@ -510,7 +522,7 @@ private fun LazyListScope.profileNoteItems(
         }
     }
     if (!state.isLoadingNotes && state.notes.isEmpty() && !hasPinnedNotes && state.notesErrorMessage == null) {
-        item(contentType = "profile-status") { ProfileStatusRow(text = "还没有帖子") }
+        item(key = "profile-notes-empty-${user.id}", contentType = "profile-status") { ProfileStatusRow(text = "还没有帖子") }
     }
     items(
         items = timelineNotes,
@@ -542,7 +554,7 @@ private fun LazyListScope.profileNoteItems(
         )
     }
     if (state.notes.isNotEmpty() && state.isLoadingMoreNotes) {
-        item(contentType = "profile-status") {
+        item(key = "profile-notes-loading-more-${user.id}", contentType = "profile-status") {
             ProfileStatusRow(
                 text = "正在加载更多...",
                 loading = true,
@@ -655,6 +667,7 @@ private fun ProfileHeaderIdentity(
     onEditProfile: () -> Unit,
     onChangeBanner: (() -> Unit)?,
 ) {
+    val colors = LocalHhhlColors.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ProfileBanner(
             bannerUrl = user.bannerUrl,
@@ -680,7 +693,7 @@ private fun ProfileHeaderIdentity(
             ) {
                 Text(
                     user.displayName,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -688,24 +701,15 @@ private fun ProfileHeaderIdentity(
                 )
                 Text(
                     "@${user.username}",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (!isOwnProfile && onToggleSpecialCare != null) {
-                    HhhlActionChip(
-                        label = userSocialSpecialCareActionLabel(isSpecialCare),
-                        emphasized = isSpecialCare,
-                        enabled = !isChanging,
-                        onClick = onToggleSpecialCare,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
                 if (!isOwnProfile && isSpecialCare) {
                     Text(
                         text = "特别关心提醒已开启",
-                        color = MaterialTheme.colorScheme.primary,
+                        color = colors.accent,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -766,7 +770,7 @@ private fun ProfileEditDialog(
     val localError = nameError ?: descriptionError
     val canSubmit = localError == null && hasChanges && !isSaving
 
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = {
             if (!isSaving) onDismiss()
         },
@@ -806,9 +810,10 @@ private fun ProfileEditDialog(
                     isError = descriptionError != null,
                 )
                 (localError ?: errorMessage)?.let {
+                    val colors = LocalHhhlColors.current
                     Text(
                         text = it,
-                        color = MaterialTheme.colorScheme.error,
+                        color = colors.danger,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -839,9 +844,10 @@ private fun ProfileEditFieldCounter(
     max: Int,
     isError: Boolean,
 ) {
+    val colors = LocalHhhlColors.current
     Text(
         text = "$count / $max",
-        color = if (isError) MaterialTheme.colorScheme.error else LocalHhhlColors.current.subtleText,
+        color = if (isError) colors.danger else colors.textMuted,
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier.fillMaxWidth(),
     )
@@ -852,6 +858,7 @@ private fun ProfileSocialStatsRow(
     user: User,
     onOpenSocial: (UserSocialKind) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     FlowRow(
         modifier = Modifier.padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -859,19 +866,19 @@ private fun ProfileSocialStatsRow(
     ) {
         Text(
             "${user.followingCount} 关注",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.clickable { onOpenSocial(UserSocialKind.Following) },
         )
         Text(
             "${user.followersCount} 关注者",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.clickable { onOpenSocial(UserSocialKind.Followers) },
         )
         Text(
             "${user.notesCount} 帖子",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -887,6 +894,7 @@ private fun ProfileQuickActions(
     onOpenProfileNotes: () -> Unit,
     onOpenDrive: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAutomation: () -> Unit,
     onOpenFlash: () -> Unit,
     onOpenAnnouncements: () -> Unit,
     onOpenRelationshipManagement: () -> Unit,
@@ -905,16 +913,19 @@ private fun ProfileQuickActions(
 ) {
     var appearanceDialogOpen by remember { mutableStateOf(false) }
     var logoutDialogOpen by remember { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
     val primaryShortcuts = profilePrimaryShortcuts(
         profilePostsText = profilePostsText,
         onOpenProfileNotes = onOpenProfileNotes,
         onOpenDrive = onOpenDrive,
         onOpenSettings = onOpenSettings,
+        onOpenAutomation = onOpenAutomation,
     )
     val workspaceShortcuts = profileWorkspaceShortcuts(
         capabilities = capabilities,
         onOpenFavoriteNotes = onOpenFavoriteNotes,
         onOpenAchievements = onOpenAchievements,
+        onOpenRelationshipManagement = onOpenRelationshipManagement,
         onOpenLists = onOpenLists,
         onOpenClips = onOpenClips,
         onOpenAntennas = onOpenAntennas,
@@ -952,7 +963,7 @@ private fun ProfileQuickActions(
             ) {
                 Text(
                     text = "快捷入口",
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -969,7 +980,7 @@ private fun ProfileQuickActions(
             )
         }
 
-        ProfileShortcutGrid(primaryShortcuts, columns = 3, compact = false)
+        ProfileShortcutGrid(primaryShortcuts, columns = 2, compact = false)
         ProfileShortcutGroupLabel("工作区")
         ProfileShortcutGrid(workspaceShortcuts, columns = 2, compact = true)
     }
@@ -985,13 +996,13 @@ private fun ProfileQuickActions(
     }
 
     if (logoutDialogOpen) {
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { logoutDialogOpen = false },
             title = { Text("退出登录") },
             text = {
                 Text(
                     text = "退出后需要重新授权才能继续使用当前账号。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -1027,6 +1038,7 @@ private fun profilePrimaryShortcuts(
     onOpenProfileNotes: () -> Unit,
     onOpenDrive: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAutomation: () -> Unit,
 ): List<ProfileShortcut> = buildList {
     add(
         ProfileShortcut(
@@ -1052,12 +1064,21 @@ private fun profilePrimaryShortcuts(
             onClick = onOpenSettings,
         ),
     )
+    add(
+        ProfileShortcut(
+            title = "自动化",
+            supportingText = "规则与回调",
+            icon = Icons.Filled.Tune,
+            onClick = onOpenAutomation,
+        ),
+    )
 }
 
 private fun profileWorkspaceShortcuts(
     capabilities: InstanceCapabilities,
     onOpenFavoriteNotes: () -> Unit,
     onOpenAchievements: () -> Unit,
+    onOpenRelationshipManagement: () -> Unit,
     onOpenLists: () -> Unit,
     onOpenClips: () -> Unit,
     onOpenAntennas: () -> Unit,
@@ -1079,6 +1100,14 @@ private fun profileWorkspaceShortcuts(
             supportingText = "奖杯",
             icon = Icons.Filled.EmojiEvents,
             onClick = onOpenAchievements,
+        ),
+    )
+    add(
+        ProfileShortcut(
+            title = "关系",
+            supportingText = "关心与静音",
+            icon = Icons.Filled.People,
+            onClick = onOpenRelationshipManagement,
         ),
     )
     if (capabilities.canUseUserLists) {
@@ -1170,7 +1199,7 @@ private fun ProfileShortcutGrid(
 private fun ProfileShortcutGroupLabel(label: String) {
     Text(
         text = label,
-        color = LocalHhhlColors.current.subtleText,
+        color = LocalHhhlColors.current.textMuted,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(top = 2.dp, start = 2.dp),
@@ -1184,6 +1213,14 @@ private fun ProfileShortcutTile(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalHhhlColors.current
+    val fontScale = LocalDensity.current.fontScale.coerceIn(1f, 1.7f)
+    val baseTileHeight = if (compact) {
+        ProfileWorkspaceShortcutTileHeight
+    } else {
+        ProfilePrimaryShortcutTileHeight
+    }
+    val tileHeight = baseTileHeight + ((fontScale - 1f) * if (compact) 24f else 28f).dp
+    val supportingMaxLines = if (fontScale > 1.25f) 2 else 1
     val tileShape = RoundedCornerShape(ProfileShortcutTileCornerRadius)
     val iconContainerShape = RoundedCornerShape(10.dp)
     val interactionSource = remember { MutableInteractionSource() }
@@ -1192,40 +1229,46 @@ private fun ProfileShortcutTile(
         colors = if (compact) {
             listOf(
                 colors.inputBackground.copy(alpha = 0.34f),
-                MaterialTheme.colorScheme.surface.copy(alpha = 0.30f),
+                colors.surface.copy(alpha = 0.30f),
             )
         } else {
             listOf(
-                colors.cardBackground.copy(alpha = 0.98f),
-                MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                colors.noteBackground.copy(alpha = 0.98f),
+                colors.surface.copy(alpha = 0.94f),
             )
         },
     )
     val iconBrush = Brush.verticalGradient(
         colors = listOf(
-            MaterialTheme.colorScheme.primary.copy(alpha = if (compact) 0.06f else 0.10f),
+            colors.accent.copy(alpha = if (compact) 0.06f else 0.10f),
             colors.inputBackground.copy(alpha = if (compact) 0.34f else 0.58f),
         ),
     )
     val tileBorderColor by animateColorAsState(
         targetValue = if (pressed) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+            colors.focusRing.copy(alpha = 0.24f)
         } else {
-            colors.divider.copy(alpha = if (compact) 0.18f else 0.30f)
+            colors.border.copy(alpha = if (compact) 0.18f else 0.30f)
         },
         label = "profile-shortcut-border",
     )
     val pressedOverlayColor by animateColorAsState(
         targetValue = if (pressed) {
-            MaterialTheme.colorScheme.primary.copy(alpha = if (compact) 0.05f else 0.08f)
+            colors.accent.copy(alpha = if (compact) 0.05f else 0.08f)
         } else {
             colors.inputBackground.copy(alpha = 0f)
         },
         label = "profile-shortcut-overlay",
     )
     val tileModifier = modifier
-        .height(if (compact) ProfileWorkspaceShortcutTileHeight else ProfilePrimaryShortcutTileHeight)
-        .shadow(if (compact) 0.dp else 0.25.dp, tileShape, clip = false)
+        .height(tileHeight)
+        .shadow(
+            elevation = if (compact) 0.dp else 0.25.dp,
+            shape = tileShape,
+            clip = false,
+            ambientColor = colors.shadow,
+            spotColor = colors.shadow,
+        )
         .clip(tileShape)
         .background(tileBrush)
         .background(pressedOverlayColor)
@@ -1257,7 +1300,7 @@ private fun ProfileShortcutTile(
                 Icon(
                     imageVector = shortcut.icon,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = colors.accent,
                     modifier = Modifier.size(ProfileShortcutIconSize),
                 )
             }
@@ -1267,7 +1310,7 @@ private fun ProfileShortcutTile(
             ) {
                 Text(
                     text = shortcut.title,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -1276,11 +1319,11 @@ private fun ProfileShortcutTile(
                 )
                 Text(
                     text = shortcut.supportingText,
-                    color = colors.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelSmall.copy(lineHeight = 16.sp),
-                    maxLines = 1,
+                    maxLines = supportingMaxLines,
                     overflow = TextOverflow.Ellipsis,
-                    softWrap = false,
+                    softWrap = supportingMaxLines > 1,
                 )
             }
         }
@@ -1301,13 +1344,13 @@ private fun ProfileShortcutTile(
                 .size(ProfileShortcutIconContainerSize)
                 .clip(iconContainerShape)
                 .background(iconBrush)
-                .border(1.dp, colors.divider.copy(alpha = 0.12f), iconContainerShape),
+                .border(1.dp, colors.border.copy(alpha = 0.12f), iconContainerShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = shortcut.icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = colors.accent,
                 modifier = Modifier.size(ProfileShortcutIconSize),
             )
         }
@@ -1318,7 +1361,7 @@ private fun ProfileShortcutTile(
         ) {
             Text(
                 text = shortcut.title,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -1327,11 +1370,11 @@ private fun ProfileShortcutTile(
             )
             Text(
                 text = shortcut.supportingText,
-                color = colors.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall.copy(lineHeight = 16.sp),
-                maxLines = 1,
+                maxLines = supportingMaxLines,
                 overflow = TextOverflow.Ellipsis,
-                softWrap = false,
+                softWrap = supportingMaxLines > 1,
             )
         }
     }
@@ -1492,7 +1535,7 @@ private fun ProfileRelationshipActions(
                 )
                 add(
                     HhhlOverflowMenuAction(
-                        label = if (isBlocking) "取消拉黑" else "拉黑",
+                        label = if (isBlocking) "取消屏蔽" else "屏蔽",
                         destructive = !isBlocking,
                         onClick = { blockDialogOpen = true },
                     ),
@@ -1509,17 +1552,17 @@ private fun ProfileRelationshipActions(
     }
 
     if (blockDialogOpen) {
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { blockDialogOpen = false },
-            title = { Text(if (isBlocking) "取消拉黑" else "拉黑用户") },
+            title = { Text(if (isBlocking) "取消屏蔽" else "屏蔽用户") },
             text = {
                 Text(
                     text = if (isBlocking) {
-                        "取消拉黑后，对方将不再处于你的屏蔽列表。"
+                        "取消屏蔽后，对方将不再处于你的屏蔽列表。"
                     } else {
-                        "拉黑后，你将减少看到对方内容，对方与你的互动也会被限制。"
+                        "屏蔽后，你将不再看到对方的帖子和群聊消息，对方与你的互动也会被限制。"
                     },
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = LocalHhhlColors.current.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -1532,7 +1575,7 @@ private fun ProfileRelationshipActions(
                     enabled = !isChanging,
                     destructive = !isBlocking,
                 ) {
-                    Text(if (isChanging) "处理中" else if (isBlocking) "取消拉黑" else "拉黑")
+                    Text(if (isChanging) "处理中" else if (isBlocking) "取消屏蔽" else "屏蔽")
                 }
             },
             dismissButton = {
@@ -1544,13 +1587,13 @@ private fun ProfileRelationshipActions(
     }
 
     if (reportDialogOpen) {
-        AlertDialog(
+        HhhlAlertDialog(
             onDismissRequest = { reportDialogOpen = false },
             title = { Text("举报用户") },
             text = {
                 Text(
                     text = "举报会提交给实例管理员处理。请只在账号存在骚扰、垃圾信息或违反规则时使用。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = LocalHhhlColors.current.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -1583,7 +1626,7 @@ private fun ProfileAppearanceDialog(
     onTimelineDensitySelected: (TimelineDensity) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("外观") },
         text = {
@@ -1609,10 +1652,11 @@ private fun ProfileAppearancePanel(
     onThemeSelected: (HhhlThemePreset) -> Unit,
     onTimelineDensitySelected: (TimelineDensity) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
             text = profileAppearanceSummaryLabel(selectedTheme, selectedTimelineDensity),
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.bodySmall,
         )
         ThemePicker(
@@ -1650,12 +1694,13 @@ private fun ProfileBanner(
     isChangingBanner: Boolean,
     onChangeBanner: (() -> Unit)?,
 ) {
+    val colors = LocalHhhlColors.current
     val interactionSource = remember { MutableInteractionSource() }
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(96.dp)
-            .background(LocalHhhlColors.current.mediaBackground)
+            .background(colors.mediaBackground)
             .clickable(
                 enabled = canChangeBanner && onChangeBanner != null && !isChangingBanner,
                 interactionSource = interactionSource,
@@ -1676,8 +1721,8 @@ private fun ProfileBanner(
                     .background(
                         Brush.verticalGradient(
                             listOf(
-                                LocalHhhlColors.current.cardBackground.copy(alpha = 0.18f),
-                                LocalHhhlColors.current.mediaBackground.copy(alpha = 0.54f),
+                                colors.noteBackground.copy(alpha = 0.18f),
+                                colors.mediaBackground.copy(alpha = 0.54f),
                             ),
                         ),
                     ),
@@ -1687,10 +1732,10 @@ private fun ProfileBanner(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background.copy(alpha = 0.42f)),
+                    .background(colors.pageBackground.copy(alpha = 0.42f)),
                 contentAlignment = Alignment.Center,
             ) {
-                CircularProgressIndicator()
+                HhhlProgressIndicator()
             }
         }
     }

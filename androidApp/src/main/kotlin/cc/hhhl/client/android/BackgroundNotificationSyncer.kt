@@ -28,10 +28,12 @@ import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatRoom
 import cc.hhhl.client.model.NotificationItem
 import cc.hhhl.client.model.NotificationType
+import cc.hhhl.client.model.User
 import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRepositoryResult
 import cc.hhhl.client.repository.ChatUserConversationRepositoryResult
+import cc.hhhl.client.state.ChatAttentionKind
 import cc.hhhl.client.repository.TimelineRepository
 import cc.hhhl.client.repository.TimelineRepositoryResult
 import kotlinx.coroutines.async
@@ -44,10 +46,17 @@ enum class BackgroundNotificationSyncResult {
     Retry,
 }
 
+enum class BackgroundNotificationSyncTrigger {
+    Scheduled,
+    RealtimeChat,
+}
+
 class BackgroundNotificationSyncer(
     private val context: Context,
 ) {
-    suspend fun sync(): BackgroundNotificationSyncResult {
+    suspend fun sync(
+        trigger: BackgroundNotificationSyncTrigger = BackgroundNotificationSyncTrigger.Scheduled,
+    ): BackgroundNotificationSyncResult {
         val settings = AndroidBackgroundNotificationStore(context)
         if (!settings.isBackgroundSyncEnabled()) return BackgroundNotificationSyncResult.Success
 
@@ -62,6 +71,16 @@ class BackgroundNotificationSyncer(
         val specialCareEnabled = settings.isSpecialCareEnabled()
         val seenIds = settings.loadSeenIds()
         val chatUnreadStore = AndroidChatUnreadStore(context)
+        val currentUser = session.user?.let { user ->
+            User(
+                id = user.id,
+                displayName = user.displayName,
+                username = user.username,
+                avatarInitial = user.displayName.trim().firstOrNull()?.toString()?.uppercase() ?: "我",
+                avatarUrl = user.avatarUrl,
+                host = session.host,
+            )
+        }
 
         return runCatching {
             coroutineScope {
@@ -105,6 +124,7 @@ class BackgroundNotificationSyncer(
                                     },
                                     text = item.notePreviewText?.takeIf { it.isNotBlank() } ?: item.text,
                                     specialCare = isSpecialCare,
+                                    gatedBySpecialCareSetting = isSpecialCare,
                                     avatarMode = if (item.isAppNotification()) {
                                         NotificationAvatarMode.AppIcon
                                     } else if (isSpecialCare) {
@@ -139,20 +159,38 @@ class BackgroundNotificationSyncer(
                             ),
                             roomLatestMarkers = roomLatestMarkers,
                         )
-                        val unreadRooms = result.rooms
-                            .filter { it.unreadCount > 0 }
-                        for (room in unreadRooms) {
-                            val latestSpecialCareMessage = if (specialCareEnabled && specialCareUserIds.isNotEmpty()) {
-                                chatRepository.latestSpecialCareRoomMessage(room.id, specialCareUserIds)
+                        val shouldScanSpecialCareRooms = specialCareEnabled && specialCareUserIds.isNotEmpty()
+                        val shouldScanAttentionRooms = currentUser != null
+                        val shouldScanRealtimeAttentionRooms =
+                            trigger == BackgroundNotificationSyncTrigger.RealtimeChat &&
+                                (shouldScanSpecialCareRooms || shouldScanAttentionRooms)
+                        val unreadRooms = result.rooms.filter { room -> room.unreadCount > 0 }
+                        val roomsToCheck = if (shouldScanRealtimeAttentionRooms) {
+                            (result.rooms.take(SPECIAL_CARE_ROOM_SCAN_LIMIT) + unreadRooms).distinctBy { it.id }
+                        } else {
+                            unreadRooms
+                        }
+                        for (room in roomsToCheck) {
+                            val latestAttention = if (shouldScanAttentionRooms || shouldScanSpecialCareRooms) {
+                                chatRepository.latestAttentionRoomMessage(
+                                    roomId = room.id,
+                                    specialCareUserIds = if (specialCareEnabled) specialCareUserIds else emptySet(),
+                                    currentUser = currentUser,
+                                )
                             } else {
                                 null
                             }
-                            val actor = latestSpecialCareMessage?.fromUser ?: room.owner
-                            val isSpecialCare = latestSpecialCareMessage != null || room.owner.id in specialCareUserIds
-                            val latestMarker = latestSpecialCareMessage?.unreadMarker()
+                            if (room.unreadCount <= 0 && latestAttention == null) continue
+                            val attentionMessage = latestAttention?.message
+                            val attentionKind = latestAttention?.kind
+                            val actor = attentionMessage?.fromUser ?: room.owner
+                            val isAttention = attentionKind != null
+                            val isSpecialCare = attentionKind == ChatAttentionKind.SpecialCare
+                            val gatedBySpecialCareSetting = attentionKind == ChatAttentionKind.SpecialCare
+                            val latestMarker = attentionMessage?.unreadMarker()
                                 ?: roomLatestMarkers[room.id].orEmpty()
-                            val latestPreview = latestSpecialCareMessage?.text?.takeIf { it.isNotBlank() }
-                            val latestCreatedAtLabel = latestSpecialCareMessage?.createdAtLabel
+                            val latestPreview = attentionMessage?.text?.takeIf { it.isNotBlank() }
+                            val latestCreatedAtLabel = attentionMessage?.createdAtLabel
                                 ?.takeIf { it.isNotBlank() }
                                 ?: room.latestMessageAtLabel.ifBlank { "刚刚" }
                             val unreadCount = mergedUnread.roomCounts[room.id] ?: room.unreadCount
@@ -162,30 +200,36 @@ class BackgroundNotificationSyncer(
                                 unreadCount = room.unreadCount,
                             )
                             if (eventId in seenIds) continue
-                            val createdAtEpochMillis = latestSpecialCareMessage?.createdAt.toEpochMillisOrNow()
+                            val createdAtEpochMillis = attentionMessage?.createdAt.toEpochMillisOrNow()
+                            val titlePrefix = attentionKind?.label
                             events += BackgroundNotificationEvent(
                                 id = eventId,
-                                title = if (isSpecialCare) "特别关心 · ${actor.displayName}" else room.name,
+                                title = when {
+                                    titlePrefix != null -> "$titlePrefix · ${actor.displayName}"
+                                    isSpecialCare -> "特别关心 · ${actor.displayName}"
+                                    else -> room.name
+                                },
                                 text = latestPreview ?: "${unreadCount.coerceAtLeast(0)} 条未读消息",
-                                specialCare = isSpecialCare,
-                                avatarMode = if (isSpecialCare) {
+                                specialCare = isAttention || isSpecialCare,
+                                gatedBySpecialCareSetting = gatedBySpecialCareSetting,
+                                avatarMode = if (isAttention || isSpecialCare) {
                                     NotificationAvatarMode.UserAvatar(actor.avatarUrl, actor.avatarInitial)
                                 } else {
                                     NotificationAvatarMode.Transparent
                                 },
                                 createdAtEpochMillis = createdAtEpochMillis,
-                                cacheNotification = if (isSpecialCare) {
+                                cacheNotification = if (isAttention || isSpecialCare) {
                                     NotificationItem(
-                                        id = "special-care-room-${room.id}-$latestMarker",
+                                        id = "chat-attention-room-${room.id}-$latestMarker",
                                         type = NotificationType.App,
                                         actor = actor,
-                                        text = "在聊天室 ${room.name} 发来了新消息",
+                                        text = "${attentionKind?.label ?: "特别关心"} · 在聊天室 ${room.name} 发来了新消息",
                                         createdAtLabel = latestCreatedAtLabel,
                                         createdAtEpochMillis = createdAtEpochMillis,
                                         notePreviewText = latestPreview ?: "${unreadCount.coerceAtLeast(0)} 条未读消息",
                                         isSpecialCare = true,
                                         chatRoomId = room.id,
-                                        chatMessageId = latestSpecialCareMessage?.id?.takeIf { it.isNotBlank() },
+                                        chatMessageId = attentionMessage?.id?.takeIf { it.isNotBlank() },
                                     )
                                 } else {
                                     null
@@ -211,8 +255,19 @@ class BackgroundNotificationSyncer(
                             ),
                             userLatestMarkers = userLatestMarkers,
                         )
+                        val shouldScanSpecialCareUserChats =
+                            trigger == BackgroundNotificationSyncTrigger.RealtimeChat &&
+                                specialCareEnabled &&
+                                specialCareUserIds.isNotEmpty()
                         events += result.conversations
-                            .filter { it.unreadCount > 0 }
+                            .filter { conversation ->
+                                conversation.unreadCount > 0 ||
+                                    (
+                                        shouldScanSpecialCareUserChats &&
+                                            conversation.user.id in specialCareUserIds &&
+                                            conversation.latestMessage?.fromUser?.id in specialCareUserIds
+                                        )
+                            }
                             .filter { conversation ->
                                 userEventId(
                                     userId = conversation.user.id,
@@ -221,9 +276,15 @@ class BackgroundNotificationSyncer(
                                 ) !in seenIds
                             }
                             .map { conversation ->
-                                val isSpecialCare = conversation.user.id in specialCareUserIds
-                                val unreadCount = mergedUnread.userCounts[conversation.user.id] ?: conversation.unreadCount
                                 val latestMessage = conversation.latestMessage
+                                val attentionKind = latestMessage.chatAttentionKind(
+                                    specialCareUserIds = if (specialCareEnabled) specialCareUserIds else emptySet(),
+                                    currentUser = currentUser,
+                                )
+                                val isSpecialCare = conversation.user.id in specialCareUserIds
+                                val gatedBySpecialCareSetting = attentionKind == ChatAttentionKind.SpecialCare ||
+                                    (attentionKind == null && isSpecialCare)
+                                val unreadCount = mergedUnread.userCounts[conversation.user.id] ?: conversation.unreadCount
                                 val createdAtEpochMillis = latestMessage?.createdAt.toEpochMillisOrNow()
                                 BackgroundNotificationEvent(
                                     id = userEventId(
@@ -231,26 +292,28 @@ class BackgroundNotificationSyncer(
                                         marker = userLatestMarkers[conversation.user.id].orEmpty(),
                                         unreadCount = conversation.unreadCount,
                                     ),
-                                    title = if (isSpecialCare) {
-                                        "特别关心 · ${conversation.user.displayName}"
-                                    } else {
-                                        conversation.user.displayName
-                                    },
+                                    title = attentionKind?.let { "${it.label} · ${conversation.user.displayName}" }
+                                        ?: if (isSpecialCare) {
+                                            "特别关心 · ${conversation.user.displayName}"
+                                        } else {
+                                            conversation.user.displayName
+                                        },
                                     text = conversation.latestMessage?.text?.takeIf { it.isNotBlank() }
                                         ?: "${unreadCount.coerceAtLeast(0)} 条未读私聊",
-                                    specialCare = isSpecialCare,
-                                    avatarMode = if (isSpecialCare) {
+                                    specialCare = attentionKind != null || isSpecialCare,
+                                    gatedBySpecialCareSetting = gatedBySpecialCareSetting,
+                                    avatarMode = if (attentionKind != null || isSpecialCare) {
                                         NotificationAvatarMode.UserAvatar(conversation.user.avatarUrl, conversation.user.avatarInitial)
                                     } else {
                                         NotificationAvatarMode.Transparent
                                     },
                                     createdAtEpochMillis = createdAtEpochMillis,
-                                    cacheNotification = if (isSpecialCare) {
+                                    cacheNotification = if (attentionKind != null || isSpecialCare) {
                                         NotificationItem(
-                                            id = "special-care-chat-${conversation.user.id}-${latestMessage.unreadMarker().ifBlank { unreadCount.toString() }}",
+                                            id = "chat-attention-user-${conversation.user.id}-${latestMessage.unreadMarker().ifBlank { unreadCount.toString() }}",
                                             type = NotificationType.App,
                                             actor = conversation.user,
-                                            text = "在聊天中发来了新消息",
+                                            text = "${attentionKind?.label ?: "特别关心"} · 在聊天中发来了新消息",
                                             createdAtLabel = latestMessage?.createdAtLabel?.ifBlank { "刚刚" } ?: "刚刚",
                                             createdAtEpochMillis = createdAtEpochMillis,
                                             notePreviewText = latestMessage?.text?.takeIf { it.isNotBlank() }
@@ -281,6 +344,7 @@ class BackgroundNotificationSyncer(
                                     title = "特别关心 · ${note.author.displayName}",
                                     text = note.text.ifBlank { "发布了新帖子" },
                                     specialCare = true,
+                                    gatedBySpecialCareSetting = true,
                                     avatarMode = NotificationAvatarMode.UserAvatar(
                                         note.author.avatarUrl,
                                         note.author.avatarInitial,
@@ -306,7 +370,7 @@ class BackgroundNotificationSyncer(
                 }
 
                 val visibleEvents = events
-                    .filter { !it.specialCare || specialCareEnabled }
+                    .filter { !it.gatedBySpecialCareSetting || specialCareEnabled }
                     .distinctBy { it.id }
                     .sortedWith(
                         compareByDescending<BackgroundNotificationEvent> { if (it.specialCare) 1 else 0 }
@@ -315,9 +379,9 @@ class BackgroundNotificationSyncer(
                     .take(MAX_NOTIFICATIONS_PER_SYNC)
                 if (visibleEvents.isNotEmpty()) {
                     BackgroundNotificationPublisher(context).publish(visibleEvents)
-                    context.cacheSpecialCareNotifications(
+                    context.cacheBackgroundNotificationEvents(
                         accountId = session.id,
-                        notifications = visibleEvents.mapNotNull { it.cacheNotification },
+                        events = visibleEvents,
                     )
                     settings.saveSeenIds((visibleEvents.map { it.id } + seenIds).take(200).toSet())
                 }
@@ -330,6 +394,7 @@ class BackgroundNotificationSyncer(
 
     private companion object {
         const val MAX_NOTIFICATIONS_PER_SYNC = 5
+        const val SPECIAL_CARE_ROOM_SCAN_LIMIT = 8
     }
 }
 
@@ -338,6 +403,7 @@ internal data class BackgroundNotificationEvent(
     val title: String,
     val text: String,
     val specialCare: Boolean,
+    val gatedBySpecialCareSetting: Boolean = specialCare,
     val avatarMode: NotificationAvatarMode,
     val createdAtEpochMillis: Long,
     val cacheNotification: NotificationItem? = null,
@@ -368,9 +434,58 @@ internal fun Context.cacheSpecialCareNotifications(
         cleanAccountId,
         NotificationCacheSnapshot(
             notifications = snapshot.notifications,
+            chatAttentionNotifications = snapshot.chatAttentionNotifications,
             specialCareNotifications = nextSpecialCareNotifications,
         ),
     )
+}
+
+internal fun Context.cacheBackgroundNotificationEvents(
+    accountId: String,
+    events: List<BackgroundNotificationEvent>,
+) {
+    val cleanAccountId = accountId.trim()
+    if (cleanAccountId.isBlank() || events.isEmpty()) return
+    val cache = AndroidNotificationCache(this)
+    val snapshot = cache.read(cleanAccountId)
+    val chatAttentionNotifications = events
+        .filter { !it.gatedBySpecialCareSetting }
+        .mapNotNull { it.cacheNotification }
+    val specialCareNotifications = events
+        .filter { it.gatedBySpecialCareSetting }
+        .mapNotNull { it.cacheNotification }
+    if (chatAttentionNotifications.isEmpty() && specialCareNotifications.isEmpty()) return
+
+    cache.write(
+        cleanAccountId,
+        NotificationCacheSnapshot(
+            notifications = snapshot.notifications,
+            chatAttentionNotifications = snapshot.chatAttentionNotifications.mergeCachedBackgroundNotifications(
+                chatAttentionNotifications,
+            ),
+            specialCareNotifications = snapshot.specialCareNotifications.mergeCachedBackgroundNotifications(
+                specialCareNotifications,
+            ),
+        ),
+    )
+}
+
+private fun List<NotificationItem>.mergeCachedBackgroundNotifications(
+    incoming: List<NotificationItem>,
+): List<NotificationItem> {
+    if (incoming.isEmpty()) return this
+    val previousNotificationsById = associateBy { it.id }
+    return (
+        incoming.map { notification ->
+            notification.copy(
+                isRead = previousNotificationsById[notification.id]?.isRead == true,
+            )
+        } +
+            this
+        )
+        .distinctBy { it.id }
+        .sortedByDescending { it.createdAtEpochMillis }
+        .take(MAX_CACHED_SPECIAL_CARE_NOTIFICATIONS)
 }
 
 internal sealed interface NotificationAvatarMode {
@@ -424,15 +539,26 @@ private fun String?.toEpochMillisOrNow(): Long {
         ?: System.currentTimeMillis()
 }
 
-private suspend fun ChatRepository.latestSpecialCareRoomMessage(
+private data class ChatAttentionMessage(
+    val message: ChatMessage,
+    val kind: ChatAttentionKind,
+)
+
+private suspend fun ChatRepository.latestAttentionRoomMessage(
     roomId: String,
     specialCareUserIds: Set<String>,
-): ChatMessage? {
-    if (roomId.isBlank() || specialCareUserIds.isEmpty()) return null
+    currentUser: User?,
+): ChatAttentionMessage? {
+    if (roomId.isBlank()) return null
     return when (val result = refreshMessages(roomId)) {
         is ChatMessageRepositoryResult.Success -> result.messages
             .asReversed()
-            .firstOrNull { message -> message.fromUser.id in specialCareUserIds }
+            .firstNotNullOfOrNull { message ->
+                message.chatAttentionKind(
+                    specialCareUserIds = specialCareUserIds,
+                    currentUser = currentUser,
+                )?.let { kind -> ChatAttentionMessage(message, kind) }
+            }
         is ChatMessageRepositoryResult.Created,
         is ChatMessageRepositoryResult.Deleted,
         is ChatMessageRepositoryResult.Error,
@@ -440,6 +566,66 @@ private suspend fun ChatRepository.latestSpecialCareRoomMessage(
         ChatMessageRepositoryResult.Unauthorized,
         -> null
     }
+}
+
+private fun ChatMessage?.chatAttentionKind(
+    specialCareUserIds: Set<String>,
+    currentUser: User?,
+): ChatAttentionKind? {
+    val message = this ?: return null
+    val currentUserId = currentUser?.id?.trim().orEmpty()
+    val isFromSelf = currentUserId.isNotEmpty() && message.fromUser.id == currentUserId
+    return when {
+        !isFromSelf && currentUserId.isNotEmpty() && message.text.mentionsChatUser(currentUser) -> ChatAttentionKind.Mention
+        !isFromSelf && currentUserId.isNotEmpty() && message.reply?.fromUser?.id == currentUserId -> ChatAttentionKind.Reply
+        !isFromSelf && currentUserId.isNotEmpty() && message.quote?.fromUser?.id == currentUserId -> ChatAttentionKind.Quote
+        message.fromUser.id in specialCareUserIds -> ChatAttentionKind.SpecialCare
+        else -> null
+    }
+}
+
+private fun String.mentionsChatUser(user: User?): Boolean {
+    val username = user?.username?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+    val host = user.host?.trim()?.takeIf { it.isNotEmpty() }
+    var index = indexOf('@')
+    while (index >= 0 && index < length - 1) {
+        val parsed = parseMentionAt(index)
+        if (parsed != null && parsed.username.equals(username, ignoreCase = true)) {
+            if (host == null || parsed.host == null || parsed.host.equals(host, ignoreCase = true)) return true
+        }
+        index = indexOf('@', startIndex = index + 1)
+    }
+    return false
+}
+
+private data class ParsedMention(
+    val username: String,
+    val host: String?,
+)
+
+private fun String.parseMentionAt(atIndex: Int): ParsedMention? {
+    if (atIndex !in indices || this[atIndex] != '@') return null
+    val usernameStart = atIndex + 1
+    if (usernameStart >= length || !this[usernameStart].isMentionPart()) return null
+    var usernameEnd = usernameStart
+    while (usernameEnd < length && this[usernameEnd].isMentionPart()) usernameEnd++
+    val username = substring(usernameStart, usernameEnd).takeIf { it.isNotBlank() } ?: return null
+    var host: String? = null
+    if (usernameEnd < length && this[usernameEnd] == '@') {
+        val hostStart = usernameEnd + 1
+        var hostEnd = hostStart
+        while (hostEnd < length && this[hostEnd].isMentionHostPart()) hostEnd++
+        host = substring(hostStart, hostEnd).trim('.').takeIf { it.isNotBlank() }
+    }
+    return ParsedMention(username, host)
+}
+
+private fun Char.isMentionPart(): Boolean {
+    return isLetterOrDigit() || this == '_' || this == '-'
+}
+
+private fun Char.isMentionHostPart(): Boolean {
+    return isLetterOrDigit() || this == '_' || this == '-' || this == '.'
 }
 
 private fun roomEventId(
@@ -539,15 +725,16 @@ internal class BackgroundNotificationPublisher(
 
     private fun initialNotificationAvatar(initial: String): Bitmap {
         val cleanInitial = initial.trim().take(1).ifBlank { "?" }
+        val avatarColors = notificationAvatarColors()
         val size = 96
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val background = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(25, 25, 28)
+            color = avatarColors.background
         }
         canvas.drawCircle(size / 2f, size / 2f, size / 2f, background)
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
+            color = avatarColors.content
             textAlign = Paint.Align.CENTER
             textSize = 46f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -556,6 +743,19 @@ internal class BackgroundNotificationPublisher(
         textPaint.getTextBounds(cleanInitial, 0, cleanInitial.length, bounds)
         canvas.drawText(cleanInitial, size / 2f, size / 2f - bounds.exactCenterY(), textPaint)
         return bitmap
+    }
+
+    private fun notificationAvatarColors(): NotificationAvatarColors {
+        val customTheme = AndroidThemeStore(context).loadCustomTheme()
+        return NotificationAvatarColors(
+            background = customTheme.avatarBackgroundColorHex.toAndroidColorOrNull()
+                ?: customTheme.mediaBackgroundColorHex.toAndroidColorOrNull()
+                ?: customTheme.surfaceColorHex.toAndroidColorOrNull()
+                ?: DEFAULT_NOTIFICATION_AVATAR_BACKGROUND,
+            content = customTheme.primaryTextColorHex.toAndroidColorOrNull()
+                ?: customTheme.outgoingBubbleTextColorHex.toAndroidColorOrNull()
+                ?: DEFAULT_NOTIFICATION_AVATAR_CONTENT,
+        )
     }
 
     private fun openAppIntent(): PendingIntent {
@@ -568,6 +768,25 @@ internal class BackgroundNotificationPublisher(
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+    }
+}
+
+private data class NotificationAvatarColors(
+    val background: Int,
+    val content: Int,
+)
+
+private const val DEFAULT_NOTIFICATION_AVATAR_BACKGROUND = 0xFF19191C.toInt()
+private const val DEFAULT_NOTIFICATION_AVATAR_CONTENT = 0xFFFFFFFF.toInt()
+
+private fun String.toAndroidColorOrNull(): Int? {
+    val clean = trim().removePrefix("#")
+    if (clean.length != 6 && clean.length != 8) return null
+    val value = clean.toLongOrNull(16) ?: return null
+    return if (clean.length == 6) {
+        (0xFF000000 or value).toInt()
+    } else {
+        value.toInt()
     }
 }
 

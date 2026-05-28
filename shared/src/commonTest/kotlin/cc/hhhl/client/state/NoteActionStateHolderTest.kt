@@ -12,9 +12,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -57,6 +59,33 @@ class NoteActionStateHolderTest {
         assertEquals("https://dc.hhhl.cc/emoji/blobcat.webp", holder.state.value.customEmojiUrls[":blobcat:"])
         assertEquals(listOf("blobcat", "party"), holder.state.value.customEmojis.map { it.name })
         assertEquals(null, holder.state.value.reactionOptionsError)
+    }
+
+    @Test
+    fun loadReactionOptionsUsesLatestDefaultReactionWhenRequestCompletes() = runTest {
+        val pending = CompletableDeferred<EmojiRepositoryResult>()
+        val holder = NoteActionStateHolder(
+            repository = fakeRepository(NoteActionRepositoryResult.Success("已发送反应")),
+            emojiRepository = fakeEmojiRepository { pending.await() },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateDefaultReaction("⭐")
+        holder.loadReactionOptions()
+        runCurrent()
+        holder.updateDefaultReaction("🚀")
+        pending.complete(
+            EmojiRepositoryResult.Success(
+                reactionOptions = listOf(":blobcat:"),
+                emojiUrls = emptyMap(),
+                customEmojis = emptyList(),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals("🚀", holder.state.value.reactionOptions.first())
+        assertTrue(holder.state.value.reactionOptions.contains(":blobcat:"))
+        assertFalse(holder.state.value.isLoadingReactionOptions)
     }
 
     @Test
@@ -194,6 +223,12 @@ class NoteActionStateHolderTest {
                     reaction: String,
                 ): NoteActionApiResult = NoteActionApiResult.Success
 
+                override suspend fun likeNote(
+                    token: String,
+                    noteId: String,
+                    override: String?,
+                ): NoteActionApiResult = NoteActionApiResult.Success
+
                 override suspend fun deleteReaction(
                     token: String,
                     noteId: String,
@@ -220,6 +255,11 @@ class NoteActionStateHolderTest {
                     noteId: String,
                 ): NoteActionApiResult = NoteActionApiResult.Success
 
+                override suspend fun deleteRenote(
+                    token: String,
+                    noteId: String,
+                ): NoteActionApiResult = NoteActionApiResult.Success
+
                 override suspend fun deleteNote(
                     token: String,
                     noteId: String,
@@ -236,6 +276,21 @@ class NoteActionStateHolderTest {
                     token: String,
                     noteId: String,
                 ): NoteActionApiResult = NoteActionApiResult.Success
+
+                override suspend fun unmuteNote(
+                    token: String,
+                    noteId: String,
+                ): NoteActionApiResult = NoteActionApiResult.Success
+
+                override suspend fun muteRenotes(
+                    token: String,
+                    userId: String,
+                ): NoteActionApiResult = NoteActionApiResult.Success
+
+                override suspend fun unmuteRenotes(
+                    token: String,
+                    userId: String,
+                ): NoteActionApiResult = NoteActionApiResult.Success
             },
         ) {
             override suspend fun perform(request: NoteActionRequest): NoteActionRepositoryResult {
@@ -245,6 +300,10 @@ class NoteActionStateHolderTest {
     }
 
     private fun fakeEmojiRepository(result: EmojiRepositoryResult): EmojiRepository {
+        return fakeEmojiRepository { result }
+    }
+
+    private fun fakeEmojiRepository(resultProvider: suspend () -> EmojiRepositoryResult): EmojiRepository {
         return object : EmojiRepository(
             api = object : cc.hhhl.client.api.EmojiApi {
                 override suspend fun loadEmojis(): cc.hhhl.client.api.EmojiLoadResult {
@@ -253,7 +312,7 @@ class NoteActionStateHolderTest {
             },
         ) {
             override suspend fun loadReactionOptions(limit: Int): EmojiRepositoryResult {
-                return result
+                return resultProvider()
             }
         }
     }
@@ -271,6 +330,12 @@ class NoteActionStateHolderTest {
                     reaction: String,
                 ): NoteActionApiResult = NoteActionApiResult.Success
 
+                override suspend fun likeNote(
+                    token: String,
+                    noteId: String,
+                    override: String?,
+                ): NoteActionApiResult = NoteActionApiResult.Success
+
                 override suspend fun deleteReaction(
                     token: String,
                     noteId: String,
@@ -297,6 +362,11 @@ class NoteActionStateHolderTest {
                     noteId: String,
                 ): NoteActionApiResult = NoteActionApiResult.Success
 
+                override suspend fun deleteRenote(
+                    token: String,
+                    noteId: String,
+                ): NoteActionApiResult = NoteActionApiResult.Success
+
                 override suspend fun deleteNote(
                     token: String,
                     noteId: String,
@@ -312,6 +382,21 @@ class NoteActionStateHolderTest {
                 override suspend fun muteNote(
                     token: String,
                     noteId: String,
+                ): NoteActionApiResult = NoteActionApiResult.Success
+
+                override suspend fun unmuteNote(
+                    token: String,
+                    noteId: String,
+                ): NoteActionApiResult = NoteActionApiResult.Success
+
+                override suspend fun muteRenotes(
+                    token: String,
+                    userId: String,
+                ): NoteActionApiResult = NoteActionApiResult.Success
+
+                override suspend fun unmuteRenotes(
+                    token: String,
+                    userId: String,
                 ): NoteActionApiResult = NoteActionApiResult.Success
             },
         ) {

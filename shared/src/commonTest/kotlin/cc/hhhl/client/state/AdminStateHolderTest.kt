@@ -12,6 +12,7 @@ import cc.hhhl.client.api.AdminApi
 import cc.hhhl.client.api.AdminApiResult
 import cc.hhhl.client.repository.AdminRepository
 import cc.hhhl.client.repository.AdminRepositoryResult
+import kotlinx.coroutines.CompletableDeferred
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -19,6 +20,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 class AdminStateHolderTest {
@@ -103,6 +105,62 @@ class AdminStateHolderTest {
         assertTrue(holder.state.value.announcementTextDraft.isEmpty())
     }
 
+    @Test
+    fun changingUserQueryInvalidatesPendingUserSearch() = runTest {
+        val pending = CompletableDeferred<AdminRepositoryResult<List<AdminUserSummary>>>()
+        val holder = AdminStateHolder(
+            repository = fakeRepository(
+                searchUsersProvider = { pending.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateUserQuery("alice")
+        holder.searchUsers()
+        runCurrent()
+        assertTrue(holder.state.value.isSearchingUsers)
+
+        holder.updateUserQuery("bob")
+        pending.complete(AdminRepositoryResult.Success(listOf(sampleUser().copy(id = "user-alice"))))
+        advanceUntilIdle()
+
+        assertEquals("bob", holder.state.value.userQuery)
+        assertFalse(holder.state.value.isSearchingUsers)
+        assertEquals(emptyList(), holder.state.value.users)
+    }
+
+    @Test
+    fun loadingAnotherUsersRolesInvalidatesOlderResult() = runTest {
+        val first = CompletableDeferred<AdminRepositoryResult<List<AdminRoleSummary>>>()
+        val second = CompletableDeferred<AdminRepositoryResult<List<AdminRoleSummary>>>()
+        val firstRole = sampleRole().copy(id = "role-first", name = "First")
+        val secondRole = sampleRole().copy(id = "role-second", name = "Second")
+        val holder = AdminStateHolder(
+            repository = fakeRepository(
+                userRolesProvider = { userId ->
+                    if (userId == "user-1") first.await() else second.await()
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.loadUserRoles("user-1")
+        runCurrent()
+        holder.loadUserRoles("user-2")
+        runCurrent()
+        second.complete(AdminRepositoryResult.Success(listOf(secondRole)))
+        advanceUntilIdle()
+
+        assertEquals("user-2", holder.state.value.selectedUserId)
+        assertEquals(listOf(secondRole), holder.state.value.selectedUserRoles)
+
+        first.complete(AdminRepositoryResult.Success(listOf(firstRole)))
+        advanceUntilIdle()
+
+        assertEquals("user-2", holder.state.value.selectedUserId)
+        assertEquals(listOf(secondRole), holder.state.value.selectedUserRoles)
+    }
+
     private fun fakeRepository(
         overviewResult: AdminRepositoryResult<AdminOverview> = AdminRepositoryResult.Success(
             AdminOverview(
@@ -122,12 +180,18 @@ class AdminStateHolderTest {
         ),
         updateAnnouncementResult: AdminRepositoryResult<Unit> = AdminRepositoryResult.Success(Unit),
         deleteAnnouncementResult: AdminRepositoryResult<Unit> = AdminRepositoryResult.Success(Unit),
+        searchUsersProvider: suspend (String) -> AdminRepositoryResult<List<AdminUserSummary>> = {
+            overviewResult.usersOrEmpty()
+        },
+        userRolesProvider: suspend (String) -> AdminRepositoryResult<List<AdminRoleSummary>> = {
+            userRolesResult
+        },
     ): AdminRepository {
         return object : AdminRepository(tokenProvider = { "token-123" }, api = unusedAdminApi()) {
             override suspend fun overview(userQuery: String): AdminRepositoryResult<AdminOverview> = overviewResult
 
             override suspend fun searchUsers(query: String): AdminRepositoryResult<List<AdminUserSummary>> {
-                return overviewResult.usersOrEmpty()
+                return searchUsersProvider(query)
             }
 
             override suspend fun loadReports(): AdminRepositoryResult<List<AdminAbuseReport>> {
@@ -139,7 +203,7 @@ class AdminStateHolderTest {
             }
 
             override suspend fun loadUserRoles(userId: String): AdminRepositoryResult<List<AdminRoleSummary>> {
-                return userRolesResult
+                return userRolesProvider(userId)
             }
 
             override suspend fun loadAnnouncements(): AdminRepositoryResult<List<AdminAnnouncementSummary>> {

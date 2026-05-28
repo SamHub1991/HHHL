@@ -39,9 +39,13 @@ class AnnouncementStateHolder(
 ) {
     private val mutableState = MutableStateFlow(AnnouncementUiState())
     val state: StateFlow<AnnouncementUiState> = mutableState
+    private var listRequestId = 0
+    private var detailRequestId = 0
+    private var adminRequestId = 0
 
     fun refresh() {
         if (state.value.isLoading) return
+        val requestId = ++listRequestId
 
         mutableState.update {
             it.copy(
@@ -54,7 +58,7 @@ class AnnouncementStateHolder(
         }
 
         scope.launch {
-            applyListResult(repository.refresh(), loadingMore = false)
+            applyListResult(repository.refresh(), loadingMore = false, requestId = requestId)
         }
     }
 
@@ -68,6 +72,7 @@ class AnnouncementStateHolder(
         ) {
             return
         }
+        val requestId = ++listRequestId
 
         mutableState.update {
             it.copy(
@@ -78,15 +83,19 @@ class AnnouncementStateHolder(
         }
 
         scope.launch {
-            applyListResult(repository.loadMore(current.announcements), loadingMore = true)
+            applyListResult(repository.loadMore(current.announcements), loadingMore = true, requestId = requestId)
         }
     }
 
     fun openAnnouncement(announcementId: String) {
-        if (announcementId.isBlank() || state.value.isLoadingDetail) return
+        if (announcementId.isBlank()) return
+        val current = state.value
+        if (current.isLoadingDetail && current.selectedAnnouncement?.id == announcementId) return
+        val requestId = ++detailRequestId
 
         mutableState.update {
             it.copy(
+                selectedAnnouncement = it.selectedAnnouncement?.takeIf { selected -> selected.id == announcementId },
                 isLoadingDetail = true,
                 detailErrorMessage = null,
                 requiresRelogin = false,
@@ -96,6 +105,7 @@ class AnnouncementStateHolder(
         scope.launch {
             when (val result = repository.show(announcementId)) {
                 is AnnouncementRepositoryResult.Success -> mutableState.update {
+                    if (requestId != detailRequestId || result.announcement.id != announcementId) return@update it
                     it.copy(
                         selectedAnnouncement = result.announcement,
                         isLoadingDetail = false,
@@ -104,6 +114,7 @@ class AnnouncementStateHolder(
                     )
                 }
                 AnnouncementRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != detailRequestId) return@update it
                     it.copy(
                         isLoadingDetail = false,
                         detailErrorMessage = "登录已失效，请重新登录",
@@ -111,6 +122,7 @@ class AnnouncementStateHolder(
                     )
                 }
                 is AnnouncementRepositoryResult.Error -> mutableState.update {
+                    if (requestId != detailRequestId) return@update it
                     it.copy(
                         isLoadingDetail = false,
                         detailErrorMessage = result.message,
@@ -122,6 +134,7 @@ class AnnouncementStateHolder(
     }
 
     fun closeDetail() {
+        detailRequestId += 1
         mutableState.update {
             it.copy(
                 selectedAnnouncement = null,
@@ -134,6 +147,8 @@ class AnnouncementStateHolder(
     }
 
     fun enterManagement() {
+        listRequestId += 1
+        detailRequestId += 1
         mutableState.update {
             it.copy(
                 isManaging = true,
@@ -151,6 +166,7 @@ class AnnouncementStateHolder(
     }
 
     fun exitManagement() {
+        adminRequestId += 1
         mutableState.update {
             it.copy(
                 isManaging = false,
@@ -165,6 +181,7 @@ class AnnouncementStateHolder(
 
     fun refreshAdmin() {
         if (state.value.isLoadingAdmin) return
+        val requestId = ++adminRequestId
 
         mutableState.update {
             it.copy(
@@ -181,6 +198,7 @@ class AnnouncementStateHolder(
         scope.launch {
             when (val result = repository.refreshAdmin()) {
                 is AnnouncementsRepositoryResult.Success -> mutableState.update {
+                    if (requestId != adminRequestId || !it.isManaging) return@update it
                     it.copy(
                         announcements = result.announcements,
                         isLoadingAdmin = false,
@@ -190,6 +208,7 @@ class AnnouncementStateHolder(
                     )
                 }
                 AnnouncementsRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != adminRequestId || !it.isManaging) return@update it
                     it.copy(
                         isLoadingAdmin = false,
                         adminErrorMessage = "当前账号没有公告管理权限",
@@ -197,6 +216,7 @@ class AnnouncementStateHolder(
                     )
                 }
                 is AnnouncementsRepositoryResult.Error -> mutableState.update {
+                    if (requestId != adminRequestId || !it.isManaging) return@update it
                     it.copy(
                         isLoadingAdmin = false,
                         adminErrorMessage = result.message,
@@ -404,9 +424,11 @@ class AnnouncementStateHolder(
     private fun applyListResult(
         result: AnnouncementsRepositoryResult,
         loadingMore: Boolean,
+        requestId: Int,
     ) {
         when (result) {
             is AnnouncementsRepositoryResult.Success -> mutableState.update {
+                if (requestId != listRequestId || it.isManaging) return@update it
                 it.copy(
                     announcements = result.announcements,
                     isLoading = false,
@@ -417,6 +439,7 @@ class AnnouncementStateHolder(
                 )
             }
             AnnouncementsRepositoryResult.Unauthorized -> mutableState.update {
+                if (requestId != listRequestId || it.isManaging) return@update it
                 it.copy(
                     isLoading = false,
                     isLoadingMore = false,
@@ -425,6 +448,7 @@ class AnnouncementStateHolder(
                 )
             }
             is AnnouncementsRepositoryResult.Error -> mutableState.update {
+                if (requestId != listRequestId || it.isManaging) return@update it
                 it.copy(
                     isLoading = if (loadingMore) it.isLoading else false,
                     isLoadingMore = false,

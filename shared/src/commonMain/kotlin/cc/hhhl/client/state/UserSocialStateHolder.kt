@@ -33,13 +33,15 @@ class UserSocialStateHolder(
 ) {
     private val mutableState = MutableStateFlow(UserSocialUiState())
     val state: StateFlow<UserSocialUiState> = mutableState
+    private var listRequestId = 0
 
     fun load(
         userId: String,
         kind: UserSocialKind,
         displayName: String?,
     ) {
-        if (state.value.isLoading) return
+        if (state.value.isLoading && state.value.userId == userId && state.value.kind == kind) return
+        val requestId = nextListRequestId()
 
         mutableState.update {
             it.copy(
@@ -61,6 +63,9 @@ class UserSocialStateHolder(
             applyResult(
                 result = repository.refresh(userId, kind),
                 loadingMore = false,
+                userId = userId,
+                kind = kind,
+                requestId = requestId,
             )
         }
     }
@@ -77,14 +82,21 @@ class UserSocialStateHolder(
             return
         }
 
+        val kind = current.kind
+        val currentItems = current.items
+        val requestId = nextListRequestId()
+
         mutableState.update {
             it.copy(isLoadingMore = true, errorMessage = null, message = null, requiresRelogin = false)
         }
 
         scope.launch {
             applyResult(
-                result = repository.loadMore(userId, current.kind, current.items),
+                result = repository.loadMore(userId, kind, currentItems),
                 loadingMore = true,
+                userId = userId,
+                kind = kind,
+                requestId = requestId,
             )
         }
     }
@@ -114,7 +126,7 @@ class UserSocialStateHolder(
         performRelationshipAction(
             userId = userId,
             action = { cleanUserId -> repository.block(cleanUserId) },
-            successMessage = "已拉黑",
+            successMessage = "已屏蔽",
             removeLocalItem = true,
         )
     }
@@ -160,7 +172,11 @@ class UserSocialStateHolder(
     private fun applyResult(
         result: UserSocialRepositoryResult,
         loadingMore: Boolean,
+        userId: String,
+        kind: UserSocialKind,
+        requestId: Int,
     ) {
+        if (!isCurrentListRequest(userId, kind, requestId)) return
         when (result) {
             is UserSocialRepositoryResult.Success -> mutableState.update {
                 it.copy(
@@ -195,6 +211,20 @@ class UserSocialStateHolder(
                 )
             }
         }
+    }
+
+    private fun nextListRequestId(): Int {
+        listRequestId += 1
+        return listRequestId
+    }
+
+    private fun isCurrentListRequest(
+        userId: String,
+        kind: UserSocialKind,
+        requestId: Int,
+    ): Boolean {
+        val current = state.value
+        return requestId == listRequestId && current.userId == userId && current.kind == kind
     }
 
     private fun applyRelationshipResult(

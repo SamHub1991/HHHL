@@ -31,16 +31,18 @@ class AchievementStateHolder(
     val state: StateFlow<AchievementUiState> = mutableState
 
     private var viewAchievementClaimRequested = false
+    private var refreshRequestId = 0
 
-    fun refresh() {
-        if (state.value.isLoading) return
+    fun refresh(force: Boolean = false) {
+        if (state.value.isLoading && !force) return
+        val requestId = ++refreshRequestId
 
         mutableState.update {
             it.copy(isLoading = true, errorMessage = null, requiresRelogin = false)
         }
 
         scope.launch {
-            applyResult(repository.refresh())
+            applyResult(repository.refresh(), requestId)
         }
     }
 
@@ -50,7 +52,7 @@ class AchievementStateHolder(
 
         scope.launch {
             when (repository.claim("viewAchievements3min")) {
-                AchievementClaimRepositoryResult.Success -> refresh()
+                AchievementClaimRepositoryResult.Success -> refresh(force = true)
                 AchievementClaimRepositoryResult.Unauthorized -> mutableState.update {
                     it.copy(
                         errorMessage = "登录已失效，请重新登录",
@@ -62,9 +64,13 @@ class AchievementStateHolder(
         }
     }
 
-    private fun applyResult(result: AchievementRepositoryResult) {
+    private fun applyResult(
+        result: AchievementRepositoryResult,
+        requestId: Int,
+    ) {
         when (result) {
             is AchievementRepositoryResult.Success -> mutableState.update {
+                if (requestId != refreshRequestId) return@update it
                 it.copy(
                     achievements = result.achievements,
                     isLoading = false,
@@ -73,6 +79,7 @@ class AchievementStateHolder(
                 )
             }
             AchievementRepositoryResult.Unauthorized -> mutableState.update {
+                if (requestId != refreshRequestId) return@update it
                 it.copy(
                     isLoading = false,
                     errorMessage = "登录已失效，请重新登录",
@@ -80,6 +87,7 @@ class AchievementStateHolder(
                 )
             }
             is AchievementRepositoryResult.Error -> mutableState.update {
+                if (requestId != refreshRequestId) return@update it
                 it.copy(
                     isLoading = false,
                     errorMessage = result.message,

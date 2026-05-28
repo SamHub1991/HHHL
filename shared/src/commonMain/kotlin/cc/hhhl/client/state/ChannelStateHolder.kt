@@ -38,6 +38,7 @@ class ChannelStateHolder(
 ) {
     private val mutableState = MutableStateFlow(ChannelUiState())
     val state: StateFlow<ChannelUiState> = mutableState
+    private var timelineRequestId = 0
 
     fun refreshChannels(kind: ChannelListKind = state.value.selectedKind) {
         if (state.value.isLoadingChannels) return
@@ -117,10 +118,13 @@ class ChannelStateHolder(
             )
         }
 
+        val requestId = nextTimelineRequestId()
         scope.launch {
             applyTimelineResult(
                 result = repository.refreshTimeline(channel.id),
                 loadingMore = false,
+                channelId = channel.id,
+                requestId = requestId,
             )
         }
     }
@@ -151,10 +155,13 @@ class ChannelStateHolder(
             )
         }
 
+        val requestId = nextTimelineRequestId()
         scope.launch {
             applyTimelineResult(
                 result = repository.loadMoreTimeline(channelId, current.notes),
                 loadingMore = true,
+                channelId = channelId,
+                requestId = requestId,
             )
         }
     }
@@ -378,10 +385,13 @@ class ChannelStateHolder(
             )
         }
 
+        val requestId = nextTimelineRequestId()
         scope.launch {
             applyTimelineResult(
                 result = repository.refreshTimeline(channelId),
                 loadingMore = false,
+                channelId = channelId,
+                requestId = requestId,
             )
         }
     }
@@ -389,7 +399,10 @@ class ChannelStateHolder(
     private fun applyTimelineResult(
         result: ChannelTimelineRepositoryResult,
         loadingMore: Boolean,
+        channelId: String,
+        requestId: Int,
     ) {
+        if (!isCurrentTimelineRequest(channelId, requestId)) return
         when (result) {
             is ChannelTimelineRepositoryResult.Success -> mutableState.update {
                 it.copy(
@@ -418,6 +431,18 @@ class ChannelStateHolder(
                 )
             }
         }
+    }
+
+    private fun nextTimelineRequestId(): Int {
+        timelineRequestId += 1
+        return timelineRequestId
+    }
+
+    private fun isCurrentTimelineRequest(
+        channelId: String,
+        requestId: Int,
+    ): Boolean {
+        return requestId == timelineRequestId && state.value.selectedChannel?.id == channelId
     }
 
     private fun applyFollowResult(

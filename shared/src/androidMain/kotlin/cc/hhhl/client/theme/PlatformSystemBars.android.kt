@@ -6,7 +6,6 @@ import android.content.ContextWrapper
 import android.os.Build
 import android.view.View
 import android.view.Window
-import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.luminance
@@ -14,13 +13,13 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 
 @Composable
-internal actual fun ConfigurePlatformSystemBars(colorScheme: ColorScheme) {
+internal actual fun ConfigurePlatformSystemBars(colors: HhhlColors) {
     val view = LocalView.current
     val window = view.context.findActivity()?.window ?: return
-    val statusBarColor = colorScheme.background.toArgb()
-    val navigationBarColor = colorScheme.surface.toArgb()
-    val useDarkStatusIcons = colorScheme.background.luminance() > 0.5f
-    val useDarkNavigationIcons = colorScheme.surface.luminance() > 0.5f
+    val statusBarColor = colors.pageBackground.toArgb()
+    val navigationBarColor = colors.bottomNavBackground.toArgb()
+    val useDarkStatusIcons = colors.pageBackground.luminance() > 0.5f
+    val useDarkNavigationIcons = colors.bottomNavBackground.luminance() > 0.5f
 
     SideEffect {
         window.statusBarColor = statusBarColor

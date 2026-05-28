@@ -44,9 +44,12 @@ class UserProfileStateHolder(
 ) {
     private val mutableState = MutableStateFlow(UserProfileUiState())
     val state: StateFlow<UserProfileUiState> = mutableState
+    private var profileLoadRequestId = 0
+    private var notesRequestId = 0
 
     fun load(clearContent: Boolean = false) {
-        if (state.value.isLoading) return
+        if (!clearContent && state.value.isLoading) return
+        val requestId = nextProfileLoadRequestId()
 
         mutableState.update {
             it.copy(
@@ -67,6 +70,7 @@ class UserProfileStateHolder(
             var shouldRefreshNotes = false
             when (val result = repository.load()) {
                 is UserProfileRepositoryResult.Success -> mutableState.update {
+                    if (requestId != profileLoadRequestId) return@update it
                     shouldRefreshNotes = true
                     it.copy(
                         user = result.user,
@@ -76,6 +80,7 @@ class UserProfileStateHolder(
                     )
                 }
                 UserProfileRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != profileLoadRequestId) return@update it
                     it.copy(
                         isLoading = false,
                         errorMessage = "登录已失效，请重新登录",
@@ -83,6 +88,7 @@ class UserProfileStateHolder(
                     )
                 }
                 is UserProfileRepositoryResult.Error -> mutableState.update {
+                    if (requestId != profileLoadRequestId) return@update it
                     it.copy(
                         isLoading = false,
                         errorMessage = result.message,
@@ -90,6 +96,8 @@ class UserProfileStateHolder(
                     )
                 }
             }
+
+            if (requestId != profileLoadRequestId) return@launch
 
             state.value.user?.let { loadedUser ->
                 if (shouldRefreshNotes && relationshipRepository != null) {
@@ -124,9 +132,13 @@ class UserProfileStateHolder(
         }
 
         scope.launch {
+            val userId = current.user?.id
+            val requestId = nextNotesRequestId()
             applyNotesResult(
                 result = repository.loadMore(current.notes),
                 loadingMore = true,
+                userId = userId,
+                requestId = requestId,
             )
         }
     }
@@ -328,11 +340,13 @@ class UserProfileStateHolder(
             it.copy(isRelationshipLoading = true, requiresRelogin = false)
         }
 
-        applyRelationshipLoadResult(repository.loadRelation(userId))
+        applyRelationshipLoadResult(userId, repository.loadRelation(userId))
     }
 
     private suspend fun refreshNotes() {
         val repository = notesRepository ?: return
+        val userId = state.value.user?.id
+        val requestId = nextNotesRequestId()
 
         mutableState.update {
             it.copy(isLoadingNotes = true, notesErrorMessage = null, requiresRelogin = false)
@@ -341,13 +355,18 @@ class UserProfileStateHolder(
         applyNotesResult(
             result = repository.refresh(),
             loadingMore = false,
+            userId = userId,
+            requestId = requestId,
         )
     }
 
     private fun applyNotesResult(
         result: UserNotesRepositoryResult,
         loadingMore: Boolean,
+        userId: String?,
+        requestId: Int,
     ) {
+        if (requestId != notesRequestId || state.value.user?.id != userId) return
         when (result) {
             is UserNotesRepositoryResult.Success -> mutableState.update {
                 it.copy(
@@ -381,6 +400,7 @@ class UserProfileStateHolder(
         originalUser: User,
         result: UserRelationshipRepositoryResult,
     ) {
+        if (state.value.user?.id != originalUser.id) return
         when (result) {
             UserRelationshipRepositoryResult.Success -> mutableState.update { current ->
                 val currentUser = current.user ?: originalUser
@@ -467,7 +487,11 @@ class UserProfileStateHolder(
         ) ?: updated
     }
 
-    private fun applyRelationshipLoadResult(result: UserRelationshipRepositoryResult) {
+    private fun applyRelationshipLoadResult(
+        userId: String,
+        result: UserRelationshipRepositoryResult,
+    ) {
+        if (state.value.user?.id != userId) return
         when (result) {
             is UserRelationshipRepositoryResult.RelationLoaded -> mutableState.update {
                 it.copy(
@@ -502,6 +526,7 @@ class UserProfileStateHolder(
         originalRelationship: UserRelationship,
         result: UserRelationshipRepositoryResult,
     ) {
+        if (state.value.user?.id != userId) return
         when (result) {
             UserRelationshipRepositoryResult.Success -> mutableState.update { current ->
                 val currentRelationship = current.relationship ?: originalRelationship
@@ -545,6 +570,7 @@ class UserProfileStateHolder(
         originalRelationship: UserRelationship,
         result: UserRelationshipRepositoryResult,
     ) {
+        if (state.value.user?.id != originalUser.id) return
         when (result) {
             UserRelationshipRepositoryResult.Success -> mutableState.update { current ->
                 val currentUser = current.user ?: originalUser
@@ -622,5 +648,15 @@ class UserProfileStateHolder(
                 it.copy(isRelationshipChanging = false, requiresRelogin = false)
             }
         }
+    }
+
+    private fun nextProfileLoadRequestId(): Int {
+        profileLoadRequestId += 1
+        return profileLoadRequestId
+    }
+
+    private fun nextNotesRequestId(): Int {
+        notesRequestId += 1
+        return notesRequestId
     }
 }

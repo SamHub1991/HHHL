@@ -1,6 +1,7 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.EmojiApi
+import cc.hhhl.client.api.EmojiDetailLoadResult
 import cc.hhhl.client.api.EmojiLoadResult
 import cc.hhhl.client.api.SharkeyEmojiApi
 import cc.hhhl.client.model.CustomEmoji
@@ -12,7 +13,7 @@ open class EmojiRepository(
     private val successfulResultsByLimit = mutableMapOf<Int, EmojiRepositoryResult.Success>()
 
     open suspend fun loadReactionOptions(limit: Int = DEFAULT_REACTION_OPTION_LIMIT): EmojiRepositoryResult {
-        val safeLimit = limit.coerceAtLeast(0)
+        val safeLimit = limit.coerceIn(0, MAX_REACTION_OPTION_LIMIT)
         successfulResultsByLimit[safeLimit]?.let { return it }
 
         return when (val result = api.loadEmojis()) {
@@ -21,6 +22,17 @@ open class EmojiRepository(
                 EmojiRepositoryResult.Error("无法连接服务器：${result.message}")
             }
             is EmojiLoadResult.ServerError -> EmojiRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadEmoji(name: String): EmojiSingleRepositoryResult {
+        return when (val result = api.loadEmoji(name)) {
+            is EmojiDetailLoadResult.Success -> EmojiSingleRepositoryResult.Success(result.emoji)
+            EmojiDetailLoadResult.NotFound -> EmojiSingleRepositoryResult.NotFound
+            is EmojiDetailLoadResult.NetworkError -> {
+                EmojiSingleRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is EmojiDetailLoadResult.ServerError -> EmojiSingleRepositoryResult.Error(result.message)
         }
     }
 
@@ -44,11 +56,21 @@ open class EmojiRepository(
                 .sortedWith(compareBy<CustomEmoji> { it.category.orEmpty() }.thenBy { it.name }),
         )
         successfulResultsByLimit[limit] = success
+        trimSuccessfulResultCache()
         return success
+    }
+
+    private fun trimSuccessfulResultCache() {
+        while (successfulResultsByLimit.size > MAX_SUCCESSFUL_RESULT_CACHE_ENTRIES) {
+            val firstKey = successfulResultsByLimit.keys.firstOrNull() ?: return
+            successfulResultsByLimit.remove(firstKey)
+        }
     }
 
     private companion object {
         const val DEFAULT_REACTION_OPTION_LIMIT = 240
+        const val MAX_REACTION_OPTION_LIMIT = 1_000
+        const val MAX_SUCCESSFUL_RESULT_CACHE_ENTRIES = 8
     }
 }
 
@@ -60,4 +82,12 @@ sealed interface EmojiRepositoryResult {
     ) : EmojiRepositoryResult
 
     data class Error(val message: String) : EmojiRepositoryResult
+}
+
+sealed interface EmojiSingleRepositoryResult {
+    data class Success(val emoji: CustomEmoji) : EmojiSingleRepositoryResult
+
+    data object NotFound : EmojiSingleRepositoryResult
+
+    data class Error(val message: String) : EmojiSingleRepositoryResult
 }

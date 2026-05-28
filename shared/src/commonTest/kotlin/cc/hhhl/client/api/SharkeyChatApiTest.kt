@@ -107,6 +107,66 @@ class SharkeyChatApiTest {
     }
 
     @Test
+    fun loadsOwnedRoomsFromOwnedEndpoint() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/rooms/owned", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""limit":30"""))
+                assertTrue(body.contains(""""untilId":"room-old""""))
+                respondOwnedRooms()
+            },
+        )
+
+        val result = api.loadOwnedRooms(
+            token = "token-123",
+            limit = 30,
+            untilId = "room-old",
+        )
+
+        assertIs<ChatRoomLoadResult.Success>(result)
+        val room = result.rooms.single()
+        assertEquals("room-owned", room.id)
+        assertEquals("room-owned", room.membershipId)
+        assertEquals("Owner Room", room.name)
+        assertEquals("Alice", room.owner.displayName)
+    }
+
+    @Test
+    fun loadsInvitationInboxFromInboxEndpoint() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/rooms/invitations/inbox", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""limit":30"""))
+                assertTrue(body.contains(""""untilId":"invite-old""""))
+                respondInvitationInbox()
+            },
+        )
+
+        val result = api.loadInvitationInbox(
+            token = "token-123",
+            limit = 30,
+            untilId = "invite-old",
+        )
+
+        assertIs<ChatRoomInvitationLoadResult.Success>(result)
+        val invitation = result.invitations.single()
+        assertEquals("invite-1", invitation.id)
+        assertEquals("room-invited", invitation.room.id)
+        assertEquals("Alice", invitation.inviter?.displayName)
+        assertEquals("2026-05-25 10:25", invitation.createdAtLabel)
+    }
+
+    @Test
     fun loadsRoomMessagesFromRoomTimelineEndpoint() = runTest {
         val api = SharkeyChatApi(
             baseUrl = "https://dc.hhhl.cc/",
@@ -328,12 +388,62 @@ class SharkeyChatApiTest {
         )
 
         assertIs<ChatRoomMemberLoadResult.Success>(result)
+        assertEquals("online", result.members.firstOrNull()?.user?.onlineStatus)
         val member = result.members.single()
         assertEquals("membership-member-1", member.membershipId)
         assertEquals("room-1", member.roomId)
         assertEquals("Alice", member.user.displayName)
         assertEquals("alice", member.user.username)
         assertEquals("2026-05-25 10:00", member.joinedAtLabel)
+    }
+
+    @Test
+    fun loadsInvitationOutboxWithRoomId() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/rooms/invitations/outbox", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""roomId":"room-1""""))
+                assertTrue(body.contains(""""limit":30"""))
+                respond(
+                    content = "[]",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = api.loadInvitationOutbox(
+            token = "token-123",
+            roomId = "room-1",
+            limit = 30,
+        )
+
+        assertIs<ChatRoomInvitationLoadResult.Success>(result)
+        assertTrue(result.invitations.isEmpty())
+    }
+
+    @Test
+    fun ignoresInvitationUsingRoomIdPayload() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/rooms/invitations/ignore", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""roomId":"room-1""""))
+                respond("", status = HttpStatusCode.NoContent)
+            },
+        )
+
+        val result = api.ignoreRoomInvitation(
+            token = "token-123",
+            roomId = "room-1",
+        )
+
+        assertIs<ChatRoomActionResult.Success>(result)
     }
 
     private fun MockRequestHandleScope.respondJoiningRooms(): HttpResponseData {
@@ -397,6 +507,69 @@ class SharkeyChatApiTest {
                       "joinMode": "open",
                       "memberCount": 12,
                       "isMuted": false
+                    }
+                  }
+                ]
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
+    private fun MockRequestHandleScope.respondOwnedRooms(): HttpResponseData {
+        return respond(
+            content = """
+                [
+                  {
+                    "id": "room-owned",
+                    "owner": {
+                      "id": "user-1",
+                      "username": "alice",
+                      "name": "Alice"
+                    },
+                    "name": "Owner Room",
+                    "description": "Owned by Alice",
+                    "joinMode": "invite",
+                    "memberCount": 4,
+                    "isMuted": false,
+                    "lastMessage": {
+                      "id": "message-owned",
+                      "createdAt": "2026-05-25T02:25:00.000Z"
+                    }
+                  }
+                ]
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
+    private fun MockRequestHandleScope.respondInvitationInbox(): HttpResponseData {
+        return respond(
+            content = """
+                [
+                  {
+                    "id": "invite-1",
+                    "createdAt": "2026-05-25T02:25:00.000Z",
+                    "roomId": "room-invited",
+                    "room": {
+                      "id": "room-invited",
+                      "owner": {
+                        "id": "user-1",
+                        "username": "alice",
+                        "name": "Alice"
+                      },
+                      "name": "Invited Room",
+                      "description": "Join us",
+                      "joinMode": "invite",
+                      "memberCount": 3,
+                      "isMuted": false
+                    },
+                    "inviterId": "user-1",
+                    "inviter": {
+                      "id": "user-1",
+                      "username": "alice",
+                      "name": "Alice"
                     }
                   }
                 ]
@@ -550,7 +723,8 @@ class SharkeyChatApiTest {
                     "user": {
                       "id": "user-1",
                       "username": "alice",
-                      "name": "Alice"
+                      "name": "Alice",
+                      "onlineStatus": "online"
                     },
                     "room": null
                   }

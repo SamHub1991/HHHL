@@ -17,6 +17,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -101,6 +102,28 @@ class UserProfileStateHolderTest {
 
         assertFalse(holder.state.value.requiresRelogin)
         assertEquals(FakeData.me, holder.state.value.user)
+    }
+
+    @Test
+    fun clearContentLoadAllowsNewProfileRequestAndIgnoresOlderResult() = runTest {
+        val firstUser = FakeData.me.copy(id = "remote-a", displayName = "Remote A")
+        val secondUser = FakeData.me.copy(id = "remote-b", displayName = "Remote B")
+        val firstResult = CompletableDeferred<UserProfileRepositoryResult>()
+        val secondResult = CompletableDeferred<UserProfileRepositoryResult>()
+        val holder = UserProfileStateHolder(
+            repository = deferredSequenceRepository(firstResult, secondResult),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.load(clearContent = true)
+        holder.load(clearContent = true)
+        secondResult.complete(UserProfileRepositoryResult.Success(secondUser))
+        advanceUntilIdle()
+        firstResult.complete(UserProfileRepositoryResult.Success(firstUser))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isLoading)
+        assertEquals(secondUser, holder.state.value.user)
     }
 
     @Test
@@ -421,6 +444,28 @@ class UserProfileStateHolderTest {
         }
     }
 
+    private fun deferredSequenceRepository(
+        vararg results: CompletableDeferred<UserProfileRepositoryResult>,
+    ): UserProfileRepository {
+        var index = 0
+        return object : UserProfileRepository(
+            tokenProvider = { "token-123" },
+            userIdProvider = { "user-1" },
+            api = object : cc.hhhl.client.api.UserProfileApi {
+                override suspend fun loadProfile(
+                    token: String,
+                    userId: String,
+                ): UserProfileLoadResult = UserProfileLoadResult.Success(FakeData.me)
+            },
+        ) {
+            override suspend fun load(): UserProfileRepositoryResult {
+                val result = results[index.coerceAtMost(results.lastIndex)]
+                index += 1
+                return result.await()
+            }
+        }
+    }
+
     private fun fakeNotesRepository(
         refreshResult: UserNotesRepositoryResult,
         loadMoreResult: UserNotesRepositoryResult = refreshResult,
@@ -484,9 +529,28 @@ class UserProfileStateHolderTest {
                 override suspend fun follow(
                     token: String,
                     userId: String,
+                    withReplies: Boolean?,
                 ): cc.hhhl.client.api.UserRelationshipResult = cc.hhhl.client.api.UserRelationshipResult.Success
 
                 override suspend fun unfollow(
+                    token: String,
+                    userId: String,
+                ): cc.hhhl.client.api.UserRelationshipResult = cc.hhhl.client.api.UserRelationshipResult.Success
+
+                override suspend fun updateFollowing(
+                    token: String,
+                    userId: String,
+                    notify: String?,
+                    withReplies: Boolean?,
+                ): cc.hhhl.client.api.UserRelationshipResult = cc.hhhl.client.api.UserRelationshipResult.Success
+
+                override suspend fun updateAllFollowing(
+                    token: String,
+                    notify: String?,
+                    withReplies: Boolean?,
+                ): cc.hhhl.client.api.UserRelationshipResult = cc.hhhl.client.api.UserRelationshipResult.Success
+
+                override suspend fun invalidateFollowing(
                     token: String,
                     userId: String,
                 ): cc.hhhl.client.api.UserRelationshipResult = cc.hhhl.client.api.UserRelationshipResult.Success
@@ -522,7 +586,7 @@ class UserProfileStateHolderTest {
                 return relationResult
             }
 
-            override suspend fun follow(userId: String): UserRelationshipRepositoryResult {
+            override suspend fun follow(userId: String, withReplies: Boolean?): UserRelationshipRepositoryResult {
                 return result
             }
 

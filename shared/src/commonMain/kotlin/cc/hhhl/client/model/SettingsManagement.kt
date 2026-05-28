@@ -5,6 +5,9 @@ import androidx.compose.runtime.Immutable
 @Immutable
 enum class SettingsManagementAction {
     RevokeToken,
+    CreateInvite,
+    DeleteInvite,
+    LoginSharedAccess,
     EditWebhook,
     EnableWebhook,
     DisableWebhook,
@@ -47,6 +50,8 @@ enum class SettingsManagementSectionKey {
     AuthorizedApps,
     Webhooks,
     SigninHistory,
+    AvatarDecorations,
+    Invites,
 }
 
 @Immutable

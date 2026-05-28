@@ -85,6 +85,37 @@ class SharkeyDriveFileApiTest {
     }
 
     @Test
+    fun loadStreamPostsJsonToDriveStreamEndpoint() = runTest {
+        var capturedRequest: HttpRequestData? = null
+        val api = SharkeyDriveFileApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                capturedRequest = request
+                respondDriveFiles()
+            },
+        )
+
+        val result = api.loadStream(
+            token = "token-123",
+            limit = 30,
+            untilId = "file-old",
+            type = "image/*",
+        )
+
+        assertIs<DriveFileListResult.Success>(result)
+        val request = checkNotNull(capturedRequest)
+        assertEquals("https://dc.hhhl.cc/api/drive/stream", request.url.toString())
+        assertEquals(HttpMethod.Post, request.method)
+        assertEquals(ContentType.Application.Json, request.body.contentType)
+        val body = (request.body as TextContent).text
+        assertTrue(body.contains(""""i":"token-123""""))
+        assertTrue(body.contains(""""limit":30"""))
+        assertTrue(body.contains(""""untilId":"file-old""""))
+        assertTrue(body.contains(""""type":"image/*""""))
+        assertEquals("file-1", result.files.single().id)
+    }
+
+    @Test
     fun loadFoldersPostsJsonToDriveFoldersEndpoint() = runTest {
         var capturedRequest: HttpRequestData? = null
         val api = SharkeyDriveFileApi(

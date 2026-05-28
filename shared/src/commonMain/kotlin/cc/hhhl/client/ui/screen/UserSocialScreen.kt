@@ -11,12 +11,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +42,7 @@ import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTopBar
+import cc.hhhl.client.ui.component.InlineRichText
 
 @Composable
 fun UserSocialScreen(
@@ -103,15 +104,17 @@ fun UserSocialScreen(
             state = listState,
         ) {
             if (state?.isLoading == true && items.isEmpty()) {
-                item(contentType = "user-social-status") {
+                item(key = "user-social-loading-${kind.name}", contentType = "user-social-status") {
                     UserSocialStatusRow(text = "加载中...", loading = true)
                 }
             }
             state?.message?.let { message ->
-                item(contentType = "user-social-status") { UserSocialStatusRow(text = message) }
+                item(key = "user-social-message-${kind.name}", contentType = "user-social-status") {
+                    UserSocialStatusRow(text = message)
+                }
             }
             state?.errorMessage?.let { message ->
-                item(contentType = "user-social-status") {
+                item(key = "user-social-error-${kind.name}", contentType = "user-social-status") {
                     UserSocialStatusRow(
                         text = message,
                         actionText = "重试",
@@ -120,7 +123,9 @@ fun UserSocialScreen(
                 }
             }
             if (state != null && !state.isLoading && items.isEmpty() && state.errorMessage == null) {
-                item(contentType = "user-social-status") { UserSocialStatusRow(text = "这里还没有用户") }
+                item(key = "user-social-empty-${kind.name}", contentType = "user-social-status") {
+                    UserSocialStatusRow(text = "这里还没有用户")
+                }
             }
             items(
                 items = items,
@@ -141,7 +146,7 @@ fun UserSocialScreen(
                 )
             }
             if (state != null && items.isNotEmpty() && state.isLoadingMore) {
-                item(contentType = "user-social-status") {
+                item(key = "user-social-loading-more-${kind.name}", contentType = "user-social-status") {
                     UserSocialStatusRow(
                         text = "正在加载更多...",
                         loading = state.isLoadingMore,
@@ -160,6 +165,7 @@ private fun UserSocialSummaryRow(
     isChanging: Boolean,
     onRefresh: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val stateText = when {
         isLoading -> "加载中"
         isChanging -> "处理中"
@@ -175,7 +181,7 @@ private fun UserSocialSummaryRow(
     ) {
         Text(
             text = "${kind.label} · $stateText",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -236,6 +242,7 @@ private fun UserSocialRow(
     onToggleSpecialCareUser: ((String) -> Unit)?,
 ) {
     var pendingAction by remember(user.id) { mutableStateOf<UserSocialPendingAction?>(null) }
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -255,7 +262,7 @@ private fun UserSocialRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = user.displayName,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -263,24 +270,22 @@ private fun UserSocialRow(
                 )
                 Text(
                     text = "  @${user.username}",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
             if (user.bio.isNotBlank()) {
-                Text(
+                InlineRichText(
                     text = user.bio,
-                    color = MaterialTheme.colorScheme.secondary,
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Text(
                 text = "${user.followingCount} 关注  ${user.followersCount} 关注者",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -335,7 +340,7 @@ private enum class UserSocialPendingAction(
 ) {
     Unfollow("取消关注", "将「%s」从关注列表移除。"),
     Mute("静音", "静音「%s」后，将减少看到对方内容。"),
-    Block("拉黑", "拉黑「%s」后，对方与你的互动会被限制。"),
+    Block("屏蔽", "屏蔽「%s」后，你将不再看到对方的帖子和群聊消息。"),
     Report("举报", "将「%s」提交给实例管理员处理。"),
 }
 
@@ -348,13 +353,14 @@ private fun UserSocialActionDialog(
     onDismiss: () -> Unit,
 ) {
     val name = displayName.ifBlank { "该用户" }
-    AlertDialog(
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(action.label) },
         text = {
             Text(
                 text = action.description.replace("%s", name),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
@@ -390,7 +396,7 @@ fun userSocialRowActions(
             add(HhhlOverflowMenuAction("取消关注", onClick = onUnfollow))
         }
         onMute?.let { add(HhhlOverflowMenuAction("静音", onClick = it)) }
-        onBlock?.let { add(HhhlOverflowMenuAction("拉黑", destructive = true, onClick = it)) }
+        onBlock?.let { add(HhhlOverflowMenuAction("屏蔽", destructive = true, onClick = it)) }
         onReport?.let { add(HhhlOverflowMenuAction("举报", destructive = true, onClick = it)) }
     }
 }

@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.state.FavoriteNoteUiState
+import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
@@ -90,7 +91,7 @@ fun FavoriteNoteScreen(
             state = listState,
         ) {
             state.errorMessage?.let { message ->
-                item(contentType = "favorite-status") {
+                item(key = "favorite-error", contentType = "favorite-status") {
                     FavoriteNoteStatusRow(
                         text = message,
                         actionText = "重试",
@@ -99,12 +100,12 @@ fun FavoriteNoteScreen(
                 }
             }
             if (state.isLoading && state.favorites.isEmpty()) {
-                item(contentType = "favorite-status") {
+                item(key = "favorite-loading", contentType = "favorite-status") {
                     FavoriteNoteStatusRow(text = "正在加载收藏...", loading = true)
                 }
             }
             if (!state.isLoading && state.favorites.isEmpty() && state.errorMessage == null) {
-                item(contentType = "favorite-status") { FavoriteNoteStatusRow(text = "暂无收藏") }
+                item(key = "favorite-empty", contentType = "favorite-status") { FavoriteNoteStatusRow(text = "暂无收藏") }
             }
             items(
                 items = state.favorites,
@@ -136,7 +137,7 @@ fun FavoriteNoteScreen(
                 )
             }
             if (state.favorites.isNotEmpty() && state.isLoadingMore) {
-                item(contentType = "favorite-status") {
+                item(key = "favorite-loading-more", contentType = "favorite-status") {
                     FavoriteNoteStatusRow(
                         text = "正在加载更多...",
                         loading = state.isLoadingMore,
@@ -153,6 +154,7 @@ private fun FavoriteNoteSummaryRow(
     isLoading: Boolean,
     onRefresh: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val countText = if (favoriteCount == 0) "暂无收藏" else "${favoriteCount} 条已加载"
     val stateText = if (isLoading) "加载中" else "时间线视图"
     Row(
@@ -164,7 +166,7 @@ private fun FavoriteNoteSummaryRow(
     ) {
         Text(
             text = "$countText · $stateText",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),

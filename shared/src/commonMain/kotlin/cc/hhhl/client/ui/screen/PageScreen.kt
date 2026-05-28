@@ -33,6 +33,7 @@ import cc.hhhl.client.model.PageListKind
 import cc.hhhl.client.model.PageVisibility
 import cc.hhhl.client.model.User
 import cc.hhhl.client.state.PageUiState
+import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
@@ -44,6 +45,7 @@ import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
+import cc.hhhl.client.ui.component.InlineRichText
 
 @Composable
 fun PageScreen(
@@ -117,7 +119,7 @@ fun PageScreen(
             navigation = { HhhlBackButton(onClick = onBack) },
             action = if (overflowActions.isNotEmpty()) {
                 {
-                    HhhlOverflowMenu(actions = overflowActions)
+                    HhhlOverflowMenu(actions = overflowActions, buttonText = "更多")
                 }
             } else {
                 null
@@ -142,7 +144,7 @@ fun PageScreen(
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item(contentType = "page-status") {
+                item(key = "page-error-${selectedKind.name}", contentType = "page-status") {
                     PageStatusRow(
                         text = message,
                         actionText = "重试",
@@ -151,12 +153,14 @@ fun PageScreen(
                 }
             }
             if (state?.isLoadingPages == true && pages.isEmpty()) {
-                item(contentType = "page-status") {
+                item(key = "page-loading-${selectedKind.name}", contentType = "page-status") {
                     PageStatusRow(text = "正在加载页面...", loading = true)
                 }
             }
             if (state != null && !state.isLoadingPages && pages.isEmpty() && state.errorMessage == null) {
-                item(contentType = "page-status") { PageStatusRow(text = "还没有页面") }
+                item(key = "page-empty-${selectedKind.name}", contentType = "page-status") {
+                    PageStatusRow(text = "还没有页面")
+                }
             }
             items(
                 items = pages,
@@ -170,7 +174,7 @@ fun PageScreen(
                 )
             }
             if (state != null && pages.isNotEmpty() && state.isLoadingMore) {
-                item(contentType = "page-status") {
+                item(key = "page-loading-more-${selectedKind.name}", contentType = "page-status") {
                     PageStatusRow(
                         text = "正在加载更多...",
                         loading = state.isLoadingMore,
@@ -189,6 +193,7 @@ private fun PageSummaryRow(
     onRefreshPages: () -> Unit,
     onStartCreatingPage: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     val stateText = if (isLoading) "加载中" else "${pageCount} 项"
     Row(
         modifier = Modifier
@@ -199,7 +204,7 @@ private fun PageSummaryRow(
     ) {
         Text(
             text = "${selectedKind.label} · $stateText",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -251,6 +256,7 @@ private fun PageRow(
     onOpenPage: (String) -> Unit,
     onOpenUser: (String) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -269,22 +275,31 @@ private fun PageRow(
         ) {
             Text(
                 text = page.title.ifBlank { page.name.ifBlank { "未命名页面" } },
-                color = MaterialTheme.colorScheme.onBackground,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = page.summary.ifBlank { page.pathLabel },
-                color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (page.summary.isNotBlank()) {
+                InlineRichText(
+                    text = page.summary,
+                    color = colors.textSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxChars = 280,
+                )
+            } else {
+                Text(
+                    text = page.pathLabel,
+                    color = colors.textSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 text = "@${page.author.username} · ${page.likedCount} 喜欢 · ${page.updatedAtLabel}",
-                color = MaterialTheme.colorScheme.secondary,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -308,6 +323,7 @@ private fun PageDetailView(
     canEdit: Boolean,
     isDeleting: Boolean,
 ) {
+    val colors = LocalHhhlColors.current
     Column(modifier = Modifier.fillMaxSize()) {
         val actions = if (canEdit) {
             listOf(
@@ -330,7 +346,7 @@ private fun PageDetailView(
             supportingText = page.author.displayName,
             navigation = { HhhlBackButton(onClick = onBack) },
             action = if (actions.isNotEmpty()) {
-                { HhhlOverflowMenu(actions = actions) }
+                { HhhlOverflowMenu(actions = actions, buttonText = "更多") }
             } else {
                 null
             },
@@ -338,14 +354,16 @@ private fun PageDetailView(
         HhhlDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             if (isLoading) {
-                item(contentType = "page-detail-status") {
+                item(key = "page-detail-loading-${page.id}", contentType = "page-detail-status") {
                     PageStatusRow(text = "正在加载页面...", loading = true)
                 }
             }
             errorMessage?.let { message ->
-                item(contentType = "page-detail-status") { PageStatusRow(text = message) }
+                item(key = "page-detail-error-${page.id}", contentType = "page-detail-status") {
+                    PageStatusRow(text = message)
+                }
             }
-            item(contentType = "page-detail-header") {
+            item(key = "page-detail-header-${page.id}", contentType = "page-detail-header") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -354,7 +372,7 @@ private fun PageDetailView(
                 ) {
                     Text(
                         text = page.title.ifBlank { "未命名页面" },
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = colors.textPrimary,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                     )
@@ -377,13 +395,13 @@ private fun PageDetailView(
                             Column {
                                 Text(
                                     text = page.author.displayName,
-                                    color = MaterialTheme.colorScheme.onBackground,
+                                    color = colors.textPrimary,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
                                     text = "@${page.author.username} · ${page.updatedAtLabel}",
-                                    color = MaterialTheme.colorScheme.secondary,
+                                    color = colors.textMuted,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -400,9 +418,9 @@ private fun PageDetailView(
                         )
                     }
                     if (page.summary.isNotBlank()) {
-                        Text(
+                        InlineRichText(
                             text = page.summary,
-                            color = MaterialTheme.colorScheme.secondary,
+                            color = colors.textSecondary,
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
@@ -439,9 +457,11 @@ private fun PageEditView(
         HhhlDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             errorMessage?.let { message ->
-                item(contentType = "page-edit-status") { PageStatusRow(text = message) }
+                item(key = "page-edit-error", contentType = "page-edit-status") {
+                    PageStatusRow(text = message)
+                }
             }
-            item(contentType = "page-edit-form") {
+            item(key = "page-edit-form", contentType = "page-edit-form") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -558,6 +578,7 @@ private fun PageKindFilterRow(
 
 @Composable
 private fun PageBlockRow(block: PageBlock) {
+    val colors = LocalHhhlColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -567,20 +588,27 @@ private fun PageBlockRow(block: PageBlock) {
         if (block.type != "text") {
             Text(
                 text = block.type,
-                color = MaterialTheme.colorScheme.secondary,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.labelSmall,
             )
         }
-        Text(
-            text = block.text.ifBlank { "空白块" },
-            color = MaterialTheme.colorScheme.onBackground,
-            style = if (block.type == "section") {
-                MaterialTheme.typography.titleMedium
-            } else {
-                MaterialTheme.typography.bodyMedium
-            },
-            fontWeight = if (block.type == "section") FontWeight.SemiBold else FontWeight.Normal,
-        )
+        if (block.text.isBlank()) {
+            Text(
+                text = "空白块",
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        } else {
+            InlineRichText(
+                text = block.text,
+                color = colors.textPrimary,
+                style = if (block.type == "section") {
+                    MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                } else {
+                    MaterialTheme.typography.bodyMedium
+                },
+            )
+        }
     }
     HhhlDivider()
 }

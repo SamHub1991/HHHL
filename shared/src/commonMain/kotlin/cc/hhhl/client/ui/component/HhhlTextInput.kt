@@ -25,10 +25,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,7 +40,7 @@ import cc.hhhl.client.theme.LocalHhhlColors
 
 internal val HhhlTextInputSingleLineMinHeight = 42.dp
 internal val HhhlTextInputMultiLineMinHeight = 80.dp
-internal val HhhlTextInputCornerRadius = 14.dp
+internal val HhhlTextInputCornerRadius = 13.dp
 internal val HhhlTextInputHorizontalPadding = 12.dp
 internal val HhhlTextInputVerticalPadding = 8.dp
 
@@ -62,32 +64,43 @@ fun HhhlTextInput(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     var focused by remember { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
+    val fontScale = LocalDensity.current.fontScale.coerceIn(1f, 1.7f)
+    val defaultMinHeight = if (singleLine || minLines <= 1) {
+        HhhlTextInputSingleLineMinHeight
+    } else {
+        HhhlTextInputMultiLineMinHeight
+    }
+    val resolvedMinHeight = minHeight ?: defaultMinHeight + ((fontScale - 1f) * 16f).dp
     val shape = RoundedCornerShape(HhhlTextInputCornerRadius)
-    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.2f
+    val isDarkSurface = colors.surface.luminance() < 0.2f
+    val baseContainer = if (isDarkSurface) {
+        neutralDarkInputContainer(
+            pageBackground = colors.pageBackground,
+            surface = colors.surface,
+            surfaceElevated = colors.surfaceElevated,
+        )
+    } else {
+        colors.inputBackground.blendWith(colors.surfaceElevated, 0.34f)
+    }
     val containerColor by animateColorAsState(
-        targetValue = if (isDarkSurface) {
-            when {
-                !enabled -> MaterialTheme.colorScheme.surface.copy(alpha = 0.46f)
-                focused -> LocalHhhlColors.current.inputBackground.copy(alpha = 0.82f)
-                else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.68f)
-            }
-        } else {
-            LocalHhhlColors.current.inputBackground.copy(
-                alpha = when {
-                    !enabled -> 0.52f
-                    focused -> 0.96f
-                    else -> 0.78f
-                },
-            )
+        targetValue = when {
+            !enabled -> baseContainer.withMultipliedAlpha(if (isDarkSurface) 0.46f else 0.52f)
+            focused -> baseContainer.withMultipliedAlpha(if (isDarkSurface) 0.82f else 0.92f)
+            else -> baseContainer.withMultipliedAlpha(if (isDarkSurface) 0.58f else 0.72f)
         },
         animationSpec = tween(durationMillis = 160),
         label = "text-input-container",
     )
     val borderColor by animateColorAsState(
         targetValue = when {
-            focused -> MaterialTheme.colorScheme.primary.copy(alpha = if (isDarkSurface) 0.30f else 0.16f)
-            isDarkSurface -> Color.White.copy(alpha = 0.08f)
-            else -> LocalHhhlColors.current.divider.copy(alpha = 0.58f)
+            focused && isDarkSurface -> neutralDarkInputBorder(
+                surface = colors.surface,
+                surfaceElevated = colors.surfaceElevated,
+                textMuted = colors.textMuted,
+            ).copy(alpha = 0.86f)
+            focused -> colors.inputFocusedBorder.copy(alpha = 0.72f)
+            else -> colors.inputBorder.copy(alpha = if (isDarkSurface) 0.58f else 0.48f)
         },
         animationSpec = tween(durationMillis = 160),
         label = "text-input-border",
@@ -95,7 +108,7 @@ fun HhhlTextInput(
     val elevation by animateDpAsState(
         targetValue = when {
             !enabled -> 0.dp
-            focused && isDarkSurface -> 1.dp
+            focused && isDarkSurface -> 2.dp
             isDarkSurface -> 0.dp
             focused -> 1.dp
             else -> 0.dp
@@ -108,7 +121,7 @@ fun HhhlTextInput(
         if (label != null) {
             Text(
                 text = label,
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
             )
@@ -124,12 +137,12 @@ fun HhhlTextInput(
             keyboardOptions = keyboardOptions,
             textStyle = textStyle.copy(
                 color = if (enabled) {
-                    MaterialTheme.colorScheme.onSurface
+                    colors.textPrimary
                 } else {
-                    LocalHhhlColors.current.subtleText
+                    colors.textMuted
                 },
             ),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            cursorBrush = SolidColor(colors.accent),
             modifier = Modifier
                 .fillMaxWidth()
                 .onFocusChanged { focused = it.isFocused },
@@ -137,16 +150,26 @@ fun HhhlTextInput(
                 androidx.compose.foundation.layout.Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .shadow(elevation, shape, clip = false)
+                        .shadow(
+                            elevation = elevation,
+                            shape = shape,
+                            clip = false,
+                            ambientColor = colors.shadow,
+                            spotColor = colors.shadow,
+                        )
                         .clip(shape)
                         .defaultMinSize(
-                            minHeight = minHeight ?: if (singleLine || minLines <= 1) {
-                                HhhlTextInputSingleLineMinHeight
-                            } else {
-                                HhhlTextInputMultiLineMinHeight
-                            },
+                            minHeight = resolvedMinHeight,
                         )
-                        .background(color = containerColor, shape = shape)
+                        .background(
+                            brush = Brush.verticalGradient(
+                                listOf(
+                                    containerColor,
+                                    containerColor.withMultipliedAlpha(if (isDarkSurface) 0.86f else 0.92f),
+                                ),
+                            ),
+                            shape = shape,
+                        )
                         .border(1.dp, borderColor, shape)
                         .padding(
                             horizontal = horizontalPadding,
@@ -165,7 +188,7 @@ fun HhhlTextInput(
                         if (value.isBlank()) {
                             Text(
                                 text = placeholder,
-                                color = LocalHhhlColors.current.subtleText,
+                                color = colors.textMuted,
                                 style = textStyle,
                                 maxLines = if (singleLine) 1 else 2,
                                 overflow = TextOverflow.Ellipsis,
@@ -177,4 +200,49 @@ fun HhhlTextInput(
             },
         )
     }
+}
+
+private fun Color.withMultipliedAlpha(multiplier: Float): Color {
+    return copy(alpha = (alpha * multiplier).coerceIn(0f, 1f))
+}
+
+private fun Color.blendWith(other: Color, otherRatio: Float): Color {
+    val ratio = otherRatio.coerceIn(0f, 1f)
+    val selfRatio = 1f - ratio
+    return Color(
+        red = red * selfRatio + other.red * ratio,
+        green = green * selfRatio + other.green * ratio,
+        blue = blue * selfRatio + other.blue * ratio,
+        alpha = alpha * selfRatio + other.alpha * ratio,
+    )
+}
+
+private fun neutralDarkInputContainer(
+    pageBackground: Color,
+    surface: Color,
+    surfaceElevated: Color,
+): Color {
+    val neutralBase = surface.blendWith(pageBackground, 0.36f)
+    return neutralBase.blendWith(surfaceElevated, 0.18f).desaturate(0.42f)
+}
+
+private fun neutralDarkInputBorder(
+    surface: Color,
+    surfaceElevated: Color,
+    textMuted: Color,
+): Color {
+    return surfaceElevated.blendWith(surface, 0.26f)
+        .blendWith(textMuted, 0.24f)
+        .desaturate(0.50f)
+}
+
+private fun Color.desaturate(amount: Float): Color {
+    val ratio = amount.coerceIn(0f, 1f)
+    val grey = red * 0.299f + green * 0.587f + blue * 0.114f
+    return Color(
+        red = red * (1f - ratio) + grey * ratio,
+        green = green * (1f - ratio) + grey * ratio,
+        blue = blue * (1f - ratio) + grey * ratio,
+        alpha = alpha,
+    )
 }

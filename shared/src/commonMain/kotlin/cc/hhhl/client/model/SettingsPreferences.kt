@@ -47,6 +47,9 @@ data class SecuritySettings(
 data class IntegrationSettings(
     val apiTokensAvailable: Boolean = false,
     val apiTokensCount: Int? = null,
+    val invitesAvailable: Boolean = false,
+    val invitesCount: Int? = null,
+    val inviteRemaining: Int? = null,
     val sharedAccessAvailable: Boolean = false,
     val sharedAccessCount: Int? = null,
     val webhooksAvailable: Boolean = false,

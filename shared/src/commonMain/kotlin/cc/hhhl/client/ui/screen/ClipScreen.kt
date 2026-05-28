@@ -19,13 +19,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
+import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,12 +44,14 @@ import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
+import cc.hhhl.client.ui.component.HhhlCheckbox
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlInlinePanel
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
+import cc.hhhl.client.ui.component.HhhlProgressIndicator
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
 import cc.hhhl.client.ui.component.InlineRichText
@@ -165,7 +165,7 @@ fun ClipScreen(
             state = listState,
         ) {
             state?.errorMessage?.let { message ->
-                item(contentType = "clip-status") {
+                item(key = "clip-error", contentType = "clip-status") {
                     ClipStatusRow(
                         text = message,
                         actionText = "重试",
@@ -174,20 +174,20 @@ fun ClipScreen(
                 }
             }
             if (state?.isLoadingClips == true && clips.isEmpty()) {
-                item(contentType = "clip-status") {
+                item(key = "clip-loading", contentType = "clip-status") {
                     ClipStatusRow(text = "正在加载剪辑...", loading = true)
                 }
             }
             if (state != null && !state.isLoadingClips && clips.isEmpty() && state.errorMessage == null) {
-                item(contentType = "clip-status") { ClipStatusRow(text = "还没有剪辑") }
+                item(key = "clip-empty", contentType = "clip-status") { ClipStatusRow(text = "还没有剪辑") }
             }
             if (state?.isLoadingNotes == true && notes.isEmpty()) {
-                item(contentType = "clip-status") {
+                item(key = "clip-notes-loading-${selectedClip?.id.orEmpty()}", contentType = "clip-status") {
                     ClipStatusRow(text = "正在加载剪辑动态...", loading = true)
                 }
             }
             selectedClip?.let { clip ->
-                item(contentType = "clip-header") {
+                item(key = "clip-header-${clip.id}", contentType = "clip-header") {
                     ClipHeaderRow(
                         clip = clip,
                         isChangingFavorite = state?.isChangingFavorite == true,
@@ -200,7 +200,7 @@ fun ClipScreen(
                 }
             }
             state?.notesErrorMessage?.let { message ->
-                item(contentType = "clip-status") {
+                item(key = "clip-notes-error-${selectedClip?.id.orEmpty()}", contentType = "clip-status") {
                     ClipStatusRow(
                         text = message,
                         actionText = "重试",
@@ -215,7 +215,7 @@ fun ClipScreen(
                 notes.isEmpty() &&
                 state.notesErrorMessage == null
             ) {
-                item(contentType = "clip-status") { ClipStatusRow(text = "这个剪辑还没有动态") }
+                item(key = "clip-notes-empty-${selectedClip.id}", contentType = "clip-status") { ClipStatusRow(text = "这个剪辑还没有动态") }
             }
             items(
                 items = notes,
@@ -254,7 +254,7 @@ fun ClipScreen(
                 }
             }
             if (state != null && notes.isNotEmpty() && state.isLoadingMore) {
-                item(contentType = "clip-status") {
+                item(key = "clip-loading-more-${selectedClip?.id.orEmpty()}", contentType = "clip-status") {
                     ClipStatusRow(
                         text = "正在加载更多...",
                         loading = state.isLoadingMore,
@@ -316,13 +316,14 @@ private fun RemoveClipNoteDialog(
     onDismiss: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    AlertDialog(
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("移出剪辑") },
         text = {
             Text(
                 text = "这条动态会从当前剪辑移除，动态本身不会被删除。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
@@ -354,12 +355,13 @@ private fun ClipEditorDialog(
     onDismiss: () -> Unit,
     onSubmit: (String, String, Boolean) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     var name by remember(initialClip?.id) { mutableStateOf(initialClip?.name.orEmpty()) }
     var description by remember(initialClip?.id) { mutableStateOf(initialClip?.description.orEmpty()) }
     var isPublic by remember(initialClip?.id) { mutableStateOf(initialClip?.isPublic == true) }
     val canSubmit = name.isNotBlank() && !isCreating
 
-    AlertDialog(
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
@@ -386,14 +388,14 @@ private fun ClipEditorDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Checkbox(
+                    HhhlCheckbox(
                         checked = isPublic,
                         onCheckedChange = { isPublic = it },
                         enabled = !isCreating,
                     )
                     Text(
                         text = "公开剪辑",
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = colors.textPrimary,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -425,13 +427,14 @@ private fun DeleteClipDialog(
     onDismiss: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    AlertDialog(
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("删除剪辑") },
         text = {
             Text(
                 text = "删除「${clip.name.ifBlank { "未命名剪辑" }}」后，剪辑列表会移除它，动态本身不会被删除。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
@@ -492,6 +495,7 @@ private fun ClipHeaderRow(
     onEditClip: () -> Unit,
     onDeleteClip: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     HhhlInlinePanel(
         modifier = Modifier
             .fillMaxWidth()
@@ -504,19 +508,19 @@ private fun ClipHeaderRow(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = clip.name.ifBlank { "未命名剪辑" },
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = colors.textPrimary,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     text = "${clip.notesCount} 条 · ${clip.favoritedCount} 人收藏 · ${clip.visibilityLabel}",
-                    color = LocalHhhlColors.current.subtleText,
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 clip.description.takeIf { it.isNotBlank() }?.let { description ->
                     InlineRichText(
                         text = description,
-                        color = LocalHhhlColors.current.subtleText,
+                        color = colors.textMuted,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -593,6 +597,7 @@ private fun ClipSummaryRow(
     isLoadingClips: Boolean,
     isLoadingNotes: Boolean,
 ) {
+    val colors = LocalHhhlColors.current
     val titleText = listOfNotNull(
         selectedKind.label,
         selectedClip?.name?.ifBlank { "未命名剪辑" },
@@ -612,7 +617,7 @@ private fun ClipSummaryRow(
     ) {
         Text(
             text = "$titleText · $stateText",
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
@@ -662,6 +667,7 @@ private fun ClipPickerRow(
     isLoading: Boolean,
     onSelectClip: (Clip) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
@@ -670,16 +676,16 @@ private fun ClipPickerRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (isLoading && clips.isNotEmpty()) {
-            item(contentType = "clip-picker-status") {
+            item(key = "clip-picker-loading", contentType = "clip-picker-status") {
                 Row(
                     modifier = Modifier.padding(horizontal = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    CircularProgressIndicator(strokeWidth = 2.dp)
+                    HhhlProgressIndicator(strokeWidth = 2.dp)
                     Text(
                         text = "加载中",
-                        color = LocalHhhlColors.current.subtleText,
+                        color = colors.textMuted,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -706,13 +712,14 @@ private fun ClipPickerChip(
     active: Boolean,
     onClick: () -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Box(
         modifier = Modifier
             .widthIn(min = 120.dp, max = 188.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                else LocalHhhlColors.current.inputBackground,
+                if (active) colors.buttonSelectedBackground
+                else colors.buttonBackground,
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -721,9 +728,9 @@ private fun ClipPickerChip(
             Text(
                 text = clip.name.ifBlank { "未命名剪辑" },
                 color = if (active) {
-                    MaterialTheme.colorScheme.primary
+                    colors.accent
                 } else {
-                    MaterialTheme.colorScheme.onBackground
+                    colors.textPrimary
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
@@ -732,7 +739,7 @@ private fun ClipPickerChip(
             )
             Text(
                 text = "${clip.notesCount} 条 · ${clip.visibilityLabel}",
-                color = LocalHhhlColors.current.subtleText,
+                color = colors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

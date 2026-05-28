@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 
 data class NotificationCacheSnapshot(
     val notifications: List<NotificationItem> = emptyList(),
+    val chatAttentionNotifications: List<NotificationItem> = emptyList(),
     val specialCareNotifications: List<NotificationItem> = emptyList(),
 )
 
@@ -38,8 +39,15 @@ object NotificationCacheCodec {
     fun encode(snapshot: NotificationCacheSnapshot): String {
         return json.encodeToString(
             CachedNotificationEnvelope(
-                notifications = snapshot.notifications.map { it.toCachedNotification() },
-                specialCareNotifications = snapshot.specialCareNotifications.map { it.toCachedNotification() },
+                notifications = snapshot.notifications
+                    .take(MAX_NOTIFICATION_CACHE_ITEMS)
+                    .map { it.toCachedNotification() },
+                chatAttentionNotifications = snapshot.chatAttentionNotifications
+                    .take(MAX_NOTIFICATION_CACHE_ITEMS)
+                    .map { it.toCachedNotification() },
+                specialCareNotifications = snapshot.specialCareNotifications
+                    .take(MAX_NOTIFICATION_CACHE_ITEMS)
+                    .map { it.toCachedNotification() },
             ),
         )
     }
@@ -49,17 +57,27 @@ object NotificationCacheCodec {
         return runCatching {
             val envelope = json.decodeFromString<CachedNotificationEnvelope>(payload)
             NotificationCacheSnapshot(
-                notifications = envelope.notifications.map { it.toDomainNotification() },
-                specialCareNotifications = envelope.specialCareNotifications.map { it.toDomainNotification() },
+                notifications = envelope.notifications
+                    .take(MAX_NOTIFICATION_CACHE_ITEMS)
+                    .map { it.toDomainNotification() },
+                chatAttentionNotifications = envelope.chatAttentionNotifications
+                    .take(MAX_NOTIFICATION_CACHE_ITEMS)
+                    .map { it.toDomainNotification() },
+                specialCareNotifications = envelope.specialCareNotifications
+                    .take(MAX_NOTIFICATION_CACHE_ITEMS)
+                    .map { it.toDomainNotification() },
             )
         }.getOrDefault(NotificationCacheSnapshot())
     }
 }
 
+private const val MAX_NOTIFICATION_CACHE_ITEMS = 240
+
 @Serializable
 private data class CachedNotificationEnvelope(
     val version: Int = 1,
     val notifications: List<CachedNotificationItem> = emptyList(),
+    val chatAttentionNotifications: List<CachedNotificationItem> = emptyList(),
     val specialCareNotifications: List<CachedNotificationItem> = emptyList(),
 )
 

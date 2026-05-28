@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -58,9 +59,12 @@ private data class EmojiPickerTab(
     val label: String,
 )
 
-private const val CustomEmojiTabKey = "custom"
+private const val CustomEmojiTabPrefix = "custom:"
 private const val SearchEmojiTabKey = "search"
 private const val SearchUnicodeEmojiMaxPerCategory = 96
+
+private val EmojiPickerContentHeight = 220.dp
+private val CompactEmojiPickerContentHeight = 180.dp
 
 private data class CustomEmojiPickerIndex(
     val emojis: List<CustomEmoji>,
@@ -218,7 +222,9 @@ fun CustomEmojiPicker(
         if (query.isBlank()) {
             buildList {
                 unicodeSections.forEach { add(EmojiPickerTab(it.key, it.label)) }
-                if (sections.isNotEmpty()) add(EmojiPickerTab(CustomEmojiTabKey, "实例"))
+                sections.forEach { section ->
+                    add(EmojiPickerTab(section.customEmojiTabKey(), section.label))
+                }
             }
         } else {
             listOf(EmojiPickerTab(SearchEmojiTabKey, "搜索"))
@@ -226,12 +232,14 @@ fun CustomEmojiPicker(
     }
     val selectedTab = tabs.firstOrNull { it.key == selectedTabKey } ?: tabs.firstOrNull()
     val selectedUnicodeSection = unicodeSections.firstOrNull { it.key == selectedTab?.key }
+    val selectedCustomSection = sections.firstOrNull { it.customEmojiTabKey() == selectedTab?.key }
     val outerHorizontalPadding = if (compact) 8.dp else 12.dp
     val outerVerticalPadding = if (compact) 6.dp else 8.dp
     val outerSpacing = if (compact) 7.dp else 10.dp
     val searchMinHeight = if (compact) 34.dp else 38.dp
     val searchVerticalPadding = if (compact) 5.dp else 7.dp
     val sectionSpacing = if (compact) 7.dp else 10.dp
+    val contentHeight = if (compact) CompactEmojiPickerContentHeight else EmojiPickerContentHeight
 
     Column(
         modifier = modifier
@@ -259,7 +267,7 @@ fun CustomEmojiPicker(
         if (sections.isEmpty() && unicodeSections.isEmpty()) {
             Text(
                 text = if (customEmojis.isEmpty()) "实例表情加载后会显示在这里" else "没有匹配的表情",
-                color = LocalHhhlColors.current.subtleText,
+                color = LocalHhhlColors.current.textMuted,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -269,14 +277,14 @@ fun CustomEmojiPicker(
                 onEmojiSelected = onEmojiSelected,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .height(contentHeight),
                 compact = compact,
             )
         } else if (query.isNotBlank() && (unicodeSections.isNotEmpty() || sections.isNotEmpty())) {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .height(contentHeight),
                 verticalArrangement = Arrangement.spacedBy(sectionSpacing),
             ) {
                 items(
@@ -302,27 +310,24 @@ fun CustomEmojiPicker(
                     )
                 }
             }
-        } else if (selectedTab?.key == CustomEmojiTabKey && sections.isNotEmpty()) {
-            LazyColumn(
+        } else if (selectedCustomSection != null) {
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(sectionSpacing),
+                    .height(contentHeight),
             ) {
-                items(
-                    items = sections,
-                    key = { it.label },
-                    contentType = { "custom-emoji-section" },
-                ) { section ->
-                    CustomEmojiPickerSectionView(
-                        section,
-                        onEmojiSelected,
-                        compact = compact,
-                    )
-                }
+                CustomEmojiPickerSectionView(
+                    selectedCustomSection,
+                    onEmojiSelected,
+                    compact = compact,
+                )
             }
         }
     }
+}
+
+private fun CustomEmojiPickerSection.customEmojiTabKey(): String {
+    return CustomEmojiTabPrefix + label
 }
 
 @Composable
@@ -332,6 +337,7 @@ private fun CustomUnicodeEmojiGridSection(
     modifier: Modifier = Modifier,
     compact: Boolean = false,
 ) {
+    val colors = LocalHhhlColors.current
     val minCellSize = if (compact) 42.dp else 48.dp
     val gridSpacing = if (compact) 6.dp else 8.dp
     val itemShape = RoundedCornerShape(if (compact) 7.dp else 8.dp)
@@ -341,7 +347,7 @@ private fun CustomUnicodeEmojiGridSection(
     ) {
         Text(
             text = "${section.label} · ${section.emojis.size}",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -366,10 +372,10 @@ private fun CustomUnicodeEmojiGridSection(
                         .fillMaxWidth()
                         .aspectRatio(1f)
                         .clip(itemShape)
-                        .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.78f))
+                        .background(colors.inputBackground.copy(alpha = 0.78f))
                         .border(
                             width = 1.dp,
-                            color = LocalHhhlColors.current.divider.copy(alpha = 0.44f),
+                            color = colors.border.copy(alpha = 0.44f),
                             shape = itemShape,
                         )
                         .clickable { onEmojiSelected(emoji) },
@@ -424,18 +430,18 @@ private fun EmojiPickerTabItem(
             .clip(shape)
             .background(
                 color = if (selected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                    colors.buttonSelectedBackground
                 } else {
-                    colors.inputBackground.copy(alpha = 0.58f)
+                    colors.buttonBackground.copy(alpha = 0.58f)
                 },
                 shape = shape,
             )
             .border(
                 width = 1.dp,
                 color = if (selected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+                    colors.focusRing.copy(alpha = 0.28f)
                 } else {
-                    colors.divider.copy(alpha = 0.36f)
+                    colors.border.copy(alpha = 0.36f)
                 },
                 shape = shape,
             )
@@ -448,7 +454,7 @@ private fun EmojiPickerTabItem(
     ) {
         Text(
             text = label,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            color = if (selected) colors.accent else colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -462,13 +468,14 @@ private fun CustomUnicodeEmojiSection(
     onEmojiSelected: (String) -> Unit,
     compact: Boolean = false,
 ) {
+    val colors = LocalHhhlColors.current
     val gridSpacing = if (compact) 6.dp else 8.dp
     val itemShape = RoundedCornerShape(if (compact) 7.dp else 8.dp)
     val minCellSize = if (compact) 32.dp else 36.dp
     Column(verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 6.dp)) {
         Text(
             text = "${section.label} · ${section.emojis.size}",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -489,10 +496,10 @@ private fun CustomUnicodeEmojiSection(
                                     .weight(1f)
                                     .aspectRatio(1f)
                                     .clip(itemShape)
-                                    .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.78f))
+                                    .background(colors.inputBackground.copy(alpha = 0.78f))
                                     .border(
                                         width = 1.dp,
-                                        color = LocalHhhlColors.current.divider.copy(alpha = 0.44f),
+                                        color = colors.border.copy(alpha = 0.44f),
                                         shape = itemShape,
                                     )
                                     .clickable { onEmojiSelected(emoji) },
@@ -524,11 +531,12 @@ private fun CustomEmojiPickerSectionView(
     onEmojiSelected: (String) -> Unit,
     compact: Boolean = false,
 ) {
+    val colors = LocalHhhlColors.current
     val gridSpacing = if (compact) 6.dp else 8.dp
     Column(verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 6.dp)) {
         Text(
             text = "${section.label} · ${section.emojis.size}",
-            color = LocalHhhlColors.current.subtleText,
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -556,14 +564,15 @@ private fun CustomEmojiPickerItem(
     onClick: () -> Unit,
     compact: Boolean = false,
 ) {
+    val colors = LocalHhhlColors.current
     val iconSize = if (compact) 22.dp else 24.dp
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(LocalHhhlColors.current.inputBackground.copy(alpha = 0.78f))
+            .background(colors.inputBackground.copy(alpha = 0.78f))
             .border(
                 width = 1.dp,
-                color = LocalHhhlColors.current.divider.copy(alpha = 0.44f),
+                color = colors.border.copy(alpha = 0.44f),
                 shape = RoundedCornerShape(8.dp),
             )
             .clickable(onClick = onClick)
@@ -586,7 +595,7 @@ private fun CustomEmojiPickerItem(
         }
         Text(
             text = emoji.name,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.labelMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,

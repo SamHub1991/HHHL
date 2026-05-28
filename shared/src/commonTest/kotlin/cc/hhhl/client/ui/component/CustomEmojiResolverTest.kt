@@ -65,6 +65,27 @@ class CustomEmojiResolverTest {
     }
 
     @Test
+    fun malformedEmojiCandidateDoesNotSwallowFollowingValidEmoji() {
+        val segments = parseCustomEmojiText(
+            text = "bad :broken plus :blobcat: and :unknown: then :party@.:",
+            emojiUrls = mapOf(
+                ":blobcat:" to "https://dc.hhhl.cc/emoji/blobcat.webp",
+                ":party@.:" to "https://dc.hhhl.cc/emoji/party.webp",
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                CustomEmojiTextSegment.Text("bad :broken plus "),
+                CustomEmojiTextSegment.Emoji(":blobcat:", "https://dc.hhhl.cc/emoji/blobcat.webp"),
+                CustomEmojiTextSegment.Text(" and :unknown: then "),
+                CustomEmojiTextSegment.Emoji(":party@.:", "https://dc.hhhl.cc/emoji/party.webp"),
+            ),
+            segments,
+        )
+    }
+
+    @Test
     fun parsesOnlyBoundedEmojiCodesWithValidCodeCharacters() {
         val longCode = ":${"a".repeat(120)}:"
         val segments = parseCustomEmojiText(
@@ -81,6 +102,21 @@ class CustomEmojiResolverTest {
         )
     }
 
+    @Test
+    fun capsCustomEmojiTextSegmentsAndKeepsTail() {
+        val text = buildString {
+            repeat(220) { index -> append(":e$index: ") }
+            append("tail")
+        }
+        val emojiUrls = (0 until 220).associate { index -> ":e$index:" to "https://dc.hhhl.cc/emoji/e$index.webp" }
+
+        val segments = parseCustomEmojiText(text = text, emojiUrls = emojiUrls)
+
+        assertTrue(segments.size <= 162)
+        assertEquals(text, segments.joinToString(separator = "") { it.displayValue() })
+        assertTrue(segments.last() is CustomEmojiTextSegment.Text)
+    }
+
     private fun customEmoji(
         name: String,
         url: String,
@@ -94,5 +130,12 @@ class CustomEmojiResolverTest {
             localOnly = true,
             isSensitive = isSensitive,
         )
+    }
+}
+
+private fun CustomEmojiTextSegment.displayValue(): String {
+    return when (this) {
+        is CustomEmojiTextSegment.Text -> value
+        is CustomEmojiTextSegment.Emoji -> code
     }
 }

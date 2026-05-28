@@ -24,8 +24,8 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import cc.hhhl.client.HhhlApp
 import cc.hhhl.client.api.DriveFileUpload
-import cc.hhhl.client.auth.MiAuthCallback
 import cc.hhhl.client.media.MediaPicker
+import cc.hhhl.client.model.NotificationItem
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
             val displayPreferenceStore = remember { AndroidDisplayPreferenceStore(applicationContext) }
             val recentReactionStore = remember { AndroidRecentReactionStore(applicationContext) }
             val specialCareStore = remember { AndroidSpecialCareStore(applicationContext) }
+            val automationStore = remember { AndroidAutomationStore(applicationContext) }
             val composeDraftStore = remember { AndroidComposeDraftStore(applicationContext) }
             val chatMessageCache = remember { AndroidChatMessageCache(applicationContext) }
             val chatUnreadStore = remember { AndroidChatUnreadStore(applicationContext) }
@@ -55,6 +56,7 @@ class MainActivity : ComponentActivity() {
             val notificationReadStore = remember { AndroidNotificationReadStore(applicationContext) }
             val timelineCache = remember { AndroidTimelineCache(applicationContext) }
             val backgroundNotificationStore = remember { AndroidBackgroundNotificationStore(applicationContext) }
+            val appUpdateManager = remember { AndroidAppUpdateManager(applicationContext) }
             var backgroundNotificationsEnabled by remember {
                 mutableStateOf(backgroundNotificationStore.isBackgroundSyncEnabled())
             }
@@ -88,7 +90,13 @@ class MainActivity : ComponentActivity() {
                 MediaPicker { mimeType, onPicked, onError ->
                     onMediaPicked = onPicked
                     onMediaError = onError
-                    mediaLauncher.launch(mimeType.ifBlank { "*/*" })
+                    runCatching {
+                        mediaLauncher.launch(mimeType.ifBlank { "*/*" })
+                    }.onFailure {
+                        onMediaPicked = null
+                        onMediaError = null
+                        onError("无法打开系统文件选择器")
+                    }
                 }
             }
             val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -105,11 +113,23 @@ class MainActivity : ComponentActivity() {
             }
             LaunchedEffect(backgroundNotificationsEnabled, specialCareBackgroundNotificationsEnabled) {
                 if (backgroundNotificationsEnabled && shouldRequestNotificationPermission()) {
-                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    runCatching {
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
                 }
             }
             LaunchedEffect(backgroundNotificationsEnabled) {
                 BackgroundNotificationScheduler.apply(applicationContext, backgroundNotificationsEnabled)
+            }
+            LaunchedEffect(Unit) {
+                launch(Dispatchers.IO) {
+                    when (val result = appUpdateManager.checkForUpdates()) {
+                        is AppUpdateCheckResult.UpdateAvailable -> appUpdateManager.notifyUpdateAvailable(result.update)
+                        is AppUpdateCheckResult.NoUpdate,
+                        is AppUpdateCheckResult.Error,
+                            -> Unit
+                    }
+                }
             }
             BackHandler(enabled = systemBackHandler != null) {
                 val handled = systemBackHandler?.invoke() == true
@@ -119,6 +139,7 @@ class MainActivity : ComponentActivity() {
             }
             HhhlApp(
                 openUrl = ::openUrl,
+                shareUrl = ::shareUrl,
                 downloadUrl = ::downloadUrl,
                 mediaPicker = mediaPicker,
                 authCallbackSession = authCallbackSession,
@@ -127,6 +148,7 @@ class MainActivity : ComponentActivity() {
                 displayPreferenceStore = displayPreferenceStore,
                 recentReactionStore = recentReactionStore,
                 specialCareStore = specialCareStore,
+                automationStore = automationStore,
                 composeDraftStore = composeDraftStore,
                 chatMessageCache = chatMessageCache,
                 chatUnreadStore = chatUnreadStore,
@@ -139,7 +161,9 @@ class MainActivity : ComponentActivity() {
                     backgroundNotificationsEnabled = enabled
                     backgroundNotificationStore.setBackgroundSyncEnabled(enabled)
                     if (enabled && shouldRequestNotificationPermission()) {
-                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        runCatching {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
                     } else {
                         BackgroundNotificationScheduler.apply(applicationContext, enabled)
                     }
@@ -149,6 +173,41 @@ class MainActivity : ComponentActivity() {
                     backgroundNotificationStore.setSpecialCareEnabled(enabled)
                     if (backgroundNotificationsEnabled) {
                         BackgroundNotificationScheduler.syncNow(applicationContext)
+                    }
+                },
+                onSpecialCareUsersChanged = {
+                    if (backgroundNotificationsEnabled && specialCareBackgroundNotificationsEnabled) {
+                        BackgroundNotificationScheduler.syncNow(applicationContext)
+                    }
+                },
+                onSpecialCareSystemNotification = { notification ->
+                    coroutineScope.launch(Dispatchers.IO) {
+                        publishChatAttentionSystemNotification(notification)
+                    }
+                },
+                onAutomationSystemNotification = { title, body ->
+                    publishAutomationSystemNotification(title, body)
+                },
+                onCheckForUpdates = { report ->
+                    coroutineScope.launch(Dispatchers.IO) {
+                        val message = when (val result = appUpdateManager.checkForUpdates()) {
+                            is AppUpdateCheckResult.UpdateAvailable -> {
+                                val notified = appUpdateManager.notifyUpdateAvailable(result.update)
+                                if (notified) {
+                                    "发现新版本 ${result.update.versionName}，已发送下载通知"
+                                } else {
+                                    when (val download = appUpdateManager.downloadUpdate(result.update)) {
+                                        is AppUpdateDownloadResult.Started -> "发现新版本 ${result.update.versionName}，已开始下载"
+                                        is AppUpdateDownloadResult.Error -> download.message
+                                    }
+                                }
+                            }
+                            is AppUpdateCheckResult.NoUpdate -> "当前已是最新版本 ${result.currentVersion}"
+                            is AppUpdateCheckResult.Error -> result.message
+                        }
+                        withContext(Dispatchers.Main) {
+                            report(message)
+                        }
                     }
                 },
                 onBackHandlerChanged = { handler ->
@@ -166,10 +225,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun consumeAuthCallback(intent: Intent?) {
-        val session = MiAuthCallback.parseSession(intent?.dataString)
+        val session = intent?.data?.parseMiAuthSession()
         if (session != null) {
             authCallbackSession = session
         }
+    }
+
+    private fun Uri.parseMiAuthSession(): String? {
+        if (scheme != "hhhl" || host != "miauth") return null
+        return getQueryParameter("session")?.takeIf { it.isNotBlank() }
     }
 
     private fun configureImageLoader() {
@@ -194,9 +258,27 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openUrl(url: String) {
-        startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse(url)),
-        )
+        val cleanUrl = url.trim()
+        if (cleanUrl.isEmpty()) return
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(cleanUrl)))
+        }.onFailure {
+            Toast.makeText(this, "无法打开链接", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun shareUrl(url: String) {
+        val cleanUrl = url.trim()
+        if (cleanUrl.isEmpty()) return
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, cleanUrl)
+        }
+        runCatching {
+            startActivity(Intent.createChooser(intent, "分享帖子"))
+        }.onFailure {
+            Toast.makeText(this, "无法打开分享面板", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun downloadUrl(url: String, label: String, mimeType: String) {
@@ -230,10 +312,93 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.POST_NOTIFICATIONS,
             ) != PackageManager.PERMISSION_GRANTED
     }
+
+    private suspend fun publishChatAttentionSystemNotification(notification: NotificationItem) {
+        val settings = AndroidBackgroundNotificationStore(applicationContext)
+        if (!settings.isBackgroundSyncEnabled()) return
+        if (notification.isSpecialCare && !settings.isSpecialCareEnabled()) return
+        if (shouldRequestNotificationPermission()) return
+        val eventId = notification.specialCareSystemEventId()
+        val seenIds = settings.loadSeenIds()
+        if (eventId in seenIds) return
+
+        BackgroundNotificationPublisher(applicationContext).publish(
+            listOf(
+                BackgroundNotificationEvent(
+                    id = eventId,
+                    title = "${notification.chatAttentionSystemTitlePrefix()} · ${notification.actor.displayName}",
+                    text = notification.notePreviewText?.takeIf { it.isNotBlank() }
+                        ?: notification.text.ifBlank { "有新的聊天提醒" },
+                    specialCare = notification.isSpecialCare,
+                    avatarMode = NotificationAvatarMode.UserAvatar(
+                        notification.actor.avatarUrl,
+                        notification.actor.avatarInitial,
+                    ),
+                    createdAtEpochMillis = notification.createdAtEpochMillis.takeIf { it > 0L }
+                        ?: System.currentTimeMillis(),
+                    cacheNotification = notification.takeIf { it.isSpecialCare }?.copy(isSpecialCare = true),
+                ),
+            ),
+        )
+        if (notification.isSpecialCare) {
+            AndroidAuthTokenStore(applicationContext)
+                .readAccountSessions()
+                .firstOrNull { it.current }
+                ?.let { session ->
+                    applicationContext.cacheSpecialCareNotifications(
+                        accountId = session.id,
+                        notifications = listOf(notification.copy(isSpecialCare = true)),
+                    )
+                }
+        }
+        settings.saveSeenIds((listOf(eventId) + seenIds).take(200).toSet())
+    }
+
+    private fun publishAutomationSystemNotification(title: String, body: String): Boolean {
+        if (shouldRequestNotificationPermission()) return false
+        val cleanTitle = title.trim().ifBlank { "HHHL 自动化" }
+        val cleanBody = body.trim().ifBlank { "自动化规则已执行" }
+        BackgroundNotificationPublisher(applicationContext).publish(
+            listOf(
+                BackgroundNotificationEvent(
+                    id = "automation:${cleanTitle.hashCode()}:${cleanBody.hashCode()}:${System.currentTimeMillis()}",
+                    title = cleanTitle,
+                    text = cleanBody,
+                    specialCare = false,
+                    avatarMode = NotificationAvatarMode.AppIcon,
+                    createdAtEpochMillis = System.currentTimeMillis(),
+                    cacheNotification = null,
+                ),
+            ),
+        )
+        return true
+    }
+}
+
+private fun NotificationItem.chatAttentionSystemTitlePrefix(): String {
+    val cleanText = text.trim()
+    return when {
+        cleanText.startsWith("有人 @ 你") -> "有人 @ 你"
+        cleanText.startsWith("有人回复你") -> "有人回复你"
+        cleanText.startsWith("有人引用你") -> "有人引用你"
+        else -> "特别关心"
+    }
+}
+
+private fun NotificationItem.specialCareSystemEventId(): String {
+    noteId?.takeIf { it.isNotBlank() }?.let { return "special-note:$it" }
+    chatUserId?.takeIf { it.isNotBlank() }?.let { userId ->
+        return "user:$userId:${chatMessageId?.takeIf { it.isNotBlank() } ?: id}"
+    }
+    chatRoomId?.takeIf { it.isNotBlank() }?.let { roomId ->
+        return "room:$roomId:${chatMessageId?.takeIf { it.isNotBlank() } ?: id}"
+    }
+    return "special:$id"
 }
 
 private fun String.toDownloadTitle(url: String): String {
-    return trim().takeIf { it.isNotBlank() && it != "附件" && it != "图片" }
+    val genericLabels = setOf("附件", "图片", "视频", "音频", "敏感内容", "文件")
+    return trim().takeIf { it.isNotBlank() && it !in genericLabels }
         ?: Uri.parse(url).lastPathSegment?.substringBefore('?')?.takeIf { it.isNotBlank() }
         ?: "HHHL 附件"
 }
@@ -252,14 +417,51 @@ private fun String.toDownloadFileName(url: String, mimeType: String): String {
 private fun String.withExtensionForMime(mimeType: String): String {
     val clean = trim().ifBlank { "hhhl_attachment" }
     if ("." in clean.substringAfterLast('/')) return clean
-    val extension = when (mimeType.substringBefore(';').lowercase()) {
+    val extension = when (mimeType.substringBefore(';').trim().lowercase()) {
         "image/jpeg" -> "jpg"
         "image/png" -> "png"
         "image/gif" -> "gif"
         "image/webp" -> "webp"
+        "image/heic" -> "heic"
+        "image/heif" -> "heif"
+        "image/bmp" -> "bmp"
+        "image/svg+xml" -> "svg"
         "video/mp4" -> "mp4"
+        "video/webm" -> "webm"
+        "video/quicktime" -> "mov"
+        "video/x-matroska" -> "mkv"
+        "video/x-msvideo" -> "avi"
+        "video/mpeg" -> "mpg"
         "audio/mpeg" -> "mp3"
+        "audio/mp4" -> "m4a"
+        "audio/aac" -> "aac"
+        "audio/ogg" -> "ogg"
+        "audio/wav" -> "wav"
+        "audio/webm" -> "webm"
+        "audio/flac" -> "flac"
         "application/pdf" -> "pdf"
+        "application/json" -> "json"
+        "application/ld+json" -> "json"
+        "application/xml" -> "xml"
+        "application/zip", "application/x-zip-compressed" -> "zip"
+        "application/vnd.rar", "application/x-rar-compressed" -> "rar"
+        "application/x-7z-compressed" -> "7z"
+        "application/gzip" -> "gz"
+        "application/x-tar" -> "tar"
+        "application/msword" -> "doc"
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> "docx"
+        "application/vnd.ms-excel" -> "xls"
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> "xlsx"
+        "application/vnd.ms-powerpoint" -> "ppt"
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> "pptx"
+        "application/vnd.android.package-archive" -> "apk"
+        "text/plain" -> "txt"
+        "text/markdown" -> "md"
+        "text/csv" -> "csv"
+        "text/html" -> "html"
+        "text/css" -> "css"
+        "text/javascript" -> "js"
+        "text/xml" -> "xml"
         else -> "bin"
     }
     return "$clean.$extension"
