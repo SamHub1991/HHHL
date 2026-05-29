@@ -140,6 +140,7 @@ private fun AchievementSummaryRow(
 @Composable
 private fun AchievementRow(achievement: Achievement) {
     val colors = LocalHhhlColors.current
+    val presentation = achievementRowPresentation(achievement)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -164,7 +165,7 @@ private fun AchievementRow(achievement: Achievement) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = if (achievement.isUnlocked) achievement.title else "???",
+                    text = presentation.title,
                     color = colors.textPrimary,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
@@ -180,15 +181,15 @@ private fun AchievementRow(achievement: Achievement) {
                 )
             }
             Text(
-                text = if (achievement.isUnlocked) achievement.description else "未解锁",
+                text = presentation.description,
                 color = colors.textMuted,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (achievement.isUnlocked && achievement.unlockedAtLabel.isNotBlank()) {
+            if (presentation.statusLabel.isNotBlank()) {
                 Text(
-                    text = achievement.unlockedAtLabel,
+                    text = presentation.statusLabel,
                     color = colors.textMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
@@ -245,6 +246,20 @@ private fun Achievement.rankColor() = when (rank) {
     AchievementRank.Silver -> LocalHhhlColors.current.rankSilver
     AchievementRank.Gold -> LocalHhhlColors.current.rankGold
     AchievementRank.Platinum -> LocalHhhlColors.current.rankPlatinum
+}
+
+internal data class AchievementRowPresentation(
+    val title: String,
+    val description: String,
+    val statusLabel: String,
+)
+
+internal fun achievementRowPresentation(achievement: Achievement): AchievementRowPresentation {
+    return AchievementRowPresentation(
+        title = achievement.title,
+        description = achievement.description,
+        statusLabel = if (achievement.isUnlocked) achievement.unlockedAtLabel else "未解锁",
+    )
 }
 
 private const val ACHIEVEMENT_VIEW_MILESTONE_DELAY_MS = 180_000L
