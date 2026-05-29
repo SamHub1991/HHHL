@@ -43,14 +43,9 @@ fun siteLinkNavigationTarget(url: String): SiteLinkNavigationTarget {
         ?: return SiteLinkNavigationTarget.External(cleanUrl)
 
     return when {
-        path.startsWith("notes/") -> {
-            val noteId = path.removePrefix("notes/").substringBefore('/').trim()
-            if (noteId.isNotBlank()) {
-                SiteLinkNavigationTarget.NoteDetail(noteId)
-            } else {
-                SiteLinkNavigationTarget.External(cleanUrl)
-            }
-        }
+        path.startsWith("notes/") -> path.localStrictIdAfter("notes")
+            ?.let { SiteLinkNavigationTarget.NoteDetail(it) }
+            ?: SiteLinkNavigationTarget.External(cleanUrl)
         path.startsWith("users/") -> path.localPathIdAfter("users")
             ?.let { SiteLinkNavigationTarget.UserProfile(it) }
             ?: SiteLinkNavigationTarget.External(cleanUrl)
@@ -168,12 +163,20 @@ private fun String.localPathIdAfter(prefix: String): String? {
 }
 
 private fun String.localChatIdAfter(prefix: String): String? {
+    return localStrictIdAfter(prefix)
+}
+
+private fun String.localStrictIdAfter(prefix: String): String? {
     return removePrefix(prefix)
         .trim('/')
         .substringBefore('/')
-        .takeWhile { it.isAsciiLetterOrDigit() || it == '-' || it == '_' }
+        .takeWhile { it.isLocalStrictIdChar() }
         .trim()
         .takeIf { it.isNotBlank() }
+}
+
+private fun Char.isLocalStrictIdChar(): Boolean {
+    return isAsciiLetterOrDigit() || this == '-' || this == '_'
 }
 
 private fun Char.isAsciiLetterOrDigit(): Boolean {

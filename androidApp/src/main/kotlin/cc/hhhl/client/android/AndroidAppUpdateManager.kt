@@ -1,6 +1,7 @@
 package cc.hhhl.client.android
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.DownloadManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -30,7 +31,7 @@ class AndroidAppUpdateManager(
         return runCatching {
             val release = loadLatestRelease()
                 ?: return AppUpdateCheckResult.Error("没有找到 GitHub Release")
-            val asset = release.assets.firstOrNull { asset -> asset.isAndroidPackage }
+            val asset = release.selectAndroidPackage()
                 ?: return AppUpdateCheckResult.Error("最新 Release 没有 APK 安装包")
             val update = AppUpdateInfo(
                 versionName = release.cleanVersionName,
@@ -53,7 +54,7 @@ class AndroidAppUpdateManager(
     fun notifyUpdateAvailable(update: AppUpdateInfo): Boolean {
         if (!canPostNotifications()) return false
         ensureUpdateChannel()
-        val intent = Intent(context, AppUpdateReceiver::class.java).apply {
+        val downloadIntent = Intent(context, AppUpdateReceiver::class.java).apply {
             action = ACTION_DOWNLOAD_APP_UPDATE
             setPackage(context.packageName)
             putExtra(EXTRA_VERSION_NAME, update.versionName)
@@ -62,27 +63,42 @@ class AndroidAppUpdateManager(
             putExtra(EXTRA_APK_URL, update.apkUrl)
             putExtra(EXTRA_SIZE_BYTES, update.sizeBytes)
         }
-        val pendingIntent = PendingIntent.getBroadcast(
+        val downloadPendingIntent = PendingIntent.getBroadcast(
             context,
             update.versionName.hashCode(),
-            intent,
+            downloadIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val openAppPendingIntent = PendingIntent.getActivity(
+            context,
+            UPDATE_NOTIFICATION_ID,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
             .setSmallIcon(R.drawable.dc_icon)
             .setLargeIcon(android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.dc_icon))
             .setContentTitle("发现新版本 ${update.versionName}")
-            .setContentText("点击下载并覆盖安装，缓存和本地数据会保留")
+            .setContentText("可下载并覆盖安装，缓存和本地数据会保留")
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(
-                    "${update.releaseName.ifBlank { "HHHL" }} 已可更新。点击后下载 APK，下载完成会打开系统安装确认。",
+                    "${update.releaseName.ifBlank { "HHHL" }} 已可更新。点击“下载更新”下载 APK，下载完成会打开系统安装确认。",
                 ),
             )
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(openAppPendingIntent)
+            .addAction(R.drawable.dc_icon, "下载更新", downloadPendingIntent)
             .build()
+        return notifyUpdateSafely(notification)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun notifyUpdateSafely(notification: android.app.Notification): Boolean {
+        if (!canPostNotifications()) return false
         return runCatching {
             NotificationManagerCompat.from(context).notify(UPDATE_NOTIFICATION_ID, notification)
             true
@@ -120,11 +136,26 @@ class AndroidAppUpdateManager(
         val store = AndroidAppUpdateStore(context)
         val pending = store.readPendingDownload() ?: return false
         if (pending.downloadId != downloadId) return false
+        return installPendingUpdate(store, pending, openSettingsIfNeeded = true)
+    }
+
+    fun retryPendingInstall(): Boolean {
+        val store = AndroidAppUpdateStore(context)
+        val pending = store.readPendingDownload() ?: return false
+        return installPendingUpdate(store, pending, openSettingsIfNeeded = false)
+    }
+
+    private fun installPendingUpdate(
+        store: AndroidAppUpdateStore,
+        pending: PendingAppUpdateDownload,
+        openSettingsIfNeeded: Boolean,
+    ): Boolean {
+        val downloadId = pending.downloadId
         if (!isDownloadSuccessful(downloadId)) return false
         val apk = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), pending.fileName)
         if (!apk.exists()) return false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
-            return openUnknownAppSourcesSettings()
+            return openSettingsIfNeeded && openUnknownAppSourcesSettings()
         }
         val uri = FileProvider.getUriForFile(
             context,
@@ -279,6 +310,18 @@ private data class GithubRelease(
         get() = tagName.trim().removePrefix("v").removePrefix("V")
 }
 
+private fun GithubRelease.selectAndroidPackage(): GithubReleaseAsset? {
+    val version = cleanVersionName
+    val candidates = assets.filter { asset -> asset.isAndroidPackage }
+    if (candidates.isEmpty()) return null
+    val expectedName = defaultUpdateFileName(version)
+    return candidates.firstOrNull { asset -> asset.name.equals(expectedName, ignoreCase = true) }
+        ?: candidates
+            .filterNot { asset -> asset.isUnsafeUpdateArtifact }
+            .maxWithOrNull(compareBy<GithubReleaseAsset> { asset -> asset.releaseArtifactScore(version) }.thenBy { it.size })
+        ?: candidates.maxByOrNull { asset -> asset.size }
+}
+
 @Serializable
 private data class GithubReleaseAsset(
     val name: String = "",
@@ -287,6 +330,26 @@ private data class GithubReleaseAsset(
 ) {
     val isAndroidPackage: Boolean
         get() = name.endsWith(".apk", ignoreCase = true) && downloadUrl.isNotBlank()
+
+    val isUnsafeUpdateArtifact: Boolean
+        get() {
+            val cleanName = name.lowercase()
+            return "debug" in cleanName ||
+                "unsigned" in cleanName ||
+                "unaligned" in cleanName ||
+                "test" in cleanName
+        }
+
+    fun releaseArtifactScore(version: String): Int {
+        val cleanName = name.lowercase()
+        val cleanVersion = version.lowercase()
+        var score = 0
+        if ("hhhl" in cleanName) score += 8
+        if (cleanVersion.isNotBlank() && cleanVersion in cleanName) score += 8
+        if ("release" in cleanName) score += 4
+        if ("universal" in cleanName) score += 2
+        return score
+    }
 }
 
 private fun AppUpdateInfo.safeApkFileName(): String {

@@ -30,6 +30,14 @@ class SiteLinkNavigationTest {
     }
 
     @Test
+    fun localNoteUrlIgnoresAdjacentEmoji() {
+        assertEquals(
+            SiteLinkNavigationTarget.NoteDetail("amtbghzudk"),
+            siteLinkNavigationTarget("https://dc.hhhl.cc/notes/amtbghzudk😺"),
+        )
+    }
+
+    @Test
     fun relativeLocalUserUrlNavigatesToMentionResolution() {
         assertEquals(
             SiteLinkNavigationTarget.Mention("alice"),

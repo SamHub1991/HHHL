@@ -147,9 +147,11 @@ private data class ChatOlderLoadAnchor(
     val scrollOffset: Int,
 )
 
-private data class ChatSearchAuthorFilter(
+internal data class ChatSearchAuthorFilter(
     val userId: String,
     val displayName: String,
+    val username: String,
+    val host: String?,
     val avatarInitial: String,
     val avatarUrl: String?,
     val avatarDecorations: List<AvatarDecoration> = emptyList(),
@@ -200,6 +202,8 @@ private const val CHAT_MEMBER_ACTIVE_WINDOW_MILLIS = 30 * 60 * 1000L
 private const val CHAT_MEMBER_ACTIVE_FALLBACK_MESSAGE_LIMIT = 48
 private const val CHAT_MEMBER_ACTIVE_FALLBACK_USER_LIMIT = 8
 private const val CHAT_MESSAGE_UI_FILTER_MAX_MATCH_TEXT_LENGTH = 4_096
+private const val CHAT_SEARCH_AUTHOR_FILTER_MAX_USERS = 240
+private const val CHAT_SEARCH_AUTHOR_MENU_VISIBLE_USERS = 12
 
 private val ChatMessageTelegramTailWidth = 12.dp
 private val ChatMessageTelegramTailHeight = 10.dp
@@ -1582,6 +1586,7 @@ private fun ChatDetailScreen(
             title = title,
             messages = displayBaseMessages,
             searchResults = displayBaseSearchResults,
+            members = state.members,
             searchQuery = state.messageSearchQuery,
             canLoadOlderMessages = !state.messagesEndReached,
             isLoadingMessages = state.isLoadingMessages,
@@ -2973,6 +2978,7 @@ private fun ChatMessageSearchScreen(
     title: String,
     messages: List<ChatMessage>,
     searchResults: List<ChatMessage>,
+    members: List<ChatRoomMember>,
     searchQuery: String,
     canLoadOlderMessages: Boolean,
     isLoadingMessages: Boolean,
@@ -2995,16 +3001,31 @@ private fun ChatMessageSearchScreen(
     var query by remember(title) { mutableStateOf("") }
     var dateQuery by remember(title) { mutableStateOf("") }
     var authorFilterUserId by remember(title) { mutableStateOf<String?>(null) }
+    var authorFilterExpanded by remember(title) { mutableStateOf(false) }
+    var authorFilterQuery by remember(title) { mutableStateOf("") }
+    var searchRegexMode by remember(title) { mutableStateOf(false) }
     val cleanQuery = query.trim()
     val cleanSearchQuery = searchQuery.trim()
-    val hasPendingQuery = cleanQuery.isNotBlank() && cleanQuery != cleanSearchQuery
-    val sourceResults = if (cleanQuery.isBlank()) messages else searchResults
+    val searchRegex = remember(cleanQuery, searchRegexMode) {
+        if (searchRegexMode && cleanQuery.isSafeChatMessageSearchRegex()) {
+            runCatching { Regex(cleanQuery, RegexOption.IGNORE_CASE) }.getOrNull()
+        } else {
+            null
+        }
+    }
+    val regexSearchError = searchRegexMode && cleanQuery.isNotBlank() && searchRegex == null
+    val hasPendingQuery = !searchRegexMode && cleanQuery.isNotBlank() && cleanQuery != cleanSearchQuery
+    val sourceResults = if (!searchRegexMode && cleanQuery.isNotBlank()) {
+        searchResults
+    } else {
+        (messages + searchResults).distinctBy { it.id }
+    }
     val baseResults = remember(sourceResults, uiFilter, uiFilterRegexes) {
         sourceResults.filterByChatMessageUiFilter(uiFilter, uiFilterRegexes)
     }
     val uiFilteredSearchCount = sourceResults.size - baseResults.size
-    val authorFilters = remember(messages, searchResults) {
-        buildChatSearchAuthorFilters(messages, searchResults)
+    val authorFilters = remember(members, messages, searchResults) {
+        buildChatSearchAuthorFilters(members, messages, searchResults)
     }
     val selectedAuthor = authorFilters.firstOrNull { it.userId == authorFilterUserId }
     LaunchedEffect(authorFilters, authorFilterUserId) {
@@ -3012,11 +3033,11 @@ private fun ChatMessageSearchScreen(
             authorFilterUserId = null
         }
     }
-    val results = remember(baseResults, query, dateQuery, authorFilterUserId) {
+    val results = remember(baseResults, query, dateQuery, authorFilterUserId, searchRegexMode, searchRegex) {
         val filtered = if (cleanQuery.isBlank() && dateQuery.isBlank()) {
             if (authorFilterUserId == null) emptyList() else baseResults
-        } else if (dateQuery.isBlank()) {
-            baseResults
+        } else if (searchRegexMode) {
+            baseResults.filterByChatMessageSearchRegex(searchRegex, dateQuery)
         } else {
             baseResults.filterByChatMessageSearch("", dateQuery)
         }
@@ -3031,7 +3052,7 @@ private fun ChatMessageSearchScreen(
         buildChatMessageDateSuggestions(messages)
     }
     val hasFilter = cleanQuery.isNotBlank() || dateQuery.isNotBlank() || authorFilterUserId != null
-    val canSubmitSearch = cleanQuery.isNotBlank() && !isSearchingMessages
+    val canSubmitSearch = cleanQuery.isNotBlank() && !searchRegexMode && !isSearchingMessages
     val searchListState = rememberLazyListState()
     var lastOlderSearchAutoLoadCount by remember(title) { mutableStateOf(0) }
 
@@ -3040,6 +3061,7 @@ private fun ChatMessageSearchScreen(
         itemCount = results.size,
         isLoadingMore = isLoadingMoreSearch ||
             !canLoadMoreSearch ||
+            searchRegexMode ||
             cleanQuery.isBlank() ||
             searchResults.isEmpty(),
         onLoadMore = onLoadMoreSearch,
@@ -3049,7 +3071,7 @@ private fun ChatMessageSearchScreen(
         itemCount = results.size,
         isLoadingMore = isLoadingOlderMessages ||
             !canLoadOlderMessages ||
-            cleanQuery.isNotBlank() ||
+            (!searchRegexMode && cleanQuery.isNotBlank()) ||
             messages.isEmpty(),
         onLoadMore = {
             if (messages.size != lastOlderSearchAutoLoadCount) {
@@ -3082,7 +3104,7 @@ private fun ChatMessageSearchScreen(
                 HhhlTextInput(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = "搜索",
+                    placeholder = if (searchRegexMode) "正则搜索已加载消息" else "搜索",
                     singleLine = true,
                     minHeight = 36.dp,
                     verticalPadding = 6.dp,
@@ -3094,6 +3116,14 @@ private fun ChatMessageSearchScreen(
                             tint = colors.textMuted,
                             modifier = Modifier.size(18.dp),
                         )
+                    },
+                )
+                HhhlActionChip(
+                    label = if (searchRegexMode) "正则" else "普通",
+                    emphasized = searchRegexMode,
+                    onClick = {
+                        searchRegexMode = !searchRegexMode
+                        if (searchRegexMode) onSearch("")
                     },
                 )
                 Text(
@@ -3119,6 +3149,8 @@ private fun ChatMessageSearchScreen(
                                 query = ""
                                 dateQuery = ""
                                 authorFilterUserId = null
+                                authorFilterQuery = ""
+                                searchRegexMode = false
                                 onSearch("")
                                 onBack()
                             }
@@ -3148,17 +3180,35 @@ private fun ChatMessageSearchScreen(
                             query = ""
                             dateQuery = ""
                             authorFilterUserId = null
+                            authorFilterQuery = ""
+                            searchRegexMode = false
                             onSearch("")
                         },
                         size = 32.dp,
                     )
                 }
             }
-            ChatMessageAuthorFilterRow(
+            ChatMessageAuthorFilterPicker(
                 authors = authorFilters,
                 selectedUserId = authorFilterUserId,
-                onSelected = { userId -> authorFilterUserId = userId },
+                query = authorFilterQuery,
+                expanded = authorFilterExpanded,
+                onQueryChanged = { authorFilterQuery = it },
+                onExpandedChanged = { authorFilterExpanded = it },
+                onSelected = { userId ->
+                    authorFilterUserId = userId
+                    authorFilterExpanded = false
+                    authorFilterQuery = ""
+                },
             )
+            if (regexSearchError) {
+                Text(
+                    text = "正则无效或过于复杂",
+                    color = colors.danger,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -3190,10 +3240,10 @@ private fun ChatMessageSearchScreen(
             Text(
                 text = chatMessageSearchSummary(
                     hasFilter = hasFilter,
-                    isRemoteSearch = cleanQuery.isNotBlank(),
+                    isRemoteSearch = !searchRegexMode && cleanQuery.isNotBlank(),
                     hasPendingQuery = hasPendingQuery,
                     authorName = selectedAuthor?.displayName,
-                    isSearching = isSearchingMessages || isLoadingMoreSearch,
+                    isSearching = !searchRegexMode && (isSearchingMessages || isLoadingMoreSearch),
                     resultCount = results.size,
                     loadedCount = baseResults.size,
                 ),
@@ -3227,8 +3277,8 @@ private fun ChatMessageSearchScreen(
                 item(key = "chat-search-error", contentType = ChatListContentType.Status) {
                     ChatStatusRow(
                         text = message,
-                        actionText = if (cleanQuery.isNotBlank()) "重试搜索" else null,
-                        onAction = if (cleanQuery.isNotBlank()) {
+                        actionText = if (!searchRegexMode && cleanQuery.isNotBlank()) "重试搜索" else null,
+                        onAction = if (!searchRegexMode && cleanQuery.isNotBlank()) {
                             { onSearch(cleanQuery) }
                         } else {
                             null
@@ -3236,7 +3286,7 @@ private fun ChatMessageSearchScreen(
                     )
                 }
             }
-            if (isSearchingMessages && searchResults.isEmpty()) {
+            if (!searchRegexMode && isSearchingMessages && searchResults.isEmpty()) {
                 item(key = "chat-search-remote-loading", contentType = ChatListContentType.Status) {
                     ChatStatusRow(text = "正在搜索服务器消息...", loading = true)
                 }
@@ -3264,7 +3314,9 @@ private fun ChatMessageSearchScreen(
             ) {
                 item(key = "chat-search-empty", contentType = ChatListContentType.Status) {
                     ChatStatusRow(
-                        text = if (cleanQuery.isNotBlank()) {
+                        text = if (searchRegexMode) {
+                            "当前已加载消息里没有匹配结果"
+                        } else if (cleanQuery.isNotBlank()) {
                             "没有匹配的服务器消息"
                         } else {
                             "当前已加载消息里没有匹配结果"
@@ -3298,7 +3350,7 @@ private fun ChatMessageSearchScreen(
                     }
                 }
             }
-            if (cleanQuery.isNotBlank() && searchResults.isNotEmpty() && canLoadMoreSearch) {
+            if (!searchRegexMode && cleanQuery.isNotBlank() && searchResults.isNotEmpty() && canLoadMoreSearch) {
                 item(key = "chat-search-loading-more", contentType = ChatListContentType.Status) {
                     if (isLoadingMoreSearch) {
                         ChatStatusRow(
@@ -3313,85 +3365,151 @@ private fun ChatMessageSearchScreen(
 }
 
 @Composable
-private fun ChatMessageAuthorFilterRow(
+private fun ChatMessageAuthorFilterPicker(
     authors: List<ChatSearchAuthorFilter>,
     selectedUserId: String?,
+    query: String,
+    expanded: Boolean,
+    onQueryChanged: (String) -> Unit,
+    onExpandedChanged: (Boolean) -> Unit,
     onSelected: (String?) -> Unit,
 ) {
     if (authors.isEmpty()) return
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    val selectedAuthor = authors.firstOrNull { it.userId == selectedUserId }
+    val visibleAuthors = remember(authors, query) {
+        authors.filterByChatSearchAuthorQuery(query).take(CHAT_SEARCH_AUTHOR_MENU_VISIBLE_USERS)
+    }
+    Box(modifier = Modifier.fillMaxWidth()) {
         HhhlActionChip(
-            label = "全部",
-            emphasized = selectedUserId == null,
-            onClick = { onSelected(null) },
+            label = selectedAuthor?.let { "作者：${it.displayName}" } ?: "作者：全部",
+            emphasized = selectedUserId != null,
+            onClick = { onExpandedChanged(true) },
         )
-        authors.forEach { author ->
-            ChatMessageAuthorFilterChip(
-                author = author,
-                selected = selectedUserId == author.userId,
-                onClick = {
-                    onSelected(if (selectedUserId == author.userId) null else author.userId)
-                },
+        HhhlDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChanged(false) },
+            maxHeight = 420.dp,
+            modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
+        ) {
+            HhhlTextInput(
+                value = query,
+                onValueChange = onQueryChanged,
+                placeholder = "搜索用户、用户名、域名",
+                singleLine = true,
+                minHeight = 36.dp,
+                verticalPadding = 6.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
             )
+            ChatMessageAuthorDropdownItem(
+                author = null,
+                selected = selectedUserId == null,
+                onClick = { onSelected(null) },
+            )
+            if (visibleAuthors.isEmpty()) {
+                Text(
+                    text = "没有匹配的用户",
+                    color = LocalHhhlColors.current.textMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+            visibleAuthors.forEach { author ->
+                ChatMessageAuthorDropdownItem(
+                    author = author,
+                    selected = selectedUserId == author.userId,
+                    onClick = { onSelected(author.userId) },
+                )
+            }
+            if (authors.size > visibleAuthors.size) {
+                Text(
+                    text = "输入关键词可继续缩小范围",
+                    color = LocalHhhlColors.current.textMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun ChatMessageAuthorFilterChip(
-    author: ChatSearchAuthorFilter,
+private fun ChatMessageAuthorDropdownItem(
+    author: ChatSearchAuthorFilter?,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val colors = LocalHhhlColors.current
-    val shape = RoundedCornerShape(999.dp)
-    Row(
-        modifier = Modifier
-            .height(34.dp)
-            .clip(shape)
-            .background(
-                if (selected) {
-                    colors.buttonSelectedBackground
-                } else {
-                    colors.buttonBackground.copy(alpha = 0.68f)
-                },
-            )
-            .border(
-                width = 1.dp,
-                color = if (selected) {
-                    colors.focusRing.copy(alpha = 0.28f)
-                } else {
-                    colors.border.copy(alpha = 0.42f)
-                },
-                shape = shape,
-            )
-            .clickable(onClick = onClick)
-            .padding(start = 4.dp, end = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Avatar(
-            initial = author.avatarInitial,
-            avatarUrl = author.avatarUrl,
-            avatarDecorations = author.avatarDecorations,
-            size = 24.dp,
-        )
-        Text(
-            text = author.displayName,
-            color = if (selected) colors.accent else colors.textPrimary,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = 112.dp),
-        )
-    }
+    HhhlDropdownMenuItem(
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = author?.displayName ?: "全部用户",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val detail = author?.chatSearchAuthorSubtitle().orEmpty()
+                if (detail.isNotBlank()) {
+                    Text(
+                        text = detail,
+                        color = LocalHhhlColors.current.textMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        },
+        leadingIcon = author?.let { currentAuthor ->
+            {
+                Avatar(
+                    initial = currentAuthor.avatarInitial,
+                    avatarUrl = currentAuthor.avatarUrl,
+                    avatarDecorations = currentAuthor.avatarDecorations,
+                    size = 28.dp,
+                )
+            }
+        },
+        trailingIcon = if (selected) {
+            {
+                Text(
+                    text = "当前",
+                    color = LocalHhhlColors.current.accent,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        } else {
+            null
+        },
+        onClick = onClick,
+    )
+}
+
+private fun ChatSearchAuthorFilter.chatSearchAuthorSubtitle(): String {
+    return listOf(
+        username.takeIf { it.isNotBlank() }?.let { "@$it" },
+        host?.takeIf { it.isNotBlank() },
+    )
+        .filterNotNull()
+        .joinToString(" · ")
+}
+
+internal fun List<ChatSearchAuthorFilter>.filterByChatSearchAuthorQuery(query: String): List<ChatSearchAuthorFilter> {
+    val cleanQuery = query.trim()
+    if (cleanQuery.isBlank()) return this
+    return filter { author -> author.matchesChatSearchAuthorQuery(cleanQuery) }
+}
+
+private fun ChatSearchAuthorFilter.matchesChatSearchAuthorQuery(query: String): Boolean {
+    val identityQuery = query.removePrefix("@")
+    val acct = host?.takeIf { it.isNotBlank() }?.let { host -> "$username@$host" } ?: username
+    return displayName.contains(query, ignoreCase = true) ||
+        username.contains(identityQuery, ignoreCase = true) ||
+        "@$username".contains(query, ignoreCase = true) ||
+        acct.contains(identityQuery, ignoreCase = true) ||
+        "@$acct".contains(query, ignoreCase = true) ||
+        host.orEmpty().contains(identityQuery, ignoreCase = true) ||
+        userId.contains(query, ignoreCase = true)
 }
 
 @Composable
@@ -5892,29 +6010,34 @@ internal fun ChatMessage.isHiddenByBlockedChatUser(blockedUserIds: Set<String>):
         quote?.fromUser?.id?.let { it in blockedUserIds } == true
 }
 
-private fun buildChatSearchAuthorFilters(
+internal fun buildChatSearchAuthorFilters(
+    members: List<ChatRoomMember>,
     messages: List<ChatMessage>,
     searchResults: List<ChatMessage>,
 ): List<ChatSearchAuthorFilter> {
-    val seenUserIds = HashSet<String>(16)
-    val filters = ArrayList<ChatSearchAuthorFilter>(16)
-    fun visit(message: ChatMessage) {
-        if (filters.size >= 16) return
-        val user = message.fromUser
+    val seenUserIds = HashSet<String>(CHAT_SEARCH_AUTHOR_FILTER_MAX_USERS)
+    val filters = ArrayList<ChatSearchAuthorFilter>(CHAT_SEARCH_AUTHOR_FILTER_MAX_USERS)
+    fun visit(user: User) {
+        if (filters.size >= CHAT_SEARCH_AUTHOR_FILTER_MAX_USERS) return
         if (user.id.isBlank() || !seenUserIds.add(user.id)) return
-        filters += ChatSearchAuthorFilter(
-            userId = user.id,
-            displayName = user.displayName.ifBlank { user.username },
-            avatarInitial = user.avatarInitial,
-            avatarUrl = user.avatarUrl,
-            avatarDecorations = user.avatarDecorations,
-        )
+        filters += user.toChatSearchAuthorFilter()
     }
-    for (index in searchResults.indices.reversed()) visit(searchResults[index])
-    if (filters.size < 16) {
-        for (index in messages.indices.reversed()) visit(messages[index])
-    }
+    members.forEach { member -> visit(member.user) }
+    for (index in searchResults.indices.reversed()) visit(searchResults[index].fromUser)
+    for (index in messages.indices.reversed()) visit(messages[index].fromUser)
     return filters
+}
+
+private fun User.toChatSearchAuthorFilter(): ChatSearchAuthorFilter {
+    return ChatSearchAuthorFilter(
+        userId = id,
+        displayName = displayName.ifBlank { username.ifBlank { id } },
+        username = username,
+        host = host,
+        avatarInitial = avatarInitial,
+        avatarUrl = avatarUrl,
+        avatarDecorations = avatarDecorations,
+    )
 }
 
 private fun buildChatMessageDateSuggestions(messages: List<ChatMessage>): List<String> {
@@ -6049,6 +6172,25 @@ internal fun List<ChatMessage>.filterByChatMessageSearch(
     }
 }
 
+internal fun List<ChatMessage>.filterByChatMessageSearchRegex(
+    regex: Regex?,
+    dateQuery: String,
+): List<ChatMessage> {
+    val cleanDateQuery = dateQuery.trim()
+    if (regex == null && cleanDateQuery.isBlank()) return emptyList()
+    return filter { message ->
+        (regex == null || message.matchesChatMessageRegex(regex)) &&
+            (cleanDateQuery.isBlank() || message.matchesChatMessageDateQuery(cleanDateQuery))
+    }
+}
+
+internal fun String.isSafeChatMessageSearchRegex(): Boolean {
+    val pattern = trim()
+    if (pattern.isEmpty() || pattern.length > CHAT_MESSAGE_UI_FILTER_MAX_REGEX_LENGTH) return false
+    if (runCatching { Regex(pattern) }.isFailure) return false
+    return !pattern.hasNestedOrAmbiguousRegexQuantifier() && !pattern.hasAdvancedBacktrackingRegexConstruct()
+}
+
 private fun ChatMessage.matchesChatMessageQuery(query: String): Boolean {
     val presentation = chatMessagePresentation(this)
     return text.contains(query, ignoreCase = true) ||
@@ -6060,6 +6202,50 @@ private fun ChatMessage.matchesChatMessageQuery(query: String): Boolean {
         fromUser.host.orEmpty().contains(query, ignoreCase = true) ||
         file?.name.orEmpty().contains(query, ignoreCase = true) ||
         file?.type.orEmpty().contains(query, ignoreCase = true)
+}
+
+private fun ChatMessage.matchesChatMessageRegex(regex: Regex): Boolean {
+    return regex.containsMatchIn(chatMessageSearchMatchText())
+}
+
+private fun ChatMessage.chatMessageSearchMatchText(): String {
+    val presentation = chatMessagePresentation(this)
+    val builder = ChatMessageUiFilterMatchTextBuilder(CHAT_MESSAGE_UI_FILTER_MAX_MATCH_TEXT_LENGTH)
+    builder.appendPart(text)
+    builder.appendPart(presentation.body)
+    presentation.quote?.let { quote ->
+        builder.appendPart(quote.author)
+        builder.appendPart(quote.preview)
+    }
+    builder.appendPart(fromUser.displayName)
+    builder.appendPart(fromUser.username)
+    hostSearchText()?.let { builder.appendPart(it) }
+    reply?.let { reference -> builder.appendPart(reference.chatMessageReferenceSearchText()) }
+    quote?.let { reference -> builder.appendPart(reference.chatMessageReferenceSearchText()) }
+    file?.let { file ->
+        builder.appendPart(file.name)
+        builder.appendPart(file.type)
+    }
+    return builder.build()
+}
+
+private fun ChatMessage.hostSearchText(): String? {
+    return fromUser.host?.takeIf { it.isNotBlank() }
+}
+
+private fun cc.hhhl.client.model.ChatMessageReference.chatMessageReferenceSearchText(): String {
+    val builder = ChatMessageUiFilterMatchTextBuilder(CHAT_MESSAGE_UI_FILTER_MAX_MATCH_TEXT_LENGTH / 2)
+    fromUser?.let { user ->
+        builder.appendPart(user.displayName)
+        builder.appendPart(user.username)
+        user.host?.let { builder.appendPart(it) }
+    }
+    builder.appendPart(text)
+    file?.let { file ->
+        builder.appendPart(file.name)
+        builder.appendPart(file.type)
+    }
+    return builder.build()
 }
 
 private fun List<ChatUserConversation>.filterByChatUserConversationQuery(
@@ -6227,7 +6413,7 @@ internal fun List<ChatMessage>.indexOfReferencedQuote(quote: ChatRenderedQuote):
     val cleanPreview = quote.preview.trim()
     val cleanAuthor = quote.author.trim()
     if (cleanPreview.isBlank()) return -1
-    return indexOfFirst { message ->
+    val previewIndexWithAuthor = indexOfFirst { message ->
         val presentation = chatMessagePresentation(message)
         val plainBody = presentation.body.toChatReferencePreviewBody()
         val authorMatches = cleanAuthor.isBlank() ||
@@ -6237,6 +6423,13 @@ internal fun List<ChatMessage>.indexOfReferencedQuote(quote: ChatRenderedQuote):
             presentation.body.contains(cleanPreview, ignoreCase = true) ||
                 plainBody.contains(cleanPreview, ignoreCase = true)
             )
+    }
+    if (previewIndexWithAuthor >= 0) return previewIndexWithAuthor
+    return indexOfLast { message ->
+        val presentation = chatMessagePresentation(message)
+        val plainBody = presentation.body.toChatReferencePreviewBody()
+        presentation.body.contains(cleanPreview, ignoreCase = true) ||
+            plainBody.contains(cleanPreview, ignoreCase = true)
     }
 }
 

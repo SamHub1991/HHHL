@@ -556,7 +556,10 @@ private fun NotificationSummaryRow(
             )
             HhhlActionChip(
                 label = if (isMarkingAllRead) "处理中" else "全部已读",
-                enabled = !isMarkingAllRead && notificationCount > 0,
+                enabled = notificationMarkAllReadEnabled(
+                    isLoading = isLoading,
+                    isMarkingAllRead = isMarkingAllRead,
+                ),
                 onClick = onMarkAllAsRead,
             )
             HhhlActionChip(
@@ -576,6 +579,11 @@ private fun NotificationSummaryRow(
         }
     }
 }
+
+internal fun notificationMarkAllReadEnabled(
+    isLoading: Boolean,
+    isMarkingAllRead: Boolean,
+): Boolean = !isLoading && !isMarkingAllRead
 
 fun notificationSummaryActions(
     isMarkingAllRead: Boolean,

@@ -158,7 +158,7 @@ class TimelineRepositoryTest {
 
         assertIs<TimelineRepositoryResult.Success>(result)
         assertEquals(listOf(first, second), result.notes)
-        assertEquals(listOf(ApiCall(TimelineKind.Social, "token-123", "following:note-1:mutuals:true:true")), calls)
+        assertEquals(listOf(ApiCall(TimelineKind.Social, "token-123", "following:${first.id}:mutuals:true:true")), calls)
         assertEquals(emptyMap(), cache.saved)
     }
 

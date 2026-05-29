@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.datetime.Clock
 
 data class NotificationUiState(
     val selectedFilter: NotificationFilter = NotificationFilter.All,
@@ -82,6 +83,7 @@ class NotificationStateHolder(
     private var specialCareUserIds: Set<String> = emptySet()
     private var isQuietRefreshing: Boolean = false
     private var notificationRequestId: Int = 0
+    private var localAllReadCutoffEpochMillis: Long = 0L
 
     fun refresh() {
         if (state.value.isLoading) return
@@ -216,7 +218,17 @@ class NotificationStateHolder(
 
     fun markAllAsRead() {
         val current = state.value
-        if (current.isLoading || current.isMarkingAllRead || current.notifications.isEmpty()) return
+        if (current.isLoading || current.isMarkingAllRead) return
+        if (current.unreadCount == 0 && current.specialCareUnreadCount == 0) {
+            mutableState.update {
+                it.copy(
+                    message = "没有未读通知",
+                    errorMessage = null,
+                    requiresRelogin = false,
+                ).withSpecialCareCounts()
+            }
+            return
+        }
 
         mutableState.update {
             it.copy(
@@ -337,6 +349,7 @@ class NotificationStateHolder(
         val current = state.value
         if (current.unreadCount == 0 && current.specialCareUnreadCount == 0) return
         mutableState.update {
+            recordLocalAllReadCutoff()
             remoteNotifications = remoteNotifications.markAllRead()
             chatAttentionNotifications = chatAttentionNotifications.markAllRead()
             specialCareNotifications = specialCareNotifications.markAllRead()
@@ -496,10 +509,15 @@ class NotificationStateHolder(
                 ).withSpecialCareCounts()
             }
             NotificationRepositoryResult.AllRead -> mutableState.update {
+                recordLocalAllReadCutoff()
                 remoteNotifications = remoteNotifications.markAllRead()
+                chatAttentionNotifications = chatAttentionNotifications.markAllRead()
                 specialCareNotifications = specialCareNotifications.markAllRead()
                 readNotificationIds = readNotificationIds +
                     remoteNotifications.mapTo(LinkedHashSet(remoteNotifications.size)) { notification -> notification.id } +
+                    chatAttentionNotifications.mapTo(LinkedHashSet(chatAttentionNotifications.size)) { notification ->
+                        notification.id
+                    } +
                     specialCareNotifications.mapTo(LinkedHashSet(specialCareNotifications.size)) { notification -> notification.id }
                 persistReadNotificationIds()
                 persistNotificationCache()
@@ -519,7 +537,7 @@ class NotificationStateHolder(
                 ).withSpecialCareCounts()
             }
             is NotificationRepositoryResult.Success -> mutableState.update {
-                val loadedNotifications = result.notifications.withLocalReadState(readNotificationIds)
+                val loadedNotifications = result.notifications.applyLocalReadState()
                 remoteNotifications = when (it.selectedFilter) {
                     NotificationFilter.All -> loadedNotifications
                     NotificationFilter.SpecialCare -> remoteNotifications
@@ -582,7 +600,7 @@ class NotificationStateHolder(
     private fun applyQuietRefreshResult(result: NotificationRepositoryResult) {
         when (result) {
             is NotificationRepositoryResult.Success -> mutableState.update {
-                remoteNotifications = result.notifications.withLocalReadState(readNotificationIds)
+                remoteNotifications = result.notifications.applyLocalReadState()
                 syncRemoteSpecialCareNotifications(updateState = false)
                 persistNotificationCache()
                 val visibleNotifications = when (it.selectedFilter) {
@@ -675,6 +693,43 @@ class NotificationStateHolder(
         return remoteUnreadIds.size + chatAttentionUnreadCount + localSpecialCareUnreadCount
     }
 
+    private fun List<NotificationItem>.applyLocalReadState(): List<NotificationItem> {
+        val notifications = withLocalReadState(readNotificationIds, localAllReadCutoffEpochMillis)
+        rememberReadNotifications(notifications)
+        return notifications
+    }
+
+    private fun recordLocalAllReadCutoff() {
+        val latestKnownNotificationTime = sequenceOf(
+            remoteNotifications,
+            chatAttentionNotifications,
+            specialCareNotifications,
+        )
+            .flatMap { notifications -> notifications.asSequence() }
+            .map { notification -> notification.createdAtEpochMillis }
+            .filter { createdAt -> createdAt > 0L }
+            .maxOrNull()
+            ?: 0L
+        localAllReadCutoffEpochMillis = maxOf(
+            localAllReadCutoffEpochMillis,
+            Clock.System.now().toEpochMilliseconds(),
+            latestKnownNotificationTime,
+        )
+    }
+
+    private fun rememberReadNotifications(notifications: List<NotificationItem>) {
+        if (notifications.isEmpty()) return
+        val readIds = notifications
+            .asSequence()
+            .filter { notification -> notification.isRead }
+            .map { notification -> notification.id }
+            .filter { id -> id.isNotBlank() && id !in readNotificationIds }
+            .toSet()
+        if (readIds.isEmpty()) return
+        readNotificationIds = readNotificationIds + readIds
+        persistReadNotificationIds()
+    }
+
     private fun restoreReadNotificationIds(): Set<String> {
         val cleanAccountId = accountId?.takeIf { it.isNotBlank() } ?: return emptySet()
         return runCatching { readStore.loadReadNotificationIds(cleanAccountId).cleanNotificationIds() }
@@ -753,11 +808,15 @@ private fun List<NotificationItem>.markNotificationRead(notificationId: String):
 
 private fun List<NotificationItem>.withLocalReadState(
     readNotificationIds: Set<String>,
+    allReadCutoffEpochMillis: Long = 0L,
 ): List<NotificationItem> {
-    if (readNotificationIds.isEmpty()) return this
+    if (readNotificationIds.isEmpty() && allReadCutoffEpochMillis <= 0L) return this
     var changed = false
     val next = map { notification ->
-        if (!notification.isRead && notification.id in readNotificationIds) {
+        if (
+            !notification.isRead &&
+            (notification.id in readNotificationIds || notification.isCoveredByLocalAllReadCutoff(allReadCutoffEpochMillis))
+        ) {
             changed = true
             notification.copy(isRead = true)
         } else {
@@ -765,6 +824,10 @@ private fun List<NotificationItem>.withLocalReadState(
         }
     }
     return if (changed) next else this
+}
+
+private fun NotificationItem.isCoveredByLocalAllReadCutoff(allReadCutoffEpochMillis: Long): Boolean {
+    return allReadCutoffEpochMillis > 0L && createdAtEpochMillis > 0L && createdAtEpochMillis <= allReadCutoffEpochMillis
 }
 
 private fun List<NotificationItem>.markAllRead(): List<NotificationItem> {

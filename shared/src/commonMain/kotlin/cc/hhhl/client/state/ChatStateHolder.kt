@@ -1105,7 +1105,7 @@ class ChatStateHolder(
         val room = current.selectedRoom ?: return
         if (current.isLoadingMembers) return
 
-        if (!current.showingMembers && current.members.isNotEmpty()) {
+        if (!current.showingMembers && current.members.hasOfficialChatRoomMembers()) {
             mutableState.update {
                 it.copy(showingMembers = true, memberErrorMessage = null, requiresRelogin = false)
             }
@@ -2687,6 +2687,10 @@ private fun List<ChatRoomMember>.dedupeActiveChatMembers(): List<ChatRoomMember>
 private fun List<ChatRoomMember>.mergeActiveChatMembers(activeMembers: List<ChatRoomMember>): List<ChatRoomMember> {
     if (activeMembers.isEmpty()) return dedupeActiveChatMembers()
     return (this + activeMembers).dedupeActiveChatMembers()
+}
+
+private fun List<ChatRoomMember>.hasOfficialChatRoomMembers(): Boolean {
+    return any { member -> !member.membershipId.startsWith(CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX) }
 }
 
 private fun User.mergeActiveChatUser(incoming: User): User {

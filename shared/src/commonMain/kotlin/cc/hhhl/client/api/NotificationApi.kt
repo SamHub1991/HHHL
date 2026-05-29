@@ -9,10 +9,8 @@ import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
-import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
 import io.ktor.http.appendPathSegments
@@ -117,11 +115,19 @@ class SharkeyNotificationApi(
     }
 
     override suspend fun markAllAsRead(token: String): NotificationActionResult {
-        return postNotificationAction(token, "notifications", "mark-all-as-read")
+        return postNotificationAction(
+            token = token,
+            endpoint = arrayOf("notifications", "mark-all-as-read"),
+            payload = NotificationTokenRequest(i = token.trim()),
+        )
     }
 
     override suspend fun flush(token: String): NotificationActionResult {
-        return postNotificationAction(token, "notifications", "flush")
+        return postNotificationAction(
+            token = token,
+            endpoint = arrayOf("notifications", "flush"),
+            payload = NotificationTokenRequest(i = token.trim()),
+        )
     }
 
     override suspend fun createNotification(
@@ -145,7 +151,11 @@ class SharkeyNotificationApi(
     }
 
     override suspend fun sendTestNotification(token: String): NotificationActionResult {
-        return postNotificationAction(token, "notifications", "test-notification")
+        return postNotificationAction(
+            token = token,
+            endpoint = arrayOf("notifications", "test-notification"),
+            payload = NotificationTokenRequest(i = token.trim()),
+        )
     }
 
     private suspend fun postNotificationAction(
@@ -176,34 +186,6 @@ class SharkeyNotificationApi(
             NotificationActionResult.NetworkError(error.message ?: "网络请求失败")
         }
     }
-
-    private suspend fun postNotificationAction(
-        token: String,
-        vararg endpoint: String,
-    ): NotificationActionResult {
-        val cleanToken = token.trim()
-        if (cleanToken.isEmpty()) return NotificationActionResult.Unauthorized
-
-        return try {
-            val response = client.post(apiUrl(*endpoint)) {
-                header(HttpHeaders.Authorization, "Bearer $cleanToken")
-            }
-
-            when {
-                response.status.value in 200..299 -> NotificationActionResult.Success
-                response.isSharkeyUnauthorized() -> NotificationActionResult.Unauthorized
-                else -> NotificationActionResult.ServerError(
-                    statusCode = response.status.value,
-                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
-                )
-            }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Throwable) {
-            NotificationActionResult.NetworkError(error.message ?: "网络请求失败")
-        }
-    }
-
     private fun apiUrl(vararg endpoint: String): String {
         return URLBuilder(baseUrl.trim().trimEnd('/'))
             .appendPathSegments("api", *endpoint)
@@ -221,6 +203,11 @@ private data class NotificationRequest(
     val limit: Int,
     val untilId: String? = null,
     val includeTypes: List<String>? = null,
+)
+
+@Serializable
+private data class NotificationTokenRequest(
+    val i: String,
 )
 
 @Serializable

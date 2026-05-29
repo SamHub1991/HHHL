@@ -53,6 +53,22 @@ class NotificationsPresentationTest {
     }
 
     @Test
+    fun markAllReadActionDoesNotDependOnVisibleNotificationCount() {
+        assertEquals(
+            true,
+            notificationMarkAllReadEnabled(isLoading = false, isMarkingAllRead = false),
+        )
+        assertEquals(
+            false,
+            notificationMarkAllReadEnabled(isLoading = true, isMarkingAllRead = false),
+        )
+        assertEquals(
+            false,
+            notificationMarkAllReadEnabled(isLoading = false, isMarkingAllRead = true),
+        )
+    }
+
+    @Test
     fun notificationNotePreviewNormalizesLegacyRawRichText() {
         assertEquals(
             "CW docs 👍",

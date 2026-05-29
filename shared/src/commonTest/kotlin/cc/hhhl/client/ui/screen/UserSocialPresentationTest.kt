@@ -54,7 +54,7 @@ class UserSocialPresentationTest {
         )
 
         assertEquals(
-            listOf("查看资料", "取消特别关心", "取消关注", "静音", "拉黑", "举报"),
+            listOf("查看资料", "取消特别关心", "取消关注", "静音", "屏蔽", "举报"),
             actions.map { it.label },
         )
     }

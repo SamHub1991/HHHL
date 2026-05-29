@@ -115,7 +115,7 @@ class SharkeyAppAuthorizationApi(
         return postJsonResult(
             endpoint = arrayOf("my", "apps"),
             body = MyAppsRequest(
-                limit = limit.coerceIn(1, 100),
+                limit = limit.takeIf { it in 1..100 } ?: DEFAULT_PAGE_SIZE,
                 offset = offset.coerceAtLeast(0),
             ),
             bearerToken = cleanToken,
@@ -195,7 +195,7 @@ class SharkeyAppAuthorizationApi(
         cleanInput.validate()?.let { return AppAuthorizationResult.ServerError(400, it) }
         return postJsonResult(
             endpoint = arrayOf("miauth", "gen-token"),
-            body = cleanInput.toRequestJson(),
+            body = cleanInput.toRequestJsonString(),
             bearerToken = cleanToken,
         ) { response -> response.body<MiAuthTokenResponse>().token }
     }
@@ -238,6 +238,7 @@ class SharkeyAppAuthorizationApi(
 
     companion object {
         const val DEFAULT_BASE_URL = "https://dc.hhhl.cc"
+        const val DEFAULT_PAGE_SIZE = 20
     }
 }
 
@@ -412,7 +413,10 @@ private fun MiAuthTokenInput.validate(): String? {
     }
 }
 
-private fun MiAuthTokenInput.toRequestJson() = buildJsonObject {
+private fun MiAuthTokenInput.toRequestJsonString(): String {
+    return Json { explicitNulls = true }.encodeToString(
+        kotlinx.serialization.json.JsonObject.serializer(),
+        buildJsonObject {
     put("session", session?.let(::JsonPrimitive) ?: JsonNull)
     put(
         "permission",
@@ -432,6 +436,8 @@ private fun MiAuthTokenInput.toRequestJson() = buildJsonObject {
         )
     }
     rank?.let { put("rank", JsonPrimitive(it)) }
+        },
+    )
 }
 
 private suspend fun HttpResponse.apiErrorMessage(): String? {

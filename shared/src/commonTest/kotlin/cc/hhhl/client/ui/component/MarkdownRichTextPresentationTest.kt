@@ -781,8 +781,7 @@ class MarkdownRichTextPresentationTest {
 
         assertEquals(
             listOf(
-                InlineMarkdownSpan.Text("visible"),
-                InlineMarkdownSpan.Text(" "),
+                InlineMarkdownSpan.Text("visible "),
                 InlineMarkdownSpan.Ruby(longToken.take(512), "note"),
                 InlineMarkdownSpan.Text(" tail"),
             ),
@@ -813,7 +812,7 @@ class MarkdownRichTextPresentationTest {
 
         assertEquals(
             listOf(
-                InlineMarkdownSpan.Text("before ${'$'}{$longName} middle name"),
+                InlineMarkdownSpan.Text("before $longName middle name"),
             ),
             spans,
         )

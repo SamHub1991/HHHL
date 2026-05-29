@@ -160,7 +160,7 @@ private fun defaultChartClient(): HttpClient {
 @Serializable
 private data class ChartRequest(
     val span: String,
-    val limit: Int = 30,
+    val limit: Int,
     val offset: Int? = null,
     val host: String? = null,
     val userId: String? = null,

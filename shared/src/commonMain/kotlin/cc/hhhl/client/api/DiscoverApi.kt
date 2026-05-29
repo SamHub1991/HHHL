@@ -1101,13 +1101,13 @@ private class DiscoverEmptyRequest
 private data class HashtagSearchRequest(
     val query: String,
     val limit: Int,
-    val offset: Int = 0,
+    val offset: Int,
 )
 
 @Serializable
 private data class HashtagListRequest(
     val limit: Int,
-    val sort: String = "+attachedUsers",
+    val sort: String,
 )
 
 @Serializable
@@ -1171,8 +1171,8 @@ private data class FederationFollowsRequest(
     val host: String,
     val limit: Int,
     val untilId: String? = null,
-    val includeFollower: Boolean = false,
-    val includeFollowee: Boolean = true,
+    val includeFollower: Boolean,
+    val includeFollowee: Boolean,
 )
 
 @Serializable

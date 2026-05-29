@@ -82,7 +82,7 @@ private fun nextRichTextMatch(
 
 private fun parseUrl(text: String, start: Int): RichTextMatch? {
     var end = start
-    while (end < text.length && !text[end].isWhitespace() && text[end] !in urlTerminatingPunctuation) {
+    while (end < text.length && text[end].isUrlBodyChar()) {
         end += 1
     }
     while (end > start && shouldTrimTrailingUrlChar(text, start, end)) {
@@ -95,6 +95,21 @@ private fun parseUrl(text: String, start: Int): RichTextMatch? {
 private fun String.startsWithHttpUrl(index: Int): Boolean {
     return startsWith("https://", startIndex = index, ignoreCase = true) ||
         startsWith("http://", startIndex = index, ignoreCase = true)
+}
+
+private fun Char.isUrlBodyChar(): Boolean {
+    return !isWhitespace() && this !in urlTerminatingPunctuation && (
+        isAsciiUrlChar() ||
+            isLetterOrDigit() ||
+            this in urlPathUnicodePunctuation
+        )
+}
+
+private fun Char.isAsciiUrlChar(): Boolean {
+    return this in 'a'..'z' ||
+        this in 'A'..'Z' ||
+        this in '0'..'9' ||
+        this in asciiUrlPunctuation
 }
 
 private fun shouldTrimTrailingUrlChar(text: String, start: Int, end: Int): Boolean {
@@ -216,6 +231,10 @@ private val trailingUrlPunctuation = setOf(
     '.', ',', '!', '?', ':', ';', ')', ']', '}', '>', '"', '\'',
     '。', '，', '！', '？', '：', '；', '、', '）', '】', '》', '」', '』',
 )
+private val asciiUrlPunctuation = setOf(
+    ':', '/', '?', '#', '[', ']', '@', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=', '%', '-', '.', '_', '~',
+)
+private val urlPathUnicodePunctuation = setOf('·', '・', 'ー', '－', '＿')
 private val urlTerminatingPunctuation = setOf('>', '。', '，', '！', '？', '：', '；', '、', '）', '】', '》', '」', '』')
 private val pairedUrlOpeners = mapOf(
     ')' to '(',

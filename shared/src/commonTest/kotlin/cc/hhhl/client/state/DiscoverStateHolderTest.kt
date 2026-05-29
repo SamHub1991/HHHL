@@ -293,13 +293,15 @@ class DiscoverStateHolderTest {
     }
 
     @Test
-    fun openHashtagSearchesNotesForHashtagQuery() = runTest {
+    fun openHashtagLoadsHashtagDetailsAndUsers() = runTest {
         val calls = mutableListOf<String>()
-        val note = FakeData.timeline[0]
+        val hashtag = TrendingHashtag(tag = "Sharkey", chart = emptyList(), usersCount = 7)
         val holder = DiscoverStateHolder(
             repository = fakeRepository(
-                searchResult = DiscoverRepositoryResult.Success(listOf(note)),
-                onSearchNotes = { query -> calls.add(query) },
+                searchResult = DiscoverRepositoryResult.HashtagSuccess(hashtag),
+                loadHashtagUsersResult = DiscoverRepositoryResult.UserSuccess(listOf(FakeData.me)),
+                onShowHashtag = { query -> calls.add("show:$query") },
+                onLoadHashtagUsers = { query -> calls.add("users:$query") },
             ),
             scope = TestScope(testScheduler),
         )
@@ -307,20 +309,24 @@ class DiscoverStateHolderTest {
         holder.openHashtag("Sharkey")
         advanceUntilIdle()
 
-        assertEquals(DiscoverSearchMode.Notes, holder.state.value.selectedMode)
-        assertEquals("#Sharkey", holder.state.value.query)
-        assertEquals(listOf("#Sharkey"), calls)
-        assertEquals(listOf(note), holder.state.value.notes)
+        assertEquals(DiscoverSearchMode.Hashtags, holder.state.value.selectedMode)
+        assertEquals("Sharkey", holder.state.value.query)
+        assertEquals(listOf("show:Sharkey", "users:Sharkey"), calls)
+        assertEquals(listOf(hashtag), holder.state.value.trends)
+        assertEquals(hashtag, holder.state.value.selectedHashtag)
+        assertEquals(listOf(FakeData.me), holder.state.value.hashtagUsers)
     }
 
     @Test
-    fun openHashtagCanSearchWhenFullTextNotesSearchIsDisabled() = runTest {
+    fun openHashtagCanLoadDetailsWhenFullTextNotesSearchIsDisabled() = runTest {
         val calls = mutableListOf<String>()
-        val note = FakeData.timeline[0]
+        val hashtag = TrendingHashtag(tag = "签到", chart = emptyList(), usersCount = 3)
         val holder = DiscoverStateHolder(
             repository = fakeRepository(
-                searchResult = DiscoverRepositoryResult.Success(listOf(note)),
-                onSearchNotes = { query -> calls.add(query) },
+                searchResult = DiscoverRepositoryResult.HashtagSuccess(hashtag),
+                loadHashtagUsersResult = DiscoverRepositoryResult.UserSuccess(emptyList()),
+                onShowHashtag = { query -> calls.add("show:$query") },
+                onLoadHashtagUsers = { query -> calls.add("users:$query") },
             ),
             scope = TestScope(testScheduler),
         )
@@ -329,10 +335,13 @@ class DiscoverStateHolderTest {
         holder.openHashtag("#签到")
         advanceUntilIdle()
 
-        assertEquals(DiscoverSearchMode.Notes, holder.state.value.selectedMode)
-        assertEquals("#签到", holder.state.value.query)
-        assertEquals(listOf("#签到"), calls)
-        assertEquals(listOf(note), holder.state.value.notes)
+        assertEquals(DiscoverSearchMode.Hashtags, holder.state.value.selectedMode)
+        assertEquals("签到", holder.state.value.query)
+        assertEquals(listOf("show:签到", "users:签到"), calls)
+        assertEquals(listOf(hashtag), holder.state.value.trends)
+        assertEquals(hashtag, holder.state.value.selectedHashtag)
+        assertEquals(emptyList(), holder.state.value.hashtagUsers)
+        assertEquals("暂无使用者", holder.state.value.hashtagDetailMessage)
     }
 
     @Test
@@ -588,6 +597,9 @@ class DiscoverStateHolderTest {
         onLoadMore: (String?) -> Unit = {},
         onSearchNotes: (String) -> Unit = {},
         onSearchUsers: (String) -> Unit = {},
+        onShowHashtag: (String) -> Unit = {},
+        onLoadHashtagUsers: (String) -> Unit = {},
+        loadHashtagUsersResult: DiscoverRepositoryResult = DiscoverRepositoryResult.UserSuccess(emptyList()),
         throwOnSearch: Boolean = false,
         throwOnLoadMore: Boolean = false,
     ): DiscoverRepository = fakeRepository(
@@ -596,6 +608,9 @@ class DiscoverStateHolderTest {
         onLoadMore = onLoadMore,
         onSearchNotes = onSearchNotes,
         onSearchUsers = onSearchUsers,
+        onShowHashtag = onShowHashtag,
+        onLoadHashtagUsers = onLoadHashtagUsers,
+        loadHashtagUsersResult = loadHashtagUsersResult,
         throwOnSearch = throwOnSearch,
         throwOnLoadMore = throwOnLoadMore,
     )
@@ -606,6 +621,9 @@ class DiscoverStateHolderTest {
         onLoadMore: (String?) -> Unit = {},
         onSearchNotes: (String) -> Unit = {},
         onSearchUsers: (String) -> Unit = {},
+        onShowHashtag: (String) -> Unit = {},
+        onLoadHashtagUsers: (String) -> Unit = {},
+        loadHashtagUsersResult: DiscoverRepositoryResult = DiscoverRepositoryResult.UserSuccess(emptyList()),
         throwOnSearch: Boolean = false,
         throwOnLoadMore: Boolean = false,
     ): DiscoverRepository {
@@ -741,6 +759,19 @@ class DiscoverStateHolderTest {
 
             override suspend fun loadFederationInstance(host: String): DiscoverRepositoryResult {
                 return searchProvider()
+            }
+
+            override suspend fun showHashtag(tag: String): DiscoverRepositoryResult {
+                onShowHashtag(tag)
+                return searchProvider()
+            }
+
+            override suspend fun loadHashtagUsers(
+                tag: String,
+                filters: DiscoverAdvancedFilters,
+            ): DiscoverRepositoryResult {
+                onLoadHashtagUsers(tag)
+                return loadHashtagUsersResult
             }
 
             override suspend fun updateFederationInstance(

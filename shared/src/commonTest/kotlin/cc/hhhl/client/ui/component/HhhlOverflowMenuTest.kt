@@ -6,9 +6,9 @@ import kotlin.test.assertNotNull
 class HhhlOverflowMenuTest {
     @Test
     fun defaultOverflowMenuActionsExposeIconsForCommonChatActions() {
-        assertNotNull(HhhlOverflowMenuAction("回复").icon)
-        assertNotNull(HhhlOverflowMenuAction("引用").icon)
-        assertNotNull(HhhlOverflowMenuAction("复制").icon)
+        assertNotNull(HhhlOverflowMenuAction("回复", onClick = {}).icon)
+        assertNotNull(HhhlOverflowMenuAction("引用", onClick = {}).icon)
+        assertNotNull(HhhlOverflowMenuAction("复制", onClick = {}).icon)
         assertNotNull(HhhlOverflowMenuAction("举报", destructive = true, onClick = {}).icon)
     }
 }

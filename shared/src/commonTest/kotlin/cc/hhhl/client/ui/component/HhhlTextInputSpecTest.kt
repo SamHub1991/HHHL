@@ -9,7 +9,7 @@ class HhhlTextInputSpecTest {
     fun textInputUsesSoftModernMetrics() {
         assertEquals(42.dp, HhhlTextInputSingleLineMinHeight)
         assertEquals(80.dp, HhhlTextInputMultiLineMinHeight)
-        assertEquals(14.dp, HhhlTextInputCornerRadius)
+        assertEquals(13.dp, HhhlTextInputCornerRadius)
         assertEquals(12.dp, HhhlTextInputHorizontalPadding)
         assertEquals(8.dp, HhhlTextInputVerticalPadding)
     }

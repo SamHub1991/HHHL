@@ -4,6 +4,7 @@ import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageQuote
 import cc.hhhl.client.model.ChatMessageReference
+import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
 import cc.hhhl.client.state.ChatUiState
@@ -464,6 +465,84 @@ class ChatPresentationTest {
     }
 
     @Test
+    fun chatSearchAuthorFiltersIncludeMembersWithoutMessagesAndSearchByIdentity() {
+        val memberOnly = chatUser(
+            id = "member-only",
+            displayName = "林间",
+            username = "lin",
+            host = "example.social",
+        )
+        val messageAuthor = chatUser(id = "message-user", displayName = "Alice", username = "alice")
+        val searchAuthor = chatUser(id = "search-user", displayName = "Bob", username = "bob")
+        val filters = buildChatSearchAuthorFilters(
+            members = listOf(chatRoomMember(memberOnly)),
+            messages = listOf(chatMessage("message", authorId = messageAuthor.id, username = messageAuthor.username)),
+            searchResults = listOf(chatMessage("search", authorId = searchAuthor.id, username = searchAuthor.username)),
+        )
+
+        assertEquals(listOf("member-only", "search-user", "message-user"), filters.map { it.userId })
+        assertEquals(listOf("member-only"), filters.filterByChatSearchAuthorQuery("@lin@example").map { it.userId })
+        assertEquals(listOf("member-only"), filters.filterByChatSearchAuthorQuery("林").map { it.userId })
+    }
+
+    @Test
+    fun chatSearchAuthorFiltersAreBoundedForLargeRooms() {
+        val members = List(260) { index ->
+            chatRoomMember(chatUser(id = "member-$index", displayName = "Member $index", username = "member$index"))
+        }
+
+        val filters = buildChatSearchAuthorFilters(members = members, messages = emptyList(), searchResults = emptyList())
+
+        assertEquals(240, filters.size)
+        assertEquals("member-0", filters.first().userId)
+        assertEquals("member-239", filters.last().userId)
+    }
+
+    @Test
+    fun chatMessageRegexSearchMatchesBodyAuthorReferenceAndFile() {
+        val bodyMatch = chatMessage("body", authorId = "user-1", text = "hello target body")
+        val authorMatch = chatMessage("author", authorId = "user-2", text = "hello", username = "alice")
+        val quoteMatch = chatMessage("quote", authorId = "user-3", text = "hello").copy(
+            quote = ChatMessageReference(
+                id = "quote-source",
+                fromUser = chatUser(id = "quoted-user", displayName = "Quoted", username = "quoted"),
+                text = "quoted target preview",
+            ),
+        )
+        val fileMatch = chatMessage("file", authorId = "user-4", text = "").copy(
+            file = DriveFile(
+                id = "file-1",
+                name = "target-file.webp",
+                type = "image/webp",
+                url = null,
+                thumbnailUrl = null,
+                comment = null,
+                size = 1,
+                isSensitive = false,
+            ),
+        )
+        val hide = chatMessage("hide", authorId = "user-5", text = "hello")
+        val regex = Regex("target|@?alice", RegexOption.IGNORE_CASE)
+
+        assertEquals(
+            listOf("body", "author", "quote", "file"),
+            listOf(bodyMatch, authorMatch, quoteMatch, fileMatch, hide)
+                .filterByChatMessageSearchRegex(regex, "")
+                .map { it.id },
+        )
+    }
+
+    @Test
+    fun chatMessageRegexSearchRejectsUnsafePatterns() {
+        assertEquals(true, "target\\s+body".isSafeChatMessageSearchRegex())
+        assertEquals(false, "[".isSafeChatMessageSearchRegex())
+        assertEquals(false, "(a+)+$".isSafeChatMessageSearchRegex())
+        assertEquals(false, "(ab|a)+$".isSafeChatMessageSearchRegex())
+        assertEquals(false, "(?=.*token).*".isSafeChatMessageSearchRegex())
+        assertEquals(false, "x".repeat(200).isSafeChatMessageSearchRegex())
+    }
+
+    @Test
     fun loadedChatMessageIdSetIndexesCurrentMessagesForJumpChecks() {
         val messages = listOf(
             chatMessage("m1", authorId = "user-1"),
@@ -676,6 +755,30 @@ class ChatPresentationTest {
             fromUser = user,
             text = text,
             createdAtLabel = "now",
+        )
+    }
+
+    private fun chatUser(
+        id: String,
+        displayName: String,
+        username: String,
+        host: String? = null,
+    ): User {
+        return FakeData.me.copy(
+            id = id,
+            displayName = displayName,
+            username = username,
+            avatarInitial = displayName.take(1).ifBlank { username.take(1) },
+            host = host,
+        )
+    }
+
+    private fun chatRoomMember(user: User): ChatRoomMember {
+        return ChatRoomMember(
+            membershipId = "membership-${user.id}",
+            roomId = "room-1",
+            user = user,
+            joinedAtLabel = "now",
         )
     }
 

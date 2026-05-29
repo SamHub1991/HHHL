@@ -48,6 +48,23 @@ class RichTextResolverTest {
     }
 
     @Test
+    fun stopsUrlBeforeAdjacentEmoji() {
+        val segments = parseRichText(
+            text = "回显 https://dc.hhhl.cc/notes/amtbghzudk😺",
+            emojiUrls = emptyMap(),
+        )
+
+        assertEquals(
+            listOf(
+                RichTextSegment.Text("回显 "),
+                RichTextSegment.Url("https://dc.hhhl.cc/notes/amtbghzudk"),
+                RichTextSegment.Text("😺"),
+            ),
+            segments,
+        )
+    }
+
+    @Test
     fun parsesBareHttpUrlsCaseInsensitively() {
         val segments = parseRichText(
             text = "Open HTTPS://dc.hhhl.cc/docs and HTTP://dc.hhhl.cc/@alice.",

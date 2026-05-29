@@ -285,10 +285,10 @@ private data class TimelineRequest(
 private data class PollRecommendationRequest(
     val i: String,
     val limit: Int,
-    val offset: Int = 0,
-    val excludeChannels: Boolean = false,
+    val offset: Int,
+    val excludeChannels: Boolean,
     val local: Boolean? = null,
-    val expired: Boolean = false,
+    val expired: Boolean,
 )
 
 @Serializable

@@ -48,6 +48,7 @@ import cc.hhhl.client.api.toLocalCompactDateLabel
 import cc.hhhl.client.presentation.truncateRichTextPreviewText
 import cc.hhhl.client.theme.LocalHhhlColors
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.sin
 import kotlinx.datetime.Instant
 
@@ -207,13 +208,14 @@ private fun Modifier.mfmGraphics(
     extraScaleX: Float = 1f,
     extraScaleY: Float = 1f,
 ): Modifier {
+    val measuredScale = mfmStyle.measuredRichTextScale()
     return offset(
         x = ((mfmStyle.positionX + extraOffsetX) * 8).dp,
         y = ((mfmStyle.positionY + extraOffsetY) * 8).dp,
     ).graphicsLayer {
         rotationZ = mfmStyle.rotateDeg + extraRotation
-        scaleX = mfmStyle.scaleX * extraScaleX * if (mfmStyle.flipX) -1f else 1f
-        scaleY = mfmStyle.scaleY * extraScaleY * if (mfmStyle.flipY) -1f else 1f
+        scaleX = (mfmStyle.scaleX / measuredScale) * extraScaleX * if (mfmStyle.flipX) -1f else 1f
+        scaleY = (mfmStyle.scaleY / measuredScale) * extraScaleY * if (mfmStyle.flipY) -1f else 1f
         alpha = mfmStyle.opacity
     }
 }
@@ -588,7 +590,7 @@ private fun InlineRichEmojiImage(
     var imageLoaded by remember(segment.url) { mutableStateOf(false) }
     Box(
         modifier = Modifier
-            .size(18.dp)
+            .size((18f * mfmStyle.measuredRichTextScale()).dp)
             .mfmAnimatedGraphics(mfmStyle = mfmStyle, textLength = segment.code.length, animationBudget = animationBudget),
         contentAlignment = Alignment.Center,
     ) {
@@ -944,10 +946,10 @@ private fun parseInlineMarkdown(text: String, depth: Int): List<InlineMarkdownSp
                 index = interpolation.end
                 continue
             }
-            val fallbackEnd = malformedMfmFallbackEnd(text, index)
-            if (fallbackEnd > index) {
-                spans.add(InlineMarkdownSpan.Text(text.substring(index, fallbackEnd)))
-                index = fallbackEnd
+            val fallback = malformedMfmFallback(text, index)
+            if (fallback != null) {
+                if (fallback.text.isNotEmpty()) spans.add(InlineMarkdownSpan.Text(fallback.text))
+                index = fallback.end
                 continue
             }
             spans.add(InlineMarkdownSpan.Text(text.substring(index)))
@@ -1265,6 +1267,7 @@ private fun parseMfmSpan(text: String, start: Int, depth: Int): ParsedStyledSpan
     val value = function.value
     val options = function.options
     if (text.startsWith("\${", start) && !name.isSupportedBraceMfmName()) return null
+    if (function.hasLineBreak && !name.isSupportedMultilineMfmName()) return null
     if (name == "ruby") {
         val parts = value.splitMfmValueTokens(maxTokens = 2)
         if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) return null
@@ -1292,6 +1295,7 @@ private fun parseMfmSpan(text: String, start: Int, depth: Int): ParsedStyledSpan
         )
     }
     val renderValue = value.unquoteMfmOptionValue()
+    if (renderValue.length > MAX_MFM_FUNCTION_BODY_CHARS) return null
     val style = when (name) {
         "small" -> InlineMarkdownStyle.Small
         "x2" -> InlineMarkdownStyle.X2
@@ -1333,10 +1337,16 @@ private data class MfmFunction(
     val options: String,
     val value: String,
     val end: Int,
+    val hasLineBreak: Boolean,
 )
 
 private data class PlainMfmInterpolation(
     val value: String,
+    val end: Int,
+)
+
+private data class MfmFallback(
+    val text: String,
     val end: Int,
 )
 
@@ -1370,6 +1380,7 @@ private fun parseMfmFunction(
     val separatorIndex = body.indexOfFirst { it.isWhitespace() }
     if (separatorIndex <= 0 || separatorIndex == body.lastIndex) return null
     val rawName = body.substring(0, separatorIndex).trim()
+    if (rawName.length > MAX_MFM_RAW_NAME_CHARS) return null
     val normalizedRawName = rawName.lowercase()
     val name = normalizedRawName.substringBefore('.').substringBefore('=')
     val options = when {
@@ -1385,6 +1396,7 @@ private fun parseMfmFunction(
         options = options,
         value = value,
         end = closeIndex + 1,
+        hasLineBreak = body.any { it == '\n' || it == '\r' },
     )
 }
 
@@ -1480,6 +1492,16 @@ private fun findMfmCloseIndex(
                 continue
             }
         }
+        if (closeStack.isNotEmpty() && closeStack.last() == ']' && char == '[') {
+            val labelEnd = findMarkdownLinkLabelEnd(text, index)
+            if (labelEnd != null && text.getOrNull(labelEnd + 1) == '(') {
+                val urlEnd = findMarkdownLinkUrlEnd(text, labelEnd + 2)
+                if (urlEnd != null && urlEnd < endExclusive) {
+                    index = urlEnd + 1
+                    continue
+                }
+            }
+        }
         if (char == closeStack.last()) {
             closeStack.removeAt(closeStack.lastIndex)
             if (closeStack.isEmpty()) return index
@@ -1491,14 +1513,11 @@ private fun findMfmCloseIndex(
     return -1
 }
 
-private fun malformedMfmFallbackEnd(text: String, start: Int): Int {
+private fun malformedMfmFallback(text: String, start: Int): MfmFallback? {
     val syntax = when {
         text.startsWith("$[", start) -> MfmSyntax(openToken = "$[", closeChar = ']')
         text.startsWith("\${", start) -> MfmSyntax(openToken = "\${", closeChar = '}')
-        else -> return -1
-    }
-    if (text.length - start > MAX_MFM_MALFORMED_FALLBACK_SCAN_CHARS) {
-        return start + syntax.openToken.length
+        else -> return null
     }
     val closeIndex = findMfmCloseIndex(
         text = text,
@@ -1506,7 +1525,17 @@ private fun malformedMfmFallbackEnd(text: String, start: Int): Int {
         syntax = syntax,
         maxEndExclusive = boundedMfmFunctionEndExclusive(text, start, syntax, text.length),
     )
-    return if (closeIndex > start) closeIndex + 1 else -1
+    if (closeIndex <= start) return null
+    val body = text.substring(start + syntax.openToken.length, closeIndex)
+    val separatorIndex = body.indexOfFirst { it.isWhitespace() }
+    val rawName = separatorIndex.takeIf { it > 0 }?.let { body.substring(0, it).trim() }.orEmpty()
+    if (rawName.length > MAX_MFM_RAW_NAME_CHARS && separatorIndex < body.lastIndex) {
+        return MfmFallback(
+            text = body.substring(separatorIndex + 1).trim(),
+            end = closeIndex + 1,
+        )
+    }
+    return MfmFallback(text = text.substring(start, closeIndex + 1), end = closeIndex + 1)
 }
 
 private fun boundedMfmFunctionEndExclusive(
@@ -1515,7 +1544,7 @@ private fun boundedMfmFunctionEndExclusive(
     syntax: MfmSyntax,
     maxEndExclusive: Int,
 ): Int {
-    val maxBodyEnd = start + syntax.openToken.length + MAX_MFM_FUNCTION_BODY_CHARS + 1
+    val maxBodyEnd = start + syntax.openToken.length + MAX_MFM_FUNCTION_SCAN_CHARS + 1
     return minOf(text.length, maxEndExclusive, maxBodyEnd)
 }
 
@@ -1574,7 +1603,7 @@ private fun String.startsWithMfmBlockName(name: String): Boolean {
     val prefix = "$[$name"
     if (!startsWith(prefix, ignoreCase = true)) return false
     val next = getOrNull(prefix.length)
-    return next == null || next.isWhitespace()
+    return next == null || next.isWhitespace() || next == ']'
 }
 
 private fun parseHtmlRuby(text: String, innerStart: Int): ParsedStyledSpan? {
@@ -1801,6 +1830,40 @@ private fun String.isSupportedBraceMfmName(): Boolean {
         "link",
         "unixtime",
         "unicode",
+        "font",
+        "flip",
+        "tada",
+        "jelly",
+        "twitch",
+        "shake",
+        "spin",
+        "jump",
+        "bounce",
+        "sparkle",
+        -> true
+        else -> isMfmForegroundName() ||
+            isMfmBackgroundName() ||
+            isMfmRotateName() ||
+            isMfmPositionName() ||
+            isMfmOpacityName() ||
+            isMfmBorderName()
+    }
+}
+
+private fun String.isSupportedMultilineMfmName(): Boolean {
+    return when (this) {
+        "center",
+        "quote",
+        "small",
+        "x2",
+        "x3",
+        "x4",
+        "scale",
+        "code",
+        "blur",
+        "blurry",
+        "rainbow",
+        "plain",
         "font",
         "flip",
         "tada",
@@ -2229,15 +2292,25 @@ private fun TextStyle.markdownMfm(mfmStyle: MfmInlineStyle): TextStyle {
         MfmFont.Fantasy -> copy(fontFamily = FontFamily.Serif)
         MfmFont.Emoji -> copy(fontSize = if (fontSize.isTextUnitSpecified) fontSize * 1.08f else 18.sp)
         MfmFont.Math -> copy(fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic)
-    }
+    }.scaledText(mfmStyle.measuredRichTextScale())
 }
 
 private fun TextStyle.scaledText(scale: Float): TextStyle {
+    if (scale == 1f) return this
     return if (fontSize.isTextUnitSpecified) {
-        copy(fontSize = fontSize * scale)
+        copy(
+            fontSize = fontSize * scale,
+            lineHeight = if (lineHeight.isTextUnitSpecified) lineHeight * scale else lineHeight,
+        )
+    } else if (lineHeight.isTextUnitSpecified) {
+        copy(lineHeight = lineHeight * scale)
     } else {
         this
     }
+}
+
+internal fun MfmInlineStyle.measuredRichTextScale(): Float {
+    return maxOf(abs(scaleX), abs(scaleY)).coerceIn(MIN_MFM_LAYOUT_SCALE, MAX_MFM_LAYOUT_SCALE)
 }
 
 private fun canRenderPlainRichTextFastPath(
@@ -2300,7 +2373,7 @@ private const val MAX_MFM_NESTING_DEPTH = 16
 private const val MAX_MFM_ANIMATED_CHARS = 240
 private const val MAX_MFM_ANIMATED_SPANS_PER_TEXT = 3
 private const val MAX_MFM_FUNCTION_BODY_CHARS = 4_096
-private const val MAX_MFM_MALFORMED_FALLBACK_SCAN_CHARS = 4_096
+private const val MAX_MFM_FUNCTION_SCAN_CHARS = 16_384
 private const val MAX_INLINE_MARKDOWN_SPANS = 180
 private const val MAX_INLINE_CODE_CHARS = 1_024
 private const val MAX_MARKDOWN_LINK_LABEL_CHARS = 512
@@ -2308,12 +2381,15 @@ private const val MAX_MARKDOWN_LINK_URL_CHARS = 2_048
 private const val MAX_MFM_OPTION_COUNT = 24
 private const val MAX_MFM_OPTION_CHARS = 128
 private const val MAX_MFM_OPTION_KEY_CHARS = 32
+private const val MAX_MFM_RAW_NAME_CHARS = 512
 private const val MAX_MFM_VALUE_TOKEN_COUNT = 8
 private const val MAX_MFM_VALUE_TOKEN_CHARS = 512
 private const val MAX_MFM_UNICODE_CODEPOINTS = 16
 private const val MAX_MFM_UNIXTIME_EPOCH_MILLIS = 4_102_444_800_000L
 private const val MIN_MFM_ANIMATION_DURATION_MILLIS = 120
 private const val MAX_MFM_ANIMATION_DURATION_MILLIS = 5_000
+private const val MIN_MFM_LAYOUT_SCALE = 0.25f
+private const val MAX_MFM_LAYOUT_SCALE = 4f
 private const val MAX_INLINE_HTML_TAG_CHARS = 512
 private const val MAX_INLINE_HTML_BODY_CHARS = 4_096
 private const val MAX_RICH_TEXT_CACHE_ENTRIES = 256

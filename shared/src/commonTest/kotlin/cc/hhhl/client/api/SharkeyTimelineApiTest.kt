@@ -22,6 +22,10 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class SharkeyTimelineApiTest {
     @Test
@@ -89,11 +93,11 @@ class SharkeyTimelineApiTest {
                 assertEquals("https://dc.hhhl.cc/api/notes/polls/recommendation", request.url.toString())
                 assertEquals(HttpMethod.Post, request.method)
                 assertEquals(ContentType.Application.Json, request.body.contentType)
-                val body = (request.body as TextContent).text
-                assertTrue(body.contains(""""i":"token-123""""))
-                assertTrue(body.contains(""""limit":20""""))
-                assertTrue(body.contains(""""offset":40""""))
-                assertTrue(body.contains(""""expired":true""""))
+                val body = Json.parseToJsonElement((request.body as TextContent).text).jsonObject
+                assertEquals("token-123", body.getValue("i").jsonPrimitive.content)
+                assertEquals(20, body.getValue("limit").jsonPrimitive.int)
+                assertEquals(40, body.getValue("offset").jsonPrimitive.int)
+                assertEquals(true, body.getValue("expired").jsonPrimitive.boolean)
                 respondNoteArray()
             },
         )

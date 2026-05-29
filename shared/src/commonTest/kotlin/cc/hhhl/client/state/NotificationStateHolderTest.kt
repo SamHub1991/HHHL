@@ -116,7 +116,7 @@ class NotificationStateHolderTest {
         advanceUntilIdle()
 
         assertEquals(listOf(NotificationFilter.All, NotificationFilter.Mentions), calls)
-        assertEquals(listOf(first), holder.state.value.notifications)
+        assertEquals(emptyList(), holder.state.value.notifications)
         assertEquals(1, holder.state.value.unreadCount)
     }
 
@@ -190,6 +190,84 @@ class NotificationStateHolderTest {
         assertTrue(holder.state.value.notifications.single().isRead)
         assertEquals(0, holder.state.value.unreadCount)
         assertEquals("通知已全部标记为已读", holder.state.value.message)
+    }
+
+    @Test
+    fun markAllAsReadRunsWhenSelectedFilterHasNoVisibleNotificationsButUnreadExists() = runTest {
+        var markAllCalls = 0
+        val reaction = FakeData.notifications[0].copy(
+            id = "remote-reaction-only",
+            type = NotificationType.Reaction,
+        )
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(listOf(reaction)),
+                markAllResult = NotificationRepositoryResult.AllRead,
+                onMarkAll = { markAllCalls += 1 },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFilter(NotificationFilter.Mentions)
+        advanceUntilIdle()
+        assertEquals(emptyList(), holder.state.value.notifications)
+
+        holder.markAllAsRead()
+        assertTrue(holder.state.value.isMarkingAllRead)
+        advanceUntilIdle()
+
+        assertEquals(1, markAllCalls)
+        assertFalse(holder.state.value.isMarkingAllRead)
+        assertEquals(0, holder.state.value.unreadCount)
+        assertEquals("通知已全部标记为已读", holder.state.value.message)
+    }
+
+    @Test
+    fun markAllAsReadKeepsUnreadClearedWhenQuietRefreshReturnsStaleUnreadRows() = runTest {
+        val first = FakeData.notifications[0].copy(id = "remote-stale-a", createdAtEpochMillis = 1000L)
+        val second = FakeData.notifications[1].copy(id = "remote-stale-b", createdAtEpochMillis = 2000L)
+        val holder = NotificationStateHolder(
+            repository = sequenceRepository(
+                NotificationRepositoryResult.Success(listOf(first)),
+                NotificationRepositoryResult.Success(listOf(second, first)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.markAllAsRead()
+        advanceUntilIdle()
+        holder.refreshQuietly()
+        advanceUntilIdle()
+
+        assertEquals(listOf("remote-stale-b", "remote-stale-a"), holder.state.value.notifications.map { it.id })
+        assertTrue(holder.state.value.notifications.all { it.isRead })
+        assertEquals(0, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun markAllAsReadShowsFeedbackWhenThereAreNoUnreadNotifications() = runTest {
+        var markAllCalls = 0
+        val read = FakeData.notifications[0].copy(id = "already-read", isRead = true)
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(listOf(read)),
+                onMarkAll = { markAllCalls += 1 },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.markAllAsRead()
+        advanceUntilIdle()
+
+        assertEquals(0, markAllCalls)
+        assertFalse(holder.state.value.isMarkingAllRead)
+        assertEquals("没有未读通知", holder.state.value.message)
     }
 
     @Test

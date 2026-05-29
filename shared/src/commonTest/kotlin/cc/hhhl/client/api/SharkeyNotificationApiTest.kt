@@ -204,7 +204,9 @@ class SharkeyNotificationApiTest {
             client = testClient { request ->
                 assertEquals("https://dc.hhhl.cc/api/notifications/mark-all-as-read", request.url.toString())
                 assertEquals(HttpMethod.Post, request.method)
-                assertEquals("Bearer token-123", request.headers[HttpHeaders.Authorization])
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains("\"i\":\"token-123\""))
                 respond(
                     content = "",
                     status = HttpStatusCode.NoContent,
@@ -222,7 +224,9 @@ class SharkeyNotificationApiTest {
             client = testClient { request ->
                 assertEquals("https://dc.hhhl.cc/api/notifications/flush", request.url.toString())
                 assertEquals(HttpMethod.Post, request.method)
-                assertEquals("Bearer token-123", request.headers[HttpHeaders.Authorization])
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains("\"i\":\"token-123\""))
                 respond(content = "", status = HttpStatusCode.NoContent)
             },
         )
@@ -261,7 +265,9 @@ class SharkeyNotificationApiTest {
             client = testClient { request ->
                 assertEquals("https://dc.hhhl.cc/api/notifications/test-notification", request.url.toString())
                 assertEquals(HttpMethod.Post, request.method)
-                assertEquals("Bearer token-123", request.headers[HttpHeaders.Authorization])
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains("\"i\":\"token-123\""))
                 respond(content = "", status = HttpStatusCode.NoContent)
             },
         )

@@ -20,6 +20,9 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class SharkeyUserRelationshipApiTest {
     @Test
@@ -92,11 +95,11 @@ class SharkeyUserRelationshipApiTest {
             client = testClient { request ->
                 assertEquals("https://dc.hhhl.cc/api/following/update", request.url.toString())
                 assertEquals(HttpMethod.Post, request.method)
-                val body = (request.body as TextContent).text
-                assertTrue(body.contains(""""i":"token-123""""))
-                assertTrue(body.contains(""""userId":"user-1""""))
-                assertTrue(body.contains(""""notify":"normal""""))
-                assertTrue(body.contains(""""withReplies":true""""))
+                val body = Json.parseToJsonElement((request.body as TextContent).text).jsonObject
+                assertEquals("token-123", body.getValue("i").jsonPrimitive.content)
+                assertEquals("user-1", body.getValue("userId").jsonPrimitive.content)
+                assertEquals("normal", body.getValue("notify").jsonPrimitive.content)
+                assertEquals(true, body.getValue("withReplies").jsonPrimitive.boolean)
                 respondOk()
             },
         )
@@ -130,10 +133,10 @@ class SharkeyUserRelationshipApiTest {
             client = testClient { request ->
                 assertEquals("https://dc.hhhl.cc/api/following/update-all", request.url.toString())
                 assertEquals(HttpMethod.Post, request.method)
-                val body = (request.body as TextContent).text
-                assertTrue(body.contains(""""i":"token-123""""))
-                assertTrue(body.contains(""""notify":"none""""))
-                assertTrue(body.contains(""""withReplies":false""""))
+                val body = Json.parseToJsonElement((request.body as TextContent).text).jsonObject
+                assertEquals("token-123", body.getValue("i").jsonPrimitive.content)
+                assertEquals("none", body.getValue("notify").jsonPrimitive.content)
+                assertEquals(false, body.getValue("withReplies").jsonPrimitive.boolean)
                 respondOk()
             },
         )

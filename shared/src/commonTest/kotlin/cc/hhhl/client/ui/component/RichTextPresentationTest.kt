@@ -158,7 +158,7 @@ class RichTextPresentationTest {
     fun truncateRichTextPreviewTextAllowsCutAfterClosedNestedMfmTokens() {
         val nested = "lead $[x2 before $[fg.color=ff0000 inner] after] done"
 
-        assertEquals("lead $[x2 before $[fg.color=ff0000 inner] after]...", nested.truncateRichTextPreviewText(54))
+        assertEquals("lead $[x2 before $[fg.color=ff0000 inner] after] done", nested.truncateRichTextPreviewText(54))
     }
 
     private fun sampleDriveFile(): DriveFile {

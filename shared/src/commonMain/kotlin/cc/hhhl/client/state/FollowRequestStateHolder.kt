@@ -45,8 +45,11 @@ class FollowRequestStateHolder(
 
         val requestId = nextListRequestId()
         scope.launch {
-            applyListResult(repository.refresh(), loadingMore = false, requestId = requestId)
-            refreshSent()
+            val result = repository.refresh()
+            applyListResult(result, loadingMore = false, requestId = requestId)
+            if (result is FollowRequestsRepositoryResult.Success) {
+                refreshSent()
+            }
         }
     }
 

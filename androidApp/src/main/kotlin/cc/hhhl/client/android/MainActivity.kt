@@ -224,6 +224,11 @@ class MainActivity : ComponentActivity() {
         consumeAuthCallback(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        AndroidAppUpdateManager(applicationContext).retryPendingInstall()
+    }
+
     private fun consumeAuthCallback(intent: Intent?) {
         val session = intent?.data?.parseMiAuthSession()
         if (session != null) {

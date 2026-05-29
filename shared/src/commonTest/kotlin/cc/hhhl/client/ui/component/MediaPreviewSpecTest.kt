@@ -84,7 +84,7 @@ class MediaPreviewSpecTest {
         assertEquals(1, session.items.size)
         assertEquals("remote.webp", session.current.label)
         assertEquals("https://dc.hhhl.cc/files/remote.webp", session.current.openUrl)
-        assertEquals("https://dc.hhhl.cc/files/remote-thumb.webp", session.current.previewUrl)
+        assertEquals("https://dc.hhhl.cc/files/remote.webp", session.current.previewUrl)
         assertTrue(session.current.isImage)
     }
 

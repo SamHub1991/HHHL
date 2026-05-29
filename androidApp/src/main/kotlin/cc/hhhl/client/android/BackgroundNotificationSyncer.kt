@@ -38,6 +38,8 @@ import cc.hhhl.client.repository.TimelineRepository
 import cc.hhhl.client.repository.TimelineRepositoryResult
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
 import java.net.URL
 import java.time.Instant
 
@@ -716,11 +718,64 @@ internal class BackgroundNotificationPublisher(
     }
 
     private fun loadRemoteAvatar(url: String): Bitmap? {
+        val cleanUrl = url.trim()
+        if (!cleanUrl.startsWith("https://", ignoreCase = true) &&
+            !cleanUrl.startsWith("http://", ignoreCase = true)
+        ) {
+            return null
+        }
         return runCatching {
-            URL(url).openStream().use { input ->
-                BitmapFactory.decodeStream(input)
+            val connection = URL(cleanUrl).openConnection() as? HttpURLConnection
+                ?: return@runCatching null
+            try {
+                connection.instanceFollowRedirects = true
+                connection.connectTimeout = REMOTE_AVATAR_CONNECT_TIMEOUT_MS
+                connection.readTimeout = REMOTE_AVATAR_READ_TIMEOUT_MS
+                connection.setRequestProperty("User-Agent", "HHHL-Android/${BuildConfig.VERSION_NAME}")
+                if (connection.responseCode !in 200..299) return@runCatching null
+                if (connection.contentLengthLong > REMOTE_AVATAR_MAX_BYTES) return@runCatching null
+                val contentType = connection.contentType.orEmpty().substringBefore(';').lowercase()
+                if (contentType.isNotBlank() && !contentType.startsWith("image/")) return@runCatching null
+
+                val bytes = connection.inputStream.use { input ->
+                    val output = ByteArrayOutputStream()
+                    val buffer = ByteArray(REMOTE_AVATAR_BUFFER_BYTES)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > REMOTE_AVATAR_MAX_BYTES) return@runCatching null
+                        output.write(buffer, 0, read)
+                    }
+                    output.toByteArray()
+                }
+                if (bytes.isEmpty()) return@runCatching null
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+                BitmapFactory.decodeByteArray(
+                    bytes,
+                    0,
+                    bytes.size,
+                    BitmapFactory.Options().apply {
+                        inSampleSize = avatarSampleSize(bounds.outWidth, bounds.outHeight)
+                    },
+                )
+            } finally {
+                connection.disconnect()
             }
         }.getOrNull()
+    }
+
+    private fun avatarSampleSize(width: Int, height: Int): Int {
+        var sampleSize = 1
+        while (width / sampleSize > REMOTE_AVATAR_MAX_DIMENSION_PX ||
+            height / sampleSize > REMOTE_AVATAR_MAX_DIMENSION_PX
+        ) {
+            sampleSize *= 2
+        }
+        return sampleSize
     }
 
     private fun initialNotificationAvatar(initial: String): Bitmap {
@@ -768,6 +823,14 @@ internal class BackgroundNotificationPublisher(
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+    }
+
+    private companion object {
+        const val REMOTE_AVATAR_CONNECT_TIMEOUT_MS = 2_000
+        const val REMOTE_AVATAR_READ_TIMEOUT_MS = 2_500
+        const val REMOTE_AVATAR_MAX_BYTES = 512L * 1024L
+        const val REMOTE_AVATAR_BUFFER_BYTES = 8 * 1024
+        const val REMOTE_AVATAR_MAX_DIMENSION_PX = 256
     }
 }
 

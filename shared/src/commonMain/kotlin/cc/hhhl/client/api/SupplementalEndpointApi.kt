@@ -361,9 +361,9 @@ private data class ActivityPubGetRequest(
     val uri: String? = null,
     val userId: String? = null,
     val noteId: String? = null,
-    val expandCollectionItems: Boolean = false,
+    val expandCollectionItems: Boolean,
     val expandCollectionLimit: Int? = null,
-    val allowAnonymous: Boolean = false,
+    val allowAnonymous: Boolean,
 )
 
 @Serializable
