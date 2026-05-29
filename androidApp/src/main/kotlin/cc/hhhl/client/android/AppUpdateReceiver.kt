@@ -8,8 +8,9 @@ import android.widget.Toast
 
 class AppUpdateReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == ACTION_DOWNLOAD_APP_UPDATE) {
-            startUpdateDownload(context, intent)
+        when (intent.action) {
+            ACTION_DOWNLOAD_APP_UPDATE -> startUpdateDownload(context, intent)
+            ACTION_INSTALL_DOWNLOADED_APP_UPDATE -> openDownloadedUpdate(context, intent)
         }
     }
 
@@ -24,12 +25,19 @@ class AppUpdateReceiver : BroadcastReceiver() {
         )
         when (val result = AndroidAppUpdateManager(context.applicationContext).downloadUpdate(update)) {
             is AppUpdateDownloadResult.Started -> {
-                Toast.makeText(context, "已开始下载更新", Toast.LENGTH_SHORT).show()
+                val message = if (result.alreadyEnqueued) "更新下载任务已存在" else "已开始下载更新"
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
             is AppUpdateDownloadResult.Error -> {
                 Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    private fun openDownloadedUpdate(context: Context, intent: Intent) {
+        val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+        if (downloadId <= 0L) return
+        AndroidAppUpdateManager(context.applicationContext).installDownloadedUpdate(downloadId)
     }
 }
 
@@ -43,9 +51,20 @@ class AppUpdateDownloadReceiver : BroadcastReceiver() {
     private fun openDownloadedUpdate(context: Context, intent: Intent) {
         val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
         if (downloadId <= 0L) return
-        val opened = AndroidAppUpdateManager(context.applicationContext).installDownloadedUpdate(downloadId)
+        val manager = AndroidAppUpdateManager(context.applicationContext)
+        if (!manager.isPendingUpdateDownload(downloadId)) return
+        val opened = manager.installDownloadedUpdate(downloadId)
         if (!opened) {
-            Toast.makeText(context, "更新包下载完成，但无法打开安装器", Toast.LENGTH_SHORT).show()
+            manager.notifyInstallReady(downloadId)
+            Toast.makeText(context, "更新包下载完成，请点击通知打开安装", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+class AppUpdateInstalledReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            AndroidAppUpdateManager(context.applicationContext).reopenAfterInstallIfRequested()
         }
     }
 }

@@ -81,17 +81,17 @@ class AndroidAppUpdateManager(
             .setSmallIcon(R.drawable.dc_icon)
             .setLargeIcon(android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.dc_icon))
             .setContentTitle("发现新版本 ${update.versionName}")
-            .setContentText("可下载并覆盖安装，缓存和本地数据会保留")
+            .setContentText("将自动下载，完成后会打开系统安装确认")
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(
-                    "${update.releaseName.ifBlank { "HHHL" }} 已可更新。点击“下载更新”下载 APK，下载完成会打开系统安装确认。",
+                    "${update.releaseName.ifBlank { "HHHL" }} 已可更新。HHHL 会自动下载 APK，下载完成后会打开系统安装确认；如果没有开始或下载失败，可点“下载或安装”。",
                 ),
             )
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setAutoCancel(true)
             .setContentIntent(openAppPendingIntent)
-            .addAction(R.drawable.dc_icon, "下载更新", downloadPendingIntent)
+            .addAction(R.drawable.dc_icon, "下载或安装", downloadPendingIntent)
             .build()
         return notifyUpdateSafely(notification)
     }
@@ -110,6 +110,13 @@ class AndroidAppUpdateManager(
             val cleanUrl = update.apkUrl.trim()
             if (cleanUrl.isBlank()) return AppUpdateDownloadResult.Error("APK 下载地址为空")
             val fileName = update.safeApkFileName()
+            val store = AndroidAppUpdateStore(context)
+            reusePendingDownload(update, fileName, store)?.let { return@runCatching it }
+            store.clearPendingDownload()
+            val destination = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName)
+            if (destination.exists() && !destination.delete()) {
+                return AppUpdateDownloadResult.Error("无法清理旧安装包，请稍后重试")
+            }
             val request = DownloadManager.Request(Uri.parse(cleanUrl))
                 .setTitle("HHHL ${update.versionName}")
                 .setDescription("下载完成后会打开系统安装确认")
@@ -119,7 +126,7 @@ class AndroidAppUpdateManager(
                 .setMimeType(APK_MIME_TYPE)
                 .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
             val downloadId = downloadManager().enqueue(request)
-            AndroidAppUpdateStore(context).savePendingDownload(
+            store.savePendingDownload(
                 PendingAppUpdateDownload(
                     downloadId = downloadId,
                     versionName = update.versionName,
@@ -132,6 +139,46 @@ class AndroidAppUpdateManager(
         }
     }
 
+    fun notifyInstallReady(downloadId: Long): Boolean {
+        if (!canPostNotifications()) return false
+        ensureUpdateChannel()
+        val installIntent = Intent(context, AppUpdateReceiver::class.java).apply {
+            action = ACTION_INSTALL_DOWNLOADED_APP_UPDATE
+            setPackage(context.packageName)
+            putExtra(DownloadManager.EXTRA_DOWNLOAD_ID, downloadId)
+        }
+        val installPendingIntent = PendingIntent.getBroadcast(
+            context,
+            downloadId.hashCode(),
+            installIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
+            .setSmallIcon(R.drawable.dc_icon)
+            .setLargeIcon(android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.dc_icon))
+            .setContentTitle("更新包已下载")
+            .setContentText("点击打开系统安装确认")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setAutoCancel(true)
+            .setContentIntent(installPendingIntent)
+            .addAction(R.drawable.dc_icon, "打开安装", installPendingIntent)
+            .build()
+        return notifyUpdateSafely(notification)
+    }
+
+    fun reopenAfterInstallIfRequested(): Boolean {
+        val store = AndroidAppUpdateStore(context)
+        if (!store.shouldReopenAfterInstall(BuildConfig.VERSION_NAME)) return false
+        store.clearPendingDownload()
+        store.clearInstallRequest()
+        return launchMainActivity() || notifyUpdateInstalled()
+    }
+
+    fun isPendingUpdateDownload(downloadId: Long): Boolean {
+        return AndroidAppUpdateStore(context).readPendingDownload()?.downloadId == downloadId
+    }
+
     fun installDownloadedUpdate(downloadId: Long): Boolean {
         val store = AndroidAppUpdateStore(context)
         val pending = store.readPendingDownload() ?: return false
@@ -142,6 +189,7 @@ class AndroidAppUpdateManager(
     fun retryPendingInstall(): Boolean {
         val store = AndroidAppUpdateStore(context)
         val pending = store.readPendingDownload() ?: return false
+        if (store.hasInstallRequestFor(pending.versionName)) return false
         return installPendingUpdate(store, pending, openSettingsIfNeeded = false)
     }
 
@@ -169,9 +217,73 @@ class AndroidAppUpdateManager(
         }
         return runCatching {
             context.startActivity(intent)
-            store.clearPendingDownload()
+            store.markInstallRequested(pending.versionName)
+            true
+        }.getOrElse {
+            store.clearInstallRequest()
+            false
+        }
+    }
+
+    private fun reusePendingDownload(
+        update: AppUpdateInfo,
+        fileName: String,
+        store: AndroidAppUpdateStore,
+    ): AppUpdateDownloadResult? {
+        val pending = store.readPendingDownload() ?: return null
+        if (pending.versionName != update.versionName || pending.fileName != fileName) return null
+        return when (downloadStatus(pending.downloadId)) {
+            DownloadManager.STATUS_PENDING,
+            DownloadManager.STATUS_RUNNING,
+            DownloadManager.STATUS_PAUSED,
+                -> AppUpdateDownloadResult.Started(pending.downloadId, alreadyEnqueued = true)
+            DownloadManager.STATUS_SUCCESSFUL -> {
+                if (store.hasInstallRequestFor(pending.versionName)) {
+                    notifyInstallReady(pending.downloadId)
+                } else {
+                    installPendingUpdate(store, pending, openSettingsIfNeeded = true)
+                }
+                AppUpdateDownloadResult.Started(pending.downloadId, alreadyEnqueued = true)
+            }
+            else -> {
+                store.clearPendingDownload()
+                null
+            }
+        }
+    }
+
+    private fun launchMainActivity(): Boolean {
+        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?: Intent(context, MainActivity::class.java)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        return runCatching {
+            context.startActivity(intent)
             true
         }.getOrDefault(false)
+    }
+
+    private fun notifyUpdateInstalled(): Boolean {
+        if (!canPostNotifications()) return false
+        ensureUpdateChannel()
+        val openAppPendingIntent = PendingIntent.getActivity(
+            context,
+            UPDATE_INSTALLED_NOTIFICATION_ID,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(context, UPDATE_CHANNEL_ID)
+            .setSmallIcon(R.drawable.dc_icon)
+            .setLargeIcon(android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.dc_icon))
+            .setContentTitle("HHHL 已更新")
+            .setContentText("如果没有自动打开，点击这里进入新版")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setAutoCancel(true)
+            .setContentIntent(openAppPendingIntent)
+            .build()
+        return notifyUpdateSafely(notification)
     }
 
     private fun openUnknownAppSourcesSettings(): Boolean {
@@ -199,14 +311,18 @@ class AndroidAppUpdateManager(
     }
 
     private fun isDownloadSuccessful(downloadId: Long): Boolean {
+        return downloadStatus(downloadId) == DownloadManager.STATUS_SUCCESSFUL
+    }
+
+    private fun downloadStatus(downloadId: Long): Int? {
         val query = DownloadManager.Query().setFilterById(downloadId)
         downloadManager().query(query)?.use { cursor ->
-            if (!cursor.moveToFirst()) return false
+            if (!cursor.moveToFirst()) return null
             val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-            if (statusIndex < 0) return false
-            return cursor.getInt(statusIndex) == DownloadManager.STATUS_SUCCESSFUL
+            if (statusIndex < 0) return null
+            return cursor.getInt(statusIndex)
         }
-        return false
+        return null
     }
 
     private fun downloadManager(): DownloadManager {
@@ -259,7 +375,37 @@ class AndroidAppUpdateStore(context: Context) {
     }
 
     fun clearPendingDownload() {
-        preferences.edit().clear().apply()
+        preferences.edit()
+            .remove(KEY_DOWNLOAD_ID)
+            .remove(KEY_VERSION_NAME)
+            .remove(KEY_FILE_NAME)
+            .apply()
+    }
+
+    fun markInstallRequested(versionName: String) {
+        preferences.edit()
+            .putString(KEY_INSTALL_REQUESTED_VERSION_NAME, versionName)
+            .apply()
+    }
+
+    fun shouldReopenAfterInstall(currentVersionName: String): Boolean {
+        val requestedVersion = preferences.getString(KEY_INSTALL_REQUESTED_VERSION_NAME, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: return false
+        return requestedVersion == currentVersionName
+    }
+
+    fun hasInstallRequestFor(versionName: String): Boolean {
+        val requestedVersion = preferences.getString(KEY_INSTALL_REQUESTED_VERSION_NAME, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: return false
+        return requestedVersion == versionName
+    }
+
+    fun clearInstallRequest() {
+        preferences.edit()
+            .remove(KEY_INSTALL_REQUESTED_VERSION_NAME)
+            .apply()
     }
 
     private companion object {
@@ -267,6 +413,7 @@ class AndroidAppUpdateStore(context: Context) {
         const val KEY_DOWNLOAD_ID = "download_id"
         const val KEY_VERSION_NAME = "version_name"
         const val KEY_FILE_NAME = "file_name"
+        const val KEY_INSTALL_REQUESTED_VERSION_NAME = "install_requested_version_name"
     }
 }
 
@@ -294,7 +441,10 @@ sealed interface AppUpdateCheckResult {
 }
 
 sealed interface AppUpdateDownloadResult {
-    data class Started(val downloadId: Long) : AppUpdateDownloadResult
+    data class Started(
+        val downloadId: Long,
+        val alreadyEnqueued: Boolean = false,
+    ) : AppUpdateDownloadResult
 
     data class Error(val message: String) : AppUpdateDownloadResult
 }
@@ -391,6 +541,7 @@ private val updateJson = Json {
 }
 
 internal const val ACTION_DOWNLOAD_APP_UPDATE = "cc.hhhl.client.android.action.DOWNLOAD_APP_UPDATE"
+internal const val ACTION_INSTALL_DOWNLOADED_APP_UPDATE = "cc.hhhl.client.android.action.INSTALL_DOWNLOADED_APP_UPDATE"
 internal const val EXTRA_VERSION_NAME = "version_name"
 internal const val EXTRA_RELEASE_NAME = "release_name"
 internal const val EXTRA_APK_NAME = "apk_name"
@@ -400,4 +551,5 @@ internal const val EXTRA_SIZE_BYTES = "size_bytes"
 private const val GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/WPXSCode/HHHL/releases/latest"
 private const val UPDATE_CHANNEL_ID = "hhhl_app_updates"
 private const val UPDATE_NOTIFICATION_ID = 42100
+private const val UPDATE_INSTALLED_NOTIFICATION_ID = 42101
 private const val APK_MIME_TYPE = "application/vnd.android.package-archive"

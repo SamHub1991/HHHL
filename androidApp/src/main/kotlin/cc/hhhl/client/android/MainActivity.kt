@@ -124,7 +124,10 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 launch(Dispatchers.IO) {
                     when (val result = appUpdateManager.checkForUpdates()) {
-                        is AppUpdateCheckResult.UpdateAvailable -> appUpdateManager.notifyUpdateAvailable(result.update)
+                        is AppUpdateCheckResult.UpdateAvailable -> {
+                            appUpdateManager.downloadUpdate(result.update)
+                            appUpdateManager.notifyUpdateAvailable(result.update)
+                        }
                         is AppUpdateCheckResult.NoUpdate,
                         is AppUpdateCheckResult.Error,
                             -> Unit
@@ -192,14 +195,16 @@ class MainActivity : ComponentActivity() {
                     coroutineScope.launch(Dispatchers.IO) {
                         val message = when (val result = appUpdateManager.checkForUpdates()) {
                             is AppUpdateCheckResult.UpdateAvailable -> {
-                                val notified = appUpdateManager.notifyUpdateAvailable(result.update)
-                                if (notified) {
-                                    "发现新版本 ${result.update.versionName}，已发送下载通知"
-                                } else {
-                                    when (val download = appUpdateManager.downloadUpdate(result.update)) {
-                                        is AppUpdateDownloadResult.Started -> "发现新版本 ${result.update.versionName}，已开始下载"
-                                        is AppUpdateDownloadResult.Error -> download.message
+                                appUpdateManager.notifyUpdateAvailable(result.update)
+                                when (val download = appUpdateManager.downloadUpdate(result.update)) {
+                                    is AppUpdateDownloadResult.Started -> {
+                                        if (download.alreadyEnqueued) {
+                                            "发现新版本 ${result.update.versionName}，下载任务已存在"
+                                        } else {
+                                            "发现新版本 ${result.update.versionName}，已开始自动下载"
+                                        }
                                     }
+                                    is AppUpdateDownloadResult.Error -> download.message
                                 }
                             }
                             is AppUpdateCheckResult.NoUpdate -> "当前已是最新版本 ${result.currentVersion}"
