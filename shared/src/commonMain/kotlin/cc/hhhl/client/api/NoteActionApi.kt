@@ -353,6 +353,7 @@ private data class PollVoteRequest(
 
 private fun defaultNoteActionClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

@@ -17,14 +17,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +39,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import cc.hhhl.client.ai.AiTaskKind
 import cc.hhhl.client.api.TimelineKind
 import cc.hhhl.client.model.InstanceCapabilities
 import cc.hhhl.client.model.Note
@@ -42,6 +48,7 @@ import cc.hhhl.client.state.TimelineTabState
 import cc.hhhl.client.state.TimelineUiState
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
+import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlAnimatedSegmentedControl
 import cc.hhhl.client.ui.component.HhhlIconActionButton
@@ -53,6 +60,7 @@ import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.NoteRow
 import cc.hhhl.client.ui.component.NoteRowDensity
 import cc.hhhl.client.ui.component.isHiddenByBlockedAuthor
+import kotlinx.coroutines.launch
 
 @Composable
 fun TimelineScreen(
@@ -89,8 +97,15 @@ fun TimelineScreen(
     trendErrorMessage: String? = null,
     onTrendSelected: () -> Unit = {},
     onRefreshTrends: () -> Unit = {},
+    onNewNotesMarkerConsumed: (TimelineKind) -> Unit = {},
     onCompose: () -> Unit = {},
     onSearch: () -> Unit = {},
+    aiEnabled: Boolean = false,
+    isAiProcessing: Boolean = false,
+    aiResultText: String? = null,
+    aiResultLabel: String? = null,
+    onAiAction: (AiTaskKind, TimelineKind, List<Note>) -> Unit = { _, _, _ -> },
+    onDismissAiResult: () -> Unit = {},
 ) {
     val availableKinds = availableTimelineKinds(capabilities)
     val selectedKind = state?.selectedKind ?: TimelineKind.Home
@@ -109,6 +124,27 @@ fun TimelineScreen(
     }
     val timelineThreadItems = remember(visibleNotes) {
         timelineThreadItems(visibleNotes)
+    }
+    val indexedTimelineThreadItems = remember(timelineThreadItems) {
+        timelineThreadItems.withIndex().toList()
+    }
+    val coroutineScope = rememberCoroutineScope()
+    val firstUnreadIndex = remember(timelineThreadItems, selectedTabState.firstUnreadNoteId) {
+        val markerId = selectedTabState.firstUnreadNoteId
+        if (markerId == null) -1 else timelineThreadItems.indexOfFirst { it.note.id == markerId }
+    }
+    val newContentSeparatorIndex = remember(timelineThreadItems, selectedTabState.newNoteCount) {
+        selectedTabState.newNoteCount
+            .takeIf { it > 0 && it < timelineThreadItems.size }
+            ?: -1
+    }
+
+    LaunchedEffect(visibleSelectedKind, selectedTabState.firstUnreadNoteId, listState.firstVisibleItemIndex) {
+        val markerId = selectedTabState.firstUnreadNoteId ?: return@LaunchedEffect
+        val markerIndex = timelineThreadItems.indexOfFirst { it.note.id == markerId }
+        if (markerIndex >= 0 && listState.firstVisibleItemIndex <= markerIndex) {
+            onNewNotesMarkerConsumed(visibleSelectedKind)
+        }
     }
 
     if (!showTrends) {
@@ -136,6 +172,25 @@ fun TimelineScreen(
                 selectedKind = visibleSelectedKind,
                 selectedTabState = selectedTabState,
                 onRefresh = { onRefresh(visibleSelectedKind) },
+                aiEnabled = aiEnabled,
+                isAiProcessing = isAiProcessing,
+                onAiDigest = { onAiAction(AiTaskKind.TimelineDigest, visibleSelectedKind, visibleNotes) },
+                onAiReplyOpportunities = {
+                    onAiAction(AiTaskKind.TimelineReplyOpportunities, visibleSelectedKind, visibleNotes)
+                },
+                onAiFilterSuggestions = {
+                    onAiAction(AiTaskKind.TimelineFilterSuggestions, visibleSelectedKind, visibleNotes)
+                },
+                onJumpToNewNotes = if (firstUnreadIndex >= 0) {
+                    {
+                        coroutineScope.launch {
+                            listState.animateScrollToItem(firstUnreadIndex)
+                            onNewNotesMarkerConsumed(visibleSelectedKind)
+                        }
+                    }
+                } else {
+                    null
+                },
                 onCompose = onCompose,
                 onSearch = onSearch,
             )
@@ -150,6 +205,14 @@ fun TimelineScreen(
             onTrendSelected = onTrendSelected,
         )
         HhhlDivider()
+        if (!showTrends && !aiResultText.isNullOrBlank()) {
+            TimelineAiResultPanel(
+                label = aiResultLabel ?: "AI 速览",
+                text = aiResultText,
+                onDismiss = onDismissAiResult,
+            )
+            HhhlDivider()
+        }
         if (showTrends) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -192,7 +255,7 @@ fun TimelineScreen(
             ) {
                 if (selectedTabState.isLoading && visibleNotes.isEmpty()) {
                     item(key = "timeline-notes-loading-${visibleSelectedKind.name}", contentType = "timeline-status") {
-                        TimelineStatusRow(text = "正在加载时间线...", loading = true)
+                        TimelineSkeletonList()
                     }
                 }
                 selectedTabState.errorMessage?.let { message ->
@@ -210,10 +273,15 @@ fun TimelineScreen(
                     }
                 }
                 items(
-                    items = timelineThreadItems,
-                    key = { it.note.id },
+                    items = indexedTimelineThreadItems,
+                    key = { it.value.note.id },
                     contentType = { "timeline-note" },
-                ) { item ->
+                ) { indexedItem ->
+                    val itemIndex = indexedItem.index
+                    val item = indexedItem.value
+                    if (itemIndex == newContentSeparatorIndex) {
+                        TimelineNewContentDivider(newNoteCount = selectedTabState.newNoteCount)
+                    }
                     TimelineThreadNoteRow(
                         item = item,
                     ) {
@@ -311,6 +379,12 @@ private fun TimelineSummaryRow(
     selectedKind: TimelineKind,
     selectedTabState: TimelineTabState,
     onRefresh: () -> Unit,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    onAiDigest: () -> Unit,
+    onAiReplyOpportunities: () -> Unit,
+    onAiFilterSuggestions: () -> Unit,
+    onJumpToNewNotes: (() -> Unit)?,
     onCompose: () -> Unit,
     onSearch: () -> Unit,
 ) {
@@ -343,6 +417,26 @@ private fun TimelineSummaryRow(
                 contentDescription = "搜索",
                 onClick = onSearch,
             )
+            if (onJumpToNewNotes != null && selectedTabState.newNoteCount > 0) {
+                HhhlActionChip(
+                    label = "新 ${selectedTabState.newNoteCount}",
+                    emphasized = true,
+                    onClick = onJumpToNewNotes,
+                )
+            }
+            HhhlOverflowMenu(
+                actions = timelineAiActions(
+                    enabled = aiEnabled && !isAiProcessing && selectedTabState.notes.isNotEmpty(),
+                    isProcessing = isAiProcessing,
+                    onAiDigest = onAiDigest,
+                    onAiReplyOpportunities = onAiReplyOpportunities,
+                    onAiFilterSuggestions = onAiFilterSuggestions,
+                ),
+                enabled = aiEnabled && selectedTabState.notes.isNotEmpty(),
+                label = "AI 时间线",
+                buttonContainerColor = colors.buttonBackground,
+                iconTint = colors.textSecondary,
+            )
             HhhlIconActionButton(
                 icon = Icons.Filled.Edit,
                 contentDescription = "写帖",
@@ -356,6 +450,82 @@ private fun TimelineSummaryRow(
                 onClick = onRefresh,
             )
         }
+    }
+}
+
+@Composable
+private fun TimelineAiResultPanel(
+    label: String,
+    text: String,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.surfaceElevated.copy(alpha = 0.78f))
+            .border(1.dp, colors.border.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            HhhlIconActionButton(
+                icon = Icons.Filled.Close,
+                contentDescription = "关闭 AI 结果",
+                onClick = onDismiss,
+            )
+        }
+        Text(
+            text = text,
+            color = colors.textSecondary,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun TimelineNewContentDivider(newNoteCount: Int) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .height(1.dp)
+                .weight(1f)
+                .background(colors.border.copy(alpha = 0.72f)),
+        )
+        Text(
+            text = if (newNoteCount > 0) "以上 $newNoteCount 条新内容" else "以上是新内容",
+            color = colors.accent,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Box(
+            modifier = Modifier
+                .height(1.dp)
+                .weight(1f)
+                .background(colors.border.copy(alpha = 0.72f)),
+        )
     }
 }
 
@@ -512,6 +682,33 @@ fun timelineOverflowActions(
         )
     }
 }
+
+fun timelineAiActions(
+    enabled: Boolean,
+    isProcessing: Boolean,
+    onAiDigest: () -> Unit,
+    onAiReplyOpportunities: () -> Unit,
+    onAiFilterSuggestions: () -> Unit,
+): List<HhhlOverflowMenuAction> = listOf(
+    HhhlOverflowMenuAction(
+        label = if (isProcessing) "AI 处理中" else "AI 时间线速览",
+        enabled = enabled,
+        icon = Icons.Filled.AutoAwesome,
+        onClick = onAiDigest,
+    ),
+    HhhlOverflowMenuAction(
+        label = "AI 互动建议",
+        enabled = enabled,
+        icon = Icons.Filled.AutoAwesome,
+        onClick = onAiReplyOpportunities,
+    ),
+    HhhlOverflowMenuAction(
+        label = "AI 过滤建议",
+        enabled = enabled,
+        icon = Icons.Filled.AutoAwesome,
+        onClick = onAiFilterSuggestions,
+    ),
+)
 
 data class TimelineThreadItem(
     val note: Note,
@@ -671,5 +868,63 @@ private fun TimelineStatusRow(
         loading = loading,
         actionText = actionText,
         onAction = onAction,
+    )
+}
+
+@Composable
+private fun TimelineSkeletonList(count: Int = 4) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        repeat(count) { index ->
+            TimelineSkeletonRow(compact = index % 2 == 1)
+        }
+    }
+}
+
+@Composable
+private fun TimelineSkeletonRow(compact: Boolean) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .width(40.dp)
+                .height(40.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(colors.inputBackground.copy(alpha = 0.72f)),
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TimelineSkeletonBar(widthFraction = if (compact) 0.46f else 0.58f, height = 12.dp)
+            TimelineSkeletonBar(widthFraction = 1f, height = 11.dp)
+            TimelineSkeletonBar(widthFraction = if (compact) 0.62f else 0.82f, height = 11.dp)
+            Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                repeat(4) {
+                    TimelineSkeletonBar(height = 10.dp, modifier = Modifier.width(34.dp))
+                }
+            }
+        }
+    }
+    HhhlDivider()
+}
+
+@Composable
+private fun TimelineSkeletonBar(
+    height: androidx.compose.ui.unit.Dp,
+    modifier: Modifier = Modifier,
+    widthFraction: Float? = null,
+) {
+    val colors = LocalHhhlColors.current
+    val sizeModifier = if (widthFraction == null) modifier else modifier.fillMaxWidth(widthFraction)
+    Box(
+        modifier = sizeModifier
+            .height(height)
+            .clip(RoundedCornerShape(999.dp))
+            .background(colors.inputBackground.copy(alpha = 0.72f)),
     )
 }

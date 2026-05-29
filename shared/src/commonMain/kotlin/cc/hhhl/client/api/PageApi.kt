@@ -554,6 +554,7 @@ private fun PageDraft.cleaned(): PageDraft {
 
 private fun defaultPageClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

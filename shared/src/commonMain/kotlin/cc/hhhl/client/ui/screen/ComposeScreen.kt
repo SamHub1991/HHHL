@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AlternateEmail
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEmotions
@@ -51,6 +52,7 @@ import cc.hhhl.client.api.ComposeDraft
 import cc.hhhl.client.api.ComposeReactionAcceptance
 import cc.hhhl.client.api.ComposeScheduleDraft
 import cc.hhhl.client.api.ComposeScheduledNote
+import cc.hhhl.client.ai.AiTaskKind
 import cc.hhhl.client.model.CustomEmoji
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NoteVisibility
@@ -60,6 +62,7 @@ import cc.hhhl.client.presentation.notePreviewText
 import cc.hhhl.client.presentation.truncateRichTextPreviewText
 import cc.hhhl.client.state.ComposeCompletionKind
 import cc.hhhl.client.state.ComposeCompletionUiState
+import cc.hhhl.client.state.ComposeFailedSend
 import cc.hhhl.client.state.ComposePollDeadlinePreset
 import cc.hhhl.client.state.ComposeUiState
 import cc.hhhl.client.state.isComposeVisibleUserMention
@@ -120,6 +123,15 @@ fun ComposeScreen(
     onCompletionTokenChanged: (ComposeCompletionKind?, String) -> Unit = { _, _ -> },
     targetNote: Note? = null,
     onSend: () -> Unit = {},
+    onRetryFailedSend: (String) -> Unit = {},
+    onRestoreFailedSend: (String) -> Unit = {},
+    onRemoveFailedSend: (String) -> Unit = {},
+    aiEnabled: Boolean = false,
+    aiResultText: String? = null,
+    aiResultLabel: String? = null,
+    isAiProcessing: Boolean = false,
+    onAiAction: (AiTaskKind, ComposeDraft, Note?) -> Unit = { _, _, _ -> },
+    onDismissAiResult: () -> Unit = {},
     onBack: () -> Unit = {},
 ) {
     var localDraft by remember { mutableStateOf(ComposeDraft()) }
@@ -334,6 +346,9 @@ fun ComposeScreen(
                 ComposeEditorSection(
                     draft = draft,
                     pollEnabled = poll != null,
+                    aiEnabled = aiEnabled,
+                    isAiProcessing = isAiProcessing,
+                    onAiAction = { kind -> onAiAction(kind, draft, targetNote) },
                     isSending = isSending,
                     isUploadingMedia = isUploadingMedia,
                     isMediaPickerAvailable = isMediaPickerAvailable,
@@ -356,6 +371,18 @@ fun ComposeScreen(
                     onInsertText = insertTextUpdater,
                     onResolveVisibleUserMentions = onResolveVisibleUserMentions,
                 )
+            }
+            if (!aiResultText.isNullOrBlank()) {
+                item(key = "compose-ai-result", contentType = "compose-ai-result") {
+                    ComposeAiResultPanel(
+                        label = aiResultLabel ?: "AI 结果",
+                        text = aiResultText,
+                        onUse = { textUpdater(aiResultText) },
+                        onAppend = { insertTextUpdater(aiResultText) },
+                        onUseAsCw = { cwUpdater(aiResultText) },
+                        onDismiss = onDismissAiResult,
+                    )
+                }
             }
             if (draft.fileIds.isNotEmpty()) {
                 item(key = "compose-attachments", contentType = "compose-attachments") {
@@ -424,11 +451,37 @@ fun ComposeScreen(
             errorMessage?.let { message ->
                 item(key = "compose-error", contentType = "compose-error") {
                     val colors = LocalHhhlColors.current
-                    Text(
-                        text = message,
+                    HhhlInlinePanel(
                         modifier = Modifier.padding(horizontal = 14.dp),
-                        color = colors.danger,
-                        style = MaterialTheme.typography.bodySmall,
+                    ) {
+                        Text(
+                            text = message,
+                            color = colors.danger,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+            if (state?.restoredDraft == true) {
+                item(key = "compose-draft-restored", contentType = "compose-status") {
+                    HhhlInlinePanel(
+                        modifier = Modifier.padding(horizontal = 14.dp),
+                    ) {
+                        Text(
+                            text = "已恢复草稿",
+                            color = LocalHhhlColors.current.textMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+            if (!state?.failedSendQueue.isNullOrEmpty()) {
+                item(key = "compose-failed-send-queue", contentType = "compose-failed-send-queue") {
+                    ComposeFailedSendQueueSection(
+                        queue = state?.failedSendQueue.orEmpty(),
+                        onRetry = onRetryFailedSend,
+                        onRestore = onRestoreFailedSend,
+                        onRemove = onRemoveFailedSend,
                     )
                 }
             }
@@ -659,9 +712,106 @@ private fun ComposeWebActionSection(
 }
 
 @Composable
+private fun ComposeFailedSendQueueSection(
+    queue: List<ComposeFailedSend>,
+    onRetry: (String) -> Unit,
+    onRestore: (String) -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    ComposeSection(
+        title = "发送失败队列",
+        supportingText = "${queue.size} 条待处理",
+        compact = true,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            queue.forEach { item ->
+                ComposeFailedSendRow(
+                    item = item,
+                    onRetry = onRetry,
+                    onRestore = onRestore,
+                    onRemove = onRemove,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ComposeFailedSendRow(
+    item: ComposeFailedSend,
+    onRetry: (String) -> Unit,
+    onRestore: (String) -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val preview = composeFailedSendPreview(item.draft)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.inputBackground.copy(alpha = if (colors.surface.luminance() < 0.2f) 0.32f else 0.58f))
+            .border(1.dp, colors.border.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = preview,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = item.message,
+            color = colors.danger,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            HhhlActionChip(
+                label = if (item.isRetrying) "重试中" else "重试",
+                emphasized = true,
+                enabled = !item.isRetrying,
+                onClick = { onRetry(item.id) },
+            )
+            HhhlActionChip(
+                label = "载入编辑器",
+                enabled = !item.isRetrying,
+                onClick = { onRestore(item.id) },
+            )
+            HhhlActionChip(
+                label = "移除",
+                enabled = !item.isRetrying,
+                onClick = { onRemove(item.id) },
+            )
+        }
+    }
+}
+
+fun composeFailedSendPreview(draft: ComposeDraft): String {
+    val text = draft.text.trim().takeIf { it.isNotEmpty() }
+    val parts = buildList {
+        text?.let { add(it) }
+        if (draft.fileIds.isNotEmpty()) add("${draft.fileIds.size} 个附件")
+        if (draft.poll != null) add("投票")
+        if (draft.replyId != null) add("回复")
+        if (draft.renoteId != null) add("引用")
+        if (draft.channelId != null) add("频道")
+    }
+    return parts.joinToString(" · ").ifBlank { "未发送草稿" }.truncateRichTextPreviewText(160)
+}
+
+@Composable
 private fun ComposeEditorSection(
     draft: ComposeDraft,
     pollEnabled: Boolean,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    onAiAction: (AiTaskKind) -> Unit,
     isSending: Boolean,
     isUploadingMedia: Boolean,
     isMediaPickerAvailable: Boolean,
@@ -738,6 +888,9 @@ private fun ComposeEditorSection(
                     actions = composeSecondaryActions(
                         cwEnabled = draft.cw != null,
                         pollEnabled = pollEnabled,
+                        aiEnabled = aiEnabled,
+                        isAiProcessing = isAiProcessing,
+                        onAiAction = onAiAction,
                         onToggleCw = { onCwChanged(if (draft.cw == null) "" else null) },
                         onTogglePoll = onTogglePoll,
                     ),
@@ -885,6 +1038,56 @@ private fun ComposeInsertedEmojiPreview(text: String) {
             ) {
                 CustomEmojiReactionLabel(reaction = emoji)
             }
+        }
+    }
+}
+
+@Composable
+private fun ComposeAiResultPanel(
+    label: String,
+    text: String,
+    onUse: () -> Unit,
+    onAppend: () -> Unit,
+    onUseAsCw: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    HhhlInlinePanel(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        emphasized = true,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            HhhlIconActionButton(
+                icon = Icons.Filled.Delete,
+                contentDescription = "关闭 AI 结果",
+                onClick = onDismiss,
+            )
+        }
+        Text(
+            text = text,
+            color = colors.textSecondary,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            HhhlActionChip(label = "替换正文", emphasized = true, onClick = onUse)
+            HhhlActionChip(label = "追加", onClick = onAppend)
+            HhhlActionChip(label = "作为 CW", onClick = onUseAsCw)
         }
     }
 }
@@ -1795,19 +1998,40 @@ fun composeVisibilityOptions(canPublicNote: Boolean = true): List<NoteVisibility
 fun composeSecondaryActions(
     cwEnabled: Boolean,
     pollEnabled: Boolean,
+    aiEnabled: Boolean = false,
+    isAiProcessing: Boolean = false,
+    onAiAction: (AiTaskKind) -> Unit = {},
     onToggleCw: () -> Unit,
     onTogglePoll: () -> Unit,
-): List<HhhlOverflowMenuAction> = listOf(
-    HhhlOverflowMenuAction(
-        label = if (cwEnabled) "关闭内容警告" else "内容警告",
-        onClick = onToggleCw,
-    ),
-    HhhlOverflowMenuAction(
-        label = if (pollEnabled) "移除投票" else "添加投票",
-        destructive = pollEnabled,
-        onClick = onTogglePoll,
-    ),
-)
+): List<HhhlOverflowMenuAction> = buildList {
+    add(
+        HhhlOverflowMenuAction(
+            label = if (cwEnabled) "关闭内容警告" else "内容警告",
+            onClick = onToggleCw,
+        ),
+    )
+    add(
+        HhhlOverflowMenuAction(
+            label = if (pollEnabled) "移除投票" else "添加投票",
+            destructive = pollEnabled,
+            onClick = onTogglePoll,
+        ),
+    )
+    add(
+        HhhlOverflowMenuAction(
+            label = if (isAiProcessing) "AI 处理中" else "AI 润色",
+            enabled = aiEnabled && !isAiProcessing,
+            icon = Icons.Filled.AutoAwesome,
+            onClick = { onAiAction(AiTaskKind.ComposePolish) },
+        ),
+    )
+    add(HhhlOverflowMenuAction(label = "AI 缩短", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeShorten) }))
+    add(HhhlOverflowMenuAction(label = "AI 扩写", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeExpand) }))
+    add(HhhlOverflowMenuAction(label = "AI 翻译中文", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeTranslateZh) }))
+    add(HhhlOverflowMenuAction(label = "AI 生成 CW", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeContentWarning) }))
+    add(HhhlOverflowMenuAction(label = "AI 推荐话题", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeHashtags) }))
+    add(HhhlOverflowMenuAction(label = "AI 推荐 @", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeMentionSuggestions) }))
+}
 
 fun composeAttachmentActions(
     onRemoveFile: () -> Unit,

@@ -1353,6 +1353,7 @@ private suspend fun HttpResponse.apiErrorMessage(): String? {
 
 private fun defaultDiscoverClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

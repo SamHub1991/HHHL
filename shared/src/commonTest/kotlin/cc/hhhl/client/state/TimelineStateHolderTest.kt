@@ -209,6 +209,48 @@ class TimelineStateHolderTest {
     }
 
     @Test
+    fun refreshQuietlyMarksNewNotesAbovePreviousReadPosition() = runTest {
+        val oldNote = FakeData.timeline[0].copy(id = "old-note")
+        val newNote = FakeData.timeline[1].copy(id = "new-note")
+        val holder = TimelineStateHolder(
+            repository = sequenceRepository(
+                TimelineRepositoryResult.Success(listOf(oldNote)),
+                TimelineRepositoryResult.Success(listOf(newNote)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh(TimelineKind.Home)
+        advanceUntilIdle()
+        holder.refreshQuietly(TimelineKind.Home)
+        advanceUntilIdle()
+
+        val tab = holder.state.value.tabs.getValue(TimelineKind.Home)
+        assertEquals("new-note", tab.firstUnreadNoteId)
+        assertEquals(1, tab.newNoteCount)
+
+        holder.consumeNewNotesMarker(TimelineKind.Home)
+
+        val consumedTab = holder.state.value.tabs.getValue(TimelineKind.Home)
+        assertEquals(null, consumedTab.firstUnreadNoteId)
+        assertEquals(0, consumedTab.newNoteCount)
+    }
+
+    @Test
+    fun timelineUnreadMarkerCountsItemsBeforePreviousFirstNote() {
+        val notes = listOf(
+            FakeData.timeline[0].copy(id = "new-2"),
+            FakeData.timeline[1].copy(id = "new-1"),
+            FakeData.timeline[2].copy(id = "old-first"),
+        )
+
+        assertEquals(
+            TimelineUnreadMarker(firstUnreadNoteId = "new-2", newNoteCount = 2),
+            timelineUnreadMarker(notes, previousFirstNoteId = "old-first"),
+        )
+    }
+
+    @Test
     fun refreshQuietlyIgnoresParallelRefreshForSameTimeline() = runTest {
         var refreshCalls = 0
         val holder = TimelineStateHolder(

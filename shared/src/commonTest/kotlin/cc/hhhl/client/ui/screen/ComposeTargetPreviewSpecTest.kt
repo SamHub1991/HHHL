@@ -110,8 +110,21 @@ class ComposeTargetPreviewSpecTest {
             onTogglePoll = {},
         )
 
-        assertEquals(listOf("内容警告", "移除投票"), actions.map { it.label })
-        assertEquals(listOf(false, true), actions.map { it.destructive })
+        assertEquals(
+            listOf(
+                "内容警告",
+                "移除投票",
+                "AI 润色",
+                "AI 缩短",
+                "AI 扩写",
+                "AI 翻译中文",
+                "AI 生成 CW",
+                "AI 推荐话题",
+                "AI 推荐 @",
+            ),
+            actions.map { it.label },
+        )
+        assertEquals(listOf(false, true, false, false, false, false, false, false, false), actions.map { it.destructive })
     }
 
     @Test

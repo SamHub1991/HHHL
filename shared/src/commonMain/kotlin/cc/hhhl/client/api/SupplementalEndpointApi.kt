@@ -341,6 +341,7 @@ private fun String?.cleanNullable(): String? = this?.trim()?.takeIf { it.isNotEm
 
 private fun defaultSupplementalEndpointClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         install(ContentNegotiation) {
             json(
                 Json {

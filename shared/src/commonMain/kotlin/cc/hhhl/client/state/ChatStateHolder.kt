@@ -2881,12 +2881,16 @@ private fun List<ChatUserConversation>.mergeChatUserConversations(
     if (isEmpty()) return existing
     val byUserId = LinkedHashMap<String, ChatUserConversation>(size + existing.size)
     for (conversation in this) {
-        byUserId[conversation.user.id] = conversation
+        byUserId[conversation.stableChatUserConversationKey()] = conversation
     }
     for (conversation in existing) {
-        byUserId.putIfAbsent(conversation.user.id, conversation)
+        byUserId.putIfAbsent(conversation.stableChatUserConversationKey(), conversation)
     }
     return byUserId.values.toList()
+}
+
+private fun ChatUserConversation.stableChatUserConversationKey(): String {
+    return user.id.ifBlank { user.username.ifBlank { user.displayName } }
 }
 
 private fun Set<String>.toggleMembership(id: String): Set<String> {
@@ -2980,30 +2984,32 @@ private fun List<ChatMessage>.withMessageReactionUpdated(
 }
 
 internal fun List<ChatMessage>.withChronologicalMessage(message: ChatMessage): List<ChatMessage> {
-    for (index in indices) {
-        if (this[index].id == message.id) {
-            if (this[index] == message) return this
-            val nextMessages = toMutableList()
-            nextMessages[index] = message
+    val stableMessages = withStableChatMessageIds()
+    val stableMessage = message.withStableChatMessageId()
+    for (index in stableMessages.indices) {
+        if (stableMessages[index].id == stableMessage.id) {
+            if (stableMessages[index] == stableMessage) return stableMessages
+            val nextMessages = stableMessages.toMutableList()
+            nextMessages[index] = stableMessage
             return nextMessages.ensureChronologicalMessages()
         }
     }
-    if (isEmpty()) return listOf(message)
-    val last = last()
-    if (message.isSameOrAfter(last)) return this + message
-    val first = first()
-    if (!message.isSameOrAfter(first)) return listOf(message) + this
+    if (stableMessages.isEmpty()) return listOf(stableMessage)
+    val last = stableMessages.last()
+    if (stableMessage.isSameOrAfter(last)) return stableMessages + stableMessage
+    val first = stableMessages.first()
+    if (!stableMessage.isSameOrAfter(first)) return listOf(stableMessage) + stableMessages
 
-    val nextMessages = ArrayList<ChatMessage>(size + 1)
+    val nextMessages = ArrayList<ChatMessage>(stableMessages.size + 1)
     var inserted = false
-    for (existing in this) {
-        if (!inserted && existing.isSameOrAfter(message)) {
-            nextMessages += message
+    for (existing in stableMessages) {
+        if (!inserted && existing.isSameOrAfter(stableMessage)) {
+            nextMessages += stableMessage
             inserted = true
         }
         nextMessages += existing
     }
-    if (!inserted) nextMessages += message
+    if (!inserted) nextMessages += stableMessage
     return nextMessages
 }
 
@@ -3211,8 +3217,9 @@ private fun ChatMessage.withReactionUpdated(
 }
 
 internal fun List<ChatMessage>.dedupeChronologicalMessages(): List<ChatMessage> {
-    val byId = LinkedHashMap<String, ChatMessage>(size)
-    for (message in this) {
+    val stableMessages = withStableChatMessageIds()
+    val byId = LinkedHashMap<String, ChatMessage>(stableMessages.size)
+    for (message in stableMessages) {
         if (!byId.containsKey(message.id)) {
             byId[message.id] = message
         }
@@ -3221,23 +3228,26 @@ internal fun List<ChatMessage>.dedupeChronologicalMessages(): List<ChatMessage> 
 }
 
 internal fun List<ChatMessage>.mergeReplacingChronologicalMessages(incoming: List<ChatMessage>): List<ChatMessage> {
-    if (incoming.isEmpty()) return ensureChronologicalMessages()
-    val byId = LinkedHashMap<String, ChatMessage>(size + incoming.size)
-    for (message in this) {
+    val stableCurrent = withStableChatMessageIds()
+    val stableIncoming = incoming.withStableChatMessageIds()
+    if (stableIncoming.isEmpty()) return stableCurrent.ensureChronologicalMessages()
+    val byId = LinkedHashMap<String, ChatMessage>(stableCurrent.size + stableIncoming.size)
+    for (message in stableCurrent) {
         byId[message.id] = message
     }
-    for (message in incoming) {
+    for (message in stableIncoming) {
         byId[message.id] = message
     }
     return byId.values.sortedByChatMessageOrder()
 }
 
 internal fun List<ChatMessage>.ensureChronologicalMessages(): List<ChatMessage> {
-    if (size <= 1) return this
-    val seen = HashSet<String>(size)
+    val stableMessages = withStableChatMessageIds()
+    if (stableMessages.size <= 1) return stableMessages
+    val seen = HashSet<String>(stableMessages.size)
     var previousKey: String? = null
     var previousId: String? = null
-    for (message in this) {
+    for (message in stableMessages) {
         if (!seen.add(message.id)) return dedupeChronologicalMessages()
         val currentKey = message.chatMessageSortKey()
         val lastKey = previousKey
@@ -3252,7 +3262,45 @@ internal fun List<ChatMessage>.ensureChronologicalMessages(): List<ChatMessage> 
         previousKey = currentKey
         previousId = message.id
     }
-    return this
+    return stableMessages
+}
+
+private fun List<ChatMessage>.withStableChatMessageIds(): List<ChatMessage> {
+    if (isEmpty()) return this
+    val seenIds = HashMap<String, Int>(size)
+    var changed = false
+    val stableMessages = mapIndexed { index, message ->
+        val hasServerId = message.id.isNotBlank()
+        val baseId = if (hasServerId) message.id else message.chatMessageFallbackId(index)
+        val seenCount = seenIds[baseId] ?: 0
+        seenIds[baseId] = seenCount + 1
+        val stableId = if (hasServerId || seenCount == 0) baseId else "${baseId}#dup-$seenCount"
+        if (stableId == message.id) {
+            message
+        } else {
+            changed = true
+            message.copy(id = stableId)
+        }
+    }
+    return if (changed) stableMessages else this
+}
+
+private fun ChatMessage.withStableChatMessageId(): ChatMessage {
+    return if (id.isNotBlank()) this else copy(id = chatMessageFallbackId(0))
+}
+
+private fun ChatMessage.chatMessageFallbackId(index: Int): String {
+    val seed = listOf(roomId, toUserId.orEmpty(), fromUser.id, createdAt, createdAtLabel, text, file?.id.orEmpty(), index.toString())
+        .joinToString(separator = "\u0000")
+    return "local-chat-${seed.stableStateChatHash()}"
+}
+
+private fun String.stableStateChatHash(): String {
+    var hash = 1125899906842597L
+    for (char in this) {
+        hash = 31L * hash + char.code
+    }
+    return hash.toULong().toString(36)
 }
 
 private data class ChatMessageSortEntry(

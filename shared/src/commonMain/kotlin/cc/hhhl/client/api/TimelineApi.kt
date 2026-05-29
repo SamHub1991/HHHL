@@ -306,6 +306,7 @@ private data class FollowingNotesRequest(
 
 private fun defaultTimelineClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

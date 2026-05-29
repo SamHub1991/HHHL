@@ -347,6 +347,7 @@ private fun String.avatarInitial(): String {
 
 private fun defaultUserProfileClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

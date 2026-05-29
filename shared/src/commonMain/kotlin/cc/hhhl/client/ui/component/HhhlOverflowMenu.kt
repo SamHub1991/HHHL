@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.Report
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -313,6 +314,7 @@ private fun defaultOverflowMenuIcon(label: String): ImageVector? {
         "复制链接" -> Icons.Outlined.Link
         "嵌入" -> Icons.Outlined.Code
         "分享" -> Icons.Outlined.Share
+        "AI 总结", "AI 回复草稿" -> Icons.Filled.AutoAwesome
         "收藏", "收藏/取消收藏" -> Icons.Outlined.StarBorder
         "设为特别关心", "取消特别关心" -> Icons.Outlined.FavoriteBorder
         "回应", "回应处理中" -> Icons.Outlined.AddReaction

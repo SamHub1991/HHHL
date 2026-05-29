@@ -2,6 +2,12 @@
 
 package cc.hhhl.client.state
 
+import cc.hhhl.client.ai.AiSettings
+import cc.hhhl.client.ai.AiTask
+import cc.hhhl.client.ai.AiTaskInput
+import cc.hhhl.client.ai.AiTaskKind
+import cc.hhhl.client.ai.AiTaskStatus
+import cc.hhhl.client.ai.AiUsageWindow
 import cc.hhhl.client.auth.AuthenticatedUser
 import cc.hhhl.client.model.FilterSettings
 import cc.hhhl.client.model.IntegrationSettings
@@ -35,6 +41,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.datetime.Clock
 
 class SettingsStateHolderTest {
     @Test
@@ -46,6 +53,7 @@ class SettingsStateHolderTest {
             selectedTimelineDensity = TimelineDensity.Compact,
             selectedDefaultNoteVisibility = DefaultNoteVisibility.Followers,
             selectedNotificationBadgeMode = NotificationBadgeMode.Hide,
+            listGesturesEnabled = false,
             accountUser = AuthenticatedUser(
                 id = "user-1",
                 username = "alice",
@@ -58,6 +66,7 @@ class SettingsStateHolderTest {
 
         assertEquals("暗灰", items.first { it.key == SettingsItemKey.Theme }.value)
         assertEquals("紧凑", items.first { it.key == SettingsItemKey.TimelineDensity }.value)
+        assertEquals("关闭", items.first { it.key == SettingsItemKey.ListGestures }.value)
         assertEquals("Alice", items.first { it.key == SettingsItemKey.AccountProfile }.value)
         assertEquals("关注者", items.first { it.key == SettingsItemKey.DefaultNoteVisibility }.value)
         assertEquals("隐藏", items.first { it.key == SettingsItemKey.NotificationBadges }.value)
@@ -87,6 +96,53 @@ class SettingsStateHolderTest {
             .first { it.key == SettingsItemKey.AccountProfile }
 
         assertEquals("@alice", profile.value)
+    }
+
+    @Test
+    fun aiQueueItemSummarizesPendingCompletedAndFailedTasks() {
+        val holder = SettingsStateHolder(repository = SettingsRepository())
+
+        holder.sync(
+            selectedTheme = HhhlThemePreset.System,
+            selectedTimelineDensity = TimelineDensity.Comfortable,
+            selectedDefaultNoteVisibility = DefaultNoteVisibility.Public,
+            selectedNotificationBadgeMode = NotificationBadgeMode.Show,
+            aiSettings = AiSettings(enabled = true, apiKey = "key"),
+            aiTasks = listOf(
+                AiTask(
+                    id = "task-1",
+                    accountId = "account-1",
+                    kind = AiTaskKind.TimelineDigest,
+                    input = AiTaskInput(),
+                    status = AiTaskStatus.Completed,
+                    updatedAtEpochMillis = 10,
+                ),
+                AiTask(
+                    id = "task-2",
+                    accountId = "account-1",
+                    kind = AiTaskKind.NotificationPriority,
+                    input = AiTaskInput(),
+                    status = AiTaskStatus.Pending,
+                    updatedAtEpochMillis = 20,
+                ),
+                AiTask(
+                    id = "task-3",
+                    accountId = "account-1",
+                    kind = AiTaskKind.ChatSummary,
+                    input = AiTaskInput(),
+                    status = AiTaskStatus.Failed,
+                    updatedAtEpochMillis = 5,
+                ),
+            ),
+            aiUsage = AiUsageWindow(dayKey = (Clock.System.now().toEpochMilliseconds() / 86_400_000L).toString(), requestCount = 3),
+            accountUser = null,
+        )
+
+        val queueItem = holder.state.value.groups
+            .flatMap { it.items }
+            .first { it.key == SettingsItemKey.AiQueue }
+
+        assertEquals("今日 3/120 · 剩余 117 · 待处理 1 · 已完成 1 · 失败 1 · 最近 通知优先级", queueItem.value)
     }
 
     @Test

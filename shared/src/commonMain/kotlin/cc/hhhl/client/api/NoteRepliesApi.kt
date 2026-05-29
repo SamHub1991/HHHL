@@ -180,6 +180,7 @@ private data class NoteChildrenRequest(
 
 private fun defaultNoteRepliesClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

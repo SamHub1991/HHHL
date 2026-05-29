@@ -31,6 +31,16 @@ class NoteRowDensitySpecTest {
     }
 
     @Test
+    fun ultraCompactDensityIsTheSmallestReadableTimelineMode() {
+        val ultraCompact = noteRowMetrics(NoteRowDensity.UltraCompact)
+        val compact = noteRowMetrics(NoteRowDensity.Compact)
+
+        assertTrue(ultraCompact.verticalPadding < compact.verticalPadding)
+        assertTrue(ultraCompact.avatarSize < compact.avatarSize)
+        assertTrue(ultraCompact.mediaHeight < compact.mediaHeight)
+    }
+
+    @Test
     fun noteActionsShareCompactControlMetrics() {
         assertEquals(30.dp, HhhlNoteActionMinHeight)
         assertEquals(34.dp, HhhlNoteActionMinWidth)
@@ -38,5 +48,12 @@ class NoteRowDensitySpecTest {
         assertEquals(5.dp, HhhlNoteActionVerticalPadding)
         assertEquals(17.dp, HhhlNoteActionIconSize)
         assertEquals(4.dp, HhhlNoteActionSpacing)
+    }
+
+    @Test
+    fun swipeActionsUseDirectionAndThreshold() {
+        assertEquals(NoteRowSwipeAction.Reply, noteRowSwipeAction(offset = 80f, threshold = 76f))
+        assertEquals(NoteRowSwipeAction.Favorite, noteRowSwipeAction(offset = -80f, threshold = 76f))
+        assertEquals(null, noteRowSwipeAction(offset = 30f, threshold = 76f))
     }
 }

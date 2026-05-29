@@ -486,6 +486,7 @@ private fun GalleryPostDraft.validationMessage(): String? {
 
 private fun defaultGalleryClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

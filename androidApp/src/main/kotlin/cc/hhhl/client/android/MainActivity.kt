@@ -37,11 +37,13 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private var authCallbackSession by mutableStateOf<String?>(null)
+    private var sharedText by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         configureImageLoader()
         consumeAuthCallback(intent)
+        consumeSharedText(intent)
         setContent {
             val authTokenStore = remember { AndroidAuthTokenStore(applicationContext) }
             val themeStore = remember { AndroidThemeStore(applicationContext) }
@@ -49,6 +51,7 @@ class MainActivity : ComponentActivity() {
             val recentReactionStore = remember { AndroidRecentReactionStore(applicationContext) }
             val specialCareStore = remember { AndroidSpecialCareStore(applicationContext) }
             val automationStore = remember { AndroidAutomationStore(applicationContext) }
+            val aiStore = remember { AndroidAiStore(applicationContext) }
             val composeDraftStore = remember { AndroidComposeDraftStore(applicationContext) }
             val chatMessageCache = remember { AndroidChatMessageCache(applicationContext) }
             val chatUnreadStore = remember { AndroidChatUnreadStore(applicationContext) }
@@ -152,6 +155,7 @@ class MainActivity : ComponentActivity() {
                 recentReactionStore = recentReactionStore,
                 specialCareStore = specialCareStore,
                 automationStore = automationStore,
+                aiStore = aiStore,
                 composeDraftStore = composeDraftStore,
                 chatMessageCache = chatMessageCache,
                 chatUnreadStore = chatUnreadStore,
@@ -191,6 +195,11 @@ class MainActivity : ComponentActivity() {
                 onAutomationSystemNotification = { title, body ->
                     publishAutomationSystemNotification(title, body)
                 },
+                onAiQueueChanged = {
+                    AiBackgroundScheduler.syncNow(applicationContext)
+                },
+                initialSharedText = sharedText,
+                onInitialSharedTextConsumed = { sharedText = null },
                 onCheckForUpdates = { report ->
                     coroutineScope.launch(Dispatchers.IO) {
                         val message = when (val result = appUpdateManager.checkForUpdates()) {
@@ -227,6 +236,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         consumeAuthCallback(intent)
+        consumeSharedText(intent)
     }
 
     override fun onResume() {
@@ -239,6 +249,15 @@ class MainActivity : ComponentActivity() {
         if (session != null) {
             authCallbackSession = session
         }
+    }
+
+    private fun consumeSharedText(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND || intent.type?.startsWith("text/") != true) return
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+            ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)
+            ?: return
+        sharedText = text.takeIf { it.isNotBlank() }
+        intent.action = null
     }
 
     private fun Uri.parseMiAuthSession(): String? {

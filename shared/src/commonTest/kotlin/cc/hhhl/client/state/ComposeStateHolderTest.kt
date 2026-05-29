@@ -77,6 +77,7 @@ class ComposeStateHolderTest {
         holder.restoreStoredDraft()
 
         assertEquals(storedDraft, holder.state.value.draft)
+        assertEquals(true, holder.state.value.restoredDraft)
         assertEquals(null as String?, holder.state.value.errorMessage)
     }
 
@@ -115,6 +116,98 @@ class ComposeStateHolderTest {
     }
 
     @Test
+    fun draftStorageKeySeparatesAccountAndTargetContext() {
+        assertEquals(
+            "account-1|new",
+            composeDraftStorageKey("account-1", ComposeDraft(text = "new")),
+        )
+        assertEquals(
+            "account-1|reply:note-1",
+            composeDraftStorageKey("account-1", ComposeDraft(replyId = "note-1")),
+        )
+        assertEquals(
+            "account-2|quote:note-1",
+            composeDraftStorageKey("account-2", ComposeDraft(renoteId = "note-1")),
+        )
+        assertEquals(
+            "account-2|channel:channel-1",
+            composeDraftStorageKey("account-2", ComposeDraft(channelId = "channel-1")),
+        )
+    }
+
+    @Test
+    fun editingReplyDraftPersistsUnderReplyScopedKey() {
+        val store = memoryDraftStore()
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            draftStore = store,
+            draftKeyProvider = { "account-1" },
+            scope = TestScope(),
+        )
+
+        holder.startReply("note-1")
+        holder.updateText("reply draft")
+
+        assertEquals("reply draft", store.savedDrafts.getValue("account-1|reply:note-1").text)
+    }
+
+    @Test
+    fun startReplyRestoresReplyScopedDraft() {
+        val store = memoryDraftStore().apply {
+            savedDrafts["account-1|reply:note-1"] = ComposeDraft(
+                text = "saved reply",
+                replyId = "note-1",
+                visibility = NoteVisibility.Followers,
+            )
+        }
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            draftStore = store,
+            draftKeyProvider = { "account-1" },
+            scope = TestScope(),
+        )
+
+        holder.startReply("note-1")
+
+        assertEquals("saved reply", holder.state.value.draft.text)
+        assertEquals("note-1", holder.state.value.draft.replyId)
+        assertEquals(NoteVisibility.Followers, holder.state.value.draft.visibility)
+        assertEquals(true, holder.state.value.restoredDraft)
+    }
+
+    @Test
+    fun startReplyDoesNotRestoreGenericDraft() {
+        val store = memoryDraftStore(ComposeDraft(text = "generic draft"))
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            draftStore = store,
+            draftKeyProvider = { "account-1" },
+            scope = TestScope(),
+        )
+
+        holder.startReply("note-1")
+
+        assertEquals("", holder.state.value.draft.text)
+        assertEquals("note-1", holder.state.value.draft.replyId)
+        assertEquals(false, holder.state.value.restoredDraft)
+    }
+
+    @Test
+    fun editingRestoredDraftClearsRestoredIndicator() {
+        val store = memoryDraftStore(ComposeDraft(text = "saved draft"))
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            draftStore = store,
+            scope = TestScope(),
+        )
+
+        holder.restoreStoredDraft()
+        holder.updateText("edited draft")
+
+        assertEquals(false, holder.state.value.restoredDraft)
+    }
+
+    @Test
     fun sendSuccessClearsStoredDraft() = runTest {
         val store = memoryDraftStore()
         val holder = ComposeStateHolder(
@@ -148,6 +241,78 @@ class ComposeStateHolderTest {
         assertEquals("", holder.state.value.draft.text)
         assertEquals("note-created", holder.state.value.createdNoteId)
         assertEquals(null as String?, holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun sendNetworkErrorQueuesFailedDraftForRetry() = runTest {
+        val store = memoryDraftStore()
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Error("网络不可用")),
+            draftStore = store,
+            draftKeyProvider = { "account-1" },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateText("hello")
+        holder.send()
+        advanceUntilIdle()
+
+        val queued = holder.state.value.failedSendQueue.single()
+        assertFalse(holder.state.value.isSending)
+        assertEquals("hello", queued.draft.text)
+        assertEquals("网络不可用", queued.message)
+        assertEquals(1, store.savedFailedQueues.getValue("account-1|failed-send-queue").size)
+    }
+
+    @Test
+    fun retryFailedSendSuccessRemovesQueuedDraft() = runTest {
+        var result: ComposeRepositoryResult = ComposeRepositoryResult.Error("网络不可用")
+        val sentDrafts = mutableListOf<ComposeDraft>()
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(
+                resultProvider = { result },
+                onSend = { sentDrafts.add(it) },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateText("retry me")
+        holder.send()
+        advanceUntilIdle()
+        val queuedId = holder.state.value.failedSendQueue.single().id
+
+        result = ComposeRepositoryResult.Success("note-created")
+        holder.retryFailedSend(queuedId)
+        advanceUntilIdle()
+
+        assertEquals(listOf("retry me", "retry me"), sentDrafts.map { it.text })
+        assertEquals(emptyList(), holder.state.value.failedSendQueue)
+        assertEquals("note-created", holder.state.value.createdNoteId)
+        assertEquals(null as String?, holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun restoreFailedSendQueueLoadsPersistedQueue() {
+        val store = memoryDraftStore().apply {
+            savedFailedQueues["account-1|failed-send-queue"] = listOf(
+                ComposeFailedSend(
+                    id = "failed-1",
+                    draft = ComposeDraft(text = "persisted"),
+                    message = "网络不可用",
+                    createdAtEpochMillis = 1_779_800_000_000L,
+                ),
+            )
+        }
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
+            draftStore = store,
+            draftKeyProvider = { "account-1" },
+            scope = TestScope(),
+        )
+
+        holder.restoreFailedSendQueue()
+
+        assertEquals("persisted", holder.state.value.failedSendQueue.single().draft.text)
     }
 
     @Test
@@ -1142,6 +1307,8 @@ class ComposeStateHolderTest {
     ) : ComposeDraftStore {
         var savedDraft: ComposeDraft? = initialDraft
             private set
+        val savedDrafts: MutableMap<String, ComposeDraft> = mutableMapOf()
+        val savedFailedQueues: MutableMap<String, List<ComposeFailedSend>> = mutableMapOf()
         var wasCleared: Boolean = false
             private set
 
@@ -1155,6 +1322,28 @@ class ComposeStateHolderTest {
         override fun clearDraft() {
             savedDraft = null
             wasCleared = true
+        }
+
+        override fun loadDraft(key: String): ComposeDraft? {
+            return savedDrafts[key] ?: savedDraft.takeIf { key.isNewDraftKey() }
+        }
+
+        override fun saveDraft(key: String, draft: ComposeDraft) {
+            savedDrafts[key] = draft
+            saveDraft(draft)
+        }
+
+        override fun clearDraft(key: String) {
+            savedDrafts.remove(key)
+            clearDraft()
+        }
+
+        override fun loadFailedSendQueue(key: String): List<ComposeFailedSend> {
+            return savedFailedQueues[key].orEmpty()
+        }
+
+        override fun saveFailedSendQueue(key: String, queue: List<ComposeFailedSend>) {
+            savedFailedQueues[key] = queue
         }
     }
 

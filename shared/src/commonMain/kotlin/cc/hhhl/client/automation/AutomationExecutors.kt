@@ -4,6 +4,9 @@ import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.NotificationRepository
 import cc.hhhl.client.repository.NotificationRepositoryResult
+import cc.hhhl.client.ai.AiBridge
+import cc.hhhl.client.ai.AiBridgeResult
+import cc.hhhl.client.ai.NoopAiBridge
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -24,6 +27,7 @@ class AppAutomationActionExecutor(
     private val chatRepository: ChatRepository,
     private val notificationRepository: NotificationRepository,
     private val systemNotificationPublisher: ((String, String) -> Boolean?)? = null,
+    private val aiBridge: AiBridge = NoopAiBridge,
     private val httpClient: HttpClient = defaultAutomationHttpClient(),
 ) : AutomationActionExecutor {
     override suspend fun execute(
@@ -38,6 +42,42 @@ class AppAutomationActionExecutor(
             AutomationActionType.ForwardToRoom -> forwardToRoom(action.targetId, body)
             AutomationActionType.ForwardToUser -> forwardToUser(action.targetId, body)
             AutomationActionType.Webhook -> sendWebhook(action.targetId, event, title, body)
+            AutomationActionType.AiGenerateLog -> generateAiLog(action.bodyTemplate, event)
+            AutomationActionType.AiGenerateNotification -> generateAiNotification(title, action.bodyTemplate, event)
+            AutomationActionType.AiGenerateWebhook -> generateAiWebhook(action.targetId, action.bodyTemplate, event, title)
+        }
+    }
+
+    private suspend fun generateAiLog(
+        prompt: String,
+        event: AutomationEvent,
+    ): AutomationActionExecutionResult {
+        return when (val result = aiBridge.generateAutomationText(prompt, event.aiContextText())) {
+            is AiBridgeResult.Success -> AutomationActionExecutionResult(true, result.text)
+            is AiBridgeResult.Error -> AutomationActionExecutionResult(false, result.message)
+        }
+    }
+
+    private suspend fun generateAiNotification(
+        title: String,
+        prompt: String,
+        event: AutomationEvent,
+    ): AutomationActionExecutionResult {
+        return when (val result = aiBridge.generateAutomationText(prompt, event.aiContextText())) {
+            is AiBridgeResult.Success -> createNotification(title, result.text)
+            is AiBridgeResult.Error -> AutomationActionExecutionResult(false, result.message)
+        }
+    }
+
+    private suspend fun generateAiWebhook(
+        url: String,
+        prompt: String,
+        event: AutomationEvent,
+        title: String,
+    ): AutomationActionExecutionResult {
+        return when (val result = aiBridge.generateAutomationText(prompt, event.aiContextText())) {
+            is AiBridgeResult.Success -> sendWebhook(url, event, title, result.text)
+            is AiBridgeResult.Error -> AutomationActionExecutionResult(false, result.message)
         }
     }
 

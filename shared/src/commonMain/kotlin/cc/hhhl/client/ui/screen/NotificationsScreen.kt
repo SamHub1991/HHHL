@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
@@ -19,6 +20,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -37,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.model.Announcement
+import cc.hhhl.client.ai.AiTaskKind
 import cc.hhhl.client.model.NotificationFilter
 import cc.hhhl.client.model.NotificationItem
 import cc.hhhl.client.model.NotificationType
@@ -74,6 +78,9 @@ fun NotificationsScreen(
     onMarkAnnouncementRead: (String) -> Unit = {},
     onOpenNote: (String) -> Unit = {},
     onOpenUser: (String) -> Unit = {},
+    onReplyToNote: (String) -> Unit = {},
+    onReactToNote: (String, String) -> Unit = { _, _ -> },
+    onFollowUser: (String) -> Unit = {},
     onOpenUrl: (String) -> Unit = {},
     onOpenMention: (String) -> Unit = {},
     onOpenHashtag: (String) -> Unit = {},
@@ -84,6 +91,14 @@ fun NotificationsScreen(
     onOpenChatUser: (String, String?) -> Unit = { _, _ -> },
     onSendTestNotification: () -> Unit = {},
     onSendReminderNotification: () -> Unit = {},
+    aiEnabled: Boolean = false,
+    isAiProcessing: Boolean = false,
+    aiResultText: String? = null,
+    aiResultLabel: String? = null,
+    onAiAction: (AiTaskKind, List<NotificationItem>, NotificationFilter) -> Unit = { _, _, _ -> },
+    onDismissAiResult: () -> Unit = {},
+    notificationListState: LazyListState = rememberLazyListState(),
+    announcementListState: LazyListState = rememberLazyListState(),
 ) {
     val notifications = state?.notifications.orEmpty()
     val selectedFilter = state?.selectedFilter ?: NotificationFilter.All
@@ -145,6 +160,9 @@ fun NotificationsScreen(
                 onFilterSelected = onFilterSelected,
                 onOpenNote = onOpenNote,
                 onOpenUser = onOpenUser,
+                onReplyToNote = onReplyToNote,
+                onReactToNote = onReactToNote,
+                onFollowUser = onFollowUser,
                 onOpenUrl = onOpenUrl,
                 onOpenMention = onOpenMention,
                 onOpenHashtag = onOpenHashtag,
@@ -155,6 +173,13 @@ fun NotificationsScreen(
                 onOpenChatUser = onOpenChatUser,
                 onSendTestNotification = onSendTestNotification,
                 onSendReminderNotification = onSendReminderNotification,
+                aiEnabled = aiEnabled,
+                isAiProcessing = isAiProcessing,
+                aiResultText = aiResultText,
+                aiResultLabel = aiResultLabel,
+                onAiAction = onAiAction,
+                onDismissAiResult = onDismissAiResult,
+                listState = notificationListState,
             )
             NotificationInboxSection.Announcements -> AnnouncementNotificationContent(
                 state = announcementState,
@@ -162,6 +187,7 @@ fun NotificationsScreen(
                 onRefresh = onRefreshAnnouncements,
                 onLoadMore = onLoadMoreAnnouncements,
                 onOpenAnnouncement = onOpenAnnouncement,
+                listState = announcementListState,
             )
         }
     }
@@ -211,6 +237,9 @@ private fun NotificationListContent(
     onFilterSelected: (NotificationFilter) -> Unit,
     onOpenNote: (String) -> Unit,
     onOpenUser: (String) -> Unit,
+    onReplyToNote: (String) -> Unit,
+    onReactToNote: (String, String) -> Unit,
+    onFollowUser: (String) -> Unit,
     onOpenUrl: (String) -> Unit,
     onOpenMention: (String) -> Unit,
     onOpenHashtag: (String) -> Unit,
@@ -221,6 +250,13 @@ private fun NotificationListContent(
     onOpenChatUser: (String, String?) -> Unit,
     onSendTestNotification: () -> Unit,
     onSendReminderNotification: () -> Unit,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    aiResultText: String?,
+    aiResultLabel: String?,
+    onAiAction: (AiTaskKind, List<NotificationItem>, NotificationFilter) -> Unit,
+    onDismissAiResult: () -> Unit,
+    listState: LazyListState,
 ) {
     NotificationPrimaryFilterRow(
         selectedFilter = selectedFilter,
@@ -240,9 +276,22 @@ private fun NotificationListContent(
         onFlush = onFlush,
         onSendTestNotification = onSendTestNotification,
         onSendReminderNotification = onSendReminderNotification,
+        aiEnabled = aiEnabled,
+        isAiProcessing = isAiProcessing,
+        onAiSummary = { onAiAction(AiTaskKind.NotificationSummary, notifications, selectedFilter) },
+        onAiFollowUp = { onAiAction(AiTaskKind.NotificationFollowUp, notifications, selectedFilter) },
+        onAiPriority = { onAiAction(AiTaskKind.NotificationPriority, notifications, selectedFilter) },
     )
     HhhlDivider()
-    LazyColumn {
+    if (!aiResultText.isNullOrBlank()) {
+        NotificationAiResultPanel(
+            label = aiResultLabel ?: "AI 结果",
+            text = aiResultText,
+            onDismiss = onDismissAiResult,
+        )
+        HhhlDivider()
+    }
+    LazyColumn(state = listState) {
         state?.message?.let { message ->
             item(key = "notification-message", contentType = "notification-status") {
                 NotificationStatusRow(text = message)
@@ -260,14 +309,7 @@ private fun NotificationListContent(
         }
         if (state?.isLoading == true && notifications.isEmpty()) {
             item(key = "notification-loading-${selectedFilter.name}", contentType = "notification-status") {
-                NotificationStatusRow(
-                    text = if (selectedFilter == NotificationFilter.SpecialCare) {
-                        "正在整理特别关心通知..."
-                    } else {
-                        "正在加载通知..."
-                    },
-                    loading = true,
-                )
+                NotificationSkeletonList()
             }
         }
         state?.errorMessage?.let { message ->
@@ -294,6 +336,9 @@ private fun NotificationListContent(
                 pendingFollowRequestUserIds = pendingFollowRequestUserIds,
                 onOpenNote = onOpenNote,
                 onOpenUser = onOpenUser,
+                onReplyToNote = onReplyToNote,
+                onReactToNote = onReactToNote,
+                onFollowUser = onFollowUser,
                 onOpenUrl = onOpenUrl,
                 onOpenMention = onOpenMention,
                 onOpenHashtag = onOpenHashtag,
@@ -321,6 +366,9 @@ private fun NotificationRow(
     pendingFollowRequestUserIds: Set<String>,
     onOpenNote: (String) -> Unit,
     onOpenUser: (String) -> Unit,
+    onReplyToNote: (String) -> Unit,
+    onReactToNote: (String, String) -> Unit,
+    onFollowUser: (String) -> Unit,
     onOpenUrl: (String) -> Unit,
     onOpenMention: (String) -> Unit,
     onOpenHashtag: (String) -> Unit,
@@ -406,6 +454,16 @@ private fun NotificationRow(
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
+            val quickActions = notificationQuickActions(
+                notification = notification,
+                onReplyToNote = onReplyToNote,
+                onReactToNote = onReactToNote,
+                onFollowUser = onFollowUser,
+                onOpenNote = onOpenNote,
+            )
+            if (quickActions.isNotEmpty()) {
+                NotificationQuickActionRow(actions = quickActions)
+            }
         }
     }
     HhhlDivider()
@@ -418,9 +476,8 @@ private fun AnnouncementNotificationContent(
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onOpenAnnouncement: (String) -> Unit,
+    listState: LazyListState = rememberLazyListState(),
 ) {
-    val listState = rememberLazyListState()
-
     AutoLoadMoreEffect(
         listState = listState,
         itemCount = announcements.size,
@@ -450,7 +507,7 @@ private fun AnnouncementNotificationContent(
         }
         if (state?.isLoading == true && announcements.isEmpty()) {
             item(key = "announcement-loading", contentType = "announcement-status") {
-                NotificationStatusRow(text = "正在加载公告...", loading = true)
+                NotificationSkeletonList(count = 3)
             }
         }
         if (state != null && !state.isLoading && announcements.isEmpty() && state.errorMessage == null) {
@@ -517,6 +574,11 @@ private fun NotificationSummaryRow(
     onFlush: () -> Unit,
     onSendTestNotification: () -> Unit,
     onSendReminderNotification: () -> Unit,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    onAiSummary: () -> Unit,
+    onAiFollowUp: () -> Unit,
+    onAiPriority: () -> Unit,
 ) {
     val colors = LocalHhhlColors.current
     val stateText = when {
@@ -572,6 +634,11 @@ private fun NotificationSummaryRow(
                     isMarkingAllRead = isMarkingAllRead,
                     onSendTestNotification = onSendTestNotification,
                     onSendReminderNotification = onSendReminderNotification,
+                    aiEnabled = aiEnabled,
+                    isAiProcessing = isAiProcessing,
+                    onAiSummary = onAiSummary,
+                    onAiFollowUp = onAiFollowUp,
+                    onAiPriority = onAiPriority,
                 ),
                 enabled = !isMarkingAllRead,
                 label = "通知操作",
@@ -589,7 +656,30 @@ fun notificationSummaryActions(
     isMarkingAllRead: Boolean,
     onSendTestNotification: () -> Unit,
     onSendReminderNotification: () -> Unit,
+    aiEnabled: Boolean = false,
+    isAiProcessing: Boolean = false,
+    onAiSummary: () -> Unit = {},
+    onAiFollowUp: () -> Unit = {},
+    onAiPriority: () -> Unit = {},
 ): List<HhhlOverflowMenuAction> = listOf(
+    HhhlOverflowMenuAction(
+        label = if (isAiProcessing) "AI 处理中" else "AI 总结通知",
+        enabled = aiEnabled && !isAiProcessing && !isMarkingAllRead,
+        icon = Icons.Filled.AutoAwesome,
+        onClick = onAiSummary,
+    ),
+    HhhlOverflowMenuAction(
+        label = "AI 待处理",
+        enabled = aiEnabled && !isAiProcessing && !isMarkingAllRead,
+        icon = Icons.Filled.AutoAwesome,
+        onClick = onAiFollowUp,
+    ),
+    HhhlOverflowMenuAction(
+        label = "AI 优先级",
+        enabled = aiEnabled && !isAiProcessing && !isMarkingAllRead,
+        icon = Icons.Filled.AutoAwesome,
+        onClick = onAiPriority,
+    ),
     HhhlOverflowMenuAction(
         label = "测试通知",
         enabled = !isMarkingAllRead,
@@ -611,7 +701,14 @@ fun notificationPrimaryFilters(): List<NotificationFilter> = listOf(
 fun notificationVisiblePrimaryFilters(): List<NotificationFilter> = NotificationFilter.entries
 
 fun notificationOverflowFilters(): List<NotificationFilter> =
-    NotificationFilter.entries - notificationPrimaryFilters().toSet()
+    listOf(
+        NotificationFilter.SpecialCare,
+        NotificationFilter.Replies,
+        NotificationFilter.Quotes,
+        NotificationFilter.Achievements,
+        NotificationFilter.Follows,
+        NotificationFilter.System,
+    )
 
 private fun notificationOverflowActions(
     selectedFilter: NotificationFilter,
@@ -646,6 +743,45 @@ fun notificationEmptyText(selectedFilter: NotificationFilter): String {
     }
 }
 
+@Composable
+private fun NotificationAiResultPanel(
+    label: String,
+    text: String,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.surfaceElevated.copy(alpha = 0.78f))
+            .border(1.dp, colors.border.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            HhhlIconActionButton(icon = Icons.Filled.Close, contentDescription = "关闭 AI 结果", onClick = onDismiss)
+        }
+        Text(
+            text = text,
+            color = colors.textSecondary,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 fun specialCareHelperText(
     isLoading: Boolean,
     notificationCount: Int,
@@ -659,6 +795,89 @@ fun specialCareHelperText(
 
 private fun List<NotificationItem>.countSpecialCareUnread(): Int {
     return count { it.isSpecialCare && !it.isRead }
+}
+
+data class NotificationQuickAction(
+    val label: String,
+    val emphasized: Boolean = false,
+    val onClick: () -> Unit,
+)
+
+fun notificationQuickActionLabels(notification: NotificationItem): List<String> {
+    return notificationQuickActionSpecs(notification).map { it.label }
+}
+
+@Composable
+private fun NotificationQuickActionRow(actions: List<NotificationQuickAction>) {
+    Row(
+        modifier = Modifier.padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        actions.forEach { action ->
+            NotificationActionChip(
+                label = action.label,
+                emphasized = action.emphasized,
+                enabled = true,
+                onClick = action.onClick,
+            )
+        }
+    }
+}
+
+private fun notificationQuickActions(
+    notification: NotificationItem,
+    onReplyToNote: (String) -> Unit,
+    onReactToNote: (String, String) -> Unit,
+    onFollowUser: (String) -> Unit,
+    onOpenNote: (String) -> Unit,
+): List<NotificationQuickAction> {
+    return notificationQuickActionSpecs(notification).map { spec ->
+        NotificationQuickAction(
+            label = spec.label,
+            emphasized = spec.emphasized,
+            onClick = {
+                when (spec.kind) {
+                    NotificationQuickActionKind.Reply -> notification.noteId?.let(onReplyToNote)
+                    NotificationQuickActionKind.React -> notification.noteId?.let { noteId -> onReactToNote(noteId, "❤️") }
+                    NotificationQuickActionKind.FollowBack -> onFollowUser(notification.actor.id)
+                    NotificationQuickActionKind.OpenNote -> notification.noteId?.let(onOpenNote)
+                }
+            },
+        )
+    }
+}
+
+private data class NotificationQuickActionSpec(
+    val kind: NotificationQuickActionKind,
+    val label: String,
+    val emphasized: Boolean = false,
+)
+
+private enum class NotificationQuickActionKind {
+    Reply,
+    React,
+    FollowBack,
+    OpenNote,
+}
+
+private fun notificationQuickActionSpecs(notification: NotificationItem): List<NotificationQuickActionSpec> {
+    return buildList {
+        if (!notification.noteId.isNullOrBlank()) {
+            if (notification.type == NotificationType.Reply || notification.type == NotificationType.Mention) {
+                add(NotificationQuickActionSpec(NotificationQuickActionKind.Reply, "回复", emphasized = true))
+            }
+            if (notification.type != NotificationType.Reaction && notification.type != NotificationType.ReactionGrouped) {
+                add(NotificationQuickActionSpec(NotificationQuickActionKind.React, "回应"))
+            }
+            if (notification.type == NotificationType.Reaction || notification.type == NotificationType.Renote) {
+                add(NotificationQuickActionSpec(NotificationQuickActionKind.OpenNote, "查看帖子"))
+            }
+        }
+        if (notification.type == NotificationType.Follow && notification.actor.id.isNotBlank()) {
+            add(NotificationQuickActionSpec(NotificationQuickActionKind.FollowBack, "关注回去", emphasized = true))
+        }
+    }
 }
 
 @Composable
@@ -756,6 +975,59 @@ private fun NotificationStatusRow(
         loading = loading,
         actionText = actionText,
         onAction = onAction,
+    )
+}
+
+@Composable
+private fun NotificationSkeletonList(count: Int = 5) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        repeat(count) { index ->
+            NotificationSkeletonRow(compact = index % 2 == 1)
+        }
+    }
+}
+
+@Composable
+private fun NotificationSkeletonRow(compact: Boolean) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .widthIn(min = 38.dp, max = 38.dp)
+                .height(38.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(colors.inputBackground.copy(alpha = 0.72f)),
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            NotificationSkeletonBar(widthFraction = if (compact) 0.42f else 0.56f, height = 12.dp)
+            NotificationSkeletonBar(widthFraction = 1f, height = 11.dp)
+            NotificationSkeletonBar(widthFraction = if (compact) 0.58f else 0.78f, height = 11.dp)
+        }
+    }
+    HhhlDivider()
+}
+
+@Composable
+private fun NotificationSkeletonBar(
+    widthFraction: Float,
+    height: androidx.compose.ui.unit.Dp,
+) {
+    val colors = LocalHhhlColors.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth(widthFraction)
+            .height(height)
+            .clip(RoundedCornerShape(999.dp))
+            .background(colors.inputBackground.copy(alpha = 0.72f)),
     )
 }
 

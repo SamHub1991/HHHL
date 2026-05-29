@@ -19,6 +19,12 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import cc.hhhl.client.ai.AiStateHolder
+import cc.hhhl.client.automation.AppAutomationActionExecutor
+import cc.hhhl.client.automation.AutomationEvent
+import cc.hhhl.client.automation.AutomationStateHolder
+import cc.hhhl.client.automation.toAutomationChatEvent
+import cc.hhhl.client.automation.toAutomationNotificationEvent
 import cc.hhhl.client.api.NotificationLoadResult
 import cc.hhhl.client.api.SharkeyNotificationApi
 import cc.hhhl.client.api.TimelineKind
@@ -33,11 +39,14 @@ import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRepositoryResult
 import cc.hhhl.client.repository.ChatUserConversationRepositoryResult
+import cc.hhhl.client.repository.NotificationRepository
 import cc.hhhl.client.state.ChatAttentionKind
 import cc.hhhl.client.repository.TimelineRepository
 import cc.hhhl.client.repository.TimelineRepositoryResult
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Dispatchers
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -90,6 +99,13 @@ class BackgroundNotificationSyncer(
                     tokenProvider = { token },
                     currentUserIdProvider = { session.user?.id },
                 )
+                val automationHolder = backgroundAutomationHolder(
+                    accountId = session.id,
+                    token = token,
+                    chatRepository = chatRepository,
+                )
+                automationHolder.restore()
+                val automationEvents = mutableListOf<AutomationEvent>()
                 val notificationsDeferred = async {
                     SharkeyNotificationApi().loadNotifications(token, limit = 20)
                 }
@@ -110,8 +126,14 @@ class BackgroundNotificationSyncer(
                 val events = mutableListOf<BackgroundNotificationEvent>()
                 when (val result = notificationsDeferred.await()) {
                     is NotificationLoadResult.Success -> {
-                        events += result.notifications
-                            .filter { !it.isRead }
+                        val unreadNotifications = result.notifications.filter { !it.isRead }
+                        automationEvents += unreadNotifications
+                            .filter { "notification:${it.id}" !in seenIds }
+                            .map { item ->
+                                item.copy(isSpecialCare = item.isSpecialCare || item.actor.id in specialCareUserIds)
+                                    .toAutomationNotificationEvent()
+                            }
+                        events += unreadNotifications
                             .filter { "notification:${it.id}" !in seenIds }
                             .map { item ->
                                 val isSpecialCare = item.actor.id in specialCareUserIds
@@ -202,6 +224,13 @@ class BackgroundNotificationSyncer(
                                 unreadCount = room.unreadCount,
                             )
                             if (eventId in seenIds) continue
+                            attentionMessage?.let { message ->
+                                automationEvents += message.toAutomationChatEvent(
+                                    roomId = room.id,
+                                    attentionKind = attentionKind?.name.orEmpty(),
+                                    currentUser = currentUser,
+                                )
+                            }
                             val createdAtEpochMillis = attentionMessage?.createdAt.toEpochMillisOrNow()
                             val titlePrefix = attentionKind?.label
                             events += BackgroundNotificationEvent(
@@ -288,6 +317,14 @@ class BackgroundNotificationSyncer(
                                     (attentionKind == null && isSpecialCare)
                                 val unreadCount = mergedUnread.userCounts[conversation.user.id] ?: conversation.unreadCount
                                 val createdAtEpochMillis = latestMessage?.createdAt.toEpochMillisOrNow()
+                                latestMessage?.let { message ->
+                                    automationEvents += message.toAutomationChatEvent(
+                                        roomId = message.roomId,
+                                        directUserId = conversation.user.id,
+                                        attentionKind = attentionKind?.name.orEmpty(),
+                                        currentUser = currentUser,
+                                    )
+                                }
                                 BackgroundNotificationEvent(
                                     id = userEventId(
                                         userId = conversation.user.id,
@@ -340,6 +377,17 @@ class BackgroundNotificationSyncer(
                             .filter { it.author.id in specialCareUserIds }
                             .filter { "special-note:${it.id}" !in seenIds }
                             .map { note ->
+                                automationEvents += NotificationItem(
+                                    id = "special-care-note-${note.id}",
+                                    type = NotificationType.Note,
+                                    actor = note.author,
+                                    text = "发布了新帖子",
+                                    createdAtLabel = note.createdAtLabel.ifBlank { "刚刚" },
+                                    createdAtEpochMillis = note.createdAt.toEpochMillisOrNow(),
+                                    noteId = note.id,
+                                    notePreviewText = note.text.takeIf { it.isNotBlank() } ?: note.cw,
+                                    isSpecialCare = true,
+                                ).toAutomationNotificationEvent()
                                 val createdAtEpochMillis = note.createdAt.toEpochMillisOrNow()
                                 BackgroundNotificationEvent(
                                     id = "special-note:${note.id}",
@@ -379,14 +427,22 @@ class BackgroundNotificationSyncer(
                             .thenByDescending { it.createdAtEpochMillis },
                     )
                     .take(MAX_NOTIFICATIONS_PER_SYNC)
+                val automationEventIds = automationEvents.map { it.id }
                 if (visibleEvents.isNotEmpty()) {
                     BackgroundNotificationPublisher(context).publish(visibleEvents)
                     context.cacheBackgroundNotificationEvents(
                         accountId = session.id,
                         events = visibleEvents,
                     )
-                    settings.saveSeenIds((visibleEvents.map { it.id } + seenIds).take(200).toSet())
                 }
+                val handledEventIds = (visibleEvents.map { it.id } + automationEventIds)
+                    .distinct()
+                    .take(MAX_SEEN_IDS_PER_SYNC)
+                if (handledEventIds.isNotEmpty()) {
+                    settings.saveSeenIds((handledEventIds + seenIds).take(MAX_STORED_SEEN_IDS).toSet())
+                }
+                automationEvents.distinctBy { it.id }.forEach { event -> automationHolder.emitNow(event) }
+                AiBackgroundScheduler.syncNow(context)
                 BackgroundNotificationSyncResult.Success
             }
         }.getOrElse {
@@ -396,7 +452,49 @@ class BackgroundNotificationSyncer(
 
     private companion object {
         const val MAX_NOTIFICATIONS_PER_SYNC = 5
+        const val MAX_SEEN_IDS_PER_SYNC = 40
+        const val MAX_STORED_SEEN_IDS = 200
         const val SPECIAL_CARE_ROOM_SCAN_LIMIT = 8
+    }
+
+    private fun backgroundAutomationHolder(
+        accountId: String,
+        token: String,
+        chatRepository: ChatRepository,
+    ): AutomationStateHolder {
+        val aiStateHolder = AiStateHolder(
+            store = AndroidAiStore(context),
+            accountId = accountId,
+            onQueueChanged = { AiBackgroundScheduler.syncNow(context) },
+            scope = CoroutineScope(Dispatchers.Default),
+        ).also { it.restore() }
+        return AutomationStateHolder(
+            store = AndroidAutomationStore(context),
+            accountId = accountId,
+            executor = AppAutomationActionExecutor(
+                chatRepository = chatRepository,
+                notificationRepository = NotificationRepository(tokenProvider = { token }),
+                systemNotificationPublisher = { title, body ->
+                    BackgroundNotificationPublisher(context).publish(
+                        listOf(
+                            BackgroundNotificationEvent(
+                                id = "automation:${title.hashCode()}:${body.hashCode()}:${System.currentTimeMillis()}",
+                                title = title.ifBlank { "HHHL 自动化" },
+                                text = body.ifBlank { "自动化规则已执行" },
+                                specialCare = false,
+                                avatarMode = NotificationAvatarMode.AppIcon,
+                                createdAtEpochMillis = System.currentTimeMillis(),
+                            ),
+                        ),
+                    )
+                    true
+                },
+                aiBridge = aiStateHolder,
+            ),
+            aiBridge = aiStateHolder,
+            aiToolPermissionProvider = { aiStateHolder.state.value.settings.toolsAllowed },
+            scope = CoroutineScope(Dispatchers.Default),
+        )
     }
 }
 

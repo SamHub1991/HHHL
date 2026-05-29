@@ -409,6 +409,7 @@ private data class NoteVersionDto(
 
 private fun defaultNoteDetailClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

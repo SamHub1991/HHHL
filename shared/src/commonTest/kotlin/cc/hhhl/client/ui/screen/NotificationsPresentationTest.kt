@@ -1,6 +1,9 @@
 package cc.hhhl.client.ui.screen
 
 import cc.hhhl.client.model.NotificationFilter
+import cc.hhhl.client.model.NotificationItem
+import cc.hhhl.client.model.NotificationType
+import cc.hhhl.client.model.User
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -22,6 +25,9 @@ class NotificationsPresentationTest {
         assertEquals(
             listOf(
                 NotificationFilter.SpecialCare,
+                NotificationFilter.Replies,
+                NotificationFilter.Quotes,
+                NotificationFilter.Achievements,
                 NotificationFilter.Follows,
                 NotificationFilter.System,
             ),
@@ -48,8 +54,8 @@ class NotificationsPresentationTest {
             onSendReminderNotification = {},
         )
 
-        assertEquals(listOf("测试通知", "提醒自己"), actions.map { it.label })
-        assertEquals(listOf(true, true), actions.map { it.enabled })
+        assertEquals(listOf("AI 总结通知", "AI 待处理", "AI 优先级", "测试通知", "提醒自己"), actions.map { it.label })
+        assertEquals(listOf(false, false, false, true, true), actions.map { it.enabled })
     }
 
     @Test
@@ -74,6 +80,42 @@ class NotificationsPresentationTest {
             "CW docs 👍",
             "$[fg.color=ff0000 CW] [docs](https://dc.hhhl.cc) ${'$'}{unicode 1f44d}"
                 .normalizeNotificationNotePreviewText(),
+        )
+    }
+
+    @Test
+    fun replyNotificationOffersReplyAndReactionQuickActions() {
+        val notification = sampleNotification(
+            type = NotificationType.Reply,
+            noteId = "note-1",
+        )
+
+        assertEquals(listOf("回复", "回应"), notificationQuickActionLabels(notification))
+    }
+
+    @Test
+    fun followNotificationOffersFollowBackQuickAction() {
+        val notification = sampleNotification(type = NotificationType.Follow)
+
+        assertEquals(listOf("关注回去"), notificationQuickActionLabels(notification))
+    }
+
+    private fun sampleNotification(
+        type: NotificationType,
+        noteId: String? = null,
+    ): NotificationItem {
+        return NotificationItem(
+            id = "notification-1",
+            type = type,
+            actor = User(
+                id = "user-1",
+                displayName = "Alice",
+                username = "alice",
+                avatarInitial = "A",
+            ),
+            text = "notification",
+            createdAtLabel = "刚刚",
+            noteId = noteId,
         )
     }
 }

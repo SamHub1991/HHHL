@@ -185,6 +185,7 @@ private fun String.avatarInitial(): String {
 
 private fun defaultUserSocialClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

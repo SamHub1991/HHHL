@@ -431,6 +431,7 @@ private suspend fun HttpResponse.apiErrorMessage(): String? {
 
 private fun defaultUserListClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

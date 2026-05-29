@@ -115,6 +115,7 @@ private data class UserNotesRequest(
 
 private fun defaultUserNotesClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

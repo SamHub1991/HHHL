@@ -1,5 +1,8 @@
 package cc.hhhl.client.automation
 
+import cc.hhhl.client.ai.AiBridge
+import cc.hhhl.client.ai.AiBridgeResult
+import cc.hhhl.client.ai.NoopAiBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -9,6 +12,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
+
+private suspend fun <T> Iterable<T>.allSuspend(predicate: suspend (T) -> Boolean): Boolean {
+    for (item in this) if (!predicate(item)) return false
+    return true
+}
+
+private suspend fun <T> Iterable<T>.anySuspend(predicate: suspend (T) -> Boolean): Boolean {
+    for (item in this) if (predicate(item)) return true
+    return false
+}
 
 data class AutomationUiState(
     val rules: List<AutomationRule> = emptyList(),
@@ -57,6 +70,8 @@ class AutomationStateHolder(
     private val store: AutomationStore = NoopAutomationStore,
     private val accountId: String? = null,
     private val executor: AutomationActionExecutor = NoopAutomationActionExecutor,
+    private val aiBridge: AiBridge = NoopAiBridge,
+    private val aiToolPermissionProvider: () -> Boolean = { true },
     private val scope: CoroutineScope,
 ) {
     private val mutableState = MutableStateFlow(AutomationUiState())
@@ -230,21 +245,25 @@ class AutomationStateHolder(
     }
 
     fun emit(event: AutomationEvent) {
+        scope.launch {
+            emitNow(event)
+        }
+    }
+
+    suspend fun emitNow(event: AutomationEvent) {
         val rules = state.value.rules
             .filter { rule -> rule.enabled && rule.trigger == event.trigger }
             .filter { rule -> !rule.ignoreOwnMessages || !event.isFromCurrentUser }
-            .filter { rule -> rule.matches(event) }
             .filter { rule -> rule.cooldownReady(event) }
         if (rules.isEmpty()) return
 
-        scope.launch {
-            rules.forEach { rule ->
-                val dedupeKey = "${event.id}:${rule.id}"
-                if (dedupeKey in recentEventRuleKeys) return@forEach
-                recentEventRuleKeys = (listOf(dedupeKey) + recentEventRuleKeys).take(MAX_RECENT_EVENT_KEYS)
-                cooldownMarkers = cooldownMarkers + (rule.id to nowMillis())
-                executeRule(rule, event)
-            }
+        rules.forEach { rule ->
+            if (!rule.matches(event)) return@forEach
+            val dedupeKey = "${event.id}:${rule.id}"
+            if (dedupeKey in recentEventRuleKeys) return@forEach
+            recentEventRuleKeys = (listOf(dedupeKey) + recentEventRuleKeys).take(MAX_RECENT_EVENT_KEYS)
+            cooldownMarkers = cooldownMarkers + (rule.id to nowMillis())
+            executeRule(rule, event)
         }
     }
 
@@ -273,6 +292,16 @@ class AutomationStateHolder(
     ): Boolean {
         val title = renderAutomationTemplate(action.titleTemplate.ifBlank { rule.name }, event)
         val body = renderAutomationTemplate(action.bodyTemplate, event)
+        if (action.requiresToolPermission() && !aiToolPermissionProvider()) {
+            addExecutionLog(
+                rule = rule,
+                event = event,
+                actionLabel = action.type.label,
+                message = "AI 工具权限未开启，已阻止外部写入动作",
+                success = false,
+            )
+            return false
+        }
         val result = runCatching {
             if (action.type == AutomationActionType.AddLog) {
                 AutomationActionExecutionResult(success = true, message = body)
@@ -366,12 +395,12 @@ class AutomationStateHolder(
         }
     }
 
-    private fun AutomationRule.matches(event: AutomationEvent): Boolean {
+    private suspend fun AutomationRule.matches(event: AutomationEvent): Boolean {
         val enabledConditions = conditions.filter { it.enabled }
         if (enabledConditions.isEmpty()) return true
         return when (conditionMode) {
-            AutomationConditionMode.All -> enabledConditions.all { it.matches(event) }
-            AutomationConditionMode.Any -> enabledConditions.any { it.matches(event) }
+            AutomationConditionMode.All -> enabledConditions.allSuspend { it.matches(event) }
+            AutomationConditionMode.Any -> enabledConditions.anySuspend { it.matches(event) }
         }
     }
 
@@ -381,7 +410,7 @@ class AutomationStateHolder(
         return nowMillis() - lastRun >= cooldownSeconds * 1000L || event.id.startsWith("manual:")
     }
 
-    private fun AutomationCondition.matches(event: AutomationEvent): Boolean {
+    private suspend fun AutomationCondition.matches(event: AutomationEvent): Boolean {
         val cleanValue = value.trim()
         if (cleanValue.isEmpty()) return true
         return when (type) {
@@ -393,6 +422,10 @@ class AutomationStateHolder(
             AutomationConditionType.SourceKind -> event.sourceKind.equals(cleanValue, ignoreCase = true)
             AutomationConditionType.AttentionKind -> event.attentionKind.equals(cleanValue, ignoreCase = true)
             AutomationConditionType.NotificationType -> event.notificationType.equals(cleanValue, ignoreCase = true)
+            AutomationConditionType.AiSemantic -> when (val result = aiBridge.evaluateSemanticCondition(cleanValue, event.aiContextText())) {
+                is AiBridgeResult.Success -> automationAiConditionSatisfied(result.text)
+                is AiBridgeResult.Error -> false
+            }
         }
     }
 
@@ -413,6 +446,13 @@ class AutomationStateHolder(
         const val MAX_LOG_MESSAGE_LENGTH = 400
         const val MAX_RECENT_EVENT_KEYS = 120
     }
+}
+
+private fun AutomationAction.requiresToolPermission(): Boolean {
+    return type == AutomationActionType.ForwardToRoom ||
+        type == AutomationActionType.ForwardToUser ||
+        type == AutomationActionType.Webhook ||
+        type == AutomationActionType.AiGenerateWebhook
 }
 
 private fun AutomationRule.cleaned(): AutomationRule {

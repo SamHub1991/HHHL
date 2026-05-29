@@ -414,6 +414,7 @@ private fun List<List<String>>.cleanedKeywordGroups(): List<List<String>> {
 
 private fun defaultAntennaClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Tune
@@ -45,6 +46,7 @@ import cc.hhhl.client.automation.AutomationFailurePolicy
 import cc.hhhl.client.automation.AutomationRule
 import cc.hhhl.client.automation.AutomationTrigger
 import cc.hhhl.client.automation.AutomationUiState
+import cc.hhhl.client.ai.AiTaskKind
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlAlertDialog
@@ -79,6 +81,13 @@ fun AutomationScreen(
     onUpdateAction: (String, AutomationAction) -> Unit,
     onRemoveAction: (String, String) -> Unit,
     onClearLogs: () -> Unit,
+    aiEnabled: Boolean = false,
+    isAiProcessing: Boolean = false,
+    aiResultText: String? = null,
+    aiResultLabel: String? = null,
+    onAiExplainRule: (AutomationRule?) -> Unit = {},
+    onAiSuggestRules: (AutomationUiState) -> Unit = {},
+    onDismissAiResult: () -> Unit = {},
 ) {
     val colors = LocalHhhlColors.current
     var createMenuOpen by remember { mutableStateOf(false) }
@@ -106,7 +115,23 @@ fun AutomationScreen(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
         ) {
             item(key = "automation-overview") {
-                AutomationOverviewCard(state = state, onCreate = { createMenuOpen = true })
+                AutomationOverviewCard(
+                    state = state,
+                    aiEnabled = aiEnabled,
+                    isAiProcessing = isAiProcessing,
+                    onCreate = { createMenuOpen = true },
+                    onAiExplain = { onAiExplainRule(state.selectedRule ?: state.rules.firstOrNull()) },
+                    onAiSuggestRules = { onAiSuggestRules(state) },
+                )
+            }
+            if (!aiResultText.isNullOrBlank()) {
+                item(key = "automation-ai-result") {
+                    AutomationAiResultCard(
+                        label = aiResultLabel ?: AiTaskKind.AutomationExplain.label,
+                        text = aiResultText,
+                        onDismiss = onDismissAiResult,
+                    )
+                }
             }
             state.message?.let { message ->
                 item(key = "automation-message") { AutomationStatusCard(message, success = true) }
@@ -130,6 +155,9 @@ fun AutomationScreen(
                     onToggle = { onToggleRule(rule.id) },
                     onDuplicate = { onDuplicateRule(rule.id) },
                     onDelete = { onDeleteRule(rule.id) },
+                    aiEnabled = aiEnabled,
+                    isAiProcessing = isAiProcessing,
+                    onAiExplain = { onAiExplainRule(rule) },
                 )
             }
             item(key = "automation-log-header") {
@@ -194,6 +222,10 @@ fun AutomationScreen(
 private fun AutomationOverviewCard(
     state: AutomationUiState,
     onCreate: () -> Unit,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    onAiExplain: () -> Unit,
+    onAiSuggestRules: () -> Unit,
 ) {
     AutomationPanel {
         Row(
@@ -211,6 +243,16 @@ private fun AutomationOverviewCard(
             AutomationMetricChip("规则 ${state.rules.size}")
             AutomationMetricChip("启用 ${state.enabledRuleCount}")
             AutomationMetricChip("日志 ${state.logs.size}")
+            HhhlActionChip(
+                label = if (isAiProcessing) "AI 处理中" else "AI 解释规则",
+                enabled = aiEnabled && !isAiProcessing && state.rules.isNotEmpty(),
+                onClick = onAiExplain,
+            )
+            HhhlActionChip(
+                label = "AI 规则建议",
+                enabled = aiEnabled && !isAiProcessing,
+                onClick = onAiSuggestRules,
+            )
         }
     }
 }
@@ -231,6 +273,9 @@ private fun AutomationRuleCard(
     onToggle: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    onAiExplain: () -> Unit,
 ) {
     AutomationPanel(
         modifier = Modifier.clickable(onClick = onOpen),
@@ -253,6 +298,7 @@ private fun AutomationRuleCard(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HhhlActionChip(label = "配置", emphasized = true, onClick = onOpen)
+            HhhlActionChip(label = "AI 解释", enabled = aiEnabled && !isAiProcessing, onClick = onAiExplain)
             HhhlActionChip(label = "复制", onClick = onDuplicate)
             HhhlActionChip(label = "删除", onClick = onDelete)
         }
@@ -426,8 +472,9 @@ private fun AutomationConditionEditor(
             value = condition.value,
             onValueChange = { onUpdate(condition.copy(value = it)) },
             placeholder = condition.type.hint,
-            label = "匹配值",
-            singleLine = true,
+            label = if (condition.type == AutomationConditionType.AiSemantic) "语义条件" else "匹配值",
+            minLines = if (condition.type == AutomationConditionType.AiSemantic) 2 else 1,
+            singleLine = condition.type != AutomationConditionType.AiSemantic,
         )
     }
 }
@@ -475,7 +522,7 @@ private fun AutomationActionEditor(
             onValueChange = { onUpdate(action.copy(bodyTemplate = it)) },
             placeholder = action.type.bodyLabel,
             label = action.type.bodyLabel,
-            minLines = 3,
+            minLines = if (action.type.isAiGeneratedAction()) 2 else 3,
         )
         AutomationEnumPicker(
             label = "失败策略",
@@ -485,6 +532,12 @@ private fun AutomationActionEditor(
             onSelected = { onUpdate(action.copy(failurePolicy = it)) },
         )
     }
+}
+
+private fun AutomationActionType.isAiGeneratedAction(): Boolean {
+    return this == AutomationActionType.AiGenerateLog ||
+        this == AutomationActionType.AiGenerateNotification ||
+        this == AutomationActionType.AiGenerateWebhook
 }
 
 @Composable
@@ -629,6 +682,35 @@ private fun AutomationStatusCard(message: String, success: Boolean) {
             text = message,
             color = if (success) LocalHhhlColors.current.textSecondary else LocalHhhlColors.current.warning,
             style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@Composable
+private fun AutomationAiResultCard(
+    label: String,
+    text: String,
+    onDismiss: () -> Unit,
+) {
+    AutomationPanel(compact = true) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Filled.AutoAwesome,
+                contentDescription = null,
+                tint = LocalHhhlColors.current.accent,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                AutomationTitle(label)
+                AutomationMutedText("AI 只解释和建议，不会自动修改规则")
+            }
+            HhhlActionChip(label = "关闭", onClick = onDismiss)
+        }
+        Text(
+            text = text,
+            color = LocalHhhlColors.current.textSecondary,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

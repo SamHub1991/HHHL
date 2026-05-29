@@ -39,10 +39,22 @@ class AndroidDisplayPreferenceStore(context: Context) : DisplayPreferenceStore {
             .apply()
     }
 
+    override fun loadListGesturesEnabled(): Boolean? {
+        if (!preferences.contains(KEY_LIST_GESTURES_ENABLED)) return null
+        return preferences.getBoolean(KEY_LIST_GESTURES_ENABLED, true)
+    }
+
+    override fun saveListGesturesEnabled(enabled: Boolean) {
+        preferences.edit()
+            .putBoolean(KEY_LIST_GESTURES_ENABLED, enabled)
+            .apply()
+    }
+
     private companion object {
         const val PREFERENCES_NAME = "hhhl_display_preferences"
         const val KEY_TIMELINE_DENSITY = "timeline_density"
         const val KEY_DEFAULT_NOTE_VISIBILITY = "default_note_visibility"
         const val KEY_NOTIFICATION_BADGE_MODE = "notification_badge_mode"
+        const val KEY_LIST_GESTURES_ENABLED = "list_gestures_enabled"
     }
 }

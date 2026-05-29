@@ -242,8 +242,8 @@ internal fun parseSharkeyStreamingChatEvent(
 
 @Serializable
 private data class StreamingChatMessageDto(
-    val id: String,
-    val createdAt: String,
+    val id: String = "",
+    val createdAt: String = "",
     val fromUser: StreamingChatUserDto? = null,
     val fromUserId: String = "",
     val toUser: StreamingChatUserDto? = null,
@@ -266,7 +266,15 @@ private data class StreamingChatMessageDto(
             avatarInitial = fromUserId.ifBlank { "成" }.avatarInitial(),
         )
         return ChatMessage(
-            id = id,
+            id = stableStreamingChatMessageId(
+                id = id,
+                roomId = toRoomId.orEmpty(),
+                toUserId = toUserId.orEmpty(),
+                fromUserId = user.id,
+                createdAt = createdAt,
+                text = text.orEmpty(),
+                fileId = file?.id.orEmpty(),
+            ),
             roomId = toRoomId.orEmpty(),
             fromUser = user,
             text = text.orEmpty(),
@@ -296,7 +304,7 @@ private data class StreamingChatMessageDto(
 
 @Serializable
 private data class StreamingChatMessageReferenceDto(
-    val id: String,
+    val id: String = "",
     val fromUser: StreamingChatUserDto? = null,
     val text: String? = null,
     val file: StreamingChatDriveFileDto? = null,
@@ -313,8 +321,8 @@ private data class StreamingChatMessageReferenceDto(
 
 @Serializable
 private data class StreamingChatDriveFileDto(
-    val id: String,
-    val name: String,
+    val id: String = "",
+    val name: String = "",
     val type: String = "",
     val url: String? = null,
     val thumbnailUrl: String? = null,
@@ -338,24 +346,25 @@ private data class StreamingChatDriveFileDto(
 
 @Serializable
 private data class StreamingChatMessageReactionDto(
-    val reaction: String,
+    val reaction: String = "",
     val user: StreamingChatUserDto? = null,
 )
 
 @Serializable
 private data class StreamingChatUserDto(
-    val id: String,
-    val username: String,
+    val id: String = "",
+    val username: String = "",
     val name: String? = null,
     val avatarUrl: String? = null,
     val avatarDecorations: List<StreamingAvatarDecorationDto> = emptyList(),
 ) {
     fun toDomainUser(): User {
-        val displayName = name?.takeIf { it.isNotBlank() } ?: username
+        val stableUsername = username.ifBlank { id.ifBlank { "unknown" } }
+        val displayName = name?.takeIf { it.isNotBlank() } ?: stableUsername
         return User(
-            id = id,
+            id = id.ifBlank { stableUsername },
             displayName = displayName,
-            username = username,
+            username = stableUsername,
             avatarInitial = displayName.avatarInitial(),
             avatarUrl = avatarUrl?.takeIf { it.isNotBlank() },
             avatarDecorations = avatarDecorations.mapNotNull { it.toDomainDecoration() },
@@ -395,6 +404,30 @@ private fun String.avatarInitial(): String {
     return trim().firstOrNull()?.toString()?.uppercase() ?: "?"
 }
 
+private fun stableStreamingChatMessageId(
+    id: String,
+    roomId: String,
+    toUserId: String,
+    fromUserId: String,
+    createdAt: String,
+    text: String,
+    fileId: String,
+): String {
+    val cleanId = id.trim()
+    if (cleanId.isNotEmpty()) return cleanId
+    val seed = listOf(roomId, toUserId, fromUserId, createdAt, text, fileId)
+        .joinToString(separator = "\u0000")
+    return "local-chat-${seed.stableStreamingChatHash()}"
+}
+
+private fun String.stableStreamingChatHash(): String {
+    var hash = 1125899906842597L
+    for (char in this) {
+        hash = 31L * hash + char.code
+    }
+    return hash.toULong().toString(36)
+}
+
 internal fun String.isUnauthorizedStreamingTransportError(): Boolean {
     val cleanMessage = trim()
     if (cleanMessage.isBlank()) return false
@@ -415,6 +448,7 @@ private fun defaultChatStreamingClient(): HttpClient {
 
 private val defaultChatStreamingJson = Json {
     ignoreUnknownKeys = true
+    coerceInputValues = true
     explicitNulls = false
 }
 

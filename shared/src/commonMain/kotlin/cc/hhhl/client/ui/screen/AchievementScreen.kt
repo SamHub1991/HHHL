@@ -144,13 +144,7 @@ private fun AchievementRow(achievement: Achievement) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                if (achievement.isUnlocked) {
-                    colors.pageBackground
-                } else {
-                    colors.buttonBackground.copy(alpha = 0.45f)
-                },
-            )
+            .background(colors.pageBackground)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,

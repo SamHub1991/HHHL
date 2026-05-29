@@ -27,6 +27,8 @@ data class TimelineTabState(
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
     val endReached: Boolean = false,
+    val firstUnreadNoteId: String? = null,
+    val newNoteCount: Int = 0,
     val errorMessage: String? = null,
 )
 
@@ -50,6 +52,7 @@ class TimelineStateHolder(
     fun refresh(kind: TimelineKind = state.value.selectedKind) {
         val tab = state.value.tabs.getValue(kind)
         if (tab.isLoading) return
+        val previousFirstNoteId = tab.notes.firstOrNull()?.id
 
         mutableState.update { current ->
             current.copy(
@@ -68,6 +71,7 @@ class TimelineStateHolder(
                 kind = kind,
                 loadingMore = false,
                 result = repository.refresh(kind),
+                previousFirstNoteId = previousFirstNoteId,
             )
         }
     }
@@ -125,14 +129,27 @@ class TimelineStateHolder(
         }
     }
 
+    fun consumeNewNotesMarker(kind: TimelineKind = state.value.selectedKind) {
+        updateTab(kind) {
+            it.copy(firstUnreadNoteId = null, newNoteCount = 0)
+        }
+    }
+
     private fun applyResult(
         kind: TimelineKind,
         loadingMore: Boolean,
         result: TimelineRepositoryResult,
+        previousFirstNoteId: String? = null,
     ) {
         when (result) {
             is TimelineRepositoryResult.Success -> {
-                applySuccessfulNotes(kind, result.notes, result.endReached)
+                applySuccessfulNotes(
+                    kind = kind,
+                    notes = result.notes,
+                    endReached = result.endReached,
+                    loadingMore = loadingMore,
+                    previousFirstNoteId = previousFirstNoteId,
+                )
                 if (!loadingMore) {
                     prefetchTimelineReplies(kind, result.notes)
                 }
@@ -189,15 +206,25 @@ class TimelineStateHolder(
         kind: TimelineKind,
         notes: List<Note>,
         endReached: Boolean,
+        loadingMore: Boolean,
+        previousFirstNoteId: String?,
     ) {
         mutableState.update { current ->
+            val tab = current.tabs.getValue(kind)
+            val unreadMarker = if (!loadingMore && previousFirstNoteId != null) {
+                timelineUnreadMarker(notes, previousFirstNoteId)
+            } else {
+                null
+            }
             current.copy(
                 requiresRelogin = false,
-                tabs = current.tabs + (kind to current.tabs.getValue(kind).copy(
+                tabs = current.tabs + (kind to tab.copy(
                     notes = notes,
                     isLoading = false,
                     isLoadingMore = false,
                     endReached = endReached,
+                    firstUnreadNoteId = if (loadingMore) tab.firstUnreadNoteId else unreadMarker?.firstUnreadNoteId,
+                    newNoteCount = if (loadingMore) tab.newNoteCount else unreadMarker?.newNoteCount ?: 0,
                     errorMessage = null,
                 )),
             )
@@ -216,11 +243,14 @@ class TimelineStateHolder(
                     keySelector = { it.id },
                 )
                 if (mergedNotes === tab.notes && tab.errorMessage == null) return@update current
+                val unreadMarker = timelineUnreadMarker(mergedNotes, tab.notes.firstOrNull()?.id)
                 current.copy(
                     requiresRelogin = false,
                     tabs = current.tabs + (kind to tab.copy(
                         notes = mergedNotes,
                         endReached = if (tab.notes.isEmpty()) result.endReached else tab.endReached,
+                        firstUnreadNoteId = unreadMarker?.firstUnreadNoteId ?: tab.firstUnreadNoteId,
+                        newNoteCount = unreadMarker?.newNoteCount ?: tab.newNoteCount,
                         errorMessage = null,
                     )),
                 )
@@ -276,4 +306,24 @@ class TimelineStateHolder(
     private companion object {
         const val TIMELINE_REPLY_PREFETCH_PARENT_LIMIT = 6
     }
+}
+
+data class TimelineUnreadMarker(
+    val firstUnreadNoteId: String,
+    val newNoteCount: Int,
+)
+
+fun timelineUnreadMarker(
+    notes: List<Note>,
+    previousFirstNoteId: String?,
+): TimelineUnreadMarker? {
+    val cleanPreviousFirstNoteId = previousFirstNoteId?.takeIf { it.isNotBlank() } ?: return null
+    if (notes.isEmpty()) return null
+    val previousIndex = notes.indexOfFirst { it.id == cleanPreviousFirstNoteId }
+    if (previousIndex <= 0) return null
+    val firstUnreadNoteId = notes.firstOrNull()?.id?.takeIf { it.isNotBlank() } ?: return null
+    return TimelineUnreadMarker(
+        firstUnreadNoteId = firstUnreadNoteId,
+        newNoteCount = previousIndex,
+    )
 }

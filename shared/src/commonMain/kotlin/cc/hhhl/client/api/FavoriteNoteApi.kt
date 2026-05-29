@@ -131,6 +131,7 @@ private suspend fun HttpResponse.apiErrorMessage(): String? {
 
 private fun defaultFavoriteNoteClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

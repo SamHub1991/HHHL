@@ -32,11 +32,38 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.automation.AppAutomationActionExecutor
+import cc.hhhl.client.automation.AutomationAction
+import cc.hhhl.client.automation.AutomationActionMode
+import cc.hhhl.client.automation.AutomationActionType
+import cc.hhhl.client.automation.AutomationCondition
+import cc.hhhl.client.automation.AutomationConditionMode
+import cc.hhhl.client.automation.AutomationConditionType
+import cc.hhhl.client.automation.AutomationRule
 import cc.hhhl.client.automation.AutomationStore
 import cc.hhhl.client.automation.AutomationStateHolder
+import cc.hhhl.client.automation.AutomationTrigger
+import cc.hhhl.client.automation.AutomationUiState
 import cc.hhhl.client.automation.NoopAutomationStore
 import cc.hhhl.client.automation.toAutomationChatEvent
 import cc.hhhl.client.automation.toAutomationNotificationEvent
+import cc.hhhl.client.ai.AiProviderPreset
+import cc.hhhl.client.ai.AiSettings
+import cc.hhhl.client.ai.AiStore
+import cc.hhhl.client.ai.AiStateHolder
+import cc.hhhl.client.ai.AiTask
+import cc.hhhl.client.ai.AiTaskInput
+import cc.hhhl.client.ai.AiTaskKind
+import cc.hhhl.client.ai.AiUiState
+import cc.hhhl.client.ai.NoopAiStore
+import cc.hhhl.client.ai.toAiChatMessageContexts
+import cc.hhhl.client.ai.toAiNotificationContexts
+import cc.hhhl.client.ai.toAiPostContexts
+import cc.hhhl.client.ai.toAiProfileContext
+import cc.hhhl.client.ai.toAiReadableText
+import cc.hhhl.client.ai.toAiTaskInput
+import cc.hhhl.client.api.ComposeDraft
+import cc.hhhl.client.api.ComposeReactionAcceptance
+import cc.hhhl.client.api.ComposeScheduledNote
 import cc.hhhl.client.api.TimelineKind
 import cc.hhhl.client.api.MainStreamingEvent
 import cc.hhhl.client.api.toApiInstantOrNull
@@ -64,11 +91,16 @@ import cc.hhhl.client.media.MediaPicker
 import cc.hhhl.client.model.Clip
 import cc.hhhl.client.model.ClipListKind
 import cc.hhhl.client.model.ChatMessage
+import cc.hhhl.client.model.Channel
 import cc.hhhl.client.model.InstanceCapabilities
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NotificationFilter
 import cc.hhhl.client.model.NotificationItem
 import cc.hhhl.client.model.NotificationType
+import cc.hhhl.client.model.NoteVisibility
 import cc.hhhl.client.model.User
+import cc.hhhl.client.model.UserList
+import cc.hhhl.client.model.UserSocialKind
 import cc.hhhl.client.model.UserRelationshipListEntry
 import cc.hhhl.client.repository.AntennaRepository
 import cc.hhhl.client.repository.AnnouncementRepository
@@ -103,34 +135,53 @@ import cc.hhhl.client.repository.UserProfileRepository
 import cc.hhhl.client.repository.UserRelationshipRepository
 import cc.hhhl.client.repository.UserSocialRepository
 import cc.hhhl.client.state.AntennaStateHolder
+import cc.hhhl.client.state.AntennaUiState
 import cc.hhhl.client.state.AnnouncementStateHolder
 import cc.hhhl.client.state.AdminStateHolder
+import cc.hhhl.client.state.AdminDashboardUiState
 import cc.hhhl.client.state.AchievementStateHolder
+import cc.hhhl.client.state.AchievementUiState
 import cc.hhhl.client.state.ChatStateHolder
 import cc.hhhl.client.state.ChannelStateHolder
+import cc.hhhl.client.state.ChannelUiState
 import cc.hhhl.client.state.ClipStateHolder
+import cc.hhhl.client.state.ClipUiState
 import cc.hhhl.client.state.ComposeCompletionStateHolder
+import cc.hhhl.client.state.ComposeCompletionKind
+import cc.hhhl.client.state.ComposeCompletionUiState
+import cc.hhhl.client.state.ComposePollDeadlinePreset
 import cc.hhhl.client.state.ComposeStateHolder
+import cc.hhhl.client.state.ComposeUiState
 import cc.hhhl.client.state.ComposeDraftStore
 import cc.hhhl.client.state.DiscoverStateHolder
+import cc.hhhl.client.state.DiscoverUiState
 import cc.hhhl.client.state.ChatAttentionKind
 import cc.hhhl.client.state.ChatUiState
 import cc.hhhl.client.state.DriveFilesUiState
 import cc.hhhl.client.state.DriveFilesStateHolder
 import cc.hhhl.client.state.FavoriteNoteStateHolder
+import cc.hhhl.client.state.FavoriteNoteUiState
 import cc.hhhl.client.state.FlashStateHolder
+import cc.hhhl.client.state.FlashUiState
 import cc.hhhl.client.state.FollowRequestStateHolder
+import cc.hhhl.client.state.FollowRequestUiState
 import cc.hhhl.client.state.GalleryStateHolder
+import cc.hhhl.client.state.GalleryUiState
 import cc.hhhl.client.state.InstanceMetaStateHolder
+import cc.hhhl.client.state.InstanceMetaUiState
 import cc.hhhl.client.state.NoteLocalMutation
 import cc.hhhl.client.state.NoteActionStateHolder
+import cc.hhhl.client.state.NoteActionUiState
+import cc.hhhl.client.state.NoteDetailUiState
 import cc.hhhl.client.state.NoopComposeDraftStore
 import cc.hhhl.client.state.NoteDetailStateHolder
 import cc.hhhl.client.state.NoopNotificationReadStore
 import cc.hhhl.client.state.NoopRecentReactionStore
 import cc.hhhl.client.state.NotificationReadStore
 import cc.hhhl.client.state.NotificationStateHolder
+import cc.hhhl.client.state.NotificationUiState
 import cc.hhhl.client.state.PageStateHolder
+import cc.hhhl.client.state.PageUiState
 import cc.hhhl.client.state.RecentReactionStore
 import cc.hhhl.client.state.RelationshipManagementTab
 import cc.hhhl.client.state.RelationshipManagementStateHolder
@@ -138,13 +189,18 @@ import cc.hhhl.client.state.RelationshipManagementUiState
 import cc.hhhl.client.state.SettingsItemKey
 import cc.hhhl.client.state.SettingsStateHolder
 import cc.hhhl.client.state.SettingsUiState
+import cc.hhhl.client.state.AnnouncementUiState
 import cc.hhhl.client.state.NoopSpecialCareStore
 import cc.hhhl.client.state.SpecialCareStateHolder
 import cc.hhhl.client.state.SpecialCareStore
 import cc.hhhl.client.state.TimelineStateHolder
+import cc.hhhl.client.state.TimelineUiState
 import cc.hhhl.client.state.UserListStateHolder
+import cc.hhhl.client.state.UserListUiState
 import cc.hhhl.client.state.UserProfileStateHolder
+import cc.hhhl.client.state.UserProfileUiState
 import cc.hhhl.client.state.UserSocialStateHolder
+import cc.hhhl.client.state.UserSocialUiState
 import cc.hhhl.client.navigation.AppRoute
 import cc.hhhl.client.navigation.MentionNavigationTarget
 import cc.hhhl.client.navigation.RootRoute
@@ -168,11 +224,17 @@ import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.ui.component.LocalCustomEmojiUrls
 import cc.hhhl.client.ui.component.LocalBlockedNoteAuthorIds
 import cc.hhhl.client.ui.component.LocalNoteRowActions
+import cc.hhhl.client.ui.component.LocalNoteRowGesturesEnabled
 import cc.hhhl.client.ui.component.MediaPreviewOverlay
+import cc.hhhl.client.presentation.chatMessageBodyText
 import cc.hhhl.client.presentation.notePreviewText
 import cc.hhhl.client.ui.component.MediaPreviewSession
+import cc.hhhl.client.ui.component.LocalMutedNoteFilters
+import cc.hhhl.client.ui.component.LocalUserQuickActions
+import cc.hhhl.client.ui.component.MutedNoteFilters
 import cc.hhhl.client.ui.component.NoteRowDensity
 import cc.hhhl.client.ui.component.NoteRowActions
+import cc.hhhl.client.ui.component.UserQuickActions
 import cc.hhhl.client.ui.screen.AnnouncementScreen
 import cc.hhhl.client.ui.screen.AutomationScreen
 import cc.hhhl.client.ui.screen.AdminDashboardScreen
@@ -222,6 +284,7 @@ fun HhhlApp(
     recentReactionStore: RecentReactionStore = NoopRecentReactionStore,
     specialCareStore: SpecialCareStore = NoopSpecialCareStore,
     automationStore: AutomationStore = NoopAutomationStore,
+    aiStore: AiStore = NoopAiStore,
     composeDraftStore: ComposeDraftStore = NoopComposeDraftStore,
     chatMessageCache: ChatMessageCache = NoopChatMessageCache,
     chatUnreadStore: ChatUnreadStore = NoopChatUnreadStore,
@@ -235,6 +298,9 @@ fun HhhlApp(
     onSpecialCareUsersChanged: (Set<String>) -> Unit = {},
     onSpecialCareSystemNotification: (NotificationItem) -> Unit = {},
     onAutomationSystemNotification: ((String, String) -> Boolean?)? = null,
+    onAiQueueChanged: () -> Unit = {},
+    initialSharedText: String? = null,
+    onInitialSharedTextConsumed: () -> Unit = {},
     onCheckForUpdates: (((String) -> Unit) -> Unit) = { report -> report("当前平台暂不支持应用内更新") },
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit) = {},
     onAuthCallbackConsumed: () -> Unit = {},
@@ -249,6 +315,7 @@ fun HhhlApp(
                 chatUnreadStore.clearAccount(accountId)
                 specialCareStore.clearAccount(accountId)
                 automationStore.clearAccount(accountId)
+                aiStore.clearAccount(accountId)
                 notificationCache.clearAccount(accountId)
                 notificationReadStore.clearAccount(accountId)
             },
@@ -311,8 +378,9 @@ fun HhhlApp(
                     timelineCache = timelineCache,
                     recentReactionStore = recentReactionStore,
                     specialCareStore = specialCareStore,
-                    automationStore = automationStore,
-                    composeDraftStore = composeDraftStore,
+                automationStore = automationStore,
+                aiStore = aiStore,
+                composeDraftStore = composeDraftStore,
                     chatMessageCache = chatMessageCache,
                     chatUnreadStore = chatUnreadStore,
                     notificationCache = notificationCache,
@@ -328,6 +396,8 @@ fun HhhlApp(
                     onThemeSelected = themeStateHolder::select,
                     selectedTimelineDensity = displayPreferenceState.timelineDensity,
                     onTimelineDensitySelected = displayPreferenceStateHolder::selectTimelineDensity,
+                    listGesturesEnabled = displayPreferenceState.listGesturesEnabled,
+                    onListGesturesEnabledChanged = displayPreferenceStateHolder::setListGesturesEnabled,
                     selectedDefaultNoteVisibility = displayPreferenceState.defaultNoteVisibility,
                     onDefaultNoteVisibilitySelected = displayPreferenceStateHolder::selectDefaultNoteVisibility,
                     selectedNotificationBadgeMode = displayPreferenceState.notificationBadgeMode,
@@ -338,7 +408,10 @@ fun HhhlApp(
                     onSpecialCareBackgroundNotificationsChanged = onSpecialCareBackgroundNotificationsChanged,
                     onSpecialCareUsersChanged = onSpecialCareUsersChanged,
                     onSpecialCareSystemNotification = onSpecialCareSystemNotification,
-                    onAutomationSystemNotification = onAutomationSystemNotification,
+                onAutomationSystemNotification = onAutomationSystemNotification,
+                onAiQueueChanged = onAiQueueChanged,
+                    initialSharedText = initialSharedText,
+                    onInitialSharedTextConsumed = onInitialSharedTextConsumed,
                     onCheckForUpdates = onCheckForUpdates,
                     onBackHandlerChanged = onBackHandlerChanged,
                     onSwitchAccount = loginStateHolder::switchAccount,
@@ -450,6 +523,45 @@ private fun relationshipPlaceholderUser(userId: String): User {
     )
 }
 
+private fun routeLabel(route: AppRoute): String {
+    return when (route) {
+        AppRoute.Timeline -> "时间线"
+        AppRoute.Discover -> "发现"
+        AppRoute.Chat -> "聊天"
+        AppRoute.Notifications -> "通知"
+        AppRoute.Profile -> "我的"
+        AppRoute.ProfileNotes -> "我的帖子"
+        AppRoute.Settings -> "设置"
+        AppRoute.ThemeCustomization -> "主题自定义"
+        AppRoute.Automation -> "自动化"
+        is AppRoute.SettingsManagement -> "设置管理"
+        AppRoute.AdminDashboard -> "管理后台"
+        AppRoute.Drive -> "网盘"
+        AppRoute.Achievements -> "成就"
+        AppRoute.FavoriteNotes -> "收藏"
+        AppRoute.UserLists -> "列表"
+        AppRoute.FollowRequests -> "关注请求"
+        AppRoute.RelationshipManagement -> "关系管理"
+        AppRoute.Antennas -> "天线"
+        AppRoute.Clips -> "剪辑"
+        AppRoute.Channels -> "频道"
+        AppRoute.Pages -> "页面"
+        AppRoute.Gallery -> "相册"
+        AppRoute.Flash -> "Flash"
+        AppRoute.Announcements -> "公告"
+        is AppRoute.UserProfile -> "用户资料"
+        is AppRoute.UserSocial -> route.kind.label
+        is AppRoute.NoteDetail -> "帖子详情"
+        is AppRoute.Compose -> "发帖"
+    }
+}
+
+private fun selectedChatTitle(state: ChatUiState): String {
+    return state.selectedRoom?.name?.ifBlank { "聊天室" }
+        ?: state.selectedUserConversation?.user?.let { user -> user.displayName.ifBlank { user.username } }
+        ?: "聊天"
+}
+
 private fun relationshipEntryForUser(
     user: User,
     prefix: String,
@@ -457,6 +569,71 @@ private fun relationshipEntryForUser(
     return UserRelationshipListEntry(
         id = "$prefix-${user.id}",
         user = user,
+    )
+}
+
+@Composable
+private fun QuickUserListDialog(
+    user: User,
+    lists: List<UserList>,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onSelectList: (UserList) -> Unit,
+) {
+    HhhlAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("加入列表") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "选择要加入 @${user.username} 的列表。",
+                    color = LocalHhhlColors.current.textSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                errorMessage?.let { message ->
+                    Text(
+                        text = message,
+                        color = LocalHhhlColors.current.danger,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (lists.isEmpty()) {
+                    Text(
+                        text = if (isLoading) "正在读取列表" else "暂无可用列表",
+                        color = LocalHhhlColors.current.textMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        lists.forEach { list ->
+                            HhhlTextButton(
+                                onClick = { onSelectList(list) },
+                                enabled = !isLoading,
+                            ) {
+                                Text(list.name)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            HhhlTextButton(
+                onClick = onRefresh,
+                enabled = !isLoading,
+            ) {
+                Text(if (isLoading) "读取中" else "刷新")
+            }
+        },
+        dismissButton = {
+            HhhlTextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
     )
 }
 
@@ -526,6 +703,7 @@ private fun cc.hhhl.client.state.SpecialCareChatToast.toChatAttentionNotificatio
 
 private fun TimelineDensity.toNoteRowDensity(): NoteRowDensity {
     return when (this) {
+        TimelineDensity.UltraCompact -> NoteRowDensity.UltraCompact
         TimelineDensity.Compact -> NoteRowDensity.Compact
         TimelineDensity.Comfortable -> NoteRowDensity.Comfortable
     }
@@ -545,6 +723,10 @@ private enum class DrivePickerTarget {
     Compose,
     Chat,
 }
+
+private data class UserListQuickTarget(
+    val user: User,
+)
 
 private const val CHAT_ROOM_REFRESH_INTERVAL_MS = 15_000L
 private const val CHAT_MESSAGE_REFRESH_INTERVAL_MS = 5_000L
@@ -647,6 +829,27 @@ private fun AuthInvalidConfirmationDialog(
     )
 }
 
+private data class NoteInteractionCallbacks(
+    val onOpenNote: (String) -> Unit,
+    val onOpenUser: (String) -> Unit,
+    val onReply: (String) -> Unit,
+    val onRenote: (String) -> Unit,
+    val onQuote: (String) -> Unit,
+    val onReact: (String, String) -> Unit,
+    val onDeleteReaction: (String, String) -> Unit,
+    val onFavorite: (String) -> Unit,
+    val onAddToClip: ((Note) -> Unit)?,
+    val onDelete: (String) -> Unit,
+    val onOpenMedia: (String) -> Unit,
+    val onOpenMediaPreview: (MediaPreviewSession) -> Unit,
+    val onOpenMention: (String) -> Unit,
+    val onOpenHashtag: (String) -> Unit,
+    val onVotePoll: (String, Int) -> Unit,
+    val isActionPending: (String) -> Boolean,
+    val canDeleteAuthor: (String) -> Boolean,
+    val noteRowDensity: NoteRowDensity,
+)
+
 @Composable
 private fun ChatRouteContent(
     state: ChatUiState,
@@ -663,6 +866,12 @@ private fun ChatRouteContent(
     recentEmojiCodes: List<String>,
     customTheme: HhhlCustomTheme,
     onOpenDrivePicker: () -> Unit,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    aiResultText: String?,
+    aiResultLabel: String?,
+    onAiAction: (AiTaskKind, ChatUiState, String) -> Unit,
+    onDismissAiResult: () -> Unit,
 ) {
     ChatScreen(
         state = state,
@@ -729,6 +938,487 @@ private fun ChatRouteContent(
         recentEmojiCodes = recentEmojiCodes,
         isMediaPickerAvailable = mediaPicker != null,
         customTheme = customTheme,
+        aiEnabled = aiEnabled,
+        isAiProcessing = isAiProcessing,
+        aiResultText = aiResultText,
+        aiResultLabel = aiResultLabel,
+        onAiAction = onAiAction,
+        onDismissAiResult = onDismissAiResult,
+    )
+}
+
+@Composable
+private fun TimelineRouteContent(
+    state: TimelineUiState,
+    instanceCapabilities: InstanceCapabilities,
+    discoverState: DiscoverUiState,
+    timelineListStates: Map<TimelineKind, LazyListState>,
+    isTrendSelected: Boolean,
+    noteActionState: NoteActionUiState,
+    aiState: AiUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    onTimelineSelected: (TimelineKind) -> Unit,
+    onRefresh: (TimelineKind) -> Unit,
+    onLoadMore: (TimelineKind) -> Unit,
+    isSpecialCareAuthor: (String) -> Boolean,
+    onTrendSelected: () -> Unit,
+    onRefreshTrends: () -> Unit,
+    onNewNotesMarkerConsumed: (TimelineKind) -> Unit,
+    onCompose: () -> Unit,
+    onSearch: () -> Unit,
+    latestAiResultFor: (Array<out AiTaskKind>) -> AiTask?,
+    onAiAction: (AiTaskKind, TimelineKind, List<Note>) -> Unit,
+    onDismissAiResult: () -> Unit,
+) {
+    val aiResult = latestAiResultFor(
+        arrayOf(
+            AiTaskKind.TimelineDigest,
+            AiTaskKind.TimelineReplyOpportunities,
+            AiTaskKind.TimelineFilterSuggestions,
+        ),
+    )
+    TimelineScreen(
+        state = state,
+        onTimelineSelected = onTimelineSelected,
+        onRefresh = onRefresh,
+        onLoadMore = onLoadMore,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        isSpecialCareAuthor = isSpecialCareAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+        capabilities = instanceCapabilities,
+        listStates = timelineListStates,
+        isTrendSelected = isTrendSelected,
+        trends = discoverState.trends,
+        isRefreshingTrends = discoverState.isRefreshingTrends,
+        trendErrorMessage = discoverState.trendErrorMessage,
+        onTrendSelected = onTrendSelected,
+        onRefreshTrends = onRefreshTrends,
+        onNewNotesMarkerConsumed = onNewNotesMarkerConsumed,
+        onCompose = onCompose,
+        onSearch = onSearch,
+        aiEnabled = aiState.hasUsableModel,
+        isAiProcessing = aiState.isProcessing,
+        aiResultText = aiResult?.resultText,
+        aiResultLabel = aiResult?.kind?.label,
+        onAiAction = onAiAction,
+        onDismissAiResult = onDismissAiResult,
+    )
+}
+
+@Composable
+private fun ProfileRouteContent(
+    state: UserProfileUiState,
+    capabilities: InstanceCapabilities,
+    noteActionState: NoteActionUiState,
+    aiState: AiUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    selectedTheme: HhhlThemePreset,
+    selectedTimelineDensity: TimelineDensity,
+    onRefresh: () -> Unit,
+    onLoadMoreNotes: () -> Unit,
+    latestAiResultFor: (Array<out AiTaskKind>) -> AiTask?,
+    onAiProfileSummary: () -> Unit,
+    onAiProfileSuggestions: () -> Unit,
+    onDismissAiResult: () -> Unit,
+    onUpdateProfile: (String, String) -> Unit,
+    onChangeBanner: () -> Unit,
+    onLogout: () -> Unit,
+    onThemeSelected: (HhhlThemePreset) -> Unit,
+    onTimelineDensitySelected: (TimelineDensity) -> Unit,
+    onClearMessage: () -> Unit,
+    onOpenDrive: () -> Unit,
+    onOpenAchievements: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenAutomation: () -> Unit,
+    onOpenFavoriteNotes: () -> Unit,
+    onOpenLists: () -> Unit,
+    onOpenFollowRequests: () -> Unit,
+    onOpenRelationshipManagement: () -> Unit,
+    onOpenAntennas: () -> Unit,
+    onOpenClips: () -> Unit,
+    onOpenChannels: () -> Unit,
+    onOpenPages: () -> Unit,
+    onOpenGallery: () -> Unit,
+    onOpenFlash: () -> Unit,
+    onOpenAnnouncements: () -> Unit,
+    onOpenProfileNotes: () -> Unit,
+    onOpenSocial: (UserSocialKind) -> Unit,
+) {
+    val aiResult = latestAiResultFor(
+        arrayOf(AiTaskKind.ProfileSummary, AiTaskKind.ProfileInteractionSuggestions),
+    )
+    ProfileScreen(
+        state = state,
+        capabilities = capabilities,
+        onRefresh = onRefresh,
+        onLoadMoreNotes = onLoadMoreNotes,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+        aiEnabled = aiState.hasUsableModel,
+        isAiProcessing = aiState.isProcessing,
+        aiResultText = aiResult?.resultText,
+        aiResultLabel = aiResult?.kind?.label,
+        onAiProfileSummary = onAiProfileSummary,
+        onAiProfileSuggestions = onAiProfileSuggestions,
+        onDismissAiResult = onDismissAiResult,
+        selectedTheme = selectedTheme,
+        selectedTimelineDensity = selectedTimelineDensity,
+        onUpdateProfile = onUpdateProfile,
+        onChangeBanner = onChangeBanner,
+        onLogout = onLogout,
+        onThemeSelected = onThemeSelected,
+        onTimelineDensitySelected = onTimelineDensitySelected,
+        onClearMessage = onClearMessage,
+        onOpenDrive = onOpenDrive,
+        onOpenAchievements = onOpenAchievements,
+        onOpenSettings = onOpenSettings,
+        onOpenAutomation = onOpenAutomation,
+        onOpenFavoriteNotes = onOpenFavoriteNotes,
+        onOpenLists = onOpenLists,
+        onOpenFollowRequests = onOpenFollowRequests,
+        onOpenRelationshipManagement = onOpenRelationshipManagement,
+        onOpenAntennas = onOpenAntennas,
+        onOpenClips = onOpenClips,
+        onOpenChannels = onOpenChannels,
+        onOpenPages = onOpenPages,
+        onOpenGallery = onOpenGallery,
+        onOpenFlash = onOpenFlash,
+        onOpenAnnouncements = onOpenAnnouncements,
+        onOpenProfileNotes = onOpenProfileNotes,
+        onOpenSocial = onOpenSocial,
+    )
+}
+
+@Composable
+private fun ViewedProfileRouteContent(
+    state: UserProfileUiState,
+    noteActionState: NoteActionUiState,
+    aiState: AiUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    onRefresh: () -> Unit,
+    onLoadMoreNotes: () -> Unit,
+    onBack: () -> Unit,
+    latestAiResultFor: (Array<out AiTaskKind>) -> AiTask?,
+    onAiProfileSummary: () -> Unit,
+    onAiProfileSuggestions: () -> Unit,
+    onDismissAiResult: () -> Unit,
+    onFollowToggle: () -> Unit,
+    onMuteToggle: () -> Unit,
+    onBlockToggle: () -> Unit,
+    onOpenChatWithUser: (User) -> Unit,
+    isSpecialCareUser: (String) -> Boolean,
+    onToggleSpecialCareUser: (String) -> Boolean,
+    onOpenSocial: (UserSocialKind) -> Unit,
+) {
+    val aiResult = latestAiResultFor(
+        arrayOf(AiTaskKind.ProfileSummary, AiTaskKind.ProfileInteractionSuggestions),
+    )
+    ProfileScreen(
+        state = state,
+        onRefresh = onRefresh,
+        onLoadMoreNotes = onLoadMoreNotes,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onBack = onBack,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+        title = "资料",
+        isOwnProfile = false,
+        aiEnabled = aiState.hasUsableModel,
+        isAiProcessing = aiState.isProcessing,
+        aiResultText = aiResult?.resultText,
+        aiResultLabel = aiResult?.kind?.label,
+        onAiProfileSummary = onAiProfileSummary,
+        onAiProfileSuggestions = onAiProfileSuggestions,
+        onDismissAiResult = onDismissAiResult,
+        onFollowToggle = onFollowToggle,
+        onMuteToggle = onMuteToggle,
+        onBlockToggle = onBlockToggle,
+        onOpenChatWithUser = onOpenChatWithUser,
+        isSpecialCareUser = isSpecialCareUser,
+        onToggleSpecialCareUser = onToggleSpecialCareUser,
+        onOpenSocial = onOpenSocial,
+    )
+}
+
+@Composable
+private fun AutomationRouteContent(
+    state: AutomationUiState,
+    aiState: AiUiState,
+    onBack: () -> Unit,
+    onCreateRule: (AutomationTrigger) -> Unit,
+    onOpenRule: (String) -> Unit,
+    onCloseEditor: () -> Unit,
+    onToggleRule: (String) -> Unit,
+    onDeleteRule: (String) -> Unit,
+    onDuplicateRule: (String) -> Unit,
+    onUpdateRuleName: (String, String) -> Unit,
+    onUpdateRuleTrigger: (String, AutomationTrigger) -> Unit,
+    onUpdateConditionMode: (String, AutomationConditionMode) -> Unit,
+    onUpdateActionMode: (String, AutomationActionMode) -> Unit,
+    onUpdateIgnoreOwnMessages: (String, Boolean) -> Unit,
+    onUpdateCooldown: (String, Int) -> Unit,
+    onAddCondition: (String, AutomationConditionType) -> Unit,
+    onUpdateCondition: (String, AutomationCondition) -> Unit,
+    onRemoveCondition: (String, String) -> Unit,
+    onAddAction: (String, AutomationActionType) -> Unit,
+    onUpdateAction: (String, AutomationAction) -> Unit,
+    onRemoveAction: (String, String) -> Unit,
+    onClearLogs: () -> Unit,
+    latestAiResultFor: (Array<out AiTaskKind>) -> AiTask?,
+    onAiExplainRule: (AutomationRule?) -> Unit,
+    onAiSuggestRules: (AutomationUiState) -> Unit,
+    onDismissAiResult: () -> Unit,
+) {
+    val aiResult = latestAiResultFor(arrayOf(AiTaskKind.AutomationExplain, AiTaskKind.AutomationRuleSuggestions))
+    AutomationScreen(
+        state = state,
+        onBack = onBack,
+        onCreateRule = onCreateRule,
+        onOpenRule = onOpenRule,
+        onCloseEditor = onCloseEditor,
+        onToggleRule = onToggleRule,
+        onDeleteRule = onDeleteRule,
+        onDuplicateRule = onDuplicateRule,
+        onUpdateRuleName = onUpdateRuleName,
+        onUpdateRuleTrigger = onUpdateRuleTrigger,
+        onUpdateConditionMode = onUpdateConditionMode,
+        onUpdateActionMode = onUpdateActionMode,
+        onUpdateIgnoreOwnMessages = onUpdateIgnoreOwnMessages,
+        onUpdateCooldown = onUpdateCooldown,
+        onAddCondition = onAddCondition,
+        onUpdateCondition = onUpdateCondition,
+        onRemoveCondition = onRemoveCondition,
+        onAddAction = onAddAction,
+        onUpdateAction = onUpdateAction,
+        onRemoveAction = onRemoveAction,
+        onClearLogs = onClearLogs,
+        aiEnabled = aiState.hasUsableModel,
+        isAiProcessing = aiState.isProcessing,
+        aiResultText = aiResult?.resultText,
+        aiResultLabel = aiResult?.kind?.label,
+        onAiExplainRule = onAiExplainRule,
+        onAiSuggestRules = onAiSuggestRules,
+        onDismissAiResult = onDismissAiResult,
+    )
+}
+
+@Composable
+private fun NoteDetailRouteContent(
+    noteId: String,
+    state: NoteDetailUiState,
+    noteActionState: NoteActionUiState,
+    aiState: AiUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    onRefresh: () -> Unit,
+    onLoadMoreReplies: () -> Unit,
+    onLoadConversation: () -> Unit,
+    onLoadRenotes: () -> Unit,
+    onLoadReactionUsers: () -> Unit,
+    onLoadVersions: () -> Unit,
+    onRefreshPollRecommendation: () -> Unit,
+    onTranslate: () -> Unit,
+    latestAiResultFor: (Array<out AiTaskKind>) -> AiTask?,
+    onAiThreadSummary: (NoteDetailUiState) -> Unit,
+    onAiThreadReplyDraft: (NoteDetailUiState) -> Unit,
+    onDismissAiResult: () -> Unit,
+    onToggleChildReplies: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val aiResult = latestAiResultFor(arrayOf(AiTaskKind.ThreadSummary, AiTaskKind.ThreadReplyDraft))
+    NoteDetailScreen(
+        noteId = noteId,
+        state = state,
+        onRefresh = onRefresh,
+        onLoadMoreReplies = onLoadMoreReplies,
+        onLoadConversation = onLoadConversation,
+        onLoadRenotes = onLoadRenotes,
+        onLoadReactionUsers = onLoadReactionUsers,
+        onLoadVersions = onLoadVersions,
+        onRefreshPollRecommendation = onRefreshPollRecommendation,
+        onTranslate = onTranslate,
+        aiEnabled = aiState.hasUsableModel,
+        isAiProcessing = aiState.isProcessing,
+        aiResultText = aiResult?.resultText,
+        aiResultLabel = aiResult?.kind?.label,
+        onAiThreadSummary = onAiThreadSummary,
+        onAiThreadReplyDraft = onAiThreadReplyDraft,
+        onDismissAiResult = onDismissAiResult,
+        onToggleChildReplies = onToggleChildReplies,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+        onBack = onBack,
+    )
+}
+
+@Composable
+private fun ComposeRouteContent(
+    state: ComposeUiState,
+    noteActionState: NoteActionUiState,
+    completionState: ComposeCompletionUiState,
+    aiState: AiUiState,
+    targetNote: Note?,
+    isMediaPickerAvailable: Boolean,
+    onTextChanged: (String) -> Unit,
+    onCwChanged: (String?) -> Unit,
+    onVisibilitySelected: (NoteVisibility) -> Unit,
+    onLocalOnlyChanged: (Boolean) -> Unit,
+    onReactionAcceptanceSelected: (ComposeReactionAcceptance) -> Unit,
+    onScheduleAtChanged: (Long?) -> Unit,
+    onInsertText: (String) -> Unit,
+    onResetDraft: () -> Unit,
+    onLoadScheduledNotes: () -> Unit,
+    onEditScheduledNote: (ComposeScheduledNote) -> Unit,
+    onDeleteScheduledNote: (String) -> Unit,
+    onVisibleUserIdsChanged: (String) -> Unit,
+    onResolveVisibleUserMentions: () -> Unit,
+    onPollEnabledChanged: (Boolean) -> Unit,
+    onPollChoiceChanged: (Int, String) -> Unit,
+    onPollMultipleChanged: (Boolean) -> Unit,
+    onPollExpiresAtChanged: (String) -> Unit,
+    onPollDeadlinePresetSelected: (ComposePollDeadlinePreset, Long) -> Unit,
+    onPollChoiceAdded: () -> Unit,
+    onPollChoiceRemoved: (Int) -> Unit,
+    onAddMedia: () -> Unit,
+    onOpenDrivePicker: () -> Unit,
+    onRemoveFileId: (String) -> Unit,
+    onAttachedFileMetadataChanged: (String, String?, Boolean) -> Unit,
+    onCompletionTokenChanged: (ComposeCompletionKind?, String) -> Unit,
+    onSend: () -> Unit,
+    onRetryFailedSend: (String) -> Unit,
+    onRestoreFailedSend: (String) -> Unit,
+    onRemoveFailedSend: (String) -> Unit,
+    latestAiResultFor: (Array<out AiTaskKind>) -> AiTask?,
+    onAiAction: (AiTaskKind, ComposeDraft, Note?) -> Unit,
+    onDismissAiResult: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val aiResult = latestAiResultFor(
+        arrayOf(
+            AiTaskKind.ComposePolish,
+            AiTaskKind.ComposeShorten,
+            AiTaskKind.ComposeExpand,
+            AiTaskKind.ComposeTranslateZh,
+            AiTaskKind.ComposeContentWarning,
+            AiTaskKind.ComposeHashtags,
+            AiTaskKind.ComposeMentionSuggestions,
+            AiTaskKind.PostReplyDraft,
+            AiTaskKind.ThreadReplyDraft,
+        ),
+    )
+    ComposeScreen(
+        state = state,
+        targetNote = targetNote,
+        onTextChanged = onTextChanged,
+        onCwChanged = onCwChanged,
+        onVisibilitySelected = onVisibilitySelected,
+        onLocalOnlyChanged = onLocalOnlyChanged,
+        onReactionAcceptanceSelected = onReactionAcceptanceSelected,
+        onScheduleAtChanged = onScheduleAtChanged,
+        onInsertText = onInsertText,
+        onResetDraft = onResetDraft,
+        onLoadScheduledNotes = onLoadScheduledNotes,
+        onEditScheduledNote = onEditScheduledNote,
+        onDeleteScheduledNote = onDeleteScheduledNote,
+        onVisibleUserIdsChanged = onVisibleUserIdsChanged,
+        onResolveVisibleUserMentions = onResolveVisibleUserMentions,
+        onPollEnabledChanged = onPollEnabledChanged,
+        onPollChoiceChanged = onPollChoiceChanged,
+        onPollMultipleChanged = onPollMultipleChanged,
+        onPollExpiresAtChanged = onPollExpiresAtChanged,
+        onPollDeadlinePresetSelected = onPollDeadlinePresetSelected,
+        onPollChoiceAdded = onPollChoiceAdded,
+        onPollChoiceRemoved = onPollChoiceRemoved,
+        onAddMedia = onAddMedia,
+        onOpenDrivePicker = onOpenDrivePicker,
+        onRemoveFileId = onRemoveFileId,
+        onAttachedFileMetadataChanged = onAttachedFileMetadataChanged,
+        isMediaPickerAvailable = isMediaPickerAvailable,
+        customEmojis = noteActionState.customEmojis,
+        recentEmojiCodes = noteActionState.recentReactions,
+        completionState = completionState,
+        onCompletionTokenChanged = onCompletionTokenChanged,
+        onSend = onSend,
+        onRetryFailedSend = onRetryFailedSend,
+        onRestoreFailedSend = onRestoreFailedSend,
+        onRemoveFailedSend = onRemoveFailedSend,
+        aiEnabled = aiState.hasUsableModel,
+        aiResultText = aiResult?.resultText,
+        aiResultLabel = aiResult?.kind?.label,
+        isAiProcessing = aiState.isProcessing,
+        onAiAction = onAiAction,
+        onDismissAiResult = onDismissAiResult,
+        onBack = onBack,
     )
 }
 
@@ -827,6 +1517,7 @@ private fun SettingsRouteContent(
     onPickChatBackgroundImage: () -> Unit,
     onClearChatBackgroundImage: () -> Unit,
     onTimelineDensitySelected: (TimelineDensity) -> Unit,
+    onListGesturesEnabledChanged: (Boolean) -> Unit,
     onDefaultNoteVisibilitySelected: (DefaultNoteVisibility) -> Unit,
     onNotificationBadgeModeSelected: (NotificationBadgeMode) -> Unit,
     onBackgroundNotificationsChanged: (Boolean) -> Unit,
@@ -841,6 +1532,12 @@ private fun SettingsRouteContent(
     onOpenAdminDashboard: () -> Unit,
     onOpenWebSettings: (SettingsItemKey) -> Unit,
     onOpenManagement: (cc.hhhl.client.model.SettingsManagementSectionKey) -> Unit,
+    onAiSettingsChanged: (AiSettings) -> Unit,
+    onAiProviderSelected: (AiProviderPreset) -> Unit,
+    onTestAiConnection: () -> Unit,
+    onAiWorkspacePlan: () -> Unit,
+    aiConnectionMessage: String?,
+    isTestingAiConnection: Boolean,
 ) {
     SettingsScreen(
         state = state,
@@ -856,6 +1553,7 @@ private fun SettingsRouteContent(
         onPickChatBackgroundImage = onPickChatBackgroundImage,
         onClearChatBackgroundImage = onClearChatBackgroundImage,
         onTimelineDensitySelected = onTimelineDensitySelected,
+        onListGesturesEnabledChanged = onListGesturesEnabledChanged,
         onDefaultNoteVisibilitySelected = onDefaultNoteVisibilitySelected,
         onNotificationBadgeModeSelected = onNotificationBadgeModeSelected,
         onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
@@ -883,6 +1581,96 @@ private fun SettingsRouteContent(
         onOpenAdminDashboard = onOpenAdminDashboard,
         onOpenWebSettings = onOpenWebSettings,
         onOpenManagement = onOpenManagement,
+        onAiSettingsChanged = onAiSettingsChanged,
+        onAiProviderSelected = onAiProviderSelected,
+        onTestAiConnection = onTestAiConnection,
+        onAiWorkspacePlan = onAiWorkspacePlan,
+        aiConnectionMessage = aiConnectionMessage,
+        isTestingAiConnection = isTestingAiConnection,
+    )
+}
+
+@Composable
+private fun NotificationsRouteContent(
+    state: NotificationUiState,
+    announcementState: AnnouncementUiState,
+    followRequestState: FollowRequestUiState,
+    aiState: AiUiState,
+    notificationListState: LazyListState,
+    announcementListState: LazyListState,
+    onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
+    onMarkAllAsRead: () -> Unit,
+    onFlush: () -> Unit,
+    onMarkNotificationRead: (String) -> Unit,
+    onFilterSelected: (NotificationFilter) -> Unit,
+    onRefreshAnnouncements: () -> Unit,
+    onLoadMoreAnnouncements: () -> Unit,
+    onOpenAnnouncement: (String) -> Unit,
+    onCloseAnnouncement: () -> Unit,
+    onMarkAnnouncementRead: (String) -> Unit,
+    onOpenNote: (String) -> Unit,
+    onOpenUser: (String) -> Unit,
+    onReplyToNote: (String) -> Unit,
+    onReactToNote: (String, String) -> Unit,
+    onFollowUser: (String) -> Unit,
+    onOpenUrl: (String) -> Unit,
+    onOpenMention: (String) -> Unit,
+    onOpenHashtag: (String) -> Unit,
+    onAcceptFollowRequest: (String) -> Unit,
+    onRejectFollowRequest: (String) -> Unit,
+    onOpenChat: () -> Unit,
+    onOpenChatUser: (String, String?) -> Unit,
+    onSendTestNotification: () -> Unit,
+    onSendReminderNotification: () -> Unit,
+    latestAiResultFor: (Array<out AiTaskKind>) -> AiTask?,
+    onAiAction: (AiTaskKind, List<NotificationItem>, NotificationFilter) -> Unit,
+    onDismissAiResult: () -> Unit,
+) {
+    val aiResult = latestAiResultFor(
+        arrayOf(
+            AiTaskKind.NotificationSummary,
+            AiTaskKind.NotificationFollowUp,
+            AiTaskKind.NotificationPriority,
+        ),
+    )
+    NotificationsScreen(
+        state = state,
+        announcementState = announcementState,
+        onRefresh = onRefresh,
+        onLoadMore = onLoadMore,
+        onMarkAllAsRead = onMarkAllAsRead,
+        onFlush = onFlush,
+        onMarkNotificationRead = onMarkNotificationRead,
+        onFilterSelected = onFilterSelected,
+        onRefreshAnnouncements = onRefreshAnnouncements,
+        onLoadMoreAnnouncements = onLoadMoreAnnouncements,
+        onOpenAnnouncement = onOpenAnnouncement,
+        onCloseAnnouncement = onCloseAnnouncement,
+        onMarkAnnouncementRead = onMarkAnnouncementRead,
+        onOpenNote = onOpenNote,
+        onOpenUser = onOpenUser,
+        onReplyToNote = onReplyToNote,
+        onReactToNote = onReactToNote,
+        onFollowUser = onFollowUser,
+        onOpenUrl = onOpenUrl,
+        onOpenMention = onOpenMention,
+        onOpenHashtag = onOpenHashtag,
+        pendingFollowRequestUserIds = followRequestState.pendingUserIds,
+        onAcceptFollowRequest = onAcceptFollowRequest,
+        onRejectFollowRequest = onRejectFollowRequest,
+        onOpenChat = onOpenChat,
+        onOpenChatUser = onOpenChatUser,
+        onSendTestNotification = onSendTestNotification,
+        onSendReminderNotification = onSendReminderNotification,
+        aiEnabled = aiState.hasUsableModel,
+        isAiProcessing = aiState.isProcessing,
+        aiResultText = aiResult?.resultText,
+        aiResultLabel = aiResult?.kind?.label,
+        onAiAction = onAiAction,
+        onDismissAiResult = onDismissAiResult,
+        notificationListState = notificationListState,
+        announcementListState = announcementListState,
     )
 }
 
@@ -908,6 +1696,416 @@ private fun RelationshipManagementRouteContent(
             stateHolder.removeRelationship(userId)
         },
         onUpdateAllFollowing = stateHolder::updateAllFollowing,
+    )
+}
+
+@Composable
+private fun DiscoverRouteContent(
+    state: DiscoverUiState,
+    stateHolder: DiscoverStateHolder,
+    noteActionState: NoteActionUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    listState: LazyListState,
+    onOpenChannels: () -> Unit,
+    onOpenPages: () -> Unit,
+    onOpenGallery: () -> Unit,
+    onOpenFlash: () -> Unit,
+    onOpenAnnouncements: () -> Unit,
+) {
+    DiscoverScreen(
+        state = state,
+        onQueryChanged = stateHolder::updateQuery,
+        onSearch = stateHolder::search,
+        onModeSelected = stateHolder::selectMode,
+        onFiltersChanged = stateHolder::updateFilters,
+        onClearFilters = stateHolder::clearFilters,
+        onLoadMore = stateHolder::loadMore,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        onOpenChannels = onOpenChannels,
+        onOpenPages = onOpenPages,
+        onOpenGallery = onOpenGallery,
+        onOpenFlash = onOpenFlash,
+        onOpenAnnouncements = onOpenAnnouncements,
+        onOpenFederationInstance = stateHolder::openFederationInstance,
+        onCloseFederationInstanceDetails = stateHolder::closeFederationInstance,
+        onToggleFederationSilence = stateHolder::toggleFederationSilence,
+        onToggleFederationBlock = stateHolder::toggleFederationBlock,
+        onOpenRole = stateHolder::openRole,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+        listState = listState,
+    )
+}
+
+@Composable
+private fun FavoriteNotesRouteContent(
+    state: FavoriteNoteUiState,
+    stateHolder: FavoriteNoteStateHolder,
+    noteActionState: NoteActionUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    onBack: () -> Unit,
+) {
+    FavoriteNoteScreen(
+        state = state,
+        onBack = onBack,
+        onRefresh = stateHolder::refresh,
+        onLoadMore = stateHolder::loadMore,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+    )
+}
+
+@Composable
+private fun UserListsRouteContent(
+    state: UserListUiState,
+    stateHolder: UserListStateHolder,
+    noteActionState: NoteActionUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    onBack: () -> Unit,
+) {
+    UserListScreen(
+        state = state,
+        onBack = onBack,
+        onRefreshLists = stateHolder::refreshLists,
+        onRefreshTimeline = stateHolder::refreshTimeline,
+        onCreateList = stateHolder::createList,
+        onUpdateSelectedList = stateHolder::updateSelectedList,
+        onDeleteSelectedList = stateHolder::deleteSelectedList,
+        onAddUserToSelectedList = stateHolder::addUserToSelectedList,
+        onRemoveUserFromSelectedList = stateHolder::removeUserFromSelectedList,
+        onSelectList = stateHolder::selectList,
+        onLoadMore = stateHolder::loadMore,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+    )
+}
+
+@Composable
+private fun AntennasRouteContent(
+    state: AntennaUiState,
+    stateHolder: AntennaStateHolder,
+    noteActionState: NoteActionUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    onBack: () -> Unit,
+) {
+    AntennaScreen(
+        state = state,
+        onBack = onBack,
+        onRefreshAntennas = stateHolder::refreshAntennas,
+        onRefreshNotes = stateHolder::refreshNotes,
+        onCreateAntenna = stateHolder::createAntenna,
+        onUpdateSelectedAntenna = stateHolder::updateSelectedAntenna,
+        onDeleteSelectedAntenna = stateHolder::deleteSelectedAntenna,
+        onSelectAntenna = stateHolder::selectAntenna,
+        onLoadMore = stateHolder::loadMore,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+    )
+}
+
+@Composable
+private fun ClipsRouteContent(
+    state: ClipUiState,
+    stateHolder: ClipStateHolder,
+    noteActionState: NoteActionUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    onBack: () -> Unit,
+) {
+    ClipScreen(
+        state = state,
+        onBack = onBack,
+        onRefreshClips = { stateHolder.refreshClips() },
+        onRefreshNotes = stateHolder::refreshNotes,
+        onCreateClip = stateHolder::createClip,
+        onUpdateSelectedClip = stateHolder::updateSelectedClip,
+        onDeleteSelectedClip = stateHolder::deleteSelectedClip,
+        onKindSelected = stateHolder::selectKind,
+        onSelectClip = stateHolder::selectClip,
+        onToggleFavoriteClip = stateHolder::toggleFavoriteSelectedClip,
+        onRemoveNoteFromClip = stateHolder::removeNoteFromSelectedClip,
+        onLoadMore = stateHolder::loadMore,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+    )
+}
+
+@Composable
+private fun ChannelsRouteContent(
+    state: ChannelUiState,
+    stateHolder: ChannelStateHolder,
+    noteActionState: NoteActionUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    onBack: () -> Unit,
+    onComposeInChannel: (Channel) -> Unit,
+) {
+    ChannelScreen(
+        state = state,
+        onBack = onBack,
+        onRefreshChannels = { stateHolder.refreshChannels() },
+        onRefreshTimeline = stateHolder::refreshTimeline,
+        onKindSelected = stateHolder::selectKind,
+        onSelectChannel = stateHolder::selectChannel,
+        onToggleFollowChannel = stateHolder::toggleFollowSelectedChannel,
+        onToggleFavoriteChannel = stateHolder::toggleFavoriteSelectedChannel,
+        onCreateChannel = stateHolder::createChannel,
+        onUpdateSelectedChannel = stateHolder::updateSelectedChannel,
+        onArchiveSelectedChannel = stateHolder::archiveSelectedChannel,
+        onComposeInChannel = onComposeInChannel,
+        onLoadMore = stateHolder::loadMore,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+    )
+}
+
+@Composable
+private fun ProfileNotesRouteContent(
+    state: UserProfileUiState,
+    noteActionState: NoteActionUiState,
+    noteCallbacks: NoteInteractionCallbacks,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onLoadMoreNotes: () -> Unit,
+) {
+    ProfileNotesScreen(
+        state = state,
+        onBack = onBack,
+        onRefresh = onRefresh,
+        onLoadMoreNotes = onLoadMoreNotes,
+        onOpenNote = noteCallbacks.onOpenNote,
+        onOpenUser = noteCallbacks.onOpenUser,
+        onReply = noteCallbacks.onReply,
+        onRenote = noteCallbacks.onRenote,
+        onQuote = noteCallbacks.onQuote,
+        onReact = noteCallbacks.onReact,
+        onDeleteReaction = noteCallbacks.onDeleteReaction,
+        onFavorite = noteCallbacks.onFavorite,
+        onAddToClip = noteCallbacks.onAddToClip,
+        onDelete = noteCallbacks.onDelete,
+        onOpenMedia = noteCallbacks.onOpenMedia,
+        onOpenMediaPreview = noteCallbacks.onOpenMediaPreview,
+        onOpenMention = noteCallbacks.onOpenMention,
+        onOpenHashtag = noteCallbacks.onOpenHashtag,
+        onVotePoll = noteCallbacks.onVotePoll,
+        reactionOptions = noteActionState.reactionOptions,
+        recentReactions = noteActionState.recentReactions,
+        isActionPending = noteCallbacks.isActionPending,
+        canDeleteAuthor = noteCallbacks.canDeleteAuthor,
+        noteRowDensity = noteCallbacks.noteRowDensity,
+    )
+}
+
+@Composable
+private fun PagesRouteContent(
+    state: PageUiState,
+    stateHolder: PageStateHolder,
+    currentUserId: String?,
+    onBack: () -> Unit,
+    onOpenUser: (String) -> Unit,
+) {
+    PageScreen(
+        state = state,
+        onBack = onBack,
+        onRefreshPages = { stateHolder.refreshPages() },
+        onKindSelected = stateHolder::selectKind,
+        onOpenPage = stateHolder::openPage,
+        onCloseDetail = stateHolder::closeDetail,
+        onToggleLikePage = stateHolder::toggleLikeSelectedPage,
+        onStartCreatingPage = stateHolder::startCreatingPage,
+        onStartEditingPage = stateHolder::startEditingSelectedPage,
+        onCancelEditingPage = stateHolder::cancelEditingPage,
+        onDraftChanged = stateHolder::updateDraft,
+        onSavePage = stateHolder::saveEditingPage,
+        onDeletePage = stateHolder::deleteSelectedPage,
+        onLoadMore = stateHolder::loadMore,
+        onOpenUser = onOpenUser,
+        currentUserId = currentUserId,
+    )
+}
+
+@Composable
+private fun GalleryRouteContent(
+    state: GalleryUiState,
+    stateHolder: GalleryStateHolder,
+    currentUserId: String?,
+    onBack: () -> Unit,
+    onOpenUser: (String) -> Unit,
+    onOpenMedia: (String) -> Unit,
+    onOpenMediaPreview: (MediaPreviewSession) -> Unit,
+) {
+    GalleryScreen(
+        state = state,
+        onBack = onBack,
+        onRefreshPosts = { stateHolder.refreshPosts() },
+        onKindSelected = stateHolder::selectKind,
+        onOpenPost = stateHolder::openPost,
+        onCloseDetail = stateHolder::closeDetail,
+        onToggleLikePost = stateHolder::toggleLikeSelectedPost,
+        onCreatePost = stateHolder::createPost,
+        onUpdatePost = stateHolder::updateSelectedPost,
+        onDeletePost = stateHolder::deleteSelectedPost,
+        onLoadMore = stateHolder::loadMore,
+        onOpenUser = onOpenUser,
+        onOpenMedia = onOpenMedia,
+        onOpenMediaPreview = onOpenMediaPreview,
+        currentUserId = currentUserId,
+    )
+}
+
+@Composable
+private fun FlashRouteContent(
+    state: FlashUiState,
+    stateHolder: FlashStateHolder,
+    onBack: () -> Unit,
+    onOpenUser: (String) -> Unit,
+    onOpenFlashInWeb: (String) -> Unit,
+) {
+    FlashScreen(
+        state = state,
+        onBack = onBack,
+        onRefreshFlashes = { stateHolder.refreshFlashes() },
+        onKindSelected = stateHolder::selectKind,
+        onOpenFlash = stateHolder::openFlash,
+        onCloseDetail = stateHolder::closeDetail,
+        onToggleLikeFlash = stateHolder::toggleLikeSelectedFlash,
+        onStartCreateFlash = stateHolder::startCreatingFlash,
+        onStartEditFlash = stateHolder::startEditingSelectedFlash,
+        onDraftChanged = stateHolder::updateDraft,
+        onSaveDraft = stateHolder::saveDraft,
+        onCancelDraft = stateHolder::cancelDraft,
+        onDeleteFlash = stateHolder::deleteSelectedFlash,
+        onLoadMore = stateHolder::loadMore,
+        onOpenUser = onOpenUser,
+        onOpenFlashInWeb = onOpenFlashInWeb,
+    )
+}
+
+@Composable
+private fun AnnouncementsRouteContent(
+    state: AnnouncementUiState,
+    stateHolder: AnnouncementStateHolder,
+    onBack: () -> Unit,
+) {
+    AnnouncementScreen(
+        state = state,
+        onBack = onBack,
+        onRefresh = { stateHolder.refresh() },
+        onOpenAnnouncement = stateHolder::openAnnouncement,
+        onCloseDetail = stateHolder::closeDetail,
+        onLoadMore = stateHolder::loadMore,
+        onMarkRead = stateHolder::markRead,
+        onEnterManagement = stateHolder::enterManagement,
+        onExitManagement = stateHolder::exitManagement,
+        onRefreshAdmin = stateHolder::refreshAdmin,
+        onCreateAnnouncement = stateHolder::createAnnouncement,
+        onUpdateAnnouncement = stateHolder::updateAnnouncement,
+        onDeleteAnnouncement = stateHolder::deleteAnnouncement,
     )
 }
 
@@ -999,6 +2197,7 @@ private fun MainShell(
     recentReactionStore: RecentReactionStore,
     specialCareStore: SpecialCareStore,
     automationStore: AutomationStore,
+    aiStore: AiStore,
     composeDraftStore: ComposeDraftStore,
     chatMessageCache: ChatMessageCache,
     chatUnreadStore: ChatUnreadStore,
@@ -1015,6 +2214,8 @@ private fun MainShell(
     onThemeSelected: (HhhlThemePreset) -> Unit,
     selectedTimelineDensity: TimelineDensity,
     onTimelineDensitySelected: (TimelineDensity) -> Unit,
+    listGesturesEnabled: Boolean,
+    onListGesturesEnabledChanged: (Boolean) -> Unit,
     selectedDefaultNoteVisibility: DefaultNoteVisibility,
     onDefaultNoteVisibilitySelected: (DefaultNoteVisibility) -> Unit,
     selectedNotificationBadgeMode: NotificationBadgeMode,
@@ -1026,6 +2227,9 @@ private fun MainShell(
     onSpecialCareUsersChanged: (Set<String>) -> Unit,
     onSpecialCareSystemNotification: (NotificationItem) -> Unit,
     onAutomationSystemNotification: ((String, String) -> Boolean?)?,
+    onAiQueueChanged: () -> Unit,
+    initialSharedText: String?,
+    onInitialSharedTextConsumed: () -> Unit,
     onCheckForUpdates: (((String) -> Unit) -> Unit),
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit),
     onSwitchAccount: (String) -> Unit,
@@ -1039,6 +2243,7 @@ private fun MainShell(
     var route: AppRoute by remember { mutableStateOf(AppRoute.Timeline) }
     var timelineTrendSelected by remember { mutableStateOf(false) }
     var drivePickerTarget by remember { mutableStateOf<DrivePickerTarget?>(null) }
+    var userListQuickTarget by remember { mutableStateOf<UserListQuickTarget?>(null) }
     var mediaPreviewSession by remember { mutableStateOf<MediaPreviewSession?>(null) }
     var viewedUserId by remember { mutableStateOf<String?>(null) }
     var authInvalidDialogOpen by remember { mutableStateOf(false) }
@@ -1087,6 +2292,7 @@ private fun MainShell(
                 userIdProvider = { accountUser?.id },
             ),
             draftStore = composeDraftStore,
+            draftKeyProvider = { currentAccountId ?: accountUser?.id ?: "default" },
             scope = appScope,
         )
     }
@@ -1170,6 +2376,15 @@ private fun MainShell(
         )
     }
     val notificationState by notificationStateHolder.state.collectAsState()
+    val aiStateHolder = remember(currentAccountId, aiStore) {
+        AiStateHolder(
+            store = aiStore,
+            accountId = currentAccountId,
+            onQueueChanged = onAiQueueChanged,
+            scope = appScope,
+        )
+    }
+    val aiState by aiStateHolder.state.collectAsState()
     val latestAutomationSystemNotification by rememberUpdatedState(onAutomationSystemNotification)
     val automationSystemNotificationPublisher: ((String, String) -> Boolean?)? = remember(
         onAutomationSystemNotification != null,
@@ -1196,7 +2411,10 @@ private fun MainShell(
                 chatRepository = chatRepository,
                 notificationRepository = notificationRepository,
                 systemNotificationPublisher = automationSystemNotificationPublisher,
+                aiBridge = aiStateHolder,
             ),
+            aiBridge = aiStateHolder,
+            aiToolPermissionProvider = { aiStateHolder.state.value.settings.toolsAllowed },
             scope = appScope,
         )
     }
@@ -1265,6 +2483,9 @@ private fun MainShell(
         )
     }
     val userSocialState by userSocialStateHolder.state.collectAsState()
+    val quickRelationshipRepository = remember(sessionToken) {
+        UserRelationshipRepository(tokenProvider = { sessionToken })
+    }
     val userListStateHolder = remember {
         UserListStateHolder(
             repository = UserListRepository(tokenProvider = { sessionToken }),
@@ -1364,11 +2585,14 @@ private fun MainShell(
         clipState = clipState,
         channelState = channelState,
     )
+    var noteActionToast by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(currentAccountId) {
         instanceMetaStateHolder.load()
         specialCareStateHolder.restoreStoredSpecialCare()
         composeStateHolder.restoreStoredDraft()
+        composeStateHolder.restoreFailedSendQueue()
+        aiStateHolder.restore()
         noteActionStateHolder.restoreRecentReactions()
         noteActionStateHolder.loadReactionOptions()
         automationStateHolder.restore()
@@ -1376,6 +2600,18 @@ private fun MainShell(
         notificationStateHolder.refresh()
         settingsStateHolder.refreshRemote()
         relationshipManagementStateHolder.refreshBlockedUsers()
+    }
+
+    LaunchedEffect(initialSharedText, currentAccountId) {
+        val sharedText = initialSharedText?.trim().orEmpty()
+        if (sharedText.isNotEmpty()) {
+            composeStateHolder.startNewNote()
+            composeStateHolder.appendText(sharedText)
+            rootRoute = RootRoute.Timeline
+            route = AppRoute.Compose()
+            noteActionToast = "已填入分享内容"
+            onInitialSharedTextConsumed()
+        }
     }
 
     LaunchedEffect(specialCareState.userIds) {
@@ -1428,8 +2664,12 @@ private fun MainShell(
         selectedTheme,
         customTheme,
         selectedTimelineDensity,
+        listGesturesEnabled,
         selectedDefaultNoteVisibility,
         selectedNotificationBadgeMode,
+        aiState.settings,
+        aiState.usage,
+        aiState.tasks,
         backgroundNotificationsEnabled,
         specialCareBackgroundNotificationsEnabled,
         accountUser,
@@ -1438,8 +2678,12 @@ private fun MainShell(
             selectedTheme = selectedTheme,
             customTheme = customTheme,
             selectedTimelineDensity = selectedTimelineDensity,
+            listGesturesEnabled = listGesturesEnabled,
             selectedDefaultNoteVisibility = selectedDefaultNoteVisibility,
             selectedNotificationBadgeMode = selectedNotificationBadgeMode,
+            aiSettings = aiState.settings,
+            aiTasks = aiState.tasks,
+            aiUsage = aiState.usage,
             backgroundNotificationsEnabled = backgroundNotificationsEnabled,
             specialCareBackgroundNotificationsEnabled = specialCareBackgroundNotificationsEnabled,
             accountUser = accountUser,
@@ -2109,6 +3353,307 @@ private fun MainShell(
     fun findLoadedNote(noteId: String): Note? {
         return loadedNotes.firstOrNull { it.id == noteId }
     }
+    fun latestAiResultFor(vararg kinds: AiTaskKind): AiTask? {
+        val result = aiState.latestResult ?: return null
+        return result.takeIf { task -> task.resultText.isNotBlank() && task.kind in kinds }
+    }
+    fun requestAiTask(kind: AiTaskKind, input: AiTaskInput, toast: String) {
+        val task = aiStateHolder.request(kind, input)
+        if (task != null) {
+            noteActionToast = toast
+        }
+    }
+    fun requestComposeAi(kind: AiTaskKind, draft: ComposeDraft, targetNote: Note?) {
+        if (draft.text.isBlank() && targetNote == null) {
+            noteActionToast = "先输入草稿再使用 AI"
+            return
+        }
+        requestAiTask(
+            kind = kind,
+            input = AiTaskInput(
+                text = draft.text,
+                title = draft.cw.orEmpty(),
+                noteId = targetNote?.id.orEmpty(),
+                noteAuthor = targetNote?.author?.displayName?.ifBlank { targetNote.author.username }.orEmpty(),
+                noteText = targetNote?.let { notePreviewText(it, fallback = "") }.orEmpty(),
+                quotedNoteText = targetNote?.quotedNote?.let { quoted ->
+                    "${quoted.author.displayName.ifBlank { quoted.author.username }}: ${notePreviewText(quoted, fallback = "")}"
+                }.orEmpty(),
+            ),
+            toast = "AI 已开始处理草稿",
+        )
+    }
+    fun requestPostAi(kind: AiTaskKind, note: Note, openCompose: Boolean = false) {
+        if (openCompose) {
+            route = AppRoute.Compose(replyToId = note.id)
+        }
+        val allowSensitiveUpload = aiState.settings.uploadSensitiveContentAllowed
+        requestAiTask(
+            kind = kind,
+            input = note.toAiTaskInput(allowSensitiveUpload),
+            toast = if (openCompose) "AI 正在生成回复草稿" else "AI 正在总结帖子",
+        )
+    }
+    fun requestThreadAi(kind: AiTaskKind, detail: NoteDetailUiState, openCompose: Boolean = false) {
+        val rootNote = detail.note
+        if (rootNote == null) {
+            noteActionToast = "当前帖子还没加载完成"
+            return
+        }
+        if (openCompose) {
+            route = AppRoute.Compose(replyToId = rootNote.id)
+        }
+        val threadNotes = buildList {
+            add(rootNote)
+            addAll(detail.conversationNotes)
+            addAll(detail.replies)
+            detail.childRepliesByParentId.values.forEach { addAll(it) }
+        }
+            .distinctBy { it.id }
+            .take(80)
+        requestAiTask(
+            kind = kind,
+            input = AiTaskInput(
+                title = "${rootNote.author.displayName.ifBlank { rootNote.author.username }} 的帖子线程",
+                timelineTitle = "帖子线程 · ${detail.replies.size} 条回复",
+                noteId = rootNote.id,
+                noteAuthor = rootNote.author.displayName.ifBlank { rootNote.author.username },
+                noteText = rootNote.toAiReadableText(aiState.settings.uploadSensitiveContentAllowed),
+                timelineNotes = threadNotes.toAiPostContexts(aiState.settings.uploadSensitiveContentAllowed),
+            ),
+            toast = if (openCompose) "AI 正在生成线程回复" else "AI 正在总结线程",
+        )
+    }
+    fun requestTimelineAi(kind: AiTaskKind, timelineKind: TimelineKind, notes: List<Note>) {
+        val readableNotes = notes.take(40)
+        if (readableNotes.isEmpty()) {
+            noteActionToast = "当前时间线还没有可分析的内容"
+            return
+        }
+        requestAiTask(
+            kind = kind,
+            input = AiTaskInput(
+                title = timelineKind.label,
+                timelineTitle = timelineKind.label,
+                timelineNotes = readableNotes.toAiPostContexts(aiState.settings.uploadSensitiveContentAllowed),
+            ),
+            toast = "AI 已开始整理时间线",
+        )
+    }
+    fun requestChatAi(kind: AiTaskKind, chat: ChatUiState, title: String) {
+        if (chat.selectedUserConversation != null && !aiState.settings.readPrivateChatAllowed) {
+            noteActionToast = "AI 未获得私聊读取权限"
+            return
+        }
+        if (chat.messages.isEmpty()) {
+            noteActionToast = "当前聊天还没有可分析的消息"
+            return
+        }
+        requestAiTask(
+            kind = kind,
+            input = AiTaskInput(
+                text = chat.messageDraft,
+                chatTitle = title,
+                chatMessages = chat.messages.takeLast(80).map { message ->
+                    message.copy(text = chatMessageBodyText(message))
+                }.toAiChatMessageContexts(),
+            ),
+            toast = "AI 已开始处理聊天",
+        )
+    }
+    fun requestNotificationAi(kind: AiTaskKind, notifications: List<NotificationItem>, filter: NotificationFilter) {
+        if (notifications.isEmpty()) {
+            noteActionToast = "当前通知列表为空"
+            return
+        }
+        requestAiTask(
+            kind = kind,
+            input = AiTaskInput(
+                title = filter.label,
+                notifications = notifications.take(80).toAiNotificationContexts(),
+            ),
+            toast = "AI 已开始整理通知",
+        )
+    }
+    fun requestProfileAi(kind: AiTaskKind, profileState: UserProfileUiState, ownProfile: Boolean) {
+        val user = profileState.user
+        if (user == null) {
+            noteActionToast = "资料还没加载完成"
+            return
+        }
+        val relationshipText = buildList {
+            if (ownProfile) add("这是我自己的资料")
+            if (user.isFollowing) add("已关注")
+            profileState.relationship?.let { relationship ->
+                if (relationship.isMuted) add("已静音")
+                if (relationship.isBlocking) add("已屏蔽")
+                if (relationship.isFollowed) add("对方关注我")
+            }
+            if (specialCareStateHolder.isSpecialCare(user.id)) add("特别关心")
+        }.joinToString(" · ")
+        requestAiTask(
+            kind = kind,
+            input = AiTaskInput(
+                title = user.displayName.ifBlank { user.username },
+                profile = user.toAiProfileContext(relationshipText),
+                timelineTitle = "${user.displayName.ifBlank { user.username }} 的最近帖子",
+                timelineNotes = (user.pinnedNotes + profileState.notes)
+                    .distinctBy { it.id }
+                    .take(40)
+                    .toAiPostContexts(aiState.settings.uploadSensitiveContentAllowed),
+            ),
+            toast = "AI 已开始分析资料",
+        )
+    }
+    fun requestAutomationExplain(rule: AutomationRule?) {
+        if (rule == null) {
+            noteActionToast = "先选择一条自动化规则"
+            return
+        }
+        val eventText = buildString {
+            appendLine("规则：${rule.name}")
+            appendLine("触发器：${rule.trigger.label}")
+            appendLine("条件关系：${rule.conditionMode.label}")
+            rule.conditions.forEachIndexed { index, condition ->
+                appendLine("条件 ${index + 1}：${condition.type.label} = ${condition.value.ifBlank { "未填写" }}")
+            }
+            appendLine("动作执行：${rule.actionMode.label}")
+            rule.actions.forEachIndexed { index, action ->
+                appendLine("动作 ${index + 1}：${action.type.label} -> ${action.targetId.ifBlank { "本地" }}")
+                if (action.bodyTemplate.isNotBlank()) appendLine("模板：${action.bodyTemplate}")
+            }
+        }
+        requestAiTask(
+            kind = AiTaskKind.AutomationExplain,
+            input = AiTaskInput(
+                title = rule.name,
+                prompt = "解释这条规则的匹配逻辑、风险和可以加强的地方。",
+                automationEventText = eventText,
+            ),
+            toast = "AI 已开始解释规则",
+        )
+    }
+    fun requestAutomationRuleSuggestions(state: AutomationUiState) {
+        val contextText = buildString {
+            appendLine("现有规则：${state.rules.size} 条，启用 ${state.enabledRuleCount} 条")
+            state.rules.take(12).forEachIndexed { index, rule ->
+                appendLine("规则 ${index + 1}：${rule.name} · ${rule.trigger.label} · ${rule.conditionMode.label} · ${rule.actionMode.label}")
+                if (rule.conditions.isEmpty()) {
+                    appendLine("  条件：无")
+                } else {
+                    appendLine("  条件：${rule.conditions.joinToString("；") { "${it.type.label}=${it.value.ifBlank { "未填写" }}" }}")
+                }
+                if (rule.actions.isEmpty()) {
+                    appendLine("  动作：无")
+                } else {
+                    appendLine("  动作：${rule.actions.joinToString("；") { "${it.type.label}->${it.targetId.ifBlank { "本地" }}" }}")
+                }
+            }
+            if (state.logs.isNotEmpty()) {
+                appendLine()
+                appendLine("最近执行日志：")
+                state.logs.take(10).forEach { log ->
+                    appendLine("- ${log.eventLabel} · ${log.actionLabel} · ${if (log.success) "成功" else "失败"}：${log.message}")
+                }
+            }
+            appendLine()
+            appendLine("可用触发器：${AutomationTrigger.entries.joinToString("、") { it.label }}")
+            appendLine("可用条件：${AutomationConditionType.entries.joinToString("、") { it.label }}")
+            appendLine("可用动作：${AutomationActionType.entries.joinToString("、") { it.label }}")
+            appendLine("工具权限：${if (aiState.settings.toolsAllowed) "已开启" else "未开启"}")
+        }
+        requestAiTask(
+            kind = AiTaskKind.AutomationRuleSuggestions,
+            input = AiTaskInput(
+                title = "自动化规则建议",
+                prompt = "结合当前 HHHL 使用场景，建议哪些规则能减少手动处理、提醒和回调整理。",
+                automationEventText = contextText,
+            ),
+            toast = "AI 已开始生成规则建议",
+        )
+    }
+    fun requestWorkspaceActionPlan() {
+        val settings = aiState.settings
+        val allowSensitiveUpload = settings.uploadSensitiveContentAllowed
+        val timelineNotes = if (settings.readTimelineAllowed) {
+            timelineState.tabs[timelineState.selectedKind]?.notes.orEmpty().take(25)
+        } else {
+            emptyList()
+        }
+        val notificationContexts = if (settings.readNotificationsAllowed) {
+            notificationState.notifications.take(30).toAiNotificationContexts()
+        } else {
+            emptyList()
+        }
+        val canReadSelectedChat = settings.readChatAllowed &&
+            (chatState.selectedUserConversation == null || settings.readPrivateChatAllowed)
+        val chatContexts = if (canReadSelectedChat) {
+            chatState.messages.takeLast(40).map { message ->
+                message.copy(text = chatMessageBodyText(message))
+            }.toAiChatMessageContexts()
+        } else {
+            emptyList()
+        }
+        val automationText = if (settings.automationAllowed) {
+            buildString {
+                appendLine("自动化：${automationState.rules.size} 条规则，启用 ${automationState.enabledRuleCount} 条")
+                automationState.logs.take(8).forEach { log ->
+                    appendLine("- ${log.eventLabel} · ${log.actionLabel} · ${if (log.success) "成功" else "失败"}：${log.message}")
+                }
+            }
+        } else {
+            "自动化上下文未授权"
+        }
+        val contextText = buildString {
+            appendLine("当前账号：${accountUser?.displayName?.ifBlank { accountUser.username } ?: "未登录"}")
+            appendLine("当前页面：${routeLabel(route)}")
+            appendLine("权限：帖子=${settings.readTimelineAllowed}，通知=${settings.readNotificationsAllowed}，聊天=${settings.readChatAllowed}，私聊=${settings.readPrivateChatAllowed}，草稿=${settings.readDraftsAllowed}，自动化=${settings.automationAllowed}，工具=${settings.toolsAllowed}")
+            appendLine("后台：${if (settings.backgroundAllowed) "可继续处理" else "已关闭"}${if (settings.wifiOnlyBackground) " · 仅 Wi-Fi" else ""}")
+            appendLine("今日用量：${aiState.usedDailyRequests}/${settings.dailyRequestLimit}，剩余 ${aiState.remainingDailyRequests}")
+            if (composeState.draft.text.isNotBlank() && settings.readDraftsAllowed) {
+                appendLine()
+                appendLine("当前草稿：")
+                appendLine(composeState.draft.text.take(1_200))
+            }
+            if (timelineNotes.isNotEmpty()) {
+                appendLine()
+                appendLine("当前时间线：${timelineState.selectedKind.label}")
+                timelineNotes.toAiPostContexts(allowSensitiveUpload).forEachIndexed { index, note ->
+                    appendLine("${index + 1}. ${note.author} @${note.username}：${note.text}")
+                    if (note.stats.isNotBlank()) appendLine("   ${note.stats}")
+                }
+            }
+            if (notificationContexts.isNotEmpty()) {
+                appendLine()
+                appendLine("当前通知：${notificationState.selectedFilter.label} · 未读 ${notificationState.unreadCount}")
+                notificationContexts.forEachIndexed { index, item ->
+                    appendLine("${index + 1}. ${item.type} · ${item.actor}：${item.text}")
+                    if (item.notePreviewText.isNotBlank()) appendLine("   ${item.notePreviewText}")
+                }
+            }
+            if (chatContexts.isNotEmpty()) {
+                appendLine()
+                appendLine("当前聊天：${selectedChatTitle(chatState)}")
+                chatContexts.forEach { message ->
+                    appendLine("${message.sender}: ${message.text}")
+                }
+            } else if (chatState.selectedUserConversation != null && settings.readChatAllowed && !settings.readPrivateChatAllowed) {
+                appendLine()
+                appendLine("当前私聊未上传：私聊读取权限未开启")
+            }
+            appendLine()
+            appendLine(automationText)
+        }
+        requestAiTask(
+            kind = AiTaskKind.WorkspaceActionPlan,
+            input = AiTaskInput(
+                title = "全局行动计划",
+                prompt = "从当前 HHHL 状态里找出最值得我下一步处理、回复、@ 人、整理和自动化的事情。",
+                automationEventText = contextText,
+            ),
+            toast = "AI 已开始生成全局行动计划",
+        )
+    }
     val onRenoteNote: (String) -> Unit = { noteId ->
         applyNoteMutation(NoteLocalMutation.Renote(noteId))
         noteActionStateHolder.perform(NoteActionRequest.Renote(noteId))
@@ -2374,8 +3919,33 @@ private fun MainShell(
     } else {
         null
     }
+    val noteCallbacks = NoteInteractionCallbacks(
+        onOpenNote = { route = AppRoute.NoteDetail(it) },
+        onOpenUser = onOpenUser,
+        onReply = onReplyNote,
+        onRenote = onRenoteNote,
+        onQuote = onQuoteNote,
+        onReact = onReactNote,
+        onDeleteReaction = onDeleteReactionNote,
+        onFavorite = onFavoriteNote,
+        onAddToClip = onRequestAddToClip,
+        onDelete = onDeleteNote,
+        onOpenMedia = onOpenUrl,
+        onOpenMediaPreview = { mediaPreviewSession = it },
+        onOpenMention = onOpenMention,
+        onOpenHashtag = onOpenHashtag,
+        onVotePoll = onVotePoll,
+        isActionPending = isNoteActionPending,
+        canDeleteAuthor = canDeleteAuthor,
+        noteRowDensity = noteRowDensity,
+    )
     val timelineListStates = remember {
         TimelineKind.values().associateWith { LazyListState() }
+    }
+    val notificationListState = remember { LazyListState() }
+    val announcementListState = remember { LazyListState() }
+    val discoverListStates = remember {
+        cc.hhhl.client.state.DiscoverSearchMode.entries.associateWith { LazyListState() }
     }
     fun handleSystemBack(): Boolean {
         if (mediaPreviewSession != null) {
@@ -2482,7 +4052,74 @@ private fun MainShell(
         onDispose { onBackHandlerChanged(null) }
     }
 
-    var noteActionToast by remember { mutableStateOf<String?>(null) }
+    val onFollowUserQuick: (String) -> Unit = { userId ->
+        appScope.launch {
+            when (val result = quickRelationshipRepository.follow(userId)) {
+                cc.hhhl.client.repository.UserRelationshipRepositoryResult.Success -> noteActionToast = "已关注"
+                cc.hhhl.client.repository.UserRelationshipRepositoryResult.Unauthorized -> noteActionToast = "登录已失效，请重新登录"
+                is cc.hhhl.client.repository.UserRelationshipRepositoryResult.Error -> noteActionToast = result.message
+                is cc.hhhl.client.repository.UserRelationshipRepositoryResult.RelationLoaded -> noteActionToast = "已更新关注状态"
+            }
+        }
+    }
+    fun handleUserRelationshipResult(
+        result: cc.hhhl.client.repository.UserRelationshipRepositoryResult,
+        successMessage: String,
+    ) {
+        when (result) {
+            cc.hhhl.client.repository.UserRelationshipRepositoryResult.Success -> noteActionToast = successMessage
+            cc.hhhl.client.repository.UserRelationshipRepositoryResult.Unauthorized -> noteActionToast = "登录已失效，请重新登录"
+            is cc.hhhl.client.repository.UserRelationshipRepositoryResult.Error -> noteActionToast = result.message
+            is cc.hhhl.client.repository.UserRelationshipRepositoryResult.RelationLoaded -> noteActionToast = successMessage
+        }
+    }
+    val userQuickActions = UserQuickActions(
+        onFollowUser = { user ->
+            appScope.launch {
+                handleUserRelationshipResult(
+                    result = quickRelationshipRepository.follow(user.id),
+                    successMessage = "已关注 @${user.username}",
+                )
+            }
+        },
+        onMuteUser = { user ->
+            appScope.launch {
+                handleUserRelationshipResult(
+                    result = quickRelationshipRepository.mute(user.id),
+                    successMessage = "已静音 @${user.username}",
+                )
+            }
+        },
+        onBlockUser = { user ->
+            appScope.launch {
+                val result = quickRelationshipRepository.block(user.id)
+                handleUserRelationshipResult(
+                    result = result,
+                    successMessage = "已屏蔽 @${user.username}",
+                )
+                if (result == cc.hhhl.client.repository.UserRelationshipRepositoryResult.Success) {
+                    relationshipManagementStateHolder.updateBlockedUser(
+                        entry = relationshipEntryForUser(user, prefix = "blocked"),
+                        blocked = true,
+                    )
+                }
+            }
+        },
+        onAddUserToList = { user ->
+            userListQuickTarget = UserListQuickTarget(user)
+            if (userListState.lists.isEmpty() && !userListState.isLoadingLists) {
+                userListStateHolder.refreshLists()
+            }
+        },
+        onToggleSpecialCareUser = { user ->
+            val enabled = specialCareStateHolder.toggleSpecialCare(user.id)
+            noteActionToast = if (enabled) {
+                "已加入特别关心"
+            } else {
+                "已取消特别关心"
+            }
+        },
+    )
     LaunchedEffect(noteActionState.message, noteActionState.errorMessage) {
         val message = noteActionState.message ?: noteActionState.errorMessage ?: return@LaunchedEffect
         noteActionToast = message
@@ -2491,13 +4128,29 @@ private fun MainShell(
             noteActionToast = null
         }
     }
+    LaunchedEffect(noteActionToast) {
+        val message = noteActionToast ?: return@LaunchedEffect
+        delay(2_200)
+        if (noteActionToast == message) {
+            noteActionToast = null
+        }
+    }
     val blockedUserIds = relationshipManagementState.blockedUserIds
+    val mutedNoteFilters = MutedNoteFilters(
+        mutedWords = settingsState.remotePreferences?.filters?.mutedWords.orEmpty(),
+        hardMutedWords = settingsState.remotePreferences?.filters?.hardMutedWords.orEmpty(),
+    )
 
     CompositionLocalProvider(
         LocalCustomEmojiUrls provides noteActionState.customEmojiUrls,
         LocalBlockedNoteAuthorIds provides blockedUserIds,
+        LocalMutedNoteFilters provides mutedNoteFilters,
+        LocalNoteRowGesturesEnabled provides listGesturesEnabled,
+        LocalUserQuickActions provides userQuickActions,
         LocalNoteRowActions provides NoteRowActions(
             onShareNote = { url -> shareUrl(url) },
+            onAiSummarizeNote = { note -> requestPostAi(AiTaskKind.PostSummary, note) },
+            onAiReplyDraft = { note -> requestPostAi(AiTaskKind.PostReplyDraft, note, openCompose = true) },
             onHideFromList = onHideNoteFromList,
             onMuteNote = onMuteNote,
             onUnmuteNote = onUnmuteNote,
@@ -2518,91 +4171,49 @@ private fun MainShell(
                     modifier = Modifier.weight(1f),
                 ) {
                     when (val current = route) {
-                AppRoute.Timeline -> TimelineScreen(
+                AppRoute.Timeline -> TimelineRouteContent(
                     state = timelineState,
+                    instanceCapabilities = instanceMetaState.meta?.capabilities ?: InstanceCapabilities(),
+                    discoverState = discoverState,
+                    timelineListStates = timelineListStates,
+                    isTrendSelected = timelineTrendSelected,
+                    noteActionState = noteActionState,
+                    aiState = aiState,
+                    noteCallbacks = noteCallbacks,
                     onTimelineSelected = {
                         timelineTrendSelected = false
                         timelineStateHolder.select(it)
                     },
                     onRefresh = timelineStateHolder::refresh,
                     onLoadMore = timelineStateHolder::loadMore,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
                     isSpecialCareAuthor = specialCareStateHolder::isSpecialCare,
-                    noteRowDensity = noteRowDensity,
-                    capabilities = instanceMetaState.meta?.capabilities ?: InstanceCapabilities(),
-                    listStates = timelineListStates,
-                    isTrendSelected = timelineTrendSelected,
-                    trends = discoverState.trends,
-                    isRefreshingTrends = discoverState.isRefreshingTrends,
-                    trendErrorMessage = discoverState.trendErrorMessage,
                     onTrendSelected = {
                         timelineTrendSelected = true
                         discoverStateHolder.refreshTrendsQuietly()
                     },
                     onRefreshTrends = discoverStateHolder::refreshTrendsQuietly,
+                    onNewNotesMarkerConsumed = timelineStateHolder::consumeNewNotesMarker,
                     onCompose = { route = AppRoute.Compose() },
                     onSearch = {
                         rootRoute = RootRoute.Discover
                         route = AppRoute.Discover
                         discoverStateHolder.selectMode(cc.hhhl.client.state.DiscoverSearchMode.Notes)
                     },
+                    latestAiResultFor = { kinds -> latestAiResultFor(*kinds) },
+                    onAiAction = ::requestTimelineAi,
+                    onDismissAiResult = aiStateHolder::consumeLatestResult,
                 )
-                AppRoute.Discover -> DiscoverScreen(
+                AppRoute.Discover -> DiscoverRouteContent(
                     state = discoverState,
-                    onQueryChanged = discoverStateHolder::updateQuery,
-                    onSearch = discoverStateHolder::search,
-                    onModeSelected = discoverStateHolder::selectMode,
-                    onFiltersChanged = discoverStateHolder::updateFilters,
-                    onClearFilters = discoverStateHolder::clearFilters,
-                    onLoadMore = discoverStateHolder::loadMore,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
+                    stateHolder = discoverStateHolder,
+                    noteActionState = noteActionState,
+                    noteCallbacks = noteCallbacks,
+                    listState = discoverListStates[discoverState.selectedMode] ?: LazyListState(),
                     onOpenChannels = { route = AppRoute.Channels },
                     onOpenPages = { route = AppRoute.Pages },
                     onOpenGallery = { route = AppRoute.Gallery },
                     onOpenFlash = { route = AppRoute.Flash },
                     onOpenAnnouncements = { route = AppRoute.Announcements },
-                    onOpenFederationInstance = discoverStateHolder::openFederationInstance,
-                    onCloseFederationInstanceDetails = discoverStateHolder::closeFederationInstance,
-                    onToggleFederationSilence = discoverStateHolder::toggleFederationSilence,
-                    onToggleFederationBlock = discoverStateHolder::toggleFederationBlock,
-                    onOpenRole = discoverStateHolder::openRole,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
-                    noteRowDensity = noteRowDensity,
                 )
                 AppRoute.Chat -> ChatRouteContent(
                     state = chatState,
@@ -2619,6 +4230,22 @@ private fun MainShell(
                     recentEmojiCodes = noteActionState.recentReactions,
                     customTheme = customTheme,
                     onOpenDrivePicker = { drivePickerTarget = DrivePickerTarget.Chat },
+                    aiEnabled = aiState.hasUsableModel,
+                    isAiProcessing = aiState.isProcessing,
+                    aiResultText = latestAiResultFor(
+                        AiTaskKind.ChatSummary,
+                        AiTaskKind.ChatReplyDraft,
+                        AiTaskKind.ChatActionItems,
+                        AiTaskKind.ChatDecisionSummary,
+                    )?.resultText,
+                    aiResultLabel = latestAiResultFor(
+                        AiTaskKind.ChatSummary,
+                        AiTaskKind.ChatReplyDraft,
+                        AiTaskKind.ChatActionItems,
+                        AiTaskKind.ChatDecisionSummary,
+                    )?.kind?.label,
+                    onAiAction = ::requestChatAi,
+                    onDismissAiResult = aiStateHolder::consumeLatestResult,
                 )
                 AppRoute.Drive -> DriveRouteContent(
                     state = driveFilesState,
@@ -2635,35 +4262,20 @@ private fun MainShell(
                     onRefresh = achievementStateHolder::refresh,
                     onClaimViewMilestone = achievementStateHolder::claimViewAchievementsMilestone,
                 )
-                AppRoute.FavoriteNotes -> FavoriteNoteScreen(
+                AppRoute.FavoriteNotes -> FavoriteNotesRouteContent(
                     state = favoriteNoteState,
+                    stateHolder = favoriteNoteStateHolder,
+                    noteActionState = noteActionState,
+                    noteCallbacks = noteCallbacks,
                     onBack = { route = AppRoute.Profile },
-                    onRefresh = favoriteNoteStateHolder::refresh,
-                    onLoadMore = favoriteNoteStateHolder::loadMore,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
-                    noteRowDensity = noteRowDensity,
                 )
-                AppRoute.Notifications -> NotificationsScreen(
+                AppRoute.Notifications -> NotificationsRouteContent(
                     state = notificationState,
                     announcementState = announcementState,
+                    followRequestState = followRequestState,
+                    aiState = aiState,
+                    notificationListState = notificationListState,
+                    announcementListState = announcementListState,
                     onRefresh = notificationStateHolder::refresh,
                     onLoadMore = notificationStateHolder::loadMore,
                     onMarkAllAsRead = notificationStateHolder::markAllAsRead,
@@ -2677,49 +4289,28 @@ private fun MainShell(
                     onMarkAnnouncementRead = announcementStateHolder::markRead,
                     onOpenNote = { route = AppRoute.NoteDetail(it) },
                     onOpenUser = onOpenUser,
+                    onReplyToNote = onReplyNote,
+                    onReactToNote = onReactNote,
+                    onFollowUser = onFollowUserQuick,
                     onOpenUrl = onOpenUrl,
                     onOpenMention = onOpenMention,
                     onOpenHashtag = onOpenHashtag,
-                    pendingFollowRequestUserIds = followRequestState.pendingUserIds,
                     onAcceptFollowRequest = onAcceptFollowRequestFromNotification,
                     onRejectFollowRequest = onRejectFollowRequestFromNotification,
                     onOpenChat = onOpenChatFromNotification,
                     onOpenChatUser = onOpenChatUserById,
                     onSendTestNotification = notificationStateHolder::sendTestNotification,
                     onSendReminderNotification = notificationStateHolder::createLocalReminderNotification,
+                    latestAiResultFor = { kinds -> latestAiResultFor(*kinds) },
+                    onAiAction = ::requestNotificationAi,
+                    onDismissAiResult = aiStateHolder::consumeLatestResult,
                 )
-                AppRoute.UserLists -> UserListScreen(
+                AppRoute.UserLists -> UserListsRouteContent(
                     state = userListState,
+                    stateHolder = userListStateHolder,
+                    noteActionState = noteActionState,
+                    noteCallbacks = noteCallbacks,
                     onBack = { route = AppRoute.Profile },
-                    onRefreshLists = userListStateHolder::refreshLists,
-                    onRefreshTimeline = userListStateHolder::refreshTimeline,
-                    onCreateList = userListStateHolder::createList,
-                    onUpdateSelectedList = userListStateHolder::updateSelectedList,
-                    onDeleteSelectedList = userListStateHolder::deleteSelectedList,
-                    onAddUserToSelectedList = userListStateHolder::addUserToSelectedList,
-                    onRemoveUserFromSelectedList = userListStateHolder::removeUserFromSelectedList,
-                    onSelectList = userListStateHolder::selectList,
-                    onLoadMore = userListStateHolder::loadMore,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
-                    noteRowDensity = noteRowDensity,
                 )
                 AppRoute.FollowRequests -> FollowRequestScreen(
                     state = followRequestState,
@@ -2731,73 +4322,25 @@ private fun MainShell(
                     onCancel = followRequestStateHolder::cancel,
                     onOpenUser = onOpenUser,
                 )
-                AppRoute.Antennas -> AntennaScreen(
+                AppRoute.Antennas -> AntennasRouteContent(
                     state = antennaState,
+                    stateHolder = antennaStateHolder,
+                    noteActionState = noteActionState,
+                    noteCallbacks = noteCallbacks,
                     onBack = { route = AppRoute.Profile },
-                    onRefreshAntennas = antennaStateHolder::refreshAntennas,
-                    onRefreshNotes = antennaStateHolder::refreshNotes,
-                    onCreateAntenna = antennaStateHolder::createAntenna,
-                    onUpdateSelectedAntenna = antennaStateHolder::updateSelectedAntenna,
-                    onDeleteSelectedAntenna = antennaStateHolder::deleteSelectedAntenna,
-                    onSelectAntenna = antennaStateHolder::selectAntenna,
-                    onLoadMore = antennaStateHolder::loadMore,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
-                    noteRowDensity = noteRowDensity,
                 )
-                AppRoute.Clips -> ClipScreen(
+                AppRoute.Clips -> ClipsRouteContent(
                     state = clipState,
+                    stateHolder = clipStateHolder,
+                    noteActionState = noteActionState,
+                    noteCallbacks = noteCallbacks,
                     onBack = { route = AppRoute.Profile },
-                    onRefreshClips = { clipStateHolder.refreshClips() },
-                    onRefreshNotes = clipStateHolder::refreshNotes,
-                    onCreateClip = clipStateHolder::createClip,
-                    onUpdateSelectedClip = clipStateHolder::updateSelectedClip,
-                    onDeleteSelectedClip = clipStateHolder::deleteSelectedClip,
-                    onKindSelected = clipStateHolder::selectKind,
-                    onSelectClip = clipStateHolder::selectClip,
-                    onToggleFavoriteClip = clipStateHolder::toggleFavoriteSelectedClip,
-                    onRemoveNoteFromClip = clipStateHolder::removeNoteFromSelectedClip,
-                    onLoadMore = clipStateHolder::loadMore,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
-                    noteRowDensity = noteRowDensity,
                 )
-                AppRoute.Channels -> ChannelScreen(
+                AppRoute.Channels -> ChannelsRouteContent(
                     state = channelState,
+                    stateHolder = channelStateHolder,
+                    noteActionState = noteActionState,
+                    noteCallbacks = noteCallbacks,
                     onBack = {
                         route = if (rootRoute == RootRoute.Profile) {
                             AppRoute.Profile
@@ -2805,66 +4348,14 @@ private fun MainShell(
                             AppRoute.Discover
                         }
                     },
-                    onRefreshChannels = { channelStateHolder.refreshChannels() },
-                    onRefreshTimeline = channelStateHolder::refreshTimeline,
-                    onKindSelected = channelStateHolder::selectKind,
-                    onSelectChannel = channelStateHolder::selectChannel,
-                    onToggleFollowChannel = channelStateHolder::toggleFollowSelectedChannel,
-                    onToggleFavoriteChannel = channelStateHolder::toggleFavoriteSelectedChannel,
-                    onCreateChannel = channelStateHolder::createChannel,
-                    onUpdateSelectedChannel = channelStateHolder::updateSelectedChannel,
-                    onArchiveSelectedChannel = channelStateHolder::archiveSelectedChannel,
                     onComposeInChannel = { channel ->
                         route = AppRoute.Compose(channelId = channel.id)
                     },
-                    onLoadMore = channelStateHolder::loadMore,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
-                    noteRowDensity = noteRowDensity,
                 )
-                AppRoute.Pages -> PageScreen(
+                AppRoute.Pages -> PagesRouteContent(
                     state = pageState,
-                    onBack = {
-                        route = if (rootRoute == RootRoute.Profile) {
-                            AppRoute.Profile
-                        } else {
-                            AppRoute.Discover
-                        }
-                    },
-                    onRefreshPages = { pageStateHolder.refreshPages() },
-                    onKindSelected = pageStateHolder::selectKind,
-                    onOpenPage = pageStateHolder::openPage,
-                    onCloseDetail = pageStateHolder::closeDetail,
-                    onToggleLikePage = pageStateHolder::toggleLikeSelectedPage,
-                    onStartCreatingPage = pageStateHolder::startCreatingPage,
-                    onStartEditingPage = pageStateHolder::startEditingSelectedPage,
-                    onCancelEditingPage = pageStateHolder::cancelEditingPage,
-                    onDraftChanged = pageStateHolder::updateDraft,
-                    onSavePage = pageStateHolder::saveEditingPage,
-                    onDeletePage = pageStateHolder::deleteSelectedPage,
-                    onLoadMore = pageStateHolder::loadMore,
-                    onOpenUser = onOpenUser,
+                    stateHolder = pageStateHolder,
                     currentUserId = accountUser?.id,
-                )
-                AppRoute.Gallery -> GalleryScreen(
-                    state = galleryState,
                     onBack = {
                         route = if (rootRoute == RootRoute.Profile) {
                             AppRoute.Profile
@@ -2872,22 +4363,26 @@ private fun MainShell(
                             AppRoute.Discover
                         }
                     },
-                    onRefreshPosts = { galleryStateHolder.refreshPosts() },
-                    onKindSelected = galleryStateHolder::selectKind,
-                    onOpenPost = galleryStateHolder::openPost,
-                    onCloseDetail = galleryStateHolder::closeDetail,
-                    onToggleLikePost = galleryStateHolder::toggleLikeSelectedPost,
-                    onCreatePost = galleryStateHolder::createPost,
-                    onUpdatePost = galleryStateHolder::updateSelectedPost,
-                    onDeletePost = galleryStateHolder::deleteSelectedPost,
-                    onLoadMore = galleryStateHolder::loadMore,
+                    onOpenUser = onOpenUser,
+                )
+                AppRoute.Gallery -> GalleryRouteContent(
+                    state = galleryState,
+                    stateHolder = galleryStateHolder,
+                    currentUserId = accountUser?.id,
+                    onBack = {
+                        route = if (rootRoute == RootRoute.Profile) {
+                            AppRoute.Profile
+                        } else {
+                            AppRoute.Discover
+                        }
+                    },
                     onOpenUser = onOpenUser,
                     onOpenMedia = onOpenUrl,
                     onOpenMediaPreview = { mediaPreviewSession = it },
-                    currentUserId = accountUser?.id,
                 )
-                AppRoute.Flash -> FlashScreen(
+                AppRoute.Flash -> FlashRouteContent(
                     state = flashState,
+                    stateHolder = flashStateHolder,
                     onBack = {
                         route = if (rootRoute == RootRoute.Profile) {
                             AppRoute.Profile
@@ -2895,25 +4390,14 @@ private fun MainShell(
                             AppRoute.Discover
                         }
                     },
-                    onRefreshFlashes = { flashStateHolder.refreshFlashes() },
-                    onKindSelected = flashStateHolder::selectKind,
-                    onOpenFlash = flashStateHolder::openFlash,
-                    onCloseDetail = flashStateHolder::closeDetail,
-                    onToggleLikeFlash = flashStateHolder::toggleLikeSelectedFlash,
-                    onStartCreateFlash = flashStateHolder::startCreatingFlash,
-                    onStartEditFlash = flashStateHolder::startEditingSelectedFlash,
-                    onDraftChanged = flashStateHolder::updateDraft,
-                    onSaveDraft = flashStateHolder::saveDraft,
-                    onCancelDraft = flashStateHolder::cancelDraft,
-                    onDeleteFlash = flashStateHolder::deleteSelectedFlash,
-                    onLoadMore = flashStateHolder::loadMore,
                     onOpenUser = onOpenUser,
                     onOpenFlashInWeb = { flashId ->
                         openUrl("${SharkeyAuthApi.DEFAULT_BASE_URL}${flashWebPath(flashId)}")
                     },
                 )
-                AppRoute.Announcements -> AnnouncementScreen(
+                AppRoute.Announcements -> AnnouncementsRouteContent(
                     state = announcementState,
+                    stateHolder = announcementStateHolder,
                     onBack = {
                         route = if (rootRoute == RootRoute.Profile) {
                             AppRoute.Profile
@@ -2921,45 +4405,23 @@ private fun MainShell(
                             AppRoute.Discover
                         }
                     },
-                    onRefresh = { announcementStateHolder.refresh() },
-                    onOpenAnnouncement = announcementStateHolder::openAnnouncement,
-                    onCloseDetail = announcementStateHolder::closeDetail,
-                    onLoadMore = announcementStateHolder::loadMore,
-                    onMarkRead = announcementStateHolder::markRead,
-                    onEnterManagement = announcementStateHolder::enterManagement,
-                    onExitManagement = announcementStateHolder::exitManagement,
-                    onRefreshAdmin = announcementStateHolder::refreshAdmin,
-                    onCreateAnnouncement = announcementStateHolder::createAnnouncement,
-                    onUpdateAnnouncement = announcementStateHolder::updateAnnouncement,
-                    onDeleteAnnouncement = announcementStateHolder::deleteAnnouncement,
                 )
-                AppRoute.Profile -> ProfileScreen(
+                AppRoute.Profile -> ProfileRouteContent(
                     state = userProfileState,
                     capabilities = instanceCapabilities,
-                    onRefresh = userProfileStateHolder::load,
-                    onLoadMoreNotes = userProfileStateHolder::loadMoreNotes,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
-                    noteRowDensity = noteRowDensity,
+                    noteActionState = noteActionState,
+                    aiState = aiState,
+                    noteCallbacks = noteCallbacks,
                     selectedTheme = selectedTheme,
                     selectedTimelineDensity = selectedTimelineDensity,
+                    onRefresh = userProfileStateHolder::load,
+                    onLoadMoreNotes = userProfileStateHolder::loadMoreNotes,
+                    latestAiResultFor = { kinds -> latestAiResultFor(*kinds) },
+                    onAiProfileSummary = { requestProfileAi(AiTaskKind.ProfileSummary, userProfileState, ownProfile = true) },
+                    onAiProfileSuggestions = {
+                        requestProfileAi(AiTaskKind.ProfileInteractionSuggestions, userProfileState, ownProfile = true)
+                    },
+                    onDismissAiResult = aiStateHolder::consumeLatestResult,
                     onUpdateProfile = userProfileStateHolder::updateProfile,
                     onChangeBanner = {
                         val picker = mediaPicker
@@ -2998,31 +4460,13 @@ private fun MainShell(
                         }
                     },
                 )
-                AppRoute.ProfileNotes -> ProfileNotesScreen(
+                AppRoute.ProfileNotes -> ProfileNotesRouteContent(
                     state = userProfileState,
+                    noteActionState = noteActionState,
+                    noteCallbacks = noteCallbacks,
                     onBack = { route = AppRoute.Profile },
                     onRefresh = userProfileStateHolder::load,
                     onLoadMoreNotes = userProfileStateHolder::loadMoreNotes,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
-                    noteRowDensity = noteRowDensity,
                 )
                 AppRoute.Settings -> SettingsRouteContent(
                     state = settingsState,
@@ -3050,6 +4494,7 @@ private fun MainShell(
                     },
                     onClearChatBackgroundImage = onClearChatBackgroundImage,
                     onTimelineDensitySelected = onTimelineDensitySelected,
+                    onListGesturesEnabledChanged = onListGesturesEnabledChanged,
                     onDefaultNoteVisibilitySelected = onDefaultNoteVisibilitySelected,
                     onNotificationBadgeModeSelected = onNotificationBadgeModeSelected,
                     onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
@@ -3078,6 +4523,12 @@ private fun MainShell(
                         settingsStateHolder.openManagement(key)
                         route = AppRoute.SettingsManagement(key)
                     },
+                    onAiSettingsChanged = aiStateHolder::updateSettings,
+                    onAiProviderSelected = aiStateHolder::applyProviderPreset,
+                    onTestAiConnection = aiStateHolder::testConnection,
+                    onAiWorkspacePlan = ::requestWorkspaceActionPlan,
+                    aiConnectionMessage = aiState.message ?: aiState.errorMessage,
+                    isTestingAiConnection = aiState.isTestingConnection,
                 )
                 AppRoute.ThemeCustomization -> ThemeCustomizationScreen(
                     customTheme = customTheme,
@@ -3099,8 +4550,9 @@ private fun MainShell(
                     onClearChatBackgroundImage = onClearChatBackgroundImage,
                     onBack = { route = AppRoute.Settings },
                 )
-                AppRoute.Automation -> AutomationScreen(
+                AppRoute.Automation -> AutomationRouteContent(
                     state = automationState,
+                    aiState = aiState,
                     onBack = { route = AppRoute.Profile },
                     onCreateRule = automationStateHolder::createRule,
                     onOpenRule = automationStateHolder::openRule,
@@ -3121,6 +4573,10 @@ private fun MainShell(
                     onUpdateAction = automationStateHolder::updateAction,
                     onRemoveAction = automationStateHolder::removeAction,
                     onClearLogs = automationStateHolder::clearLogs,
+                    latestAiResultFor = { kinds -> latestAiResultFor(*kinds) },
+                    onAiExplainRule = ::requestAutomationExplain,
+                    onAiSuggestRules = ::requestAutomationRuleSuggestions,
+                    onDismissAiResult = aiStateHolder::consumeLatestResult,
                 )
                 is AppRoute.SettingsManagement -> SettingsManagementScreen(
                     section = settingsState.managementSection,
@@ -3166,12 +4622,13 @@ private fun MainShell(
                     onBack = { route = AppRoute.Profile },
                     onOpenUser = onOpenUser,
                 )
-                is AppRoute.UserProfile -> ProfileScreen(
+                is AppRoute.UserProfile -> ViewedProfileRouteContent(
                     state = viewedProfileState,
+                    noteActionState = noteActionState,
+                    aiState = aiState,
+                    noteCallbacks = noteCallbacks,
                     onRefresh = { viewedProfileStateHolder.load(clearContent = true) },
                     onLoadMoreNotes = viewedProfileStateHolder::loadMoreNotes,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
                     onBack = {
                         route = if (rootRoute == RootRoute.Profile) {
                             AppRoute.Profile
@@ -3179,26 +4636,12 @@ private fun MainShell(
                             appRouteForRootRoute(rootRoute)
                         }
                     },
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
-                    noteRowDensity = noteRowDensity,
-                    title = "资料",
-                    isOwnProfile = false,
+                    latestAiResultFor = { kinds -> latestAiResultFor(*kinds) },
+                    onAiProfileSummary = { requestProfileAi(AiTaskKind.ProfileSummary, viewedProfileState, ownProfile = false) },
+                    onAiProfileSuggestions = {
+                        requestProfileAi(AiTaskKind.ProfileInteractionSuggestions, viewedProfileState, ownProfile = false)
+                    },
+                    onDismissAiResult = aiStateHolder::consumeLatestResult,
                     onFollowToggle = viewedProfileStateHolder::toggleFollow,
                     onMuteToggle = viewedProfileStateHolder::toggleMute,
                     onBlockToggle = viewedProfileStateHolder::toggleBlock,
@@ -3258,9 +4701,12 @@ private fun MainShell(
                         }
                     },
                 )
-                is AppRoute.NoteDetail -> NoteDetailScreen(
+                is AppRoute.NoteDetail -> NoteDetailRouteContent(
                     noteId = current.noteId,
                     state = noteDetailState,
+                    noteActionState = noteActionState,
+                    aiState = aiState,
+                    noteCallbacks = noteCallbacks,
                     onRefresh = { noteDetailStateHolder.load(current.noteId) },
                     onLoadMoreReplies = noteDetailStateHolder::loadMoreReplies,
                     onLoadConversation = noteDetailStateHolder::loadConversation,
@@ -3269,31 +4715,18 @@ private fun MainShell(
                     onLoadVersions = noteDetailStateHolder::loadVersions,
                     onRefreshPollRecommendation = noteDetailStateHolder::refreshPollRecommendation,
                     onTranslate = noteDetailStateHolder::translate,
+                    latestAiResultFor = { kinds -> latestAiResultFor(*kinds) },
+                    onAiThreadSummary = { detail -> requestThreadAi(AiTaskKind.ThreadSummary, detail) },
+                    onAiThreadReplyDraft = { detail -> requestThreadAi(AiTaskKind.ThreadReplyDraft, detail, openCompose = true) },
+                    onDismissAiResult = aiStateHolder::consumeLatestResult,
                     onToggleChildReplies = noteDetailStateHolder::toggleChildReplies,
-                    onOpenNote = { route = AppRoute.NoteDetail(it) },
-                    onOpenUser = onOpenUser,
-                    onReply = onReplyNote,
-                    onRenote = onRenoteNote,
-                    onQuote = onQuoteNote,
-                    onReact = onReactNote,
-                    onDeleteReaction = onDeleteReactionNote,
-                    onFavorite = onFavoriteNote,
-                    onAddToClip = onRequestAddToClip,
-                    onDelete = onDeleteNote,
-                    onOpenMedia = onOpenUrl,
-                    onOpenMediaPreview = { mediaPreviewSession = it },
-                    onOpenMention = onOpenMention,
-                    onOpenHashtag = onOpenHashtag,
-                    onVotePoll = onVotePoll,
-                    reactionOptions = noteActionState.reactionOptions,
-                    recentReactions = noteActionState.recentReactions,
-                    isActionPending = isNoteActionPending,
-                    canDeleteAuthor = canDeleteAuthor,
-                    noteRowDensity = noteRowDensity,
                     onBack = { route = AppRoute.Timeline },
                 )
-                is AppRoute.Compose -> ComposeScreen(
+                is AppRoute.Compose -> ComposeRouteContent(
                     state = composeState,
+                    noteActionState = noteActionState,
+                    completionState = composeCompletionState,
+                    aiState = aiState,
                     targetNote = when {
                         current.replyToId != null -> findLoadedNote(current.replyToId)
                         current.renoteId != null -> findLoadedNote(current.renoteId)
@@ -3330,11 +4763,14 @@ private fun MainShell(
                     onRemoveFileId = composeStateHolder::removeFileId,
                     onAttachedFileMetadataChanged = composeStateHolder::updateAttachedFileMetadata,
                     isMediaPickerAvailable = mediaPicker != null,
-                    customEmojis = noteActionState.customEmojis,
-                    recentEmojiCodes = noteActionState.recentReactions,
-                    completionState = composeCompletionState,
                     onCompletionTokenChanged = composeCompletionStateHolder::request,
                     onSend = composeStateHolder::send,
+                    onRetryFailedSend = composeStateHolder::retryFailedSend,
+                    onRestoreFailedSend = composeStateHolder::restoreFailedSend,
+                    onRemoveFailedSend = composeStateHolder::removeFailedSend,
+                    latestAiResultFor = { kinds -> latestAiResultFor(*kinds) },
+                    onAiAction = ::requestComposeAi,
+                    onDismissAiResult = aiStateHolder::consumeLatestResult,
                     onBack = { route = AppRoute.Timeline },
                 )
                 }
@@ -3377,6 +4813,7 @@ private fun MainShell(
                     onDismiss = { mediaPreviewSession = null },
                     onSessionChanged = { mediaPreviewSession = it },
                     onOpenExternal = openUrl,
+                    onShare = shareUrl,
                     onDownload = { item ->
                         downloadUrl(item.openUrl, item.label, item.type)
                     },
@@ -3399,6 +4836,22 @@ private fun MainShell(
                     onSelectClip = { clip ->
                         clipStateHolder.addNoteToClip(clip, note)
                         clipTargetNote = null
+                    },
+                )
+            }
+            userListQuickTarget?.let { target ->
+                QuickUserListDialog(
+                    user = target.user,
+                    lists = userListState.lists,
+                    isLoading = userListState.isLoadingLists || userListState.isMutatingMembers,
+                    errorMessage = userListState.errorMessage,
+                    onDismiss = { userListQuickTarget = null },
+                    onRefresh = userListStateHolder::refreshLists,
+                    onSelectList = { list ->
+                        userListStateHolder.selectList(list)
+                        userListStateHolder.addUserToSelectedList(target.user.id)
+                        noteActionToast = "已加入 ${list.name}"
+                        userListQuickTarget = null
                     },
                 )
             }

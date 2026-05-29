@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.CardGiftcard
@@ -32,13 +33,16 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Swipe
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.outlined.AddReaction
+import androidx.compose.material.icons.outlined.Api
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.ModelTraining
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.SearchOff
@@ -61,6 +65,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.items
+import cc.hhhl.client.ai.AiProviderPreset
+import cc.hhhl.client.ai.AiSettings
+import cc.hhhl.client.ai.AiTaskStatus
+import cc.hhhl.client.ai.normalizedAiUsage
 import cc.hhhl.client.display.DefaultNoteVisibility
 import cc.hhhl.client.display.NotificationBadgeMode
 import cc.hhhl.client.display.TimelineDensity
@@ -106,6 +114,7 @@ fun SettingsScreen(
     onPickChatBackgroundImage: () -> Unit = {},
     onClearChatBackgroundImage: () -> Unit = {},
     onTimelineDensitySelected: (TimelineDensity) -> Unit,
+    onListGesturesEnabledChanged: (Boolean) -> Unit = {},
     onDefaultNoteVisibilitySelected: (DefaultNoteVisibility) -> Unit,
     onNotificationBadgeModeSelected: (NotificationBadgeMode) -> Unit,
     onBackgroundNotificationsChanged: (Boolean) -> Unit = {},
@@ -133,6 +142,12 @@ fun SettingsScreen(
     onOpenAdminDashboard: () -> Unit = {},
     onOpenWebSettings: (SettingsItemKey) -> Unit = {},
     onOpenManagement: (SettingsManagementSectionKey) -> Unit = {},
+    onAiSettingsChanged: (AiSettings) -> Unit = {},
+    onAiProviderSelected: (AiProviderPreset) -> Unit = {},
+    onTestAiConnection: () -> Unit = {},
+    onAiWorkspacePlan: () -> Unit = {},
+    aiConnectionMessage: String? = null,
+    isTestingAiConnection: Boolean = false,
 ) {
     var updateStatus by remember { mutableStateOf<String?>(null) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
@@ -206,6 +221,7 @@ fun SettingsScreen(
                         onPickChatBackgroundImage = onPickChatBackgroundImage,
                         onClearChatBackgroundImage = onClearChatBackgroundImage,
                         onTimelineDensitySelected = onTimelineDensitySelected,
+                        onListGesturesEnabledChanged = onListGesturesEnabledChanged,
                         onDefaultNoteVisibilitySelected = onDefaultNoteVisibilitySelected,
                         onNotificationBadgeModeSelected = onNotificationBadgeModeSelected,
                         onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
@@ -226,6 +242,12 @@ fun SettingsScreen(
                         onOpenAdminDashboard = onOpenAdminDashboard,
                         onOpenWebSettings = onOpenWebSettings,
                         onOpenManagement = onOpenManagement,
+                        onAiSettingsChanged = onAiSettingsChanged,
+                        onAiProviderSelected = onAiProviderSelected,
+                        onTestAiConnection = onTestAiConnection,
+                        onAiWorkspacePlan = onAiWorkspacePlan,
+                        aiConnectionMessage = aiConnectionMessage,
+                        isTestingAiConnection = isTestingAiConnection,
                     )
                     HhhlDivider()
                 }
@@ -450,6 +472,7 @@ private fun SettingsRow(
     onPickChatBackgroundImage: () -> Unit,
     onClearChatBackgroundImage: () -> Unit,
     onTimelineDensitySelected: (TimelineDensity) -> Unit,
+    onListGesturesEnabledChanged: (Boolean) -> Unit,
     onDefaultNoteVisibilitySelected: (DefaultNoteVisibility) -> Unit,
     onNotificationBadgeModeSelected: (NotificationBadgeMode) -> Unit,
     onBackgroundNotificationsChanged: (Boolean) -> Unit,
@@ -470,6 +493,12 @@ private fun SettingsRow(
     onOpenAdminDashboard: () -> Unit,
     onOpenWebSettings: (SettingsItemKey) -> Unit,
     onOpenManagement: (SettingsManagementSectionKey) -> Unit,
+    onAiSettingsChanged: (AiSettings) -> Unit,
+    onAiProviderSelected: (AiProviderPreset) -> Unit,
+    onTestAiConnection: () -> Unit,
+    onAiWorkspacePlan: () -> Unit,
+    aiConnectionMessage: String?,
+    isTestingAiConnection: Boolean,
 ) {
     val colors = LocalHhhlColors.current
     val webManagementPath = settingsWebManagementPath(item.key)
@@ -529,6 +558,11 @@ private fun SettingsRow(
                     selectedDensity = state.selectedTimelineDensity,
                     onDensitySelected = onTimelineDensitySelected,
                     modifier = Modifier.fillMaxWidth(),
+                )
+                SettingsItemKey.ListGestures -> SettingsSwitchLine(
+                    checked = state.listGesturesEnabled,
+                    enabled = true,
+                    onCheckedChange = onListGesturesEnabledChanged,
                 )
                 SettingsItemKey.DefaultNoteVisibility -> SettingsDropdownPicker(
                     selectedLabel = state.selectedDefaultNoteVisibility.label,
@@ -605,6 +639,101 @@ private fun SettingsRow(
                     onDraftChanged = onMutedInstanceDraftChanged,
                     onAdd = onAddMutedInstance,
                     onRemove = onRemoveMutedInstance,
+                )
+                SettingsItemKey.AiEnabled -> SettingsSwitchLine(
+                    checked = state.aiSettings.enabled,
+                    enabled = true,
+                    onCheckedChange = { onAiSettingsChanged(state.aiSettings.copy(enabled = it)) },
+                )
+                SettingsItemKey.AiProvider -> SettingsDropdownPicker(
+                    selectedLabel = state.aiSettings.provider.label,
+                    options = AiProviderPreset.entries.toList(),
+                    optionLabel = { it.label },
+                    isSelected = { it == state.aiSettings.provider },
+                    onSelected = onAiProviderSelected,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                SettingsItemKey.AiBaseUrl -> SettingsTextSettingLine(
+                    value = state.aiSettings.baseUrl,
+                    placeholder = "https://api.openai.com/v1",
+                    enabled = item.enabled,
+                    onValueChange = { onAiSettingsChanged(state.aiSettings.copy(baseUrl = it)) },
+                )
+                SettingsItemKey.AiApiKey -> SettingsTextSettingLine(
+                    value = state.aiSettings.apiKey,
+                    placeholder = "sk-...",
+                    enabled = item.enabled,
+                    onValueChange = { onAiSettingsChanged(state.aiSettings.copy(apiKey = it)) },
+                    trailing = {
+                        HhhlActionChip(
+                            label = if (isTestingAiConnection) "测试中" else "测试",
+                            emphasized = true,
+                            enabled = item.enabled && !isTestingAiConnection,
+                            onClick = onTestAiConnection,
+                        )
+                    },
+                    helper = aiConnectionMessage,
+                )
+                SettingsItemKey.AiChatModel -> SettingsTextSettingLine(
+                    value = state.aiSettings.chatModel,
+                    placeholder = "gpt-4o-mini",
+                    enabled = item.enabled,
+                    onValueChange = { onAiSettingsChanged(state.aiSettings.copy(chatModel = it)) },
+                )
+                SettingsItemKey.AiFastModel -> SettingsTextSettingLine(
+                    value = state.aiSettings.fastModel,
+                    placeholder = "快速模型",
+                    enabled = item.enabled,
+                    onValueChange = { onAiSettingsChanged(state.aiSettings.copy(fastModel = it)) },
+                )
+                SettingsItemKey.AiLongContextModel -> SettingsTextSettingLine(
+                    value = state.aiSettings.longContextModel,
+                    placeholder = "长上下文模型",
+                    enabled = item.enabled,
+                    onValueChange = { onAiSettingsChanged(state.aiSettings.copy(longContextModel = it)) },
+                )
+                SettingsItemKey.AiVisionModel -> SettingsTextSettingLine(
+                    value = state.aiSettings.visionModel,
+                    placeholder = "视觉模型",
+                    enabled = item.enabled,
+                    onValueChange = { onAiSettingsChanged(state.aiSettings.copy(visionModel = it)) },
+                )
+                SettingsItemKey.AiEmbeddingModel -> SettingsTextSettingLine(
+                    value = state.aiSettings.embeddingModel,
+                    placeholder = "向量模型",
+                    enabled = item.enabled,
+                    onValueChange = { onAiSettingsChanged(state.aiSettings.copy(embeddingModel = it)) },
+                )
+                SettingsItemKey.AiReadPermissions -> SettingsAiPermissionLine(
+                    settings = state.aiSettings,
+                    enabled = item.enabled,
+                    onChanged = onAiSettingsChanged,
+                )
+                SettingsItemKey.AiAutomation -> SettingsSwitchLine(
+                    checked = state.aiSettings.automationAllowed,
+                    enabled = item.enabled,
+                    onCheckedChange = { onAiSettingsChanged(state.aiSettings.copy(automationAllowed = it)) },
+                )
+                SettingsItemKey.AiBackground -> SettingsAiBackgroundLine(
+                    settings = state.aiSettings,
+                    enabled = item.enabled,
+                    onChanged = onAiSettingsChanged,
+                )
+                SettingsItemKey.AiQueue -> SettingsAiQueueLine(
+                    state = state,
+                    enabled = item.enabled,
+                    onAiWorkspacePlan = onAiWorkspacePlan,
+                )
+                SettingsItemKey.AiLimits -> SettingsAiLimitsLine(
+                    settings = state.aiSettings,
+                    enabled = item.enabled,
+                    onChanged = onAiSettingsChanged,
+                )
+                SettingsItemKey.AiTone -> SettingsTextSettingLine(
+                    value = state.aiSettings.tonePreference,
+                    placeholder = "自然、简洁、贴近当前语气",
+                    enabled = item.enabled,
+                    onValueChange = { onAiSettingsChanged(state.aiSettings.copy(tonePreference = it)) },
                 )
                 SettingsItemKey.AdminDashboard -> Text(
                     text = item.value.orEmpty(),
@@ -722,6 +851,240 @@ private fun HhhlCustomTheme.activeLabels(): List<String> {
         if (globalBackgroundImageDataUri.isNotBlank()) add("全局图")
         if (chatBackgroundImageDataUri.isNotBlank()) add("聊天图")
     }
+}
+
+@Composable
+private fun SettingsTextSettingLine(
+    value: String,
+    placeholder: String,
+    enabled: Boolean,
+    onValueChange: (String) -> Unit,
+    trailing: (@Composable () -> Unit)? = null,
+    helper: String? = null,
+) {
+    val colors = LocalHhhlColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HhhlTextInput(
+                value = value,
+                onValueChange = onValueChange,
+                placeholder = placeholder,
+                enabled = enabled,
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            trailing?.invoke()
+        }
+        helper?.takeIf { it.isNotBlank() }?.let { message ->
+            Text(
+                text = message,
+                color = colors.textMuted,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsAiPermissionLine(
+    settings: AiSettings,
+    enabled: Boolean,
+    onChanged: (AiSettings) -> Unit,
+) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SettingsAiToggleChip("帖子", settings.readTimelineAllowed, enabled) {
+            onChanged(settings.copy(readTimelineAllowed = it))
+        }
+        SettingsAiToggleChip("通知", settings.readNotificationsAllowed, enabled) {
+            onChanged(settings.copy(readNotificationsAllowed = it))
+        }
+        SettingsAiToggleChip("聊天", settings.readChatAllowed, enabled) {
+            onChanged(settings.copy(readChatAllowed = it))
+        }
+        SettingsAiToggleChip("私聊", settings.readPrivateChatAllowed, enabled && settings.readChatAllowed) {
+            onChanged(settings.copy(readPrivateChatAllowed = it))
+        }
+        SettingsAiToggleChip("草稿", settings.readDraftsAllowed, enabled) {
+            onChanged(settings.copy(readDraftsAllowed = it))
+        }
+        SettingsAiToggleChip("资料", settings.readProfileAllowed, enabled) {
+            onChanged(settings.copy(readProfileAllowed = it))
+        }
+        SettingsAiToggleChip("敏感内容", settings.uploadSensitiveContentAllowed, enabled) {
+            onChanged(settings.copy(uploadSensitiveContentAllowed = it))
+        }
+    }
+}
+
+@Composable
+private fun SettingsAiBackgroundLine(
+    settings: AiSettings,
+    enabled: Boolean,
+    onChanged: (AiSettings) -> Unit,
+) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SettingsAiToggleChip("后台队列", settings.backgroundAllowed, enabled) {
+            onChanged(settings.copy(backgroundAllowed = it))
+        }
+        SettingsAiToggleChip("仅 Wi-Fi", settings.wifiOnlyBackground, enabled && settings.backgroundAllowed) {
+            onChanged(settings.copy(wifiOnlyBackground = it))
+        }
+        SettingsAiToggleChip("工具权限", settings.toolsAllowed, enabled) {
+            onChanged(settings.copy(toolsAllowed = it))
+        }
+    }
+}
+
+@Composable
+private fun SettingsAiQueueLine(
+    state: SettingsUiState,
+    enabled: Boolean,
+    onAiWorkspacePlan: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val latest = state.aiTasks.maxByOrNull { it.updatedAtEpochMillis }
+    val usage = state.aiUsage.normalizedAiUsage()
+    val remaining = (state.aiSettings.dailyRequestLimit - usage.requestCount).coerceAtLeast(0)
+    val pending = state.aiTasks.count { it.status == AiTaskStatus.Pending }
+    val running = state.aiTasks.count { it.status == AiTaskStatus.Running }
+    val completed = state.aiTasks.count { it.status == AiTaskStatus.Completed }
+    val failed = state.aiTasks.count { it.status == AiTaskStatus.Failed }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = latest?.let { task ->
+                    val status = when (task.status) {
+                        AiTaskStatus.Pending -> "等待中"
+                        AiTaskStatus.Running -> "处理中"
+                        AiTaskStatus.Completed -> "已完成"
+                        AiTaskStatus.Failed -> "失败"
+                    }
+                    "$status · ${task.kind.label}"
+                } ?: "暂无 AI 任务",
+                color = if (enabled) colors.textSecondary else colors.textMuted,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            HhhlActionChip(
+                label = "AI 行动计划",
+                emphasized = true,
+                enabled = enabled && state.aiSettings.enabled,
+                onClick = onAiWorkspacePlan,
+            )
+        }
+        Text(
+            text = "今日 ${usage.requestCount}/${state.aiSettings.dailyRequestLimit} · 剩余 $remaining · " +
+                if (state.aiSettings.backgroundAllowed) "后台可继续处理" else "后台队列关闭",
+            color = colors.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SettingsAiQueueChip("等待", pending)
+            SettingsAiQueueChip("处理中", running)
+            SettingsAiQueueChip("完成", completed)
+            SettingsAiQueueChip("失败", failed)
+            SettingsAiToggleChip("仅 Wi-Fi", state.aiSettings.wifiOnlyBackground, enabled = false, onCheckedChange = {})
+        }
+        val notices = buildList {
+            if (!state.aiSettings.backgroundAllowed) add("后台任务关闭后，离开应用时队列不会继续跑")
+            if (!state.aiSettings.uploadSensitiveContentAllowed) add("CW 和敏感附件默认脱敏上传")
+            if (state.aiSettings.toolsAllowed) add("工具权限已开，外部回调和 Webhook 仍受自动化确认策略限制")
+        }
+        notices.take(2).forEach { notice ->
+            Text(
+                text = notice,
+                color = colors.textMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        latest?.resultText?.takeIf { it.isNotBlank() }?.let { result ->
+            Text(
+                text = result,
+                color = colors.textMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        latest?.errorMessage?.takeIf { it.isNotBlank() }?.let { error ->
+            Text(
+                text = error,
+                color = colors.danger,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsAiQueueChip(label: String, count: Int) {
+    SettingsAiToggleChip(
+        label = "$label $count",
+        checked = count > 0,
+        enabled = false,
+        onCheckedChange = {},
+    )
+}
+
+@Composable
+private fun SettingsAiLimitsLine(
+    settings: AiSettings,
+    enabled: Boolean,
+    onChanged: (AiSettings) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SettingsTextSettingLine(
+            value = settings.maxInputChars.toString(),
+            placeholder = "最大输入字数",
+            enabled = enabled,
+            onValueChange = { onChanged(settings.copy(maxInputChars = it.toIntOrNull() ?: settings.maxInputChars)) },
+        )
+        SettingsTextSettingLine(
+            value = settings.maxOutputTokens.toString(),
+            placeholder = "最大输出 token",
+            enabled = enabled,
+            onValueChange = { onChanged(settings.copy(maxOutputTokens = it.toIntOrNull() ?: settings.maxOutputTokens)) },
+        )
+        SettingsTextSettingLine(
+            value = settings.dailyRequestLimit.toString(),
+            placeholder = "每日请求上限",
+            enabled = enabled,
+            onValueChange = { onChanged(settings.copy(dailyRequestLimit = it.toIntOrNull() ?: settings.dailyRequestLimit)) },
+        )
+    }
+}
+
+@Composable
+private fun SettingsAiToggleChip(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    HhhlActionChip(
+        label = if (checked) "$label 开" else "$label 关",
+        emphasized = checked,
+        enabled = enabled,
+        onClick = { onCheckedChange(!checked) },
+    )
 }
 
 @Composable
@@ -945,6 +1308,7 @@ private fun settingsItemIcon(key: SettingsItemKey): ImageVector {
         SettingsItemKey.Theme -> Icons.Filled.Palette
         SettingsItemKey.AdvancedTheme -> Icons.Filled.AutoAwesome
         SettingsItemKey.TimelineDensity -> Icons.Filled.Tune
+        SettingsItemKey.ListGestures -> Icons.Filled.Swipe
         SettingsItemKey.AccountProfile -> Icons.Filled.Person
         SettingsItemKey.AdminDashboard -> Icons.Filled.AdminPanelSettings
         SettingsItemKey.TwoFactor -> Icons.Filled.Security
@@ -966,6 +1330,21 @@ private fun settingsItemIcon(key: SettingsItemKey): ImageVector {
         SettingsItemKey.MutedWords -> Icons.Outlined.Block
         SettingsItemKey.HardMutedWords -> Icons.Outlined.FilterList
         SettingsItemKey.MutedInstances -> Icons.Filled.Language
+        SettingsItemKey.AiEnabled -> Icons.Filled.AutoAwesome
+        SettingsItemKey.AiProvider -> Icons.Outlined.Api
+        SettingsItemKey.AiBaseUrl -> Icons.Outlined.Link
+        SettingsItemKey.AiApiKey -> Icons.Filled.Key
+        SettingsItemKey.AiChatModel,
+        SettingsItemKey.AiFastModel,
+        SettingsItemKey.AiLongContextModel,
+        SettingsItemKey.AiVisionModel,
+        SettingsItemKey.AiEmbeddingModel -> Icons.Outlined.ModelTraining
+        SettingsItemKey.AiReadPermissions -> Icons.Filled.Visibility
+        SettingsItemKey.AiAutomation -> Icons.Filled.AutoAwesome
+        SettingsItemKey.AiBackground -> Icons.Filled.CloudQueue
+        SettingsItemKey.AiQueue -> Icons.Filled.CloudQueue
+        SettingsItemKey.AiLimits -> Icons.Filled.Tune
+        SettingsItemKey.AiTone -> Icons.Filled.Person
         SettingsItemKey.ApiTokens -> Icons.Filled.Key
         SettingsItemKey.Invites -> Icons.Filled.CardGiftcard
         SettingsItemKey.SharedAccess -> Icons.Outlined.Share

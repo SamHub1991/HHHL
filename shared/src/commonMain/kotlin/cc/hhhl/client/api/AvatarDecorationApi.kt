@@ -101,6 +101,7 @@ private suspend fun HttpResponse.apiErrorMessage(): String? {
 
 private fun defaultAvatarDecorationClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

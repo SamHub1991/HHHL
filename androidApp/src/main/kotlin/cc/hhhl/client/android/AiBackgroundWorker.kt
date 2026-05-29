@@ -1,0 +1,114 @@
+package cc.hhhl.client.android
+
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import cc.hhhl.client.ai.AiPromptBuilder
+import cc.hhhl.client.ai.AiRepository
+import cc.hhhl.client.ai.AiRepositoryResult
+import cc.hhhl.client.ai.AiSnapshot
+import cc.hhhl.client.ai.AiTask
+import cc.hhhl.client.ai.AiTaskStatus
+import cc.hhhl.client.ai.consumeAiRequest
+import cc.hhhl.client.ai.normalizedAiUsage
+
+class AiBackgroundWorker(
+    appContext: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(appContext, params) {
+    override suspend fun doWork(): Result {
+        val store = AndroidAiStore(applicationContext)
+        val sessions = AndroidAuthTokenStore(applicationContext).readAccountSessions()
+        val accountIds = sessions.map { it.id }.ifEmpty { listOf("default") }
+        val repository = AiRepository()
+        var retriableFailure = false
+
+        accountIds.forEach { accountId ->
+            val snapshot = store.read(accountId)
+            val settings = snapshot.settings
+            if (!settings.enabled || !settings.backgroundAllowed) return@forEach
+            if (settings.wifiOnlyBackground && !applicationContext.isOnUnmeteredNetwork()) {
+                retriableFailure = true
+                return@forEach
+            }
+            var tasks = snapshot.tasks
+            var usage = snapshot.usage.normalizedAiUsage()
+            val pending = tasks
+                .filter { it.status == AiTaskStatus.Pending || it.status == AiTaskStatus.Running }
+                .sortedBy { it.createdAtEpochMillis }
+                .take(MAX_BACKGROUND_TASKS_PER_RUN)
+            pending.forEach { task ->
+                var taskForRun = task
+                if (!task.usageCharged) {
+                    val usageResult = usage.consumeAiRequest(settings)
+                    val usageErrorMessage = usageResult.errorMessage
+                    if (usageErrorMessage != null) {
+                        usage = usageResult.usage
+                        tasks = tasks.replaceTask(
+                            task.copy(
+                                status = AiTaskStatus.Pending,
+                                errorMessage = usageErrorMessage,
+                                updatedAtEpochMillis = System.currentTimeMillis(),
+                            ),
+                        )
+                        store.write(accountId, AiSnapshot(settings = settings, tasks = tasks, usage = usage))
+                        return@forEach
+                    }
+                    usage = usageResult.usage
+                    taskForRun = task.copy(usageCharged = true)
+                }
+                val now = System.currentTimeMillis()
+                tasks = tasks.replaceTask(taskForRun.copy(status = AiTaskStatus.Running, updatedAtEpochMillis = now))
+                store.write(accountId, AiSnapshot(settings = settings, tasks = tasks, usage = usage))
+
+                val prompt = AiPromptBuilder.build(settings, taskForRun.kind, taskForRun.input)
+                val nextTask = when (val result = repository.complete(settings, prompt)) {
+                    is AiRepositoryResult.Success -> taskForRun.copy(
+                        status = AiTaskStatus.Completed,
+                        resultText = result.text.take(4_000),
+                        errorMessage = "",
+                        updatedAtEpochMillis = System.currentTimeMillis(),
+                    )
+                    AiRepositoryResult.Unauthorized -> taskForRun.copy(
+                        status = AiTaskStatus.Failed,
+                        errorMessage = "AI API Key 无效或权限不足",
+                        updatedAtEpochMillis = System.currentTimeMillis(),
+                        retryCount = taskForRun.retryCount + 1,
+                    )
+                    is AiRepositoryResult.Error -> {
+                        retriableFailure = true
+                        taskForRun.copy(
+                            status = if (taskForRun.retryCount < 2) AiTaskStatus.Pending else AiTaskStatus.Failed,
+                            errorMessage = result.message,
+                            updatedAtEpochMillis = System.currentTimeMillis(),
+                            retryCount = taskForRun.retryCount + 1,
+                        )
+                    }
+                }
+                tasks = tasks.replaceTask(nextTask)
+                store.write(accountId, AiSnapshot(settings = settings, tasks = tasks, usage = usage))
+            }
+        }
+
+        return if (retriableFailure) Result.retry() else Result.success()
+    }
+
+    private fun List<AiTask>.replaceTask(task: AiTask): List<AiTask> {
+        return map { current -> if (current.id == task.id) task else current }
+    }
+
+    private fun Context.isOnUnmeteredNetwork(): Boolean {
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+        val network = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) ||
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
+
+    private companion object {
+        const val MAX_BACKGROUND_TASKS_PER_RUN = 8
+    }
+}

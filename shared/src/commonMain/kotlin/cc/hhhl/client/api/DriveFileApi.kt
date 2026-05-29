@@ -890,6 +890,7 @@ private suspend fun HttpResponse.apiErrorMessage(): String? {
 
 private fun defaultDriveFileClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

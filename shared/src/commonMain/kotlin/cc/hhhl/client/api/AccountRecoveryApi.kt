@@ -93,6 +93,7 @@ class SharkeyAccountRecoveryApi(
 
 private fun defaultAccountRecoveryClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
         }

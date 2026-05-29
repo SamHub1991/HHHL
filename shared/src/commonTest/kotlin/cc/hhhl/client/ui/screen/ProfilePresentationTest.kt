@@ -22,7 +22,7 @@ class ProfilePresentationTest {
             profilePrimaryActionLabels(capabilities),
         )
         assertEquals(
-            listOf("收藏", "关注请求", "关系管理"),
+            listOf("稍后看", "关注请求", "关系管理"),
             profileAccountActionLabels(),
         )
         assertEquals(
@@ -44,7 +44,7 @@ class ProfilePresentationTest {
             profilePrimaryActionLabels(capabilities),
         )
         assertEquals(
-            listOf("收藏", "关注请求", "关系管理"),
+            listOf("稍后看", "关注请求", "关系管理"),
             profileAccountActionLabels(),
         )
         assertEquals(
@@ -61,7 +61,7 @@ class ProfilePresentationTest {
         )
 
         assertEquals(
-            listOf("外观", "账号与安全", "管理", "隐私", "通知", "过滤", "授权"),
+            listOf("外观", "账号与安全", "管理", "隐私", "通知", "过滤", "AI", "授权"),
             settingsGroupLabels(groups),
         )
         assertEquals(
@@ -69,6 +69,7 @@ class ProfilePresentationTest {
                 "主题",
                 "高级自定义主题",
                 "信息流密度",
+                "列表手势",
                 "账号资料",
                 "双重验证",
                 "Passkey",
@@ -90,6 +91,21 @@ class ProfilePresentationTest {
                 "词语静音",
                 "强过滤词",
                 "静音实例",
+                "AI 助手",
+                "Provider",
+                "Base URL",
+                "API Key",
+                "对话模型",
+                "快速模型",
+                "长上下文模型",
+                "视觉模型",
+                "向量模型",
+                "读取权限",
+                "AI 自动化",
+                "后台 AI 队列",
+                "AI 队列",
+                "用量限制",
+                "语气偏好",
                 "访问令牌",
                 "邀请码",
                 "共享访问",

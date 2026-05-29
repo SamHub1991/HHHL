@@ -43,6 +43,16 @@ class DisplayPreferenceStateHolderTest {
     }
 
     @Test
+    fun restoresStoredUltraCompactTimelineDensity() {
+        val store = InMemoryDisplayPreferenceStore(TimelineDensity.UltraCompact.storageKey)
+        val holder = DisplayPreferenceStateHolder(store = store)
+
+        holder.restoreStoredPreferences()
+
+        assertEquals(TimelineDensity.UltraCompact, holder.state.value.timelineDensity)
+    }
+
+    @Test
     fun restoresStoredDefaultNoteVisibility() {
         val store = InMemoryDisplayPreferenceStore(
             storedDefaultNoteVisibility = DefaultNoteVisibility.Followers.storageKey,
@@ -88,14 +98,37 @@ class DisplayPreferenceStateHolderTest {
         assertEquals(NotificationBadgeMode.Hide, holder.state.value.notificationBadgeMode)
     }
 
+    @Test
+    fun restoresStoredListGesturesPreference() {
+        val store = InMemoryDisplayPreferenceStore(storedListGesturesEnabled = false)
+        val holder = DisplayPreferenceStateHolder(store = store)
+
+        holder.restoreStoredPreferences()
+
+        assertEquals(false, holder.state.value.listGesturesEnabled)
+    }
+
+    @Test
+    fun changingListGesturesPreferencePersistsValue() {
+        val store = InMemoryDisplayPreferenceStore()
+        val holder = DisplayPreferenceStateHolder(store = store)
+
+        holder.setListGesturesEnabled(false)
+
+        assertEquals(false, store.savedListGesturesEnabled)
+        assertEquals(false, holder.state.value.listGesturesEnabled)
+    }
+
     private class InMemoryDisplayPreferenceStore(
         private var storedTimelineDensity: String? = null,
         private var storedDefaultNoteVisibility: String? = null,
         private var storedNotificationBadgeMode: String? = null,
+        private var storedListGesturesEnabled: Boolean? = null,
     ) : DisplayPreferenceStore {
         var savedTimelineDensity: String? = null
         var savedDefaultNoteVisibility: String? = null
         var savedNotificationBadgeMode: String? = null
+        var savedListGesturesEnabled: Boolean? = null
 
         override fun loadTimelineDensity(): String? {
             return storedTimelineDensity
@@ -122,6 +155,15 @@ class DisplayPreferenceStateHolderTest {
         override fun saveNotificationBadgeMode(mode: String) {
             savedNotificationBadgeMode = mode
             storedNotificationBadgeMode = mode
+        }
+
+        override fun loadListGesturesEnabled(): Boolean? {
+            return storedListGesturesEnabled
+        }
+
+        override fun saveListGesturesEnabled(enabled: Boolean) {
+            savedListGesturesEnabled = enabled
+            storedListGesturesEnabled = enabled
         }
     }
 }

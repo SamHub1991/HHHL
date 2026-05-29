@@ -28,6 +28,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,8 +44,11 @@ fun MediaPreviewOverlay(
     onSessionChanged: (MediaPreviewSession) -> Unit,
     onOpenExternal: (String) -> Unit,
     onDownload: (MediaPreviewItem) -> Unit = {},
+    onShare: (String) -> Unit = {},
 ) {
     val colors = LocalHhhlColors.current
+    @Suppress("DEPRECATION")
+    val clipboardManager = LocalClipboardManager.current
     val item = session.currentOrNull
     if (item == null) {
         LaunchedEffect(Unit) { onDismiss() }
@@ -84,10 +89,16 @@ fun MediaPreviewOverlay(
                     )
                 }
                 MediaPreviewTextButton(onClick = { onDownload(item) }) {
-                    Text("下载", color = colors.textInverse)
+                    Text("保存", color = colors.textInverse)
+                }
+                MediaPreviewTextButton(onClick = { clipboardManager.setText(AnnotatedString(item.openUrl)) }) {
+                    Text("复制链接", color = colors.textInverse)
+                }
+                MediaPreviewTextButton(onClick = { onShare(item.openUrl) }) {
+                    Text("分享", color = colors.textInverse)
                 }
                 MediaPreviewTextButton(onClick = { onOpenExternal(item.openUrl) }) {
-                    Text("外部打开", color = colors.textInverse)
+                    Text("打开", color = colors.textInverse)
                 }
             }
             Box(

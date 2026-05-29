@@ -1,5 +1,8 @@
 package cc.hhhl.client.state
 
+import cc.hhhl.client.ai.AiSettings
+import cc.hhhl.client.ai.AiTask
+import cc.hhhl.client.ai.AiUsageWindow
 import cc.hhhl.client.auth.AuthenticatedUser
 import cc.hhhl.client.display.DefaultNoteVisibility
 import cc.hhhl.client.display.NotificationBadgeMode
@@ -34,6 +37,10 @@ data class SettingsUiState(
     val selectedTimelineDensity: TimelineDensity = TimelineDensity.Comfortable,
     val selectedDefaultNoteVisibility: DefaultNoteVisibility = DefaultNoteVisibility.Public,
     val selectedNotificationBadgeMode: NotificationBadgeMode = NotificationBadgeMode.Show,
+    val aiSettings: AiSettings = AiSettings(),
+    val aiTasks: List<AiTask> = emptyList(),
+    val aiUsage: AiUsageWindow = AiUsageWindow(),
+    val listGesturesEnabled: Boolean = true,
     val backgroundNotificationsEnabled: Boolean = false,
     val specialCareBackgroundNotificationsEnabled: Boolean = true,
     val accountDisplayName: String = "未登录",
@@ -76,12 +83,14 @@ enum class SettingsGroupKey {
     Privacy,
     Notifications,
     Filters,
+    Ai,
     Integrations,
 }
 
 enum class SettingsItemKey {
     Theme,
     TimelineDensity,
+    ListGestures,
     AdvancedTheme,
     AccountProfile,
     AdminDashboard,
@@ -104,6 +113,21 @@ enum class SettingsItemKey {
     MutedWords,
     HardMutedWords,
     MutedInstances,
+    AiEnabled,
+    AiProvider,
+    AiBaseUrl,
+    AiApiKey,
+    AiChatModel,
+    AiFastModel,
+    AiLongContextModel,
+    AiVisionModel,
+    AiEmbeddingModel,
+    AiReadPermissions,
+    AiAutomation,
+    AiBackground,
+    AiQueue,
+    AiLimits,
+    AiTone,
     ApiTokens,
     Invites,
     SharedAccess,
@@ -128,6 +152,10 @@ class SettingsStateHolder(
         selectedTimelineDensity: TimelineDensity,
         selectedDefaultNoteVisibility: DefaultNoteVisibility,
         selectedNotificationBadgeMode: NotificationBadgeMode,
+        aiSettings: AiSettings = AiSettings(),
+        aiTasks: List<AiTask> = emptyList(),
+        aiUsage: AiUsageWindow = AiUsageWindow(),
+        listGesturesEnabled: Boolean = true,
         backgroundNotificationsEnabled: Boolean = false,
         specialCareBackgroundNotificationsEnabled: Boolean = true,
         accountUser: AuthenticatedUser?,
@@ -141,8 +169,12 @@ class SettingsStateHolder(
                 selectedTheme = selectedTheme,
                 customTheme = customTheme,
                 selectedTimelineDensity = selectedTimelineDensity,
+                listGesturesEnabled = listGesturesEnabled,
                 selectedDefaultNoteVisibility = selectedDefaultNoteVisibility,
                 selectedNotificationBadgeMode = selectedNotificationBadgeMode,
+                aiSettings = aiSettings,
+                aiTasks = aiTasks,
+                aiUsage = aiUsage,
                 backgroundNotificationsEnabled = backgroundNotificationsEnabled,
                 specialCareBackgroundNotificationsEnabled = specialCareBackgroundNotificationsEnabled,
                 accountDisplayName = accountDisplayName,
@@ -648,6 +680,10 @@ class SettingsStateHolder(
                 selectedTimelineDensity = selectedTimelineDensity,
                 selectedDefaultNoteVisibility = selectedDefaultNoteVisibility,
                 selectedNotificationBadgeMode = selectedNotificationBadgeMode,
+                aiSettings = aiSettings,
+                aiTasks = aiTasks,
+                aiUsage = aiUsage,
+                listGesturesEnabled = listGesturesEnabled,
                 backgroundNotificationsEnabled = backgroundNotificationsEnabled,
                 specialCareBackgroundNotificationsEnabled = specialCareBackgroundNotificationsEnabled,
                 accountDisplayName = accountDisplayName,

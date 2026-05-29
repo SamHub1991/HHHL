@@ -26,12 +26,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Folder
@@ -91,6 +93,7 @@ import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import coil3.compose.AsyncImage
+import cc.hhhl.client.ai.AiTaskKind
 import cc.hhhl.client.model.AvatarDecoration
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageQuote
@@ -274,6 +277,12 @@ fun ChatScreen(
     recentEmojiCodes: List<String> = emptyList(),
     isMediaPickerAvailable: Boolean = false,
     customTheme: HhhlCustomTheme = HhhlCustomTheme(),
+    aiEnabled: Boolean = false,
+    isAiProcessing: Boolean = false,
+    aiResultText: String? = null,
+    aiResultLabel: String? = null,
+    onAiAction: (AiTaskKind, ChatUiState, String) -> Unit = { _, _, _ -> },
+    onDismissAiResult: () -> Unit = {},
 ) {
     val selectedRoom = state.selectedRoom
     val selectedUserConversation = state.selectedUserConversation
@@ -324,6 +333,12 @@ fun ChatScreen(
             isMediaPickerAvailable = isMediaPickerAvailable,
             customTheme = customTheme,
             currentUserId = currentUserId,
+            aiEnabled = aiEnabled,
+            isAiProcessing = isAiProcessing,
+            aiResultText = aiResultText,
+            aiResultLabel = aiResultLabel,
+            onAiAction = onAiAction,
+            onDismissAiResult = onDismissAiResult,
         )
         return
     }
@@ -470,11 +485,11 @@ fun ChatScreen(
                         HhhlDivider()
                     }
                 }
-                items(
+                itemsIndexed(
                     items = visibleRooms,
-                    key = { it.membershipId },
-                    contentType = { ChatListContentType.Room },
-                ) { room ->
+                    key = { index, room -> room.stableChatRoomListKey(index) },
+                    contentType = { _, _ -> ChatListContentType.Room },
+                ) { _, room ->
                     ChatRoomRow(
                         room = room,
                         attentionKind = state.roomAttentionKinds[room.id],
@@ -485,11 +500,11 @@ fun ChatScreen(
                     HhhlDivider()
                 }
             } else {
-                items(
+                itemsIndexed(
                     items = visibleUserConversations,
-                    key = { it.user.id },
-                    contentType = { ChatListContentType.UserConversation },
-                ) { conversation ->
+                    key = { index, conversation -> conversation.stableChatUserConversationListKey(index) },
+                    contentType = { _, _ -> ChatListContentType.UserConversation },
+                ) { _, conversation ->
                     ChatUserConversationRow(
                         conversation = conversation,
                         currentUserId = currentUserId,
@@ -1483,6 +1498,12 @@ private fun ChatDetailScreen(
     isMediaPickerAvailable: Boolean,
     customTheme: HhhlCustomTheme,
     currentUserId: String?,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    aiResultText: String?,
+    aiResultLabel: String?,
+    onAiAction: (AiTaskKind, ChatUiState, String) -> Unit,
+    onDismissAiResult: () -> Unit,
 ) {
     val conversationKey = room?.id ?: userConversation?.user?.id ?: "chat"
     val title = room?.name?.ifBlank { "聊天室" }
@@ -1658,6 +1679,24 @@ private fun ChatDetailScreen(
                         onSearchMessages = {
                             closeComposerPanel()
                             showingMessageSearch = true
+                        },
+                        aiEnabled = aiEnabled,
+                        isAiProcessing = isAiProcessing,
+                        onAiSummary = {
+                            closeComposerPanel()
+                            onAiAction(AiTaskKind.ChatSummary, state, title)
+                        },
+                        onAiReplyDraft = {
+                            closeComposerPanel()
+                            onAiAction(AiTaskKind.ChatReplyDraft, state, title)
+                        },
+                        onAiActionItems = {
+                            closeComposerPanel()
+                            onAiAction(AiTaskKind.ChatActionItems, state, title)
+                        },
+                        onAiDecisionSummary = {
+                            closeComposerPanel()
+                            onAiAction(AiTaskKind.ChatDecisionSummary, state, title)
                         },
                         onOpenFilters = {
                             closeComposerPanel()
@@ -2014,11 +2053,11 @@ private fun ChatDetailScreen(
                             }
                         }
                     }
-                    items(
+                    itemsIndexed(
                         items = visibleMessages,
-                        key = { it.id },
-                        contentType = { ChatListContentType.Message },
-                    ) { message ->
+                        key = { index, message -> message.stableChatMessageListKey(index) },
+                        contentType = { _, _ -> ChatListContentType.Message },
+                    ) { _, message ->
                         ChatMessageRow(
                             message = message,
                             reactionOptions = state.reactionOptions,
@@ -2071,6 +2110,16 @@ private fun ChatDetailScreen(
                 }
             }
             HhhlDivider()
+            if (!aiResultText.isNullOrBlank()) {
+                ChatAiResultPanel(
+                    label = aiResultLabel ?: "AI 结果",
+                    text = aiResultText,
+                    onUseAsDraft = { onMessageDraftChanged(aiResultText) },
+                    onAppendToDraft = { onMessageDraftChanged(state.messageDraft.withAppendedChatText(aiResultText)) },
+                    onDismiss = onDismissAiResult,
+                )
+                HhhlDivider()
+            }
             state.replyingMessage?.let { reply ->
                 ChatQuoteComposerPreview(
                     quote = reply,
@@ -2407,6 +2456,12 @@ fun chatDetailSummaryActions(
     onRefresh: () -> Unit,
     onAddMedia: () -> Unit,
     onSearchMessages: () -> Unit = {},
+    aiEnabled: Boolean = false,
+    isAiProcessing: Boolean = false,
+    onAiSummary: () -> Unit = {},
+    onAiReplyDraft: () -> Unit = {},
+    onAiActionItems: () -> Unit = {},
+    onAiDecisionSummary: () -> Unit = {},
     onOpenFilters: () -> Unit = {},
     onEditRoom: () -> Unit = {},
     onInviteMember: () -> Unit = {},
@@ -2428,6 +2483,38 @@ fun chatDetailSummaryActions(
         HhhlOverflowMenuAction(
             label = "搜索消息",
             onClick = onSearchMessages,
+        ),
+    )
+    add(
+        HhhlOverflowMenuAction(
+            label = if (isAiProcessing) "AI 处理中" else "AI 总结聊天",
+            enabled = aiEnabled && !isAiProcessing && !showingMembers,
+            icon = Icons.Filled.AutoAwesome,
+            onClick = onAiSummary,
+        ),
+    )
+    add(
+        HhhlOverflowMenuAction(
+            label = "AI 回复草稿",
+            enabled = aiEnabled && !isAiProcessing && !showingMembers,
+            icon = Icons.Filled.AutoAwesome,
+            onClick = onAiReplyDraft,
+        ),
+    )
+    add(
+        HhhlOverflowMenuAction(
+            label = "AI 待办提取",
+            enabled = aiEnabled && !isAiProcessing && !showingMembers,
+            icon = Icons.Filled.AutoAwesome,
+            onClick = onAiActionItems,
+        ),
+    )
+    add(
+        HhhlOverflowMenuAction(
+            label = "AI 决策摘要",
+            enabled = aiEnabled && !isAiProcessing && !showingMembers,
+            icon = Icons.Filled.AutoAwesome,
+            onClick = onAiDecisionSummary,
         ),
     )
     add(
@@ -2591,6 +2678,51 @@ private fun ChatDetailModeItem(
 
 fun chatDetailModeLabel(label: String, count: Int): String {
     return if (count > 0) "$label $count" else label
+}
+
+@Composable
+private fun ChatAiResultPanel(
+    label: String,
+    text: String,
+    onUseAsDraft: () -> Unit,
+    onAppendToDraft: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.surfaceElevated.copy(alpha = 0.78f))
+            .border(1.dp, colors.border.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            HhhlIconActionButton(icon = Icons.Filled.Close, contentDescription = "关闭 AI 结果", onClick = onDismiss)
+        }
+        Text(
+            text = text,
+            color = colors.textSecondary,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 6,
+            overflow = TextOverflow.Ellipsis,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            HhhlActionChip(label = "填入输入框", emphasized = true, onClick = onUseAsDraft)
+            HhhlActionChip(label = "追加", onClick = onAppendToDraft)
+        }
+    }
 }
 
 @Composable
@@ -2833,11 +2965,11 @@ private fun ChatMessageFilterScreen(
                     ChatStatusRow(text = "暂无可过滤用户")
                 }
             }
-            items(
+            itemsIndexed(
                 items = authors,
-                key = { it.id },
-                contentType = { "filter-user" },
-            ) { user ->
+                key = { index, user -> user.stableChatUserListKey(index) },
+                contentType = { _, _ -> "filter-user" },
+            ) { _, user ->
                 val hidden = user.matchesHiddenChatMessageUiFilterUser(normalizedHiddenUserIds)
                 ChatFilterUserRow(
                     user = user,
@@ -3329,11 +3461,11 @@ private fun ChatMessageSearchScreen(
                     ChatStatusRow(text = "还没有消息")
                 }
             }
-            items(
+            itemsIndexed(
                 items = results,
-                key = { it.id },
-                contentType = { ChatListContentType.MessageSearchResult },
-            ) { message ->
+                key = { index, message -> message.stableChatMessageListKey(index) },
+                contentType = { _, _ -> ChatListContentType.MessageSearchResult },
+            ) { _, message ->
                 ChatMessageSearchResultRow(
                     message = message,
                     onClick = { onSelectMessage(message.id) },
@@ -3789,11 +3921,11 @@ private fun androidx.compose.foundation.lazy.LazyListScope.chatRoomMemberSection
         }
         return
     }
-    items(
+    itemsIndexed(
         items = memberRows,
-        key = { row -> "chat-members-$keyPrefix-row-${row.firstOrNull()?.membershipId.orEmpty()}" },
-        contentType = { ChatListContentType.MemberRow },
-    ) { rowMembers ->
+        key = { index, row -> "chat-members-$keyPrefix-row-${row.firstOrNull()?.stableChatMemberListKey(index) ?: index}" },
+        contentType = { _, _ -> ChatListContentType.MemberRow },
+    ) { _, rowMembers ->
         ChatRoomMemberGridRow(
             members = rowMembers,
             online = online,
@@ -5705,6 +5837,40 @@ internal fun List<ChatMessage>.loadedChatMessageIdSet(): Set<String> {
     return asSequence().map { it.id }.toSet()
 }
 
+private fun ChatRoom.stableChatRoomListKey(index: Int): String {
+    return "room-${membershipId.ifBlank { id.ifBlank { name } }}-$index"
+}
+
+private fun ChatUserConversation.stableChatUserConversationListKey(index: Int): String {
+    return "user-${user.id.ifBlank { user.username.ifBlank { user.displayName } }}-$index"
+}
+
+private fun ChatMessage.stableChatMessageListKey(index: Int): String {
+    return "message-${id.ifBlank { chatMessageFallbackListKey(index) }}-$index"
+}
+
+private fun ChatRoomMember.stableChatMemberListKey(index: Int): String {
+    return "${membershipId.ifBlank { user.id.ifBlank { roomId } }}-$index"
+}
+
+private fun User.stableChatUserListKey(index: Int): String {
+    return "${id.ifBlank { username.ifBlank { displayName } }}-$index"
+}
+
+private fun ChatMessage.chatMessageFallbackListKey(index: Int): String {
+    val seed = listOf(roomId, toUserId.orEmpty(), fromUser.id, createdAt, createdAtLabel, text, file?.id.orEmpty(), index.toString())
+        .joinToString(separator = "\u0000")
+    return seed.stableChatListHash()
+}
+
+private fun String.stableChatListHash(): String {
+    var hash = 1125899906842597L
+    for (char in this) {
+        hash = 31L * hash + char.code
+    }
+    return hash.toULong().toString(36)
+}
+
 internal fun ChatMessageUiFilterState.shouldResetForLoadedHiddenMessage(
     messageId: String?,
     loadedMessageIds: Set<String>,
@@ -6085,6 +6251,13 @@ private fun cc.hhhl.client.model.ChatMessageReference.toReferencePreviewText(): 
         ?: file?.name?.takeIf { it.isNotBlank() }
         ?: "附件"
     return if (author.isNullOrBlank()) body else "$author: $body"
+}
+
+private fun String.withAppendedChatText(text: String): String {
+    val cleanText = text.trim()
+    if (cleanText.isEmpty()) return this
+    val base = trimEnd()
+    return if (base.isBlank()) cleanText else "$base\n$cleanText"
 }
 
 fun cc.hhhl.client.model.ChatMessageReference.toRenderedQuote(): ChatRenderedQuote {

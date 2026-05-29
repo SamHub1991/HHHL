@@ -72,6 +72,24 @@ enum class NotificationFilter(
             NotificationType.RenoteGrouped,
         ),
     ),
+    Replies(
+        label = "回复",
+        includedTypes = listOf(
+            NotificationType.Reply,
+        ),
+    ),
+    Quotes(
+        label = "引用",
+        includedTypes = listOf(
+            NotificationType.Quote,
+        ),
+    ),
+    Achievements(
+        label = "成就",
+        includedTypes = listOf(
+            NotificationType.AchievementEarned,
+        ),
+    ),
     SpecialCare(label = "特别关心"),
     Follows(
         label = "关注",

@@ -373,6 +373,7 @@ private suspend fun HttpResponse.apiErrorMessage(): String? {
 
 private fun defaultAdminClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

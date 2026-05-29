@@ -13,6 +13,8 @@ import cc.hhhl.client.api.ChatRoomLoadResult
 import cc.hhhl.client.api.ChatRoomMutationResult
 import cc.hhhl.client.api.ChatUserHistoryLoadResult
 import cc.hhhl.client.cache.InMemoryChatMessageCache
+import cc.hhhl.client.cache.ChatMessageCacheConversationType
+import cc.hhhl.client.cache.ChatMessageCacheKey
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX
 import cc.hhhl.client.model.ChatMessageReaction
@@ -157,6 +159,61 @@ class ChatRepositoryTest {
     }
 
     @Test
+    fun loadRoomMessagesAssignsStableIdsForBlankMessageIds() = runTest {
+        val first = sampleMessage(
+            id = "",
+            text = "first blank id",
+            createdAt = "2026-05-25T01:00:00.000Z",
+        )
+        val second = sampleMessage(
+            id = "",
+            text = "second blank id",
+            createdAt = "2026-05-25T02:00:00.000Z",
+        )
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                messageResult = ChatMessageLoadResult.Success(listOf(second, first)),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.refreshMessages("room-1")
+
+        assertIs<ChatMessageRepositoryResult.Success>(result)
+        assertEquals(2, result.messages.size)
+        assertTrue(result.messages.all { it.id.startsWith("local-chat-") })
+        assertEquals(2, result.messages.map { it.id }.toSet().size)
+        assertEquals(listOf("first blank id", "second blank id"), result.messages.map { it.text })
+    }
+
+    @Test
+    fun loadRoomMessagesDeduplicatesRepeatedServerMessageIds() = runTest {
+        val duplicateOld = sampleMessage(
+            id = "message-dup",
+            text = "old duplicate",
+            createdAt = "2026-05-25T01:00:00.000Z",
+        )
+        val duplicateNew = sampleMessage(
+            id = "message-dup",
+            text = "new duplicate",
+            createdAt = "2026-05-25T02:00:00.000Z",
+        )
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                messageResult = ChatMessageLoadResult.Success(listOf(duplicateNew, duplicateOld)),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.refreshMessages("room-1")
+
+        assertIs<ChatMessageRepositoryResult.Success>(result)
+        assertEquals(listOf("message-dup"), result.messages.map { it.id })
+    }
+
+    @Test
     fun loadRoomMessagesSortsByApiTimestampNotDisplayLabel() = runTest {
         val newer = sampleMessage(
             id = "message-newer",
@@ -204,6 +261,38 @@ class ChatRepositoryTest {
     }
 
     @Test
+    fun restoreCachedRoomMessagesCapsInitialPayload() = runTest {
+        val messages = (1..220).map { index ->
+            sampleMessage(
+                id = "message-${index.paddedId()}",
+                createdAtLabel = index.paddedId(),
+            )
+        }
+        val cache = InMemoryChatMessageCache()
+        cache.write(
+            ChatMessageCacheKey(
+                accountId = "account-1",
+                type = ChatMessageCacheConversationType.Room,
+                conversationId = "room-1",
+            ),
+            messages,
+        )
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { "account-1" },
+            messageCache = cache,
+            api = fakeApi(result = ChatRoomLoadResult.Success(emptyList())),
+        )
+
+        val cached = repository.restoreCachedMessages("room-1")
+
+        assertIs<ChatMessageRepositoryResult.Success>(cached)
+        assertEquals(160, cached.messages.size)
+        assertEquals("message-061", cached.messages.first().id)
+        assertEquals("message-220", cached.messages.last().id)
+    }
+
+    @Test
     fun refreshUserMessagesWritesAndRestoresCache() = runTest {
         val message = sampleMessage("message-user", roomId = "")
         val calls = mutableListOf<UserMessageCall>()
@@ -225,6 +314,39 @@ class ChatRepositoryTest {
         assertIs<ChatMessageRepositoryResult.Success>(cached)
         assertEquals(listOf(UserMessageCall("token-123", "user-2", null)), calls)
         assertEquals(listOf(message), cached.messages)
+    }
+
+    @Test
+    fun restoreCachedUserMessagesCapsInitialPayload() = runTest {
+        val messages = (1..220).map { index ->
+            sampleMessage(
+                id = "user-message-${index.paddedId()}",
+                createdAtLabel = index.paddedId(),
+                roomId = "",
+            )
+        }
+        val cache = InMemoryChatMessageCache()
+        cache.write(
+            ChatMessageCacheKey(
+                accountId = "account-1",
+                type = ChatMessageCacheConversationType.User,
+                conversationId = "user-2",
+            ),
+            messages,
+        )
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { "account-1" },
+            messageCache = cache,
+            api = fakeApi(result = ChatRoomLoadResult.Success(emptyList())),
+        )
+
+        val cached = repository.restoreCachedUserMessages("user-2")
+
+        assertIs<ChatMessageRepositoryResult.Success>(cached)
+        assertEquals(160, cached.messages.size)
+        assertEquals("user-message-061", cached.messages.first().id)
+        assertEquals("user-message-220", cached.messages.last().id)
     }
 
     @Test
@@ -308,6 +430,65 @@ class ChatRepositoryTest {
         assertEquals(1, result.conversations.size)
         assertEquals(latestUnread.id, result.conversations.single().latestMessage?.id)
         assertEquals(2, result.conversations.single().unreadCount)
+    }
+
+    @Test
+    fun refreshLimitsRoomUnreadCountResolution() = runTest {
+        val rooms = (1..12).map { index ->
+            sampleRoom("room-$index", "membership-$index")
+                .copy(unreadCount = 1, latestMessageMarker = "marker-$index")
+        }
+        val messageCalls = mutableListOf<MessageCall>()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                messageCalls = messageCalls,
+                messageResult = ChatMessageLoadResult.Success(
+                    listOf(sampleMessage("unread-message").copy(isRead = false)),
+                ),
+                result = ChatRoomLoadResult.Success(rooms),
+            ),
+        )
+
+        val result = repository.refresh()
+
+        assertIs<ChatRepositoryResult.Success>(result)
+        assertEquals(12, result.rooms.size)
+        assertEquals((1..6).map { "room-$it" }, messageCalls.map { it.roomId })
+    }
+
+    @Test
+    fun refreshUserConversationsLimitsUnreadCountResolution() = runTest {
+        val currentUser = User("account-user", "Alice", "alice", "A")
+        val history = (1..12).map { index ->
+            val peer = User("peer-$index", "Peer $index", "peer$index", "P")
+            sampleMessage(
+                id = "history-${index.paddedId()}",
+                roomId = "",
+                createdAtLabel = index.paddedId(),
+            ).copy(
+                fromUser = peer,
+                toUserId = currentUser.id,
+                toUser = currentUser,
+                isRead = false,
+            )
+        }
+        val userMessageCalls = mutableListOf<UserMessageCall>()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { currentUser.id },
+            api = fakeApi(
+                userMessageCalls = userMessageCalls,
+                userHistoryResult = ChatUserHistoryLoadResult.Success(history),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.refreshUserConversations()
+
+        assertIs<ChatUserConversationRepositoryResult.Success>(result)
+        assertEquals(12, result.conversations.size)
+        assertEquals(6, userMessageCalls.size)
     }
 
     @Test
@@ -953,6 +1134,8 @@ class ChatRepositoryTest {
             joinedAtLabel = "2026-05-25 02:00",
         )
     }
+
+    private fun Int.paddedId(): String = toString().padStart(3, '0')
 
     private data class ApiCall(
         val token: String,

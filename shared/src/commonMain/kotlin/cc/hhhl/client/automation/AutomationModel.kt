@@ -1,6 +1,7 @@
 package cc.hhhl.client.automation
 
 import androidx.compose.runtime.Immutable
+import cc.hhhl.client.ai.aiSemanticYes
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.NotificationItem
 import cc.hhhl.client.model.User
@@ -67,6 +68,7 @@ enum class AutomationConditionType(
     SourceKind("来源", "room 或 direct"),
     AttentionKind("提醒类型", "specialCare / mention / reply / quote"),
     NotificationType("通知类型", "Reaction / Reply / Follow 等"),
+    AiSemantic("AI 语义判断", "例如：有人问我问题 / 反馈 bug / 情绪不满"),
 }
 
 @Immutable
@@ -93,6 +95,9 @@ enum class AutomationActionType(
     ForwardToRoom("转发到聊天室", "把事件内容转发到指定聊天室", "聊天室 ID", "转发内容"),
     ForwardToUser("转发给用户", "把事件内容转发给指定用户", "用户 ID", "转发内容"),
     Webhook("Webhook", "向自定义 URL 发送回调", "Webhook URL", "请求正文"),
+    AiGenerateLog("AI 生成日志", "让 AI 根据事件生成本地日志，不会发送到外部用户", "", "AI 要求"),
+    AiGenerateNotification("AI 生成通知", "让 AI 生成系统通知正文，不会自动回复或发帖", "", "AI 要求"),
+    AiGenerateWebhook("AI 生成 Webhook", "让 AI 根据事件生成 Webhook 正文，再发送到指定 URL", "Webhook URL", "AI 要求"),
 }
 
 @Serializable
@@ -160,8 +165,25 @@ data class AutomationEvent(
             "notification.text" -> notificationText
             "note.id" -> noteId
             "createdAt" -> createdAtLabel
+            "event.body" -> defaultBody
             else -> ""
         }
+    }
+
+    fun aiContextText(): String {
+        return buildString {
+            appendLine("事件：$displayLabel")
+            if (sourceKind.isNotBlank()) appendLine("来源：$sourceKind")
+            if (senderName.isNotBlank() || senderUserId.isNotBlank()) appendLine("发送者：$senderName ($senderUserId)")
+            if (roomId.isNotBlank()) appendLine("聊天室：$roomId")
+            if (directUserId.isNotBlank()) appendLine("私聊用户：$directUserId")
+            if (attentionKind.isNotBlank()) appendLine("提醒类型：$attentionKind")
+            if (notificationType.isNotBlank()) appendLine("通知类型：$notificationType")
+            if (noteId.isNotBlank()) appendLine("帖子：$noteId")
+            if (createdAtLabel.isNotBlank()) appendLine("时间：$createdAtLabel")
+            if (notificationText.isNotBlank()) appendLine("通知：$notificationText")
+            if (messageText.isNotBlank()) appendLine("正文：$messageText")
+        }.trim()
     }
 }
 
@@ -211,6 +233,8 @@ fun renderAutomationTemplate(template: String, event: AutomationEvent): String {
         event.variable(match.groupValues[1].trim())
     }.trim()
 }
+
+fun automationAiConditionSatisfied(text: String): Boolean = text.aiSemanticYes()
 
 fun defaultAutomationTemplate(event: AutomationEvent): String {
     return when (event.trigger) {

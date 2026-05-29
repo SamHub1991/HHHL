@@ -589,6 +589,7 @@ private suspend fun HttpResponse.apiErrorMessage(): String? {
 
 private fun defaultClipClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

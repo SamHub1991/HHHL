@@ -464,6 +464,7 @@ private fun FlashDraft.validationMessage(): String? {
 
 private fun defaultFlashClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

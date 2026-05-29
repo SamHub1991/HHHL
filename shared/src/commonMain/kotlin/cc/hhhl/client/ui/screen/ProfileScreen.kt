@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Folder
@@ -126,6 +127,13 @@ fun ProfileScreen(
     isActionPending: (String) -> Boolean = { false },
     canDeleteAuthor: (String) -> Boolean = { false },
     noteRowDensity: NoteRowDensity = NoteRowDensity.Comfortable,
+    aiEnabled: Boolean = false,
+    isAiProcessing: Boolean = false,
+    aiResultText: String? = null,
+    aiResultLabel: String? = null,
+    onAiProfileSummary: () -> Unit = {},
+    onAiProfileSuggestions: () -> Unit = {},
+    onDismissAiResult: () -> Unit = {},
     selectedTheme: HhhlThemePreset = HhhlThemePreset.System,
     selectedTimelineDensity: TimelineDensity = TimelineDensity.Comfortable,
     title: String = "我的",
@@ -251,6 +259,19 @@ fun ProfileScreen(
                             )
                         }
                         ProfileSocialStatsRow(user = user, onOpenSocial = onOpenSocial)
+                        ProfileAiActions(
+                            enabled = aiEnabled,
+                            isProcessing = isAiProcessing,
+                            onSummary = onAiProfileSummary,
+                            onSuggestions = onAiProfileSuggestions,
+                        )
+                        if (!aiResultText.isNullOrBlank()) {
+                            ProfileAiResultPanel(
+                                label = aiResultLabel ?: "AI 资料",
+                                text = aiResultText,
+                                onDismiss = onDismissAiResult,
+                            )
+                        }
                         if (isOwnProfile) {
                             ProfileQuickActions(
                                 capabilities = capabilities,
@@ -885,6 +906,76 @@ private fun ProfileSocialStatsRow(
 }
 
 @Composable
+private fun ProfileAiActions(
+    enabled: Boolean,
+    isProcessing: Boolean,
+    onSummary: () -> Unit,
+    onSuggestions: () -> Unit,
+) {
+    FlowRow(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        HhhlActionChip(
+            label = if (isProcessing) "AI 处理中" else "AI 资料速览",
+            enabled = enabled && !isProcessing,
+            onClick = onSummary,
+        )
+        HhhlActionChip(
+            label = "AI 互动建议",
+            enabled = enabled && !isProcessing,
+            onClick = onSuggestions,
+        )
+    }
+}
+
+@Composable
+private fun ProfileAiResultPanel(
+    label: String,
+    text: String,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.surfaceElevated.copy(alpha = 0.78f))
+            .border(1.dp, colors.border.copy(alpha = 0.28f), RoundedCornerShape(14.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Filled.AutoAwesome,
+                contentDescription = null,
+                tint = colors.accent,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = label,
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            HhhlTextButton(onClick = onDismiss) { Text("关闭") }
+        }
+        Text(
+            text = text,
+            color = colors.textSecondary,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
 private fun ProfileQuickActions(
     capabilities: InstanceCapabilities,
     selectedTheme: HhhlThemePreset,
@@ -1088,8 +1179,8 @@ private fun profileWorkspaceShortcuts(
 ): List<ProfileShortcut> = buildList {
     add(
         ProfileShortcut(
-            title = "收藏",
-            supportingText = "帖子",
+            title = "稍后看",
+            supportingText = "收藏帖子",
             icon = Icons.Filled.Bookmark,
             onClick = onOpenFavoriteNotes,
         ),
@@ -1441,7 +1532,7 @@ private fun profilePrimaryActions(capabilities: InstanceCapabilities): List<Prof
 
 private fun profileAccountActions(): List<ProfileAction> {
     return buildList {
-        add(ProfileAction(ProfileActionKey.FavoriteNotes, "收藏"))
+        add(ProfileAction(ProfileActionKey.FavoriteNotes, "稍后看"))
         add(ProfileAction(ProfileActionKey.FollowRequests, "关注请求"))
         add(ProfileAction(ProfileActionKey.RelationshipManagement, "关系管理"))
     }

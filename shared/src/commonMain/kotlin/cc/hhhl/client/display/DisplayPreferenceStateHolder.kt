@@ -9,7 +9,8 @@ enum class TimelineDensity(
     val label: String,
 ) {
     Comfortable("comfortable", "舒适"),
-    Compact("compact", "紧凑");
+    Compact("compact", "紧凑"),
+    UltraCompact("ultra_compact", "超紧凑");
 
     companion object {
         fun fromStoredValue(value: String?): TimelineDensity {
@@ -58,6 +59,7 @@ data class DisplayPreferenceUiState(
     val timelineDensity: TimelineDensity = TimelineDensity.Comfortable,
     val defaultNoteVisibility: DefaultNoteVisibility = DefaultNoteVisibility.Public,
     val notificationBadgeMode: NotificationBadgeMode = NotificationBadgeMode.Show,
+    val listGesturesEnabled: Boolean = true,
 )
 
 interface DisplayPreferenceStore {
@@ -72,6 +74,10 @@ interface DisplayPreferenceStore {
     fun loadNotificationBadgeMode(): String?
 
     fun saveNotificationBadgeMode(mode: String)
+
+    fun loadListGesturesEnabled(): Boolean? = null
+
+    fun saveListGesturesEnabled(enabled: Boolean) = Unit
 }
 
 object NoopDisplayPreferenceStore : DisplayPreferenceStore {
@@ -86,6 +92,10 @@ object NoopDisplayPreferenceStore : DisplayPreferenceStore {
     override fun loadNotificationBadgeMode(): String? = null
 
     override fun saveNotificationBadgeMode(mode: String) = Unit
+
+    override fun loadListGesturesEnabled(): Boolean? = null
+
+    override fun saveListGesturesEnabled(enabled: Boolean) = Unit
 }
 
 class DisplayPreferenceStateHolder(
@@ -102,12 +112,14 @@ class DisplayPreferenceStateHolder(
         val restoredNotificationBadgeMode = NotificationBadgeMode.fromStoredValue(
             store.loadNotificationBadgeMode(),
         )
+        val restoredListGesturesEnabled = store.loadListGesturesEnabled() ?: true
 
         mutableState.update {
             it.copy(
                 timelineDensity = restoredDensity,
                 defaultNoteVisibility = restoredDefaultVisibility,
                 notificationBadgeMode = restoredNotificationBadgeMode,
+                listGesturesEnabled = restoredListGesturesEnabled,
             )
         }
     }
@@ -125,5 +137,10 @@ class DisplayPreferenceStateHolder(
     fun selectNotificationBadgeMode(mode: NotificationBadgeMode) {
         store.saveNotificationBadgeMode(mode.storageKey)
         mutableState.update { it.copy(notificationBadgeMode = mode) }
+    }
+
+    fun setListGesturesEnabled(enabled: Boolean) {
+        store.saveListGesturesEnabled(enabled)
+        mutableState.update { it.copy(listGesturesEnabled = enabled) }
     }
 }

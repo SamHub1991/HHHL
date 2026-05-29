@@ -43,10 +43,27 @@ class ChatPresentationTest {
         )
 
         assertEquals(
-            listOf("刷新消息", "搜索消息", "过滤设置", "编辑聊天室", "邀请成员", "静音聊天室", "退出聊天室", "删除聊天室", "添加附件"),
+            listOf(
+                "刷新消息",
+                "搜索消息",
+                "AI 总结聊天",
+                "AI 回复草稿",
+                "AI 待办提取",
+                "AI 决策摘要",
+                "过滤设置",
+                "编辑聊天室",
+                "邀请成员",
+                "静音聊天室",
+                "退出聊天室",
+                "删除聊天室",
+                "添加附件",
+            ),
             actions.map { it.label },
         )
-        assertEquals(listOf(true, true, true, true, true, true, true, true, true), actions.map { it.enabled })
+        assertEquals(
+            listOf(true, true, false, false, false, false, true, true, true, true, true, true, true),
+            actions.map { it.enabled },
+        )
     }
 
     @Test

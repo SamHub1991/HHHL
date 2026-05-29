@@ -22,6 +22,7 @@ class AppUpdateReceiver : BroadcastReceiver() {
             apkName = intent.getStringExtra(EXTRA_APK_NAME).orEmpty(),
             apkUrl = intent.getStringExtra(EXTRA_APK_URL).orEmpty(),
             sizeBytes = intent.getLongExtra(EXTRA_SIZE_BYTES, 0L),
+            sha256 = intent.getStringExtra(EXTRA_SHA256).orEmpty(),
         )
         when (val result = AndroidAppUpdateManager(context.applicationContext).downloadUpdate(update)) {
             is AppUpdateDownloadResult.Started -> {
@@ -37,7 +38,11 @@ class AppUpdateReceiver : BroadcastReceiver() {
     private fun openDownloadedUpdate(context: Context, intent: Intent) {
         val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
         if (downloadId <= 0L) return
-        AndroidAppUpdateManager(context.applicationContext).installDownloadedUpdate(downloadId)
+        handleInstallResult(
+            context = context,
+            downloadId = downloadId,
+            result = AndroidAppUpdateManager(context.applicationContext).installDownloadedUpdateResult(downloadId),
+        )
     }
 }
 
@@ -53,11 +58,12 @@ class AppUpdateDownloadReceiver : BroadcastReceiver() {
         if (downloadId <= 0L) return
         val manager = AndroidAppUpdateManager(context.applicationContext)
         if (!manager.isPendingUpdateDownload(downloadId)) return
-        val opened = manager.installDownloadedUpdate(downloadId)
-        if (!opened) {
-            manager.notifyInstallReady(downloadId)
-            Toast.makeText(context, "更新包下载完成，请点击通知打开安装", Toast.LENGTH_SHORT).show()
-        }
+        handleInstallResult(
+            context = context,
+            downloadId = downloadId,
+            result = manager.installDownloadedUpdateResult(downloadId),
+            manager = manager,
+        )
     }
 }
 
@@ -65,6 +71,30 @@ class AppUpdateInstalledReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             AndroidAppUpdateManager(context.applicationContext).reopenAfterInstallIfRequested()
+        }
+    }
+}
+
+private fun handleInstallResult(
+    context: Context,
+    downloadId: Long,
+    result: AppUpdateInstallResult,
+    manager: AndroidAppUpdateManager = AndroidAppUpdateManager(context.applicationContext),
+) {
+    when (result) {
+        AppUpdateInstallResult.InstallOpened -> Unit
+        AppUpdateInstallResult.PermissionSettingsOpened -> {
+            Toast.makeText(context, "请允许 HHHL 安装未知来源应用后返回继续安装", Toast.LENGTH_LONG).show()
+        }
+        AppUpdateInstallResult.NotReady -> {
+            manager.notifyInstallReady(downloadId)
+            Toast.makeText(context, "更新包下载完成，请点击通知打开安装", Toast.LENGTH_SHORT).show()
+        }
+        is AppUpdateInstallResult.InvalidPackage -> {
+            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+        }
+        is AppUpdateInstallResult.Error -> {
+            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
         }
     }
 }

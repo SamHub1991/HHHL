@@ -466,6 +466,7 @@ private suspend fun HttpResponse.apiErrorMessage(): String? {
 
 private fun defaultChannelClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

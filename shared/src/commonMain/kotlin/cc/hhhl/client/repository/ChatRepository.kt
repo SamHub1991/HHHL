@@ -24,8 +24,6 @@ import cc.hhhl.client.model.ChatRoomInvitation
 import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.ChatUserConversation
 import cc.hhhl.client.model.User
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -47,7 +45,7 @@ open class ChatRepository(
     open suspend fun loadMore(currentRooms: List<ChatRoom>): ChatRepositoryResult {
         return load(
             currentRooms = currentRooms,
-            untilId = currentRooms.lastOrNull()?.membershipId,
+            untilId = currentRooms.lastOrNull()?.stableMembershipPageKey(),
         )
     }
 
@@ -146,10 +144,8 @@ open class ChatRepository(
     }
 
     open suspend fun restoreCachedMessages(roomId: String): ChatMessageRepositoryResult {
-        val key = cacheKey(ChatMessageCacheConversationType.Room, roomId)
-            ?: return ChatMessageRepositoryResult.Success(emptyList(), endReached = false)
         return ChatMessageRepositoryResult.Success(
-            messages = messageCache.read(key).dedupeSortedMessages(),
+            messages = readCachedMessages(ChatMessageCacheConversationType.Room, roomId),
             endReached = false,
         )
     }
@@ -163,10 +159,8 @@ open class ChatRepository(
     }
 
     open suspend fun restoreCachedUserMessages(userId: String): ChatMessageRepositoryResult {
-        val key = cacheKey(ChatMessageCacheConversationType.User, userId)
-            ?: return ChatMessageRepositoryResult.Success(emptyList(), endReached = false)
         return ChatMessageRepositoryResult.Success(
-            messages = messageCache.read(key).dedupeSortedMessages(),
+            messages = readCachedMessages(ChatMessageCacheConversationType.User, userId),
             endReached = false,
         )
     }
@@ -486,7 +480,7 @@ open class ChatRepository(
             is ChatRoomLoadResult.Success -> {
                 val resolvedRooms = result.rooms.withResolvedRoomUnreadCounts(token)
                 ChatRepositoryResult.Success(
-                    rooms = currentRooms.appendDistinctBy(resolvedRooms) { it.id },
+                    rooms = currentRooms.appendDistinctBy(resolvedRooms) { it.stableRoomMergeKey() },
                     endReached = result.rooms.isEmpty(),
                 )
             }
@@ -560,16 +554,14 @@ open class ChatRepository(
 
     private suspend fun List<ChatRoom>.withResolvedRoomUnreadCounts(token: String): List<ChatRoom> {
         if (none { it.unreadCount > 0 }) return this
-        return coroutineScope {
-            map { room ->
-                async {
-                    if (room.unreadCount <= 0) {
-                        room
-                    } else {
-                        room.copy(unreadCount = resolveRoomUnreadCount(token, room))
-                    }
-                }
-            }.map { it.await() }
+        var resolvedCount = 0
+        return map { room ->
+            if (room.unreadCount <= 0 || resolvedCount >= MAX_UNREAD_COUNT_RESOLUTION_PER_REFRESH) {
+                room
+            } else {
+                resolvedCount += 1
+                room.copy(unreadCount = resolveRoomUnreadCount(token, room))
+            }
         }
     }
 
@@ -630,7 +622,17 @@ open class ChatRepository(
             is ChatMessageLoadResult.NetworkError -> {
                 ChatMessageRepositoryResult.Error("无法连接服务器：${result.message}")
             }
-            is ChatMessageLoadResult.ServerError -> result.toMessageRepositoryResult()
+            is ChatMessageLoadResult.ServerError -> {
+                val cachedMessages = readCachedMessages(ChatMessageCacheConversationType.User, cleanUserId)
+                if (cachedMessages.isNotEmpty()) {
+                    ChatMessageRepositoryResult.Success(
+                        messages = currentMessages.mergeChronologicalMessages(cachedMessages),
+                        endReached = false,
+                    )
+                } else {
+                    result.toMessageRepositoryResult()
+                }
+            }
         }
     }
 
@@ -640,18 +642,16 @@ open class ChatRepository(
     ): List<ChatUserConversation> {
         if (none { it.unreadCount > 0 }) return this
         val currentId = currentUserId?.trim().orEmpty()
-        return coroutineScope {
-            map { conversation ->
-                async {
-                    if (conversation.unreadCount <= 0) {
-                        conversation
-                    } else {
-                        conversation.copy(
-                            unreadCount = resolveUserUnreadCount(token, conversation, currentId),
-                        )
-                    }
-                }
-            }.map { it.await() }
+        var resolvedCount = 0
+        return map { conversation ->
+            if (conversation.unreadCount <= 0 || resolvedCount >= MAX_UNREAD_COUNT_RESOLUTION_PER_REFRESH) {
+                conversation
+            } else {
+                resolvedCount += 1
+                conversation.copy(
+                    unreadCount = resolveUserUnreadCount(token, conversation, currentId),
+                )
+            }
         }
     }
 
@@ -775,7 +775,7 @@ open class ChatRepository(
             )
         ) {
             is ChatRoomMemberLoadResult.Success -> ChatRoomMemberRepositoryResult.Success(
-                members = currentMembers.appendDistinctBy(result.members) { it.membershipId },
+                members = currentMembers.appendDistinctBy(result.members) { it.stableMemberMergeKey() },
                 endReached = result.members.size < DEFAULT_MEMBER_PAGE_SIZE,
             )
             ChatRoomMemberLoadResult.Unauthorized -> ChatRoomMemberRepositoryResult.Unauthorized
@@ -845,7 +845,7 @@ open class ChatRepository(
         conversationId: String,
     ): List<ChatMessage> {
         val key = cacheKey(type, conversationId) ?: return emptyList()
-        return messageCache.read(key).dedupeSortedMessages()
+        return messageCache.read(key).dedupeSortedMessages().takeLast(MAX_RESTORED_MESSAGES_PER_CONVERSATION)
     }
 
     private suspend fun appendCachedMessage(
@@ -1031,12 +1031,27 @@ open class ChatRepository(
         const val DEFAULT_HISTORY_INDEX_PAGE_SIZE = 100
         const val DEFAULT_MESSAGE_SEARCH_PAGE_SIZE = 30
         const val DEFAULT_MEMBER_PAGE_SIZE = 100
+        const val MAX_UNREAD_COUNT_RESOLUTION_PER_REFRESH = 6
+        const val MAX_RESTORED_MESSAGES_PER_CONVERSATION = 160
     }
 }
 
 private fun List<ChatRoomMember>.lastOfficialMembershipId(): String? {
     return lastOrNull { member -> !member.membershipId.startsWith(CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX) }
         ?.membershipId
+        ?.takeIf { it.isNotBlank() }
+}
+
+private fun ChatRoom.stableRoomMergeKey(): String {
+    return id.ifBlank { membershipId.ifBlank { name } }
+}
+
+private fun ChatRoom.stableMembershipPageKey(): String? {
+    return membershipId.ifBlank { id }.takeIf { it.isNotBlank() }
+}
+
+private fun ChatRoomMember.stableMemberMergeKey(): String {
+    return membershipId.ifBlank { user.id.ifBlank { roomId } }
 }
 
 private fun ChatRoomLoadResult.ServerError.toRepositoryResult(): ChatRepositoryResult {
@@ -1084,54 +1099,60 @@ private val chatMessageChronologicalComparator = compareBy<ChatMessage> {
 
 private fun List<ChatMessage>.mergeChronologicalMessages(incoming: List<ChatMessage>): List<ChatMessage> {
     if (incoming.isEmpty()) return this
-    val cleanIncoming = incoming.dedupeSortedMessages()
+    val cleanIncoming = incoming.withStableRepositoryMessageIds().dedupeSortedMessages()
     if (isEmpty()) return cleanIncoming
+    val stableCurrent = withStableRepositoryMessageIds()
 
-    val existingIds = HashSet<String>(size + cleanIncoming.size)
-    forEach { existingIds += it.id }
+    val existingIds = HashSet<String>(stableCurrent.size + cleanIncoming.size)
+    stableCurrent.forEach { existingIds += it.id }
     val newMessages = cleanIncoming.filterNot { it.id in existingIds }
-    if (newMessages.isEmpty()) return this
+    if (newMessages.isEmpty()) return if (stableCurrent == this) this else stableCurrent
 
     return when {
-        chatMessageChronologicalComparator.compare(newMessages.last(), first()) <= 0 -> newMessages + this
-        chatMessageChronologicalComparator.compare(newMessages.first(), last()) >= 0 -> this + newMessages
-        else -> mergeSortedMessages(newMessages)
+        chatMessageChronologicalComparator.compare(newMessages.last(), stableCurrent.first()) <= 0 -> newMessages + stableCurrent
+        chatMessageChronologicalComparator.compare(newMessages.first(), stableCurrent.last()) >= 0 -> stableCurrent + newMessages
+        else -> stableCurrent.mergeSortedMessages(newMessages)
     }
 }
 
 private fun List<ChatMessage>.withChronologicalRepositoryMessage(message: ChatMessage): List<ChatMessage> {
-    return if (any { it.id == message.id }) {
-        map { if (it.id == message.id) message else it }.sortedWith(chatMessageChronologicalComparator)
+    val stableMessages = withStableRepositoryMessageIds()
+    val stableMessage = message.withStableRepositoryMessageId()
+    return if (stableMessages.any { it.id == stableMessage.id }) {
+        stableMessages.map { if (it.id == stableMessage.id) stableMessage else it }.sortedWith(chatMessageChronologicalComparator)
     } else {
-        mergeChronologicalMessages(listOf(message))
+        stableMessages.mergeChronologicalMessages(listOf(stableMessage))
     }
 }
 
 private fun List<ChatMessage>.mergeReplacingRepositoryMessages(incoming: List<ChatMessage>): List<ChatMessage> {
+    val stableCurrent = withStableRepositoryMessageIds()
+    val stableIncoming = incoming.withStableRepositoryMessageIds()
     if (incoming.isEmpty()) return dedupeSortedMessages()
-    if (isEmpty()) return incoming.dedupeSortedMessages()
-    val incomingById = incoming.associateBy { it.id }
-    val existingIds = mapTo(HashSet(size)) { it.id }
-    return (map { message -> incomingById[message.id] ?: message } + incoming.filterNot { incomingMessage ->
+    if (stableCurrent.isEmpty()) return stableIncoming.dedupeSortedMessages()
+    val incomingById = stableIncoming.associateBy { it.id }
+    val existingIds = stableCurrent.mapTo(HashSet(stableCurrent.size)) { it.id }
+    return (stableCurrent.map { message -> incomingById[message.id] ?: message } + stableIncoming.filterNot { incomingMessage ->
         incomingMessage.id in existingIds
     }).dedupeSortedMessages()
 }
 
 private fun List<ChatMessage>.dedupeSortedMessages(): List<ChatMessage> {
-    if (size <= 1) return this
+    val stableMessages = withStableRepositoryMessageIds()
+    if (stableMessages.size <= 1) return stableMessages
     val seenIds = HashSet<String>(size)
     var previous: ChatMessage? = null
-    for (message in this) {
+    for (message in stableMessages) {
         if (!seenIds.add(message.id)) {
-            return distinctBy { it.id }.sortedWith(chatMessageChronologicalComparator)
+            return stableMessages.distinctBy { it.id }.sortedWith(chatMessageChronologicalComparator)
         }
         val previousMessage = previous
         if (previousMessage != null && chatMessageChronologicalComparator.compare(message, previousMessage) < 0) {
-            return distinctBy { it.id }.sortedWith(chatMessageChronologicalComparator)
+            return stableMessages.distinctBy { it.id }.sortedWith(chatMessageChronologicalComparator)
         }
         previous = message
     }
-    return this
+    return stableMessages
 }
 
 private fun List<ChatMessage>.mergeSortedMessages(newMessages: List<ChatMessage>): List<ChatMessage> {
@@ -1157,6 +1178,44 @@ private fun List<ChatMessage>.mergeSortedMessages(newMessages: List<ChatMessage>
         incomingIndex += 1
     }
     return merged
+}
+
+private fun List<ChatMessage>.withStableRepositoryMessageIds(): List<ChatMessage> {
+    if (isEmpty()) return this
+    val seenIds = HashMap<String, Int>(size)
+    var changed = false
+    val stableMessages = mapIndexed { index, message ->
+        val hasServerId = message.id.isNotBlank()
+        val baseId = if (hasServerId) message.id else message.repositoryFallbackMessageId(index)
+        val seenCount = seenIds[baseId] ?: 0
+        seenIds[baseId] = seenCount + 1
+        val stableId = if (hasServerId || seenCount == 0) baseId else "${baseId}#dup-$seenCount"
+        if (stableId == message.id) {
+            message
+        } else {
+            changed = true
+            message.copy(id = stableId)
+        }
+    }
+    return if (changed) stableMessages else this
+}
+
+private fun ChatMessage.withStableRepositoryMessageId(): ChatMessage {
+    return if (id.isNotBlank()) this else copy(id = repositoryFallbackMessageId(0))
+}
+
+private fun ChatMessage.repositoryFallbackMessageId(index: Int): String {
+    val seed = listOf(roomId, toUserId.orEmpty(), fromUser.id, createdAt, createdAtLabel, text, file?.id.orEmpty(), index.toString())
+        .joinToString(separator = "\u0000")
+    return "local-chat-${seed.stableRepositoryChatHash()}"
+}
+
+private fun String.stableRepositoryChatHash(): String {
+    var hash = 1125899906842597L
+    for (char in this) {
+        hash = 31L * hash + char.code
+    }
+    return hash.toULong().toString(36)
 }
 
 private fun ChatMessage.matchesSearchQuery(query: String): Boolean {

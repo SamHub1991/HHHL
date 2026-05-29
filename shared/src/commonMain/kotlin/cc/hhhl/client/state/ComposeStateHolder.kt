@@ -41,6 +41,8 @@ data class ComposeUiState(
     val errorMessage: String? = null,
     val createdNoteId: String? = null,
     val requiresRelogin: Boolean = false,
+    val restoredDraft: Boolean = false,
+    val failedSendQueue: List<ComposeFailedSend> = emptyList(),
 )
 
 class ComposeStateHolder(
@@ -48,6 +50,7 @@ class ComposeStateHolder(
     private val driveFileRepository: DriveFileRepository? = null,
     private val userProfileRepository: UserProfileRepository? = null,
     private val draftStore: ComposeDraftStore = NoopComposeDraftStore,
+    private val draftKeyProvider: () -> String = { DEFAULT_DRAFT_KEY },
     private val scope: CoroutineScope,
 ) {
     private val mutableState = MutableStateFlow(ComposeUiState())
@@ -58,77 +61,53 @@ class ComposeStateHolder(
     private var scheduledNotesRequestId = 0
 
     fun restoreStoredDraft() {
-        val storedDraft = runCatching { draftStore.loadDraft() }.getOrNull() ?: return
+        val storedDraft = runCatching { draftStore.loadDraft(currentDraftKey()) }.getOrNull() ?: return
         draftSessionId += 1
-        updateDraftState { current ->
+        updateDraftState(clearRestoredDraft = false) { current ->
             current.copy(
                 draft = storedDraft.sanitizedForCapabilities(current.canPublicNote, current.canScheduleNotes),
                 errorMessage = null,
                 createdNoteId = null,
                 requiresRelogin = false,
+                restoredDraft = storedDraft.hasUserDraftContent(),
             )
         }
     }
 
+    fun restoreFailedSendQueue() {
+        val queue = runCatching { draftStore.loadFailedSendQueue(failedQueueStorageKey()) }.getOrDefault(emptyList())
+        mutableState.update { it.copy(failedSendQueue = queue) }
+    }
+
     fun startReply(replyId: String) {
-        invalidateDraftSession()
-        updateDraftState {
-            it.copy(
-                draft = ComposeDraft(
-                    replyId = replyId.takeIf { id -> id.isNotBlank() },
-                    visibility = defaultVisibility(it.canPublicNote),
-                ),
-                attachedFiles = emptyList(),
-                errorMessage = null,
-                createdNoteId = null,
-                requiresRelogin = false,
+        startDraftContext { canPublicNote ->
+            ComposeDraft(
+                replyId = replyId.takeIf { id -> id.isNotBlank() },
+                visibility = defaultVisibility(canPublicNote),
             )
         }
     }
 
     fun startQuote(renoteId: String) {
-        invalidateDraftSession()
-        updateDraftState {
-            it.copy(
-                draft = ComposeDraft(
-                    renoteId = renoteId.takeIf { id -> id.isNotBlank() },
-                    visibility = defaultVisibility(it.canPublicNote),
-                ),
-                attachedFiles = emptyList(),
-                errorMessage = null,
-                createdNoteId = null,
-                requiresRelogin = false,
+        startDraftContext { canPublicNote ->
+            ComposeDraft(
+                renoteId = renoteId.takeIf { id -> id.isNotBlank() },
+                visibility = defaultVisibility(canPublicNote),
             )
         }
     }
 
     fun startChannelNote(channelId: String) {
-        invalidateDraftSession()
-        updateDraftState {
-            it.copy(
-                draft = ComposeDraft(
-                    channelId = channelId.takeIf { id -> id.isNotBlank() },
-                    visibility = defaultVisibility(it.canPublicNote),
-                ),
-                attachedFiles = emptyList(),
-                errorMessage = null,
-                createdNoteId = null,
-                requiresRelogin = false,
+        startDraftContext { canPublicNote ->
+            ComposeDraft(
+                channelId = channelId.takeIf { id -> id.isNotBlank() },
+                visibility = defaultVisibility(canPublicNote),
             )
         }
     }
 
     fun startNewNote() {
-        invalidateDraftSession()
-        updateDraftState {
-            it.copy(
-                draft = newDraft(it.canPublicNote),
-                attachedFiles = emptyList(),
-                errorMessage = null,
-                createdNoteId = null,
-                requiresRelogin = false,
-            )
-        }
+        startDraftContext { canPublicNote -> newDraft(canPublicNote) }
     }
 
     fun updateText(text: String) {
@@ -138,6 +117,7 @@ class ComposeStateHolder(
                 errorMessage = null,
                 createdNoteId = null,
                 requiresRelogin = false,
+                restoredDraft = false,
             )
         }
     }
@@ -227,6 +207,7 @@ class ComposeStateHolder(
                 errorMessage = null,
                 createdNoteId = null,
                 requiresRelogin = false,
+                restoredDraft = false,
             )
         }
     }
@@ -826,7 +807,7 @@ class ComposeStateHolder(
                             )
                         } else {
                             draftSessionId += 1
-                            runCatching { draftStore.clearDraft() }
+                            runCatching { draftStore.clearDraft(currentDraftKey(draft)) }
                             latest.copy(
                                 draft = newDraft(latest.canPublicNote),
                                 attachedFiles = emptyList(),
@@ -853,15 +834,83 @@ class ComposeStateHolder(
                         requiresRelogin = false,
                     )
                 }
-                is ComposeRepositoryResult.Error -> mutableState.update {
-                    it.copy(
-                        isSending = false,
-                        errorMessage = result.message,
-                        requiresRelogin = false,
-                    )
+                is ComposeRepositoryResult.Error -> enqueueFailedSend(
+                    draft = draft,
+                    message = result.message,
+                )
+            }
+        }
+    }
+
+    fun retryFailedSend(id: String) {
+        val cleanId = id.trim()
+        val queued = state.value.failedSendQueue.firstOrNull { it.id == cleanId } ?: return
+        if (queued.isRetrying) return
+
+        updateFailedSendQueue { queue ->
+            queue.map { item -> if (item.id == cleanId) item.copy(isRetrying = true) else item }
+        }
+
+        scope.launch {
+            when (val result = repository.send(queued.draft)) {
+                is ComposeRepositoryResult.Success -> {
+                    updateFailedSendQueue { queue -> queue.filterNot { it.id == cleanId } }
+                    mutableState.update {
+                        it.copy(
+                            errorMessage = null,
+                            createdNoteId = result.createdNoteId,
+                            requiresRelogin = false,
+                        )
+                    }
+                }
+                ComposeRepositoryResult.Unauthorized -> {
+                    updateFailedSendMessage(cleanId, "登录已失效，请重新登录")
+                    mutableState.update {
+                        it.copy(
+                            errorMessage = "登录已失效，请重新登录",
+                            requiresRelogin = true,
+                        )
+                    }
+                }
+                is ComposeRepositoryResult.ValidationError -> {
+                    updateFailedSendMessage(cleanId, result.message)
+                    mutableState.update {
+                        it.copy(
+                            errorMessage = result.message,
+                            requiresRelogin = false,
+                        )
+                    }
+                }
+                is ComposeRepositoryResult.Error -> {
+                    updateFailedSendMessage(cleanId, result.message)
+                    mutableState.update {
+                        it.copy(
+                            errorMessage = result.message,
+                            requiresRelogin = false,
+                        )
+                    }
                 }
             }
         }
+    }
+
+    fun restoreFailedSend(id: String) {
+        val cleanId = id.trim()
+        val queued = state.value.failedSendQueue.firstOrNull { it.id == cleanId } ?: return
+        updateDraftState(clearRestoredDraft = false) { current ->
+            current.copy(
+                draft = queued.draft.sanitizedForCapabilities(current.canPublicNote, current.canScheduleNotes),
+                errorMessage = null,
+                createdNoteId = null,
+                requiresRelogin = false,
+                restoredDraft = true,
+            )
+        }
+    }
+
+    fun removeFailedSend(id: String) {
+        val cleanId = id.trim()
+        updateFailedSendQueue { queue -> queue.filterNot { it.id == cleanId } }
     }
 
     fun consumeCreatedNote() {
@@ -975,20 +1024,116 @@ class ComposeStateHolder(
         return ComposeDraft(visibility = defaultVisibility(canPublicNote))
     }
 
+    private fun startDraftContext(baseDraftFactory: (Boolean) -> ComposeDraft) {
+        invalidateDraftSession()
+        val baseDraft = baseDraftFactory(state.value.canPublicNote)
+        val storedDraft = runCatching { draftStore.loadDraft(currentDraftKey(baseDraft)) }.getOrNull()
+        updateDraftState(clearRestoredDraft = false) { current ->
+            val nextDraft = (storedDraft ?: baseDraft)
+                .withContextFrom(baseDraft)
+                .sanitizedForCapabilities(current.canPublicNote, current.canScheduleNotes)
+            current.copy(
+                draft = nextDraft,
+                attachedFiles = emptyList(),
+                errorMessage = null,
+                createdNoteId = null,
+                requiresRelogin = false,
+                restoredDraft = storedDraft != null && nextDraft.hasUserDraftContent(),
+            )
+        }
+    }
+
     private fun currentEpochMillis(): Long {
         return Clock.System.now().toEpochMilliseconds()
     }
 
-    private fun updateDraftState(transform: (ComposeUiState) -> ComposeUiState) {
+    private fun updateDraftState(
+        clearRestoredDraft: Boolean = true,
+        transform: (ComposeUiState) -> ComposeUiState,
+    ) {
         var nextDraft: ComposeDraft? = null
         mutableState.update { current ->
-            transform(current).also { next -> nextDraft = next.draft }
+            val transformed = transform(current)
+            val next = if (clearRestoredDraft && transformed.draft != current.draft) {
+                transformed.copy(restoredDraft = false)
+            } else {
+                transformed
+            }
+            next.also { nextDraft = it.draft }
         }
         nextDraft?.let(::persistDraft)
     }
 
     private fun persistDraft(draft: ComposeDraft) {
-        runCatching { draftStore.saveDraft(draft) }
+        runCatching { draftStore.saveDraft(currentDraftKey(draft), draft) }
+    }
+
+    private fun enqueueFailedSend(
+        draft: ComposeDraft,
+        message: String,
+    ) {
+        val createdAt = currentEpochMillis()
+        updateFailedSendQueue { queue ->
+            val cleanQueue = queue.filterNot { it.draft.sameSendPayloadAs(draft) }
+            (listOf(
+                ComposeFailedSend(
+                    id = failedSendId(createdAt),
+                    draft = draft,
+                    message = message,
+                    createdAtEpochMillis = createdAt,
+                ),
+            ) + cleanQueue).take(MAX_FAILED_SEND_QUEUE_SIZE)
+        }
+        mutableState.update {
+            it.copy(
+                isSending = false,
+                errorMessage = message,
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    private fun updateFailedSendMessage(
+        id: String,
+        message: String,
+    ) {
+        updateFailedSendQueue { queue ->
+            queue.map { item ->
+                if (item.id == id) item.copy(message = message, isRetrying = false) else item
+            }
+        }
+    }
+
+    private fun updateFailedSendQueue(transform: (List<ComposeFailedSend>) -> List<ComposeFailedSend>) {
+        var nextQueue = emptyList<ComposeFailedSend>()
+        mutableState.update { current ->
+            val transformed = transform(current.failedSendQueue)
+                .filter { it.draft.hasUserDraftContent() }
+                .take(MAX_FAILED_SEND_QUEUE_SIZE)
+            nextQueue = transformed
+            current.copy(failedSendQueue = transformed)
+        }
+        runCatching { draftStore.saveFailedSendQueue(failedQueueStorageKey(), nextQueue) }
+    }
+
+    private fun failedQueueStorageKey(): String {
+        val cleanAccountKey = draftKeyProvider().trim().takeIf { it.isNotEmpty() } ?: DEFAULT_DRAFT_KEY
+        return "$cleanAccountKey|failed-send-queue"
+    }
+
+    private fun failedSendId(createdAtEpochMillis: Long): String {
+        return "failed-$createdAtEpochMillis-${state.value.failedSendQueue.size}"
+    }
+
+    private fun ComposeDraft.sameSendPayloadAs(other: ComposeDraft): Boolean {
+        return this == other
+    }
+
+    private fun currentDraftKey(draft: ComposeDraft = state.value.draft): String {
+        return composeDraftStorageKey(
+            accountKey = draftKeyProvider(),
+            draft = draft,
+        )
     }
 
     private fun invalidateDraftSession() {
@@ -1011,6 +1156,25 @@ class ComposeStateHolder(
             visibleUserIds = if (nextVisibility == NoteVisibility.Specified) visibleUserIds else emptyList(),
             scheduleNote = if (canScheduleNotes) scheduleNote else null,
         )
+    }
+
+    private fun ComposeDraft.withContextFrom(baseDraft: ComposeDraft): ComposeDraft {
+        return copy(
+            editId = baseDraft.editId,
+            replyId = baseDraft.replyId,
+            renoteId = baseDraft.renoteId,
+            channelId = baseDraft.channelId,
+        )
+    }
+
+    private fun ComposeDraft.hasUserDraftContent(): Boolean {
+        return text.isNotBlank() ||
+            !cw.isNullOrBlank() ||
+            fileIds.isNotEmpty() ||
+            poll != null ||
+            localOnly ||
+            visibleUserIds.isNotEmpty() ||
+            scheduleNote != null
     }
 
     private fun ComposeScheduledNote.toDraft(
@@ -1042,5 +1206,22 @@ class ComposeStateHolder(
         const val MAX_FILE_COUNT = 16
         const val MIN_POLL_CHOICES = 2
         const val MAX_POLL_CHOICES = 10
+        const val MAX_FAILED_SEND_QUEUE_SIZE = 8
+        const val DEFAULT_DRAFT_KEY = "default"
     }
+}
+
+fun composeDraftStorageKey(
+    accountKey: String,
+    draft: ComposeDraft,
+): String {
+    val cleanAccountKey = accountKey.trim().takeIf { it.isNotEmpty() } ?: "default"
+    val contextKey = when {
+        !draft.replyId.isNullOrBlank() -> "reply:${draft.replyId}"
+        !draft.renoteId.isNullOrBlank() -> "quote:${draft.renoteId}"
+        !draft.channelId.isNullOrBlank() -> "channel:${draft.channelId}"
+        !draft.editId.isNullOrBlank() -> "edit:${draft.editId}"
+        else -> "new"
+    }
+    return "$cleanAccountKey|$contextKey"
 }

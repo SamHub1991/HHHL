@@ -528,6 +528,7 @@ private fun JsonElement.asAnnouncementElements(): List<JsonElement> {
 
 private fun defaultAnnouncementClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

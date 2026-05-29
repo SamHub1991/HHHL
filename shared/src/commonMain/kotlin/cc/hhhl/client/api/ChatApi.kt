@@ -1317,10 +1317,10 @@ private data class ChatMessageDeleteRequest(
 
 @Serializable
 private data class ChatRoomMembershipDto(
-    val id: String,
+    val id: String = "",
     val createdAt: String = "",
     val userId: String = "",
-    val roomId: String,
+    val roomId: String = "",
     val user: ChatUserDto? = null,
     val room: ChatRoomDto? = null,
     val lastMessage: ChatRoomLatestMessageDto? = null,
@@ -1333,16 +1333,18 @@ private data class ChatRoomMembershipDto(
     val unreadCount: Int = 0,
 ) {
     fun toDomainRoom(): ChatRoom {
+        val stableRoomId = room?.id?.takeIf { it.isNotBlank() } ?: roomId.ifBlank { id }
+        val stableMembershipId = id.ifBlank { stableRoomId }
         val membershipLatestMessageAtLabel = latestMessageTimeLabel()
         val domainRoom = room?.toDomainRoom(
-            membershipId = id,
+            membershipId = stableMembershipId,
             membershipUnreadCount = unreadCount,
             latestMessageAtLabelOverride = membershipLatestMessageAtLabel,
             latestMessageMarkerOverride = latestMessageMarker(),
         )
         return domainRoom ?: ChatRoom(
-            id = roomId,
-            membershipId = id,
+            id = stableRoomId,
+            membershipId = stableMembershipId,
             name = "聊天室",
             description = "",
             joinMode = "",
@@ -1363,8 +1365,8 @@ private data class ChatRoomMembershipDto(
             avatarInitial = userId.ifBlank { "成" }.avatarInitial(),
         )
         return ChatRoomMember(
-            membershipId = id,
-            roomId = roomId,
+            membershipId = id.ifBlank { roomId.ifBlank { memberUser.id } },
+            roomId = roomId.ifBlank { id },
             user = memberUser,
             joinedAtLabel = createdAt.toLocalCompactDateLabel(),
         )
@@ -1448,7 +1450,7 @@ private fun Int?.coercePositive(): Int = this?.coerceAtLeast(0) ?: 0
 
 @Serializable
 private data class ChatRoomDto(
-    val id: String,
+    val id: String = "",
     val owner: ChatUserDto? = null,
     val name: String = "聊天室",
     val description: String = "",
@@ -1470,9 +1472,10 @@ private data class ChatRoomDto(
         latestMessageAtLabelOverride: String = "",
         latestMessageMarkerOverride: String = "",
     ): ChatRoom {
+        val stableRoomId = id.ifBlank { membershipId }
         return ChatRoom(
-            id = id,
-            membershipId = membershipId,
+            id = stableRoomId,
+            membershipId = membershipId.ifBlank { stableRoomId },
             name = name,
             description = description,
             joinMode = joinMode,
@@ -1521,8 +1524,8 @@ private const val HISTORY_UNREAD_FALLBACK_LIMIT = 100
 
 @Serializable
 private data class ChatMessageDto(
-    val id: String,
-    val createdAt: String,
+    val id: String = "",
+    val createdAt: String = "",
     val fromUser: ChatUserDto? = null,
     val fromUserId: String = "",
     val toUser: ChatUserDto? = null,
@@ -1545,7 +1548,15 @@ private data class ChatMessageDto(
             avatarInitial = fromUserId.ifBlank { "成" }.avatarInitial(),
         )
         return ChatMessage(
-            id = id,
+            id = stableChatMessageId(
+                id = id,
+                roomId = toRoomId.orEmpty(),
+                toUserId = toUserId.orEmpty(),
+                fromUserId = user.id,
+                createdAt = createdAt,
+                text = text.orEmpty(),
+                fileId = file?.id.orEmpty(),
+            ),
             roomId = toRoomId.orEmpty(),
             fromUser = user,
             text = text.orEmpty(),
@@ -1576,7 +1587,7 @@ private data class ChatMessageDto(
 
 @Serializable
 private data class ChatMessageReferenceDto(
-    val id: String,
+    val id: String = "",
     val fromUser: ChatUserDto? = null,
     val text: String? = null,
     val file: ChatDriveFileDto? = null,
@@ -1593,8 +1604,8 @@ private data class ChatMessageReferenceDto(
 
 @Serializable
 private data class ChatDriveFileDto(
-    val id: String,
-    val name: String,
+    val id: String = "",
+    val name: String = "",
     val type: String = "",
     val url: String? = null,
     val thumbnailUrl: String? = null,
@@ -1618,25 +1629,26 @@ private data class ChatDriveFileDto(
 
 @Serializable
 private data class ChatMessageReactionDto(
-    val reaction: String,
+    val reaction: String = "",
     val user: ChatUserDto? = null,
 )
 
 @Serializable
 private data class ChatUserDto(
-    val id: String,
-    val username: String,
+    val id: String = "",
+    val username: String = "",
     val name: String? = null,
     val avatarUrl: String? = null,
     val avatarDecorations: List<ChatAvatarDecorationDto> = emptyList(),
     val onlineStatus: String = "unknown",
 ) {
     fun toDomainUser(): User {
-        val displayName = name?.takeIf { it.isNotBlank() } ?: username
+        val stableUsername = username.ifBlank { id.ifBlank { "unknown" } }
+        val displayName = name?.takeIf { it.isNotBlank() } ?: stableUsername
         return User(
-            id = id,
+            id = id.ifBlank { stableUsername },
             displayName = displayName,
-            username = username,
+            username = stableUsername,
             avatarInitial = displayName.avatarInitial(),
             avatarUrl = avatarUrl?.takeIf { it.isNotBlank() },
             avatarDecorations = avatarDecorations.mapNotNull { it.toDomainDecoration() },
@@ -1690,13 +1702,39 @@ private fun String.avatarInitial(): String {
     return trim().firstOrNull()?.toString()?.uppercase() ?: "?"
 }
 
+private fun stableChatMessageId(
+    id: String,
+    roomId: String,
+    toUserId: String,
+    fromUserId: String,
+    createdAt: String,
+    text: String,
+    fileId: String,
+): String {
+    val cleanId = id.trim()
+    if (cleanId.isNotEmpty()) return cleanId
+    val seed = listOf(roomId, toUserId, fromUserId, createdAt, text, fileId)
+        .joinToString(separator = "\u0000")
+    return "local-chat-${seed.stableChatHash()}"
+}
+
+private fun String.stableChatHash(): String {
+    var hash = 1125899906842597L
+    for (char in this) {
+        hash = 31L * hash + char.code
+    }
+    return hash.toULong().toString(36)
+}
+
 private fun defaultChatClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(
                 Json {
                     ignoreUnknownKeys = true
+                    coerceInputValues = true
                     explicitNulls = false
                 },
             )

@@ -2,10 +2,14 @@ package cc.hhhl.client.ui.component
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -50,6 +54,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -69,8 +75,10 @@ import cc.hhhl.client.model.CustomEmoji
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NoteMedia
 import cc.hhhl.client.model.NoteVisibility
+import cc.hhhl.client.model.User
 import cc.hhhl.client.model.commonReactionOptions
 import cc.hhhl.client.theme.LocalHhhlColors
+import kotlin.math.abs
 
 internal val HhhlNoteActionMinHeight = HhhlControlMinHeight
 internal val HhhlNoteActionMinWidth = HhhlControlMinWidth
@@ -92,6 +100,8 @@ internal const val HhhlReactionPickerMaxTotalItems = 120
 @Immutable
 data class NoteRowActions(
     val onShareNote: ((String) -> Unit)? = null,
+    val onAiSummarizeNote: (Note) -> Unit = {},
+    val onAiReplyDraft: (Note) -> Unit = {},
     val onHideFromList: (String) -> Unit = {},
     val onMuteNote: (String) -> Unit = {},
     val onUnmuteNote: (String) -> Unit = {},
@@ -102,7 +112,31 @@ data class NoteRowActions(
 
 val LocalNoteRowActions = staticCompositionLocalOf { NoteRowActions() }
 val LocalBlockedNoteAuthorIds = staticCompositionLocalOf<Set<String>> { emptySet() }
+val LocalMutedNoteFilters = staticCompositionLocalOf { MutedNoteFilters() }
+val LocalNoteRowGesturesEnabled = staticCompositionLocalOf { true }
+val LocalUserQuickActions = staticCompositionLocalOf { UserQuickActions() }
 
+@Immutable
+data class UserQuickActions(
+    val onFollowUser: (User) -> Unit = {},
+    val onMuteUser: (User) -> Unit = {},
+    val onBlockUser: (User) -> Unit = {},
+    val onAddUserToList: (User) -> Unit = {},
+    val onToggleSpecialCareUser: (User) -> Unit = {},
+)
+
+enum class NoteRowSwipeAction(val label: String) {
+    Reply("回复"),
+    Favorite("稍后看"),
+}
+
+@Immutable
+data class MutedNoteFilters(
+    val mutedWords: List<String> = emptyList(),
+    val hardMutedWords: List<String> = emptyList(),
+)
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NoteRow(
     note: Note,
@@ -136,13 +170,22 @@ fun NoteRow(
     density: NoteRowDensity = NoteRowDensity.Comfortable,
 ) {
     if (note.isHiddenByBlockedAuthor(LocalBlockedNoteAuthorIds.current)) return
+    val mutedFilters = LocalMutedNoteFilters.current
+    if (note.isHiddenByHardMutedWords(mutedFilters.hardMutedWords)) return
     var reactionMenuExpanded by remember(note.id) { mutableStateOf(false) }
     var deleteConfirmOpen by remember(note.id) { mutableStateOf(false) }
     var reportConfirmOpen by remember(note.id) { mutableStateOf(false) }
+    var userQuickPanelOpen by remember(note.author.id) { mutableStateOf(false) }
+    var blockUserConfirmOpen by remember(note.author.id) { mutableStateOf(false) }
     var contentExpanded by remember(note.id, note.cw) { mutableStateOf(note.cw.isNullOrBlank()) }
+    var mutedContentExpanded by remember(note.id, mutedFilters.mutedWords) {
+        mutableStateOf(!note.matchesMutedWords(mutedFilters.mutedWords))
+    }
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
     val rowActions = LocalNoteRowActions.current
+    val userQuickActions = LocalUserQuickActions.current
+    val listGesturesEnabled = LocalNoteRowGesturesEnabled.current
     val effectiveOnShareNote = onShareNote ?: rowActions.onShareNote
     val effectiveOnHideFromList = onHideFromList ?: rowActions.onHideFromList
     val effectiveOnMuteNote = onMuteNote ?: rowActions.onMuteNote
@@ -173,38 +216,92 @@ fun NoteRow(
     } else {
         Modifier.animateContentSize()
     }
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .then(rowSizeAnimationModifier)
-            .clickable { onClick(note.id) },
-    ) {
-        Row(
-            modifier = Modifier.padding(
-                horizontal = metrics.horizontalPadding.dp,
-                vertical = metrics.verticalPadding.dp,
-            ),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Avatar(
-                initial = note.author.avatarInitial,
-                avatarUrl = note.author.avatarUrl,
-                size = metrics.avatarSize.dp,
-                modifier = Modifier
-                    .clickable { onOpenUser(note.author.id) },
+    val mutedPhrase = remember(note, mutedFilters.mutedWords) {
+        note.firstMatchedMutedWord(mutedFilters.mutedWords)
+    }
+    val localDensity = LocalDensity.current
+    val swipeThresholdPx = with(localDensity) { 76.dp.toPx() }
+    val swipeMaxPx = with(localDensity) { 118.dp.toPx() }
+    var horizontalDragOffset by remember(note.id, listGesturesEnabled) { mutableStateOf(0f) }
+    val animatedSwipeOffset by animateFloatAsState(
+        targetValue = horizontalDragOffset,
+        animationSpec = tween(durationMillis = 130),
+        label = "note-row-swipe-offset",
+    )
+    fun openUserQuickPanel() {
+        if (note.author.id.isNotBlank()) {
+            userQuickPanelOpen = true
+        }
+    }
+    val userClickModifier = Modifier.combinedClickable(
+        onClick = { onOpenUser(note.author.id) },
+        onLongClick = ::openUserQuickPanel,
+    )
+    val swipeModifier = if (listGesturesEnabled && !isActionPending) {
+        Modifier.pointerInput(note.id, listGesturesEnabled, isActionPending) {
+            detectHorizontalDragGestures(
+                onDragEnd = {
+                    val action = noteRowSwipeAction(horizontalDragOffset, swipeThresholdPx)
+                    horizontalDragOffset = 0f
+                    when (action) {
+                        NoteRowSwipeAction.Reply -> onReply(note.id)
+                        NoteRowSwipeAction.Favorite -> onFavorite(note.id)
+                        null -> Unit
+                    }
+                },
+                onDragCancel = { horizontalDragOffset = 0f },
+                onHorizontalDrag = { _, dragAmount ->
+                    horizontalDragOffset = (horizontalDragOffset + dragAmount)
+                        .coerceIn(-swipeMaxPx, swipeMaxPx)
+                },
             )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(metrics.contentSpacing.dp),
+        }
+    } else {
+        Modifier
+    }
+
+    Box(modifier = modifier.fillMaxWidth()) {
+        if (listGesturesEnabled) {
+            NoteRowSwipeBackground(
+                offset = animatedSwipeOffset,
+                threshold = swipeThresholdPx,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(rowSizeAnimationModifier)
+                .offset(x = with(localDensity) { animatedSwipeOffset.toDp() })
+                .then(swipeModifier)
+                .clickable { onClick(note.id) },
+        ) {
+            Row(
+                modifier = Modifier.padding(
+                    horizontal = metrics.horizontalPadding.dp,
+                    vertical = metrics.verticalPadding.dp,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                NoteAuthorLine(
-                    note = note,
-                    onOpenUser = onOpenUser,
-                    isSpecialCareAuthor = isSpecialCareAuthor,
-                    displayStyle = MaterialTheme.typography.bodyMedium,
-                    metaStyle = MaterialTheme.typography.bodySmall,
+                Avatar(
+                    initial = note.author.avatarInitial,
+                    avatarUrl = note.author.avatarUrl,
+                    avatarDecorations = note.author.avatarDecorations,
+                    size = metrics.avatarSize.dp,
+                    modifier = userClickModifier,
                 )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(metrics.contentSpacing.dp),
+                ) {
+                    NoteAuthorLine(
+                        note = note,
+                        onOpenUser = onOpenUser,
+                        onOpenQuickActions = ::openUserQuickPanel,
+                        isSpecialCareAuthor = isSpecialCareAuthor,
+                        displayStyle = MaterialTheme.typography.bodyMedium,
+                        metaStyle = MaterialTheme.typography.bodySmall,
+                    )
                 if (note.isRenote) {
                     Text(
                         text = "转发",
@@ -239,7 +336,12 @@ fun NoteRow(
                         )
                     }
                 }
-                if (isContentVisible) {
+                if (mutedPhrase != null && !mutedContentExpanded) {
+                    MutedNoteCollapseRow(
+                        phrase = mutedPhrase,
+                        onShow = { mutedContentExpanded = true },
+                    )
+                } else if (isContentVisible) {
                     InlineRichText(
                         text = note.text,
                         style = MaterialTheme.typography.bodyMedium,
@@ -377,6 +479,8 @@ fun NoteRow(
                                                 clipboardManager.setText(AnnotatedString(noteLink))
                                             }
                                         }
+                                        NoteOverflowAction.AiSummary -> rowActions.onAiSummarizeNote(note)
+                                        NoteOverflowAction.AiReplyDraft -> rowActions.onAiReplyDraft(note)
                                         NoteOverflowAction.Favorite -> onFavorite(note.id)
                                         NoteOverflowAction.AddToClip -> onAddToClip?.invoke(note)
                                         NoteOverflowAction.HideFromList -> effectiveOnHideFromList(note.id)
@@ -400,7 +504,64 @@ fun NoteRow(
                 }
             }
         }
-        HhhlDivider()
+            HhhlDivider()
+        }
+    }
+
+    if (userQuickPanelOpen) {
+        UserQuickActionDialog(
+            user = note.author,
+            isSpecialCareUser = isSpecialCareAuthor,
+            onDismiss = { userQuickPanelOpen = false },
+            onOpenUser = {
+                userQuickPanelOpen = false
+                onOpenUser(note.author.id)
+            },
+            onFollowUser = {
+                userQuickPanelOpen = false
+                userQuickActions.onFollowUser(note.author)
+            },
+            onMuteUser = {
+                userQuickPanelOpen = false
+                userQuickActions.onMuteUser(note.author)
+            },
+            onBlockUser = {
+                userQuickPanelOpen = false
+                blockUserConfirmOpen = true
+            },
+            onAddUserToList = {
+                userQuickPanelOpen = false
+                userQuickActions.onAddUserToList(note.author)
+            },
+            onToggleSpecialCareUser = {
+                userQuickPanelOpen = false
+                userQuickActions.onToggleSpecialCareUser(note.author)
+            },
+        )
+    }
+
+    if (blockUserConfirmOpen) {
+        HhhlAlertDialog(
+            onDismissRequest = { blockUserConfirmOpen = false },
+            title = { Text("屏蔽用户") },
+            text = { Text("会屏蔽 @${note.author.username}，同时隐藏来自该用户的帖子。") },
+            confirmButton = {
+                HhhlTextButton(
+                    onClick = {
+                        blockUserConfirmOpen = false
+                        userQuickActions.onBlockUser(note.author)
+                    },
+                    destructive = true,
+                ) {
+                    Text("屏蔽")
+                }
+            },
+            dismissButton = {
+                HhhlTextButton(onClick = { blockUserConfirmOpen = false }) {
+                    Text("取消")
+                }
+            },
+        )
     }
 
     if (deleteConfirmOpen) {
@@ -457,12 +618,202 @@ fun Note.isHiddenByBlockedAuthor(blockedUserIds: Set<String>): Boolean {
     return author.id in blockedUserIds || quotedNote?.isHiddenByBlockedAuthor(blockedUserIds) == true
 }
 
+fun Note.matchesMutedWords(words: List<String>): Boolean {
+    return firstMatchedMutedWord(words) != null
+}
+
+fun Note.isHiddenByHardMutedWords(words: List<String>): Boolean {
+    return matchesMutedWords(words) || quotedNote?.isHiddenByHardMutedWords(words) == true
+}
+
+fun Note.firstMatchedMutedWord(words: List<String>): String? {
+    val haystack = noteSearchableText().lowercase()
+    return words
+        .asSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .firstOrNull { phrase -> haystack.contains(phrase.lowercase()) }
+}
+
+@Composable
+private fun NoteRowSwipeBackground(
+    offset: Float,
+    threshold: Float,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalHhhlColors.current
+    val action = noteRowSwipeAction(offset, threshold)
+    val revealProgress = (abs(offset) / threshold).coerceIn(0f, 1f)
+    if (revealProgress <= 0.08f) return
+    val positive = offset > 0f
+    val label = action?.label ?: if (positive) NoteRowSwipeAction.Reply.label else NoteRowSwipeAction.Favorite.label
+    val backgroundColor = when {
+        action == NoteRowSwipeAction.Favorite -> colors.accentSoft.copy(alpha = 0.86f * revealProgress)
+        action == NoteRowSwipeAction.Reply -> colors.inputBackground.copy(alpha = 0.82f * revealProgress)
+        else -> colors.inputBackground.copy(alpha = 0.42f * revealProgress)
+    }
+
+    Box(
+        modifier = modifier.background(backgroundColor),
+        contentAlignment = if (positive) Alignment.CenterStart else Alignment.CenterEnd,
+    ) {
+        Text(
+            text = label,
+            color = (if (action == null) colors.textMuted else colors.textPrimary).copy(alpha = revealProgress),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 18.dp),
+        )
+    }
+}
+
+fun noteRowSwipeAction(
+    offset: Float,
+    threshold: Float,
+): NoteRowSwipeAction? {
+    if (abs(offset) < threshold) return null
+    return if (offset > 0f) NoteRowSwipeAction.Reply else NoteRowSwipeAction.Favorite
+}
+
+@Composable
+private fun UserQuickActionDialog(
+    user: User,
+    isSpecialCareUser: Boolean,
+    onDismiss: () -> Unit,
+    onOpenUser: () -> Unit,
+    onFollowUser: () -> Unit,
+    onMuteUser: () -> Unit,
+    onBlockUser: () -> Unit,
+    onAddUserToList: () -> Unit,
+    onToggleSpecialCareUser: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        val colors = LocalHhhlColors.current
+        val isDarkSurface = colors.surface.luminance() < 0.2f
+        val panelShape = RoundedCornerShape(26.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 14.dp, vertical = 18.dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 390.dp)
+                    .fillMaxWidth()
+                    .shadow(
+                        elevation = 18.dp,
+                        shape = panelShape,
+                        clip = false,
+                        ambientColor = colors.shadow,
+                        spotColor = colors.shadow,
+                    )
+                    .clip(panelShape)
+                    .background(
+                        if (isDarkSurface) colors.surfaceElevated.copy(alpha = 0.97f) else colors.surface.copy(alpha = 0.99f),
+                    )
+                    .border(1.dp, colors.border.copy(alpha = if (isDarkSurface) 0.34f else 0.48f), panelShape)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .size(width = 34.dp, height = 4.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(colors.border.copy(alpha = 0.72f)),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(
+                        initial = user.avatarInitial,
+                        avatarUrl = user.avatarUrl,
+                        avatarDecorations = user.avatarDecorations,
+                        size = 42.dp,
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            text = user.displayName,
+                            color = colors.textPrimary,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "@${user.username}",
+                            color = colors.textMuted,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(colors.inputBackground.copy(alpha = if (isDarkSurface) 0.58f else 0.78f))
+                            .border(1.dp, colors.border.copy(alpha = 0.36f), RoundedCornerShape(999.dp))
+                            .clickable(onClick = onDismiss),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "关闭",
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    HhhlActionChip(label = "资料", emphasized = true, onClick = onOpenUser)
+                    HhhlActionChip(label = if (user.isFollowing) "已关注" else "关注", onClick = onFollowUser)
+                    HhhlActionChip(label = "加入列表", onClick = onAddUserToList)
+                    HhhlActionChip(
+                        label = if (isSpecialCareUser) "取消特别关心" else "特别关心",
+                        emphasized = isSpecialCareUser,
+                        onClick = onToggleSpecialCareUser,
+                    )
+                    HhhlActionChip(label = "静音", onClick = onMuteUser)
+                    HhhlActionChip(label = "屏蔽", emphasized = true, onClick = onBlockUser)
+                }
+            }
+        }
+    }
+}
+
+private fun Note.noteSearchableText(): String {
+    return buildString {
+        append(text)
+        cw?.let { append('\n').append(it) }
+        append('\n').append(author.displayName)
+        append('\n').append(author.username)
+        quotedNote?.let { append('\n').append(it.noteSearchableText()) }
+    }
+}
+
 enum class NoteOverflowAction(val label: String) {
     OpenDetail("详情"),
     CopyContent("复制内容"),
     CopyLink("复制链接"),
     Embed("嵌入"),
     Share("分享"),
+    AiSummary("AI 总结"),
+    AiReplyDraft("AI 回复草稿"),
     Favorite("收藏"),
     AddToClip("便签"),
     HideFromList("隐藏帖子列表"),
@@ -482,6 +833,7 @@ enum class NoteRenoteAction(val label: String) {
 
 enum class NoteRowDensity {
     Compact,
+    UltraCompact,
     Comfortable,
 }
 
@@ -688,6 +1040,8 @@ fun noteOverflowActions(
     add(NoteOverflowAction.CopyLink)
     add(NoteOverflowAction.Embed)
     add(NoteOverflowAction.Share)
+    add(NoteOverflowAction.AiSummary)
+    add(NoteOverflowAction.AiReplyDraft)
     add(NoteOverflowAction.Favorite)
     if (canAddToClip) {
         add(NoteOverflowAction.AddToClip)
@@ -823,6 +1177,13 @@ private fun String.customEmojiReactionName(): String? {
 
 fun noteRowMetrics(density: NoteRowDensity): NoteRowMetrics {
     return when (density) {
+        NoteRowDensity.UltraCompact -> NoteRowMetrics(
+            horizontalPadding = 12,
+            verticalPadding = 6,
+            avatarSize = 34,
+            contentSpacing = 3,
+            mediaHeight = 56,
+        )
         NoteRowDensity.Compact -> NoteRowMetrics(
             horizontalPadding = 12,
             verticalPadding = 8,
@@ -857,10 +1218,12 @@ fun noteVisibilityBadge(visibility: NoteVisibility): String? {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NoteAuthorLine(
     note: Note,
     onOpenUser: (String) -> Unit,
+    onOpenQuickActions: () -> Unit = { onOpenUser(note.author.id) },
     isSpecialCareAuthor: Boolean = false,
     displayStyle: TextStyle,
     metaStyle: TextStyle,
@@ -900,7 +1263,10 @@ private fun NoteAuthorLine(
             modifier = Modifier
                 .weight(1f)
                 .widthIn(min = 0.dp)
-                .clickable { onOpenUser(note.author.id) },
+                .combinedClickable(
+                    onClick = { onOpenUser(note.author.id) },
+                    onLongClick = onOpenQuickActions,
+                ),
         )
         if (isSpecialCareAuthor) {
             Text(
@@ -928,12 +1294,15 @@ private fun NoteAuthorLine(
                 color = colors.textMuted,
                 style = metaStyle,
                 maxLines = 1,
-                overflow = TextOverflow.Clip,
-                softWrap = false,
-                modifier = Modifier.clickable { onOpenUser(note.author.id) },
-            )
-        }
+            overflow = TextOverflow.Clip,
+            softWrap = false,
+            modifier = Modifier.combinedClickable(
+                onClick = { onOpenUser(note.author.id) },
+                onLongClick = onOpenQuickActions,
+            ),
+        )
     }
+}
 }
 
 @Composable
@@ -1091,6 +1460,40 @@ private fun ReactionChip(
             text = count.toString(),
             color = colors.accent,
             style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+@Composable
+private fun MutedNoteCollapseRow(
+    phrase: String,
+    onShow: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.inputBackground.copy(alpha = 0.46f))
+            .border(1.dp, colors.border.copy(alpha = 0.32f), RoundedCornerShape(8.dp))
+            .clickable(onClick = onShow)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "已折叠包含「$phrase」的帖子",
+            color = colors.textMuted,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = "显示",
+            color = colors.accent,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }

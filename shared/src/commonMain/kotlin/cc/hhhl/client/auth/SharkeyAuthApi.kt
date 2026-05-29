@@ -1,6 +1,7 @@
 package cc.hhhl.client.auth
 
 import cc.hhhl.client.api.isSharkeyUnauthorized
+import cc.hhhl.client.api.installDefaultHttpTimeouts
 import cc.hhhl.client.api.toSharkeyApiErrorMessage
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -286,6 +287,7 @@ class SharkeyAuthApi(
 
 private fun defaultClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

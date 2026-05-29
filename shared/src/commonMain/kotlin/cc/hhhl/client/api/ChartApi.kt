@@ -146,6 +146,7 @@ private suspend fun HttpResponse.apiErrorMessage(): String? {
 
 private fun defaultChartClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         install(ContentNegotiation) {
             json(
                 Json {

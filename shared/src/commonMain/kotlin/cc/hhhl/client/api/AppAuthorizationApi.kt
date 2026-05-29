@@ -450,6 +450,7 @@ private fun String.avatarInitial(): String {
 
 private fun defaultAppAuthorizationClient(): HttpClient {
     return HttpClient {
+        installDefaultHttpTimeouts()
         expectSuccess = false
         install(ContentNegotiation) {
             json(

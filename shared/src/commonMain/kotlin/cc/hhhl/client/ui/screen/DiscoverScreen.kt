@@ -15,7 +15,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -42,6 +45,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.model.FederationInstance
 import cc.hhhl.client.model.Note
@@ -57,8 +61,8 @@ import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlDivider
-import cc.hhhl.client.ui.component.HhhlIconActionButtonIconSize
-import cc.hhhl.client.ui.component.HhhlIconActionButtonSize
+import cc.hhhl.client.ui.component.HhhlDropdownMenu
+import cc.hhhl.client.ui.component.HhhlDropdownMenuItem
 import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
@@ -111,6 +115,7 @@ fun DiscoverScreen(
     isActionPending: (String) -> Boolean = { false },
     canDeleteAuthor: (String) -> Boolean = { false },
     noteRowDensity: NoteRowDensity = NoteRowDensity.Comfortable,
+    listState: LazyListState = rememberLazyListState(),
 ) {
     val colors = LocalHhhlColors.current
     val query = state?.query.orEmpty()
@@ -121,7 +126,6 @@ fun DiscoverScreen(
         canTrend = state?.canTrend == true,
         canViewFederation = state?.canViewFederation == true,
     )
-    val listState = rememberLazyListState()
     val canLoadMore = state != null &&
         !state.endReached &&
         (
@@ -481,19 +485,13 @@ private fun DiscoverQuickActionRow(
             icon = Icons.Filled.Apps,
             onClick = onOpenFlash,
         )
-        HhhlOverflowMenu(
+        DiscoverQuickActionOverflow(
             actions = discoverSecondaryQuickActions(
                 onOpenPages = onOpenPages,
                 onOpenGallery = onOpenGallery,
                 onOpenFlash = onOpenFlash,
                 onOpenAnnouncements = onOpenAnnouncements,
             ),
-            label = "更多探索入口",
-            buttonText = "更多",
-            labeledButtonColumnWidth = DiscoverQuickActionWidth,
-            labeledButtonWidth = HhhlIconActionButtonSize,
-            labeledButtonHeight = HhhlIconActionButtonSize,
-            labeledButtonIconSize = HhhlIconActionButtonIconSize,
         )
     }
 }
@@ -524,6 +522,72 @@ private fun DiscoverQuickAction(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+@Composable
+private fun DiscoverQuickActionOverflow(
+    actions: List<HhhlOverflowMenuAction>,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val colors = LocalHhhlColors.current
+    Box {
+        DiscoverQuickAction(
+            label = "更多",
+            icon = Icons.Filled.MoreVert,
+            onClick = { if (actions.isNotEmpty()) expanded = true },
+        )
+        HhhlDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            offset = DpOffset(x = 0.dp, y = 6.dp),
+            modifier = Modifier.widthIn(min = 184.dp, max = 240.dp),
+        ) {
+            actions.forEach { action ->
+                HhhlDropdownMenuItem(
+                    text = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                modifier = Modifier.width(20.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                action.icon?.let { icon ->
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = null,
+                                        tint = if (action.destructive) colors.danger else colors.textSecondary,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                            Text(
+                                text = action.label,
+                                color = if (action.destructive) colors.danger else colors.textPrimary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                softWrap = false,
+                            )
+                        }
+                    },
+                    enabled = action.enabled,
+                    destructive = action.destructive,
+                    onClick = {
+                        expanded = false
+                        action.onClick()
+                    },
+                    modifier = Modifier
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (action.destructive) colors.danger.copy(alpha = 0.07f) else Color.Transparent,
+                        ),
+                )
+            }
+        }
     }
 }
 

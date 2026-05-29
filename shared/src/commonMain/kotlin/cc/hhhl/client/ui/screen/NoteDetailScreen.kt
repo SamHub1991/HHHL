@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -62,6 +63,13 @@ fun NoteDetailScreen(
     onLoadVersions: () -> Unit = {},
     onRefreshPollRecommendation: () -> Unit = {},
     onTranslate: () -> Unit = {},
+    aiEnabled: Boolean = false,
+    isAiProcessing: Boolean = false,
+    aiResultText: String? = null,
+    aiResultLabel: String? = null,
+    onAiThreadSummary: (NoteDetailUiState) -> Unit = {},
+    onAiThreadReplyDraft: (NoteDetailUiState) -> Unit = {},
+    onDismissAiResult: () -> Unit = {},
     onToggleChildReplies: (String) -> Unit = {},
     onOpenNote: (String) -> Unit = {},
     onOpenUser: (String) -> Unit = {},
@@ -200,7 +208,20 @@ fun NoteDetailScreen(
                         onLoadVersions = onLoadVersions,
                         onRefreshPollRecommendation = onRefreshPollRecommendation,
                         onTranslate = onTranslate,
+                        aiEnabled = aiEnabled,
+                        isAiProcessing = isAiProcessing,
+                        onAiThreadSummary = { onAiThreadSummary(state) },
+                        onAiThreadReplyDraft = { onAiThreadReplyDraft(state) },
                     )
+                }
+                if (!aiResultText.isNullOrBlank()) {
+                    item(key = "note-detail-ai-result", contentType = "note-detail-panel") {
+                        NoteDetailAiResultPanel(
+                            label = aiResultLabel ?: "AI 线程",
+                            text = aiResultText,
+                            onDismiss = onDismissAiResult,
+                        )
+                    }
                 }
                 state.translation?.let { translation ->
                     item(key = "note-detail-translation", contentType = "note-detail-panel") {
@@ -385,6 +406,10 @@ private fun NoteDetailActionPanel(
     onLoadVersions: () -> Unit,
     onRefreshPollRecommendation: () -> Unit,
     onTranslate: () -> Unit,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    onAiThreadSummary: () -> Unit,
+    onAiThreadReplyDraft: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -400,6 +425,16 @@ private fun NoteDetailActionPanel(
                 label = if (state.isTranslating) "翻译中" else "翻译",
                 enabled = !state.isTranslating,
                 onClick = onTranslate,
+            )
+            HhhlActionChip(
+                label = if (isAiProcessing) "AI 处理中" else "AI 线程速览",
+                enabled = aiEnabled && !isAiProcessing && state.note != null,
+                onClick = onAiThreadSummary,
+            )
+            HhhlActionChip(
+                label = "AI 线程回复",
+                enabled = aiEnabled && !isAiProcessing && state.note != null,
+                onClick = onAiThreadReplyDraft,
             )
             HhhlActionChip(
                 label = if (state.isLoadingConversation) "同步上下文" else "上下文",
@@ -440,6 +475,44 @@ private fun NoteDetailActionPanel(
         }
     }
     HhhlDivider()
+}
+
+@Composable
+private fun NoteDetailAiResultPanel(
+    label: String,
+    text: String,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    HhhlInlinePanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        emphasized = true,
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                color = colors.accent,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            HhhlIconActionButton(
+                icon = Icons.Filled.Close,
+                contentDescription = "关闭 AI 结果",
+                onClick = onDismiss,
+            )
+        }
+        Text(
+            text = text,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 10,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 @Composable

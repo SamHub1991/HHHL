@@ -71,11 +71,11 @@ fun FavoriteNoteScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         HhhlTopBar(
-            title = "收藏",
+            title = "稍后看",
             supportingText = when {
                 state.isLoading -> "同步中"
-                state.favorites.isEmpty() -> "收藏时间线"
-                else -> "${state.favorites.size} 条收藏"
+                state.favorites.isEmpty() -> "收藏与稍后看的帖子"
+                else -> "${state.favorites.size} 条已保存"
             },
             navigation = { HhhlBackButton(onClick = onBack) },
         )
@@ -101,11 +101,11 @@ fun FavoriteNoteScreen(
             }
             if (state.isLoading && state.favorites.isEmpty()) {
                 item(key = "favorite-loading", contentType = "favorite-status") {
-                    FavoriteNoteStatusRow(text = "正在加载收藏...", loading = true)
+                    FavoriteNoteStatusRow(text = "正在加载稍后看...", loading = true)
                 }
             }
             if (!state.isLoading && state.favorites.isEmpty() && state.errorMessage == null) {
-                item(key = "favorite-empty", contentType = "favorite-status") { FavoriteNoteStatusRow(text = "暂无收藏") }
+                item(key = "favorite-empty", contentType = "favorite-status") { FavoriteNoteStatusRow(text = "暂无稍后看的帖子") }
             }
             items(
                 items = state.favorites,
@@ -155,7 +155,7 @@ private fun FavoriteNoteSummaryRow(
     onRefresh: () -> Unit,
 ) {
     val colors = LocalHhhlColors.current
-    val countText = if (favoriteCount == 0) "暂无收藏" else "${favoriteCount} 条已加载"
+    val countText = if (favoriteCount == 0) "暂无保存" else "${favoriteCount} 条已保存"
     val stateText = if (isLoading) "加载中" else "时间线视图"
     Row(
         modifier = Modifier
@@ -175,7 +175,7 @@ private fun FavoriteNoteSummaryRow(
         )
         HhhlIconActionButton(
             icon = Icons.Filled.Refresh,
-            contentDescription = if (isLoading) "同步收藏中" else "刷新收藏",
+            contentDescription = if (isLoading) "同步稍后看中" else "刷新稍后看",
             emphasized = true,
             enabled = !isLoading,
             onClick = onRefresh,
