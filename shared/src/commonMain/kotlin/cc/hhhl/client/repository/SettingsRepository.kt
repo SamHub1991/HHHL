@@ -425,7 +425,7 @@ open class SettingsRepository(
                     ),
                     SettingsItem(
                         key = SettingsItemKey.BackgroundNotifications,
-                        label = "后台收消息",
+                        label = "后台收消息与自动化",
                         value = backgroundNotificationsEnabled.onOffLabel(),
                         icon = "收",
                     ),

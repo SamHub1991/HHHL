@@ -47,6 +47,7 @@ import cc.hhhl.client.model.NotificationType
 import cc.hhhl.client.state.AnnouncementUiState
 import cc.hhhl.client.state.NotificationUiState
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
@@ -663,22 +664,15 @@ fun notificationSummaryActions(
     onAiPriority: () -> Unit = {},
 ): List<HhhlOverflowMenuAction> = listOf(
     HhhlOverflowMenuAction(
-        label = if (isAiProcessing) "AI 处理中" else "AI 总结通知",
+        label = if (isAiProcessing) "AI 处理中" else "AI",
         enabled = aiEnabled && !isAiProcessing && !isMarkingAllRead,
         icon = Icons.Filled.AutoAwesome,
-        onClick = onAiSummary,
-    ),
-    HhhlOverflowMenuAction(
-        label = "AI 待处理",
-        enabled = aiEnabled && !isAiProcessing && !isMarkingAllRead,
-        icon = Icons.Filled.AutoAwesome,
-        onClick = onAiFollowUp,
-    ),
-    HhhlOverflowMenuAction(
-        label = "AI 优先级",
-        enabled = aiEnabled && !isAiProcessing && !isMarkingAllRead,
-        icon = Icons.Filled.AutoAwesome,
-        onClick = onAiPriority,
+        onClick = {},
+        children = listOf(
+            HhhlOverflowMenuAction(label = "总结通知", icon = Icons.Filled.AutoAwesome, onClick = onAiSummary),
+            HhhlOverflowMenuAction(label = "待处理", icon = Icons.Filled.AutoAwesome, onClick = onAiFollowUp),
+            HhhlOverflowMenuAction(label = "优先级", icon = Icons.Filled.AutoAwesome, onClick = onAiPriority),
+        ),
     ),
     HhhlOverflowMenuAction(
         label = "测试通知",
@@ -749,37 +743,14 @@ private fun NotificationAiResultPanel(
     text: String,
     onDismiss: () -> Unit,
 ) {
-    val colors = LocalHhhlColors.current
-    Column(
+    AiResultPanel(
+        label = label,
+        text = text,
+        onDismiss = onDismiss,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(colors.surfaceElevated.copy(alpha = 0.78f))
-            .border(1.dp, colors.border.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = label,
-                color = colors.textPrimary,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            HhhlIconActionButton(icon = Icons.Filled.Close, contentDescription = "关闭 AI 结果", onClick = onDismiss)
-        }
-        Text(
-            text = text,
-            color = colors.textSecondary,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 8,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    )
 }
 
 fun specialCareHelperText(

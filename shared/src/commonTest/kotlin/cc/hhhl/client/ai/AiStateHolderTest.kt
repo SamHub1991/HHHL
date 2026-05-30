@@ -175,6 +175,22 @@ class AiStateHolderTest {
         assertEquals(null, holder.state.value.errorMessage)
         assertEquals(AiTaskKind.WorkspaceActionPlan, holder.state.value.tasks.single().kind)
     }
+
+    @Test
+    fun updateSettingsKeepsTrailingSlashWhileEditingBaseUrl() = runTest {
+        val holder = AiStateHolder(
+            store = MemoryAiStore(),
+            accountId = "account-1",
+            repository = FakeAiRepository(AiRepositoryResult.Success("OK")),
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.updateSettings(AiSettings(enabled = true, apiKey = "key", baseUrl = "https://api.example.com/v1/"))
+
+        assertEquals("https://api.example.com/v1/", holder.state.value.settings.baseUrl)
+        assertEquals("https://api.example.com/v1", holder.state.value.settings.cleanBaseUrl)
+    }
 }
 
 private class FakeAiRepository(

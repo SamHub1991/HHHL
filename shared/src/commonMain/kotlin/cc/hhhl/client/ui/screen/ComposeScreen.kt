@@ -69,6 +69,7 @@ import cc.hhhl.client.state.isComposeVisibleUserMention
 import cc.hhhl.client.state.toComposeVisibleUserTokens
 import cc.hhhl.client.state.toExpiresAtIso
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
@@ -1051,45 +1052,17 @@ private fun ComposeAiResultPanel(
     onUseAsCw: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val colors = LocalHhhlColors.current
-    HhhlInlinePanel(
+    AiResultPanel(
+        label = label,
+        text = text,
+        onDismiss = onDismiss,
         modifier = Modifier.padding(horizontal = 16.dp),
-        emphasized = true,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = label,
-                color = colors.textPrimary,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            HhhlIconActionButton(
-                icon = Icons.Filled.Delete,
-                contentDescription = "关闭 AI 结果",
-                onClick = onDismiss,
-            )
-        }
-        Text(
-            text = text,
-            color = colors.textSecondary,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 8,
-            overflow = TextOverflow.Ellipsis,
-        )
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        actions = {
             HhhlActionChip(label = "替换正文", emphasized = true, onClick = onUse)
             HhhlActionChip(label = "追加", onClick = onAppend)
             HhhlActionChip(label = "作为 CW", onClick = onUseAsCw)
-        }
-    }
+        },
+    )
 }
 
 @Composable
@@ -2019,18 +1992,22 @@ fun composeSecondaryActions(
     )
     add(
         HhhlOverflowMenuAction(
-            label = if (isAiProcessing) "AI 处理中" else "AI 润色",
+            label = if (isAiProcessing) "AI 处理中" else "AI",
             enabled = aiEnabled && !isAiProcessing,
             icon = Icons.Filled.AutoAwesome,
-            onClick = { onAiAction(AiTaskKind.ComposePolish) },
+            onClick = {},
+            children = listOf(
+                HhhlOverflowMenuAction(label = "润色", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposePolish) }),
+                HhhlOverflowMenuAction(label = "结合最近帖子生成", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeFromRecentPosts) }),
+                HhhlOverflowMenuAction(label = "缩短", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeShorten) }),
+                HhhlOverflowMenuAction(label = "扩写", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeExpand) }),
+                HhhlOverflowMenuAction(label = "翻译中文", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeTranslateZh) }),
+                HhhlOverflowMenuAction(label = "生成 CW", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeContentWarning) }),
+                HhhlOverflowMenuAction(label = "推荐话题", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeHashtags) }),
+                HhhlOverflowMenuAction(label = "推荐 @", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeMentionSuggestions) }),
+            ),
         ),
     )
-    add(HhhlOverflowMenuAction(label = "AI 缩短", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeShorten) }))
-    add(HhhlOverflowMenuAction(label = "AI 扩写", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeExpand) }))
-    add(HhhlOverflowMenuAction(label = "AI 翻译中文", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeTranslateZh) }))
-    add(HhhlOverflowMenuAction(label = "AI 生成 CW", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeContentWarning) }))
-    add(HhhlOverflowMenuAction(label = "AI 推荐话题", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeHashtags) }))
-    add(HhhlOverflowMenuAction(label = "AI 推荐 @", enabled = aiEnabled && !isAiProcessing, icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeMentionSuggestions) }))
 }
 
 fun composeAttachmentActions(

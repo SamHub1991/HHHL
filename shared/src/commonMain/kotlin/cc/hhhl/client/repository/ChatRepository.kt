@@ -24,6 +24,7 @@ import cc.hhhl.client.model.ChatRoomInvitation
 import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.ChatUserConversation
 import cc.hhhl.client.model.User
+import cc.hhhl.client.model.isServerChatMessageId
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -450,8 +451,11 @@ open class ChatRepository(
         roomId: String? = null,
         userId: String? = null,
     ): ChatMessageRepositoryResult {
-        val cleanMessageId = messageId.takeIf { it.isNotBlank() }
+        val cleanMessageId = messageId.trim().takeIf { it.isNotBlank() }
             ?: return ChatMessageRepositoryResult.Error("请选择消息")
+        if (!isServerChatMessageId(cleanMessageId)) {
+            return ChatMessageRepositoryResult.Error("这条消息还没有服务器 ID，无法同步删除")
+        }
         val token = tokenProvider()?.takeIf { it.isNotBlank() }
             ?: return ChatMessageRepositoryResult.Unauthorized
 

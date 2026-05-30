@@ -42,6 +42,43 @@ class MarkdownRichTextPresentationTest {
     }
 
     @Test
+    fun parsesAiMarkdownSummaryBlocks() {
+        val blocks = parseMarkdownBlocks(
+            """
+            ## 总结
+            - **要点**：需要回复
+            - [x] 已处理
+            1. 下一步
+            ---
+            结论
+            """.trimIndent(),
+        )
+
+        assertEquals(4, blocks.size)
+        val heading = assertIs<MarkdownBlock.Heading>(blocks[0])
+        val list = assertIs<MarkdownBlock.ListBlock>(blocks[1])
+        val divider = assertIs<MarkdownBlock.Divider>(blocks[2])
+        val paragraph = assertIs<MarkdownBlock.Paragraph>(blocks[3])
+
+        assertEquals(2, heading.level)
+        assertEquals(listOf(InlineMarkdownSpan.Text("总结")), heading.spans)
+        assertEquals("-", list.items[0].marker)
+        assertEquals(
+            listOf(
+                InlineMarkdownSpan.Text("要点", InlineMarkdownStyle.Bold),
+                InlineMarkdownSpan.Text("：需要回复"),
+            ),
+            list.items[0].spans,
+        )
+        assertEquals("[x]", list.items[1].marker)
+        assertEquals(listOf(InlineMarkdownSpan.Text("已处理")), list.items[1].spans)
+        assertEquals("1.", list.items[2].marker)
+        assertEquals(listOf(InlineMarkdownSpan.Text("下一步")), list.items[2].spans)
+        assertEquals(MarkdownBlock.Divider, divider)
+        assertEquals(listOf(InlineMarkdownSpan.Text("结论")), paragraph.spans)
+    }
+
+    @Test
     fun parsesInlineMarkdownWithoutBreakingRichTextTokens() {
         val spans = parseInlineMarkdown(
             "Hi @alice_name **bold #topic** *italic* `code()` [docs](https://dc.hhhl.cc/docs) :blobcat:",

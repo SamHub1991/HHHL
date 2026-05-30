@@ -17,6 +17,8 @@ internal data class SharkeyNoteDto(
     val cw: String? = null,
     val visibility: String? = null,
     val replyId: String? = null,
+    val channelId: String? = null,
+    val channel: SharkeyNoteChannelDto? = null,
     val user: SharkeyUserSummaryDto,
     val renote: SharkeyNoteDto? = null,
     val renoteCount: Int = 0,
@@ -52,9 +54,17 @@ internal data class SharkeyNoteDto(
             isRenote = renote != null && text.isNullOrBlank(),
             quotedNote = if (isQuote) renote?.toDomainNote() else null,
             replyId = replyId?.takeIf { it.isNotBlank() },
+            channelId = (channelId ?: contentNote.channelId).orEmpty(),
+            channelName = (channel?.name ?: contentNote.channel?.name).orEmpty(),
         )
     }
 }
+
+@Serializable
+internal data class SharkeyNoteChannelDto(
+    val id: String = "",
+    val name: String = "",
+)
 
 @Serializable
 internal data class SharkeyUserSummaryDto(

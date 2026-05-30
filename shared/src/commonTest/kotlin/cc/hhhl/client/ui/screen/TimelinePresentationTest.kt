@@ -15,9 +15,13 @@ class TimelinePresentationTest {
         )
 
         assertEquals(
-            listOf("AI 时间线速览", "AI 互动建议", "AI 过滤建议"),
+            listOf("AI"),
             actions.map { it.label },
         )
-        assertEquals(listOf(true, true, true), actions.map { it.enabled })
+        assertEquals(listOf(true), actions.map { it.enabled })
+        assertEquals(
+            listOf("时间线速览", "互动建议", "过滤建议"),
+            actions.first().children.map { it.label },
+        )
     }
 }

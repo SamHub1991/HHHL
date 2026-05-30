@@ -47,6 +47,7 @@ import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.state.TimelineTabState
 import cc.hhhl.client.state.TimelineUiState
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlDivider
@@ -459,41 +460,14 @@ private fun TimelineAiResultPanel(
     text: String,
     onDismiss: () -> Unit,
 ) {
-    val colors = LocalHhhlColors.current
-    Column(
+    AiResultPanel(
+        label = label,
+        text = text,
+        onDismiss = onDismiss,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(colors.surfaceElevated.copy(alpha = 0.78f))
-            .border(1.dp, colors.border.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = label,
-                color = colors.textPrimary,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            HhhlIconActionButton(
-                icon = Icons.Filled.Close,
-                contentDescription = "关闭 AI 结果",
-                onClick = onDismiss,
-            )
-        }
-        Text(
-            text = text,
-            color = colors.textSecondary,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 8,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    )
 }
 
 @Composable
@@ -691,22 +665,15 @@ fun timelineAiActions(
     onAiFilterSuggestions: () -> Unit,
 ): List<HhhlOverflowMenuAction> = listOf(
     HhhlOverflowMenuAction(
-        label = if (isProcessing) "AI 处理中" else "AI 时间线速览",
+        label = if (isProcessing) "AI 处理中" else "AI",
         enabled = enabled,
         icon = Icons.Filled.AutoAwesome,
-        onClick = onAiDigest,
-    ),
-    HhhlOverflowMenuAction(
-        label = "AI 互动建议",
-        enabled = enabled,
-        icon = Icons.Filled.AutoAwesome,
-        onClick = onAiReplyOpportunities,
-    ),
-    HhhlOverflowMenuAction(
-        label = "AI 过滤建议",
-        enabled = enabled,
-        icon = Icons.Filled.AutoAwesome,
-        onClick = onAiFilterSuggestions,
+        onClick = {},
+        children = listOf(
+            HhhlOverflowMenuAction(label = "时间线速览", icon = Icons.Filled.AutoAwesome, onClick = onAiDigest),
+            HhhlOverflowMenuAction(label = "互动建议", icon = Icons.Filled.AutoAwesome, onClick = onAiReplyOpportunities),
+            HhhlOverflowMenuAction(label = "过滤建议", icon = Icons.Filled.AutoAwesome, onClick = onAiFilterSuggestions),
+        ),
     ),
 )
 

@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
             val notificationCache = remember { AndroidNotificationCache(applicationContext) }
             val notificationReadStore = remember { AndroidNotificationReadStore(applicationContext) }
             val timelineCache = remember { AndroidTimelineCache(applicationContext) }
+            val releaseNotesStore = remember { AndroidReleaseNotesStore(applicationContext) }
             val backgroundNotificationStore = remember { AndroidBackgroundNotificationStore(applicationContext) }
             val appUpdateManager = remember { AndroidAppUpdateManager(applicationContext) }
             var backgroundNotificationsEnabled by remember {
@@ -200,6 +201,8 @@ class MainActivity : ComponentActivity() {
                 },
                 initialSharedText = sharedText,
                 onInitialSharedTextConsumed = { sharedText = null },
+                appVersionName = BuildConfig.VERSION_NAME,
+                releaseNotesStore = releaseNotesStore,
                 onCheckForUpdates = { report ->
                     coroutineScope.launch(Dispatchers.IO) {
                         val message = when (val result = appUpdateManager.checkForUpdates()) {

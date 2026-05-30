@@ -46,10 +46,7 @@ class ChatPresentationTest {
             listOf(
                 "刷新消息",
                 "搜索消息",
-                "AI 总结聊天",
-                "AI 回复草稿",
-                "AI 待办提取",
-                "AI 决策摘要",
+                "AI",
                 "过滤设置",
                 "编辑聊天室",
                 "邀请成员",
@@ -61,8 +58,12 @@ class ChatPresentationTest {
             actions.map { it.label },
         )
         assertEquals(
-            listOf(true, true, false, false, false, false, true, true, true, true, true, true, true),
+            listOf(true, true, false, true, true, true, true, true, true, true),
             actions.map { it.enabled },
+        )
+        assertEquals(
+            listOf("总结聊天", "回复草稿", "待办提取", "决策摘要"),
+            actions[2].children.map { it.label },
         )
     }
 
@@ -168,6 +169,20 @@ class ChatPresentationTest {
         assertEquals(List(5) { true }, actions.map { it.enabled })
         assertEquals(listOf("回复", "引用", "回应处理中", "复制", "删除"), pendingActions.map { it.label })
         assertEquals(listOf(true, true, false, true, true), pendingActions.map { it.enabled })
+    }
+
+    @Test
+    fun messageOverflowHidesDeleteWhenMessageCannotSyncToServer() {
+        val actions = chatMessageOverflowActions(
+            messageId = "local-chat-fallback",
+            reactionOptions = listOf("❤️", "👍"),
+            isReactionPending = false,
+            isOutgoing = true,
+            canDelete = false,
+            onQuote = {},
+        )
+
+        assertEquals(listOf("回复", "引用", "回应", "复制"), actions.map { it.label })
     }
 
     @Test

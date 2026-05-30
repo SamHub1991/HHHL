@@ -23,6 +23,11 @@ private suspend fun <T> Iterable<T>.anySuspend(predicate: suspend (T) -> Boolean
     return false
 }
 
+private data class AutomationConditionMatch(
+    val matched: Boolean,
+    val failureMessage: String? = null,
+)
+
 data class AutomationUiState(
     val rules: List<AutomationRule> = emptyList(),
     val logs: List<AutomationExecutionLog> = emptyList(),
@@ -107,6 +112,22 @@ class AutomationStateHolder(
             selectedRuleId = rule.id,
             editorOpen = true,
             message = "已创建规则",
+        )
+    }
+
+    fun addRuleDraft(rule: AutomationRule) {
+        val now = nowMillis()
+        val draft = rule.copy(
+            id = nextId("rule"),
+            conditions = rule.conditions.map { condition -> condition.copy(id = nextId("condition")) },
+            actions = rule.actions.map { action -> action.copy(id = nextId("action")) },
+            updatedAtEpochMillis = now,
+        ).cleaned()
+        updateRules(
+            transform = { rules -> listOf(draft) + rules },
+            selectedRuleId = draft.id,
+            editorOpen = true,
+            message = if (draft.enabled) "AI 已生成并启用规则草稿" else "AI 已生成规则草稿",
         )
     }
 
@@ -399,8 +420,28 @@ class AutomationStateHolder(
         val enabledConditions = conditions.filter { it.enabled }
         if (enabledConditions.isEmpty()) return true
         return when (conditionMode) {
-            AutomationConditionMode.All -> enabledConditions.allSuspend { it.matches(event) }
-            AutomationConditionMode.Any -> enabledConditions.anySuspend { it.matches(event) }
+            AutomationConditionMode.All -> {
+                for (condition in enabledConditions) {
+                    val result = condition.matches(event)
+                    result.failureMessage?.let { message ->
+                        addExecutionLog(this, event, "条件判断", message, success = false)
+                    }
+                    if (!result.matched) return false
+                }
+                true
+            }
+            AutomationConditionMode.Any -> {
+                val failureMessages = mutableListOf<String>()
+                for (condition in enabledConditions) {
+                    val result = condition.matches(event)
+                    if (result.matched) return true
+                    result.failureMessage?.let(failureMessages::add)
+                }
+                failureMessages.firstOrNull()?.let { message ->
+                    addExecutionLog(this, event, "条件判断", message, success = false)
+                }
+                false
+            }
         }
     }
 
@@ -410,21 +451,31 @@ class AutomationStateHolder(
         return nowMillis() - lastRun >= cooldownSeconds * 1000L || event.id.startsWith("manual:")
     }
 
-    private suspend fun AutomationCondition.matches(event: AutomationEvent): Boolean {
+    private suspend fun AutomationCondition.matches(event: AutomationEvent): AutomationConditionMatch {
         val cleanValue = value.trim()
-        if (cleanValue.isEmpty()) return true
+        if (cleanValue.isEmpty()) return AutomationConditionMatch(true)
         return when (type) {
-            AutomationConditionType.SenderUserId -> event.senderUserId.equals(cleanValue, ignoreCase = true)
-            AutomationConditionType.SenderNameContains -> event.senderName.contains(cleanValue, ignoreCase = true)
-            AutomationConditionType.MessageContains -> event.defaultBody.contains(cleanValue, ignoreCase = true)
-            AutomationConditionType.RoomId -> event.roomId.equals(cleanValue, ignoreCase = true)
-            AutomationConditionType.DirectUserId -> event.directUserId.equals(cleanValue, ignoreCase = true)
-            AutomationConditionType.SourceKind -> event.sourceKind.equals(cleanValue, ignoreCase = true)
-            AutomationConditionType.AttentionKind -> event.attentionKind.equals(cleanValue, ignoreCase = true)
-            AutomationConditionType.NotificationType -> event.notificationType.equals(cleanValue, ignoreCase = true)
+            AutomationConditionType.SenderUserId -> AutomationConditionMatch(event.senderUserId.equals(cleanValue, ignoreCase = true))
+            AutomationConditionType.SenderUserIds -> AutomationConditionMatch(cleanValue.splitAutomationValues().any { value -> event.senderUserId.equals(value, ignoreCase = true) })
+            AutomationConditionType.SenderUsername -> AutomationConditionMatch(event.matchesAutomationUsername(cleanValue))
+            AutomationConditionType.SenderNameContains -> AutomationConditionMatch(event.matchesAutomationSenderName(cleanValue))
+            AutomationConditionType.MessageContains -> AutomationConditionMatch(event.defaultBody.contains(cleanValue, ignoreCase = true))
+            AutomationConditionType.RoomId -> AutomationConditionMatch(event.roomId.equals(cleanValue, ignoreCase = true))
+            AutomationConditionType.RoomNameContains -> AutomationConditionMatch(event.roomName.contains(cleanValue, ignoreCase = true))
+            AutomationConditionType.DirectUserId -> AutomationConditionMatch(event.directUserId.equals(cleanValue, ignoreCase = true))
+            AutomationConditionType.SourceKind -> AutomationConditionMatch(
+                event.sourceKind.normalizedAutomationSourceKind() == cleanValue.normalizedAutomationSourceKind(),
+            )
+            AutomationConditionType.AttentionKind -> AutomationConditionMatch(event.attentionKind.matchesAutomationTokenValue(cleanValue))
+            AutomationConditionType.NotificationType -> AutomationConditionMatch(event.notificationType.matchesAutomationTokenValue(cleanValue))
+            AutomationConditionType.ChannelId -> AutomationConditionMatch(event.channelId.equals(cleanValue, ignoreCase = true))
+            AutomationConditionType.ChannelNameContains -> AutomationConditionMatch(event.channelName.contains(cleanValue, ignoreCase = true))
+            AutomationConditionType.MessageType -> AutomationConditionMatch(event.messageType.matchesAutomationTokenValue(cleanValue))
+            AutomationConditionType.TimelineKind -> AutomationConditionMatch(event.timelineKind.matchesAutomationTokenValue(cleanValue))
+            AutomationConditionType.NoteVisibility -> AutomationConditionMatch(event.noteVisibility.matchesAutomationTokenValue(cleanValue))
             AutomationConditionType.AiSemantic -> when (val result = aiBridge.evaluateSemanticCondition(cleanValue, event.aiContextText())) {
-                is AiBridgeResult.Success -> automationAiConditionSatisfied(result.text)
-                is AiBridgeResult.Error -> false
+                is AiBridgeResult.Success -> AutomationConditionMatch(automationAiConditionSatisfied(result.text))
+                is AiBridgeResult.Error -> AutomationConditionMatch(false, "AI 语义条件失败：${result.message}")
             }
         }
     }
@@ -451,6 +502,15 @@ class AutomationStateHolder(
 private fun AutomationAction.requiresToolPermission(): Boolean {
     return type == AutomationActionType.ForwardToRoom ||
         type == AutomationActionType.ForwardToUser ||
+        type == AutomationActionType.ReplyToChat ||
+        type == AutomationActionType.AiReplyToChat ||
+        type == AutomationActionType.ReplyToNote ||
+        type == AutomationActionType.AiReplyToNote ||
+        type == AutomationActionType.QuoteNote ||
+        type == AutomationActionType.AiQuoteNote ||
+        type == AutomationActionType.RenoteNote ||
+        type == AutomationActionType.PostToChannel ||
+        type == AutomationActionType.CopyChannelLink ||
         type == AutomationActionType.Webhook ||
         type == AutomationActionType.AiGenerateWebhook
 }
@@ -473,13 +533,106 @@ private fun AutomationAction.cleaned(): AutomationAction {
         targetId = targetId.trim().take(400),
         titleTemplate = titleTemplate.take(160),
         bodyTemplate = bodyTemplate.take(1600),
+        mentionSender = mentionSender && type.supportsSenderMention(),
+        replyToEvent = replyToEvent && type.supportsChatReference(),
+        quoteEvent = quoteEvent && type.supportsChatReference(),
     )
+}
+
+private fun AutomationActionType.supportsSenderMention(): Boolean {
+    return this == AutomationActionType.ReplyToChat ||
+        this == AutomationActionType.AiReplyToChat ||
+        this == AutomationActionType.ReplyToNote ||
+        this == AutomationActionType.AiReplyToNote ||
+        this == AutomationActionType.QuoteNote ||
+        this == AutomationActionType.AiQuoteNote ||
+        this == AutomationActionType.PostToChannel
+}
+
+private fun AutomationActionType.supportsChatReference(): Boolean {
+    return this == AutomationActionType.ReplyToChat || this == AutomationActionType.AiReplyToChat
+}
+
+private fun String.normalizedAutomationSourceKind(): String {
+    return when (trim().lowercase().replace("_", "").replace("-", "")) {
+        "chatroom", "room", "group", "聊天室", "群聊", "房间" -> "room"
+        "private", "privatemessage", "directmessage", "user", "dm", "direct", "私聊", "用户" -> "direct"
+        else -> trim().lowercase()
+    }
+}
+
+private fun String.splitAutomationValues(): List<String> {
+    return split(',', '，', '\n', ';', '；', '|', '/', '、')
+        .map { it.trim().trim('@') }
+        .filter { it.isNotEmpty() }
+}
+
+private fun AutomationEvent.matchesAutomationUsername(value: String): Boolean {
+    val candidates = buildList {
+        val cleanUsername = senderUsername.trim().trim('@')
+        val cleanHost = senderHost.trim()
+        if (cleanUsername.isNotEmpty()) {
+            add(cleanUsername)
+            add("@$cleanUsername")
+            if (cleanHost.isNotEmpty()) {
+                add("$cleanUsername@$cleanHost")
+                add("@$cleanUsername@$cleanHost")
+            }
+        }
+    }
+    return value.splitAutomationValues().any { expected ->
+        candidates.any { candidate -> candidate.equals(expected, ignoreCase = true) }
+    }
+}
+
+private fun AutomationEvent.matchesAutomationSenderName(value: String): Boolean {
+    return value.splitAutomationValues().any { expected ->
+        senderName.contains(expected, ignoreCase = true) ||
+            senderUsername.contains(expected.trim('@'), ignoreCase = true) ||
+            senderMention.contains(expected, ignoreCase = true)
+    }
+}
+
+private fun String.matchesAutomationTokenValue(value: String): Boolean {
+    val actualTokens = splitAutomationValues().map { it.normalizedAutomationToken() }.toSet()
+    return value.splitAutomationValues().any { expected -> expected.normalizedAutomationToken() in actualTokens }
+}
+
+private fun String.normalizedAutomationToken(): String {
+    return trim().lowercase().trim('@').let { clean ->
+        when (clean) {
+            "文字", "文本", "正文" -> "text"
+            "图片", "图像", "照片", "photo", "picture" -> "image"
+            "文件", "附件" -> "file"
+            "视频" -> "video"
+            "音频", "语音" -> "audio"
+            "回复", "回帖" -> "reply"
+            "引用", "转引" -> "quote"
+            "投票" -> "poll"
+            "频道" -> "channel"
+            "首页" -> "home"
+            "社交" -> "social"
+            "本地" -> "local"
+            "全局" -> "global"
+            "精选" -> "featured"
+            "提及", "@" -> "mention"
+            "特别关心" -> "specialcare"
+            "关注" -> "follow"
+            "转发" -> "renote"
+            "反应", "回应", "表情回应" -> "reaction"
+            "公开" -> "public"
+            "关注者" -> "followers"
+            "指定" -> "specified"
+            else -> clean
+        }
+    }
 }
 
 private fun defaultRuleName(trigger: AutomationTrigger): String {
     return when (trigger) {
         AutomationTrigger.ChatMessage -> "聊天消息规则"
         AutomationTrigger.ChatAttention -> "聊天提醒规则"
+        AutomationTrigger.TimelineNote -> "帖子规则"
         AutomationTrigger.Notification -> "通知规则"
         AutomationTrigger.SpecialCare -> "特别关心规则"
     }
@@ -491,6 +644,7 @@ private fun defaultConditionFor(trigger: AutomationTrigger): AutomationCondition
         type = when (trigger) {
             AutomationTrigger.ChatMessage -> AutomationConditionType.MessageContains
             AutomationTrigger.ChatAttention -> AutomationConditionType.AttentionKind
+            AutomationTrigger.TimelineNote -> AutomationConditionType.MessageContains
             AutomationTrigger.Notification -> AutomationConditionType.NotificationType
             AutomationTrigger.SpecialCare -> AutomationConditionType.SenderUserId
         },

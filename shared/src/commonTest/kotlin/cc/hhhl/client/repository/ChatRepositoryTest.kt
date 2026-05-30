@@ -728,6 +728,47 @@ class ChatRepositoryTest {
     }
 
     @Test
+    fun deleteMessageCallsApiWithTokenAndServerMessageId() = runTest {
+        val calls = mutableListOf<DeleteCall>()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                deleteCalls = calls,
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.deleteMessage(
+            messageId = " message-1 ",
+            roomId = "room-1",
+        )
+
+        assertEquals(ChatMessageRepositoryResult.Deleted("message-1"), result)
+        assertEquals(listOf(DeleteCall("token-123", "message-1")), calls)
+    }
+
+    @Test
+    fun deleteMessageRejectsSyntheticLocalIdWithoutCallingApi() = runTest {
+        val calls = mutableListOf<DeleteCall>()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                deleteCalls = calls,
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.deleteMessage(
+            messageId = "local-chat-fallback",
+            roomId = "room-1",
+        )
+
+        val error = assertIs<ChatMessageRepositoryResult.Error>(result)
+        assertEquals("这条消息还没有服务器 ID，无法同步删除", error.message)
+        assertTrue(calls.isEmpty())
+    }
+
+    @Test
     fun refreshMembersLoadsWithTokenAndRoomId() = runTest {
         val calls = mutableListOf<MemberCall>()
         val member = sampleMember("membership-member-1")
@@ -896,6 +937,7 @@ class ChatRepositoryTest {
         userHistoryCalls: MutableList<UserHistoryCall> = mutableListOf(),
         createCalls: MutableList<CreateCall> = mutableListOf(),
         reactionCalls: MutableList<ReactionCall> = mutableListOf(),
+        deleteCalls: MutableList<DeleteCall> = mutableListOf(),
         memberCalls: MutableList<MemberCall> = mutableListOf(),
         searchCalls: MutableList<SearchCall> = mutableListOf(),
         result: ChatRoomLoadResult,
@@ -907,6 +949,7 @@ class ChatRepositoryTest {
         searchResultProvider: ((String?) -> ChatMessageLoadResult)? = null,
         createResult: ChatMessageCreateResult = ChatMessageCreateResult.Success(sampleMessage("created")),
         reactionResult: ChatMessageReactionResult = ChatMessageReactionResult.Success,
+        deleteResult: ChatMessageDeleteResult = ChatMessageDeleteResult.Success,
         memberResult: ChatRoomMemberLoadResult = ChatRoomMemberLoadResult.Success(emptyList()),
         onCall: () -> Unit = {},
         onMemberCall: () -> Unit = {},
@@ -1006,7 +1049,10 @@ class ChatRepositoryTest {
             override suspend fun deleteMessage(
                 token: String,
                 messageId: String,
-            ): ChatMessageDeleteResult = ChatMessageDeleteResult.Success
+            ): ChatMessageDeleteResult {
+                deleteCalls.add(DeleteCall(token, messageId))
+                return deleteResult
+            }
 
             override suspend fun createRoom(
                 token: String,
@@ -1180,6 +1226,11 @@ class ChatRepositoryTest {
         val token: String,
         val messageId: String,
         val reaction: String,
+    )
+
+    private data class DeleteCall(
+        val token: String,
+        val messageId: String,
     )
 
     private data class MemberCall(

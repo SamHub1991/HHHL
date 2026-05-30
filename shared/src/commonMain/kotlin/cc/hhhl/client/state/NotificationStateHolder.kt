@@ -136,6 +136,31 @@ class NotificationStateHolder(
         }
     }
 
+    fun addStreamingNotification(notification: NotificationItem) {
+        val item = listOf(notification).applyLocalReadState().firstOrNull() ?: return
+        if (item.id.isBlank()) return
+        remoteNotifications = listOf(item) + remoteNotifications.filterNot { it.id == item.id }
+        syncRemoteSpecialCareNotifications(updateState = false)
+        persistNotificationCache()
+
+        mutableState.update {
+            val visibleNotifications = when (it.selectedFilter) {
+                NotificationFilter.All -> remoteNotifications
+                    .withLocalChatAttentionNotifications(chatAttentionNotifications)
+                    .withLocalSpecialCareNotifications(specialCareNotifications)
+                NotificationFilter.SpecialCare -> specialCareNotifications
+                else -> notificationsForFilter(it.selectedFilter)
+            }
+            it.copy(
+                notifications = visibleNotifications,
+                unreadCount = totalUnreadCount(),
+                message = null,
+                errorMessage = null,
+                requiresRelogin = false,
+            ).withSpecialCareCounts()
+        }
+    }
+
     fun selectFilter(filter: NotificationFilter) {
         if (state.value.selectedFilter == filter && state.value.notifications.isNotEmpty()) return
         if (state.value.isLoading) return

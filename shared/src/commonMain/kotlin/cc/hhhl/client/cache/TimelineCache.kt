@@ -99,6 +99,8 @@ private data class CachedNote(
     val isRenote: Boolean = false,
     val quotedNote: CachedNote? = null,
     val replyId: String? = null,
+    val channelId: String = "",
+    val channelName: String = "",
 )
 
 @Serializable
@@ -168,6 +170,8 @@ private fun Note.toCachedNote(): CachedNote {
         isRenote = isRenote,
         quotedNote = quotedNote?.toCachedNote(),
         replyId = replyId,
+        channelId = channelId,
+        channelName = channelName,
     )
 }
 
@@ -191,6 +195,8 @@ private fun CachedNote.toDomainNote(): Note {
         isRenote = isRenote,
         quotedNote = quotedNote?.toDomainNote(),
         replyId = replyId,
+        channelId = channelId,
+        channelName = channelName,
     )
 }
 

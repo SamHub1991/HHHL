@@ -219,7 +219,7 @@ private data class NotificationCreateRequest(
 )
 
 @Serializable
-private data class NotificationDto(
+internal data class NotificationDto(
     val id: String,
     val createdAt: String,
     val type: String,
@@ -309,7 +309,7 @@ private data class NotificationDto(
 }
 
 @Serializable
-private data class NotificationUserDto(
+internal data class NotificationUserDto(
     val id: String,
     val username: String,
     val name: String? = null,
@@ -328,14 +328,14 @@ private data class NotificationUserDto(
 }
 
 @Serializable
-private data class NotificationNoteDto(
+internal data class NotificationNoteDto(
     val id: String,
     val text: String? = null,
     val cw: String? = null,
 )
 
 @Serializable
-private data class GroupedReactionDto(
+internal data class GroupedReactionDto(
     val user: NotificationUserDto,
     val reaction: String,
 )

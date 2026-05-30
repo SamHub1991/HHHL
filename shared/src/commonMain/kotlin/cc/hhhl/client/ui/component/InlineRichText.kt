@@ -7,11 +7,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -115,6 +118,29 @@ fun InlineRichText(
                 is MarkdownBlock.Code -> InlineCodeBlock(
                     text = block.value,
                     style = style,
+                )
+                is MarkdownBlock.Divider -> InlineDividerBlock()
+                is MarkdownBlock.Heading -> InlineHeadingBlock(
+                    block = block,
+                    emojiUrls = emojiUrls,
+                    style = style,
+                    color = resolvedColor,
+                    accentColor = resolvedAccentColor,
+                    animationBudget = animationBudget,
+                    onOpenUrl = onOpenUrl,
+                    onOpenMention = onOpenMention,
+                    onOpenHashtag = onOpenHashtag,
+                )
+                is MarkdownBlock.ListBlock -> InlineListBlock(
+                    block = block,
+                    emojiUrls = emojiUrls,
+                    style = style,
+                    color = resolvedColor,
+                    accentColor = resolvedAccentColor,
+                    animationBudget = animationBudget,
+                    onOpenUrl = onOpenUrl,
+                    onOpenMention = onOpenMention,
+                    onOpenHashtag = onOpenHashtag,
                 )
                 is MarkdownBlock.Center -> Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     InlineMarkdownFlow(
@@ -376,11 +402,13 @@ private fun InlineMarkdownFlow(
     color: Color,
     accentColor: Color,
     animationBudget: RichTextAnimationBudget,
+    modifier: Modifier = Modifier,
     onOpenUrl: (String) -> Unit,
     onOpenMention: (String) -> Unit,
     onOpenHashtag: (String) -> Unit,
 ) {
     FlowRow(
+        modifier = modifier,
         horizontalArrangement = Arrangement.Start,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -428,6 +456,91 @@ private fun InlineMarkdownFlow(
             }
         }
     }
+}
+
+@Composable
+private fun InlineHeadingBlock(
+    block: MarkdownBlock.Heading,
+    emojiUrls: Map<String, String>,
+    style: TextStyle,
+    color: Color,
+    accentColor: Color,
+    animationBudget: RichTextAnimationBudget,
+    onOpenUrl: (String) -> Unit,
+    onOpenMention: (String) -> Unit,
+    onOpenHashtag: (String) -> Unit,
+) {
+    val headingScale = when (block.level) {
+        1 -> 1.26f
+        2 -> 1.16f
+        3 -> 1.08f
+        else -> 1f
+    }
+    InlineMarkdownFlow(
+        spans = block.spans,
+        emojiUrls = emojiUrls,
+        style = style.copy(fontWeight = FontWeight.SemiBold).scaledText(headingScale),
+        color = color,
+        accentColor = accentColor,
+        animationBudget = animationBudget,
+        onOpenUrl = onOpenUrl,
+        onOpenMention = onOpenMention,
+        onOpenHashtag = onOpenHashtag,
+    )
+}
+
+@Composable
+private fun InlineListBlock(
+    block: MarkdownBlock.ListBlock,
+    emojiUrls: Map<String, String>,
+    style: TextStyle,
+    color: Color,
+    accentColor: Color,
+    animationBudget: RichTextAnimationBudget,
+    onOpenUrl: (String) -> Unit,
+    onOpenMention: (String) -> Unit,
+    onOpenHashtag: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        block.items.forEach { item ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Text(
+                    text = item.marker,
+                    color = colors.textMuted,
+                    style = style.copy(fontWeight = FontWeight.SemiBold),
+                    modifier = Modifier.width(24.dp),
+                )
+                InlineMarkdownFlow(
+                    spans = item.spans,
+                    emojiUrls = emojiUrls,
+                    style = style,
+                    color = color,
+                    accentColor = accentColor,
+                    animationBudget = animationBudget,
+                    modifier = Modifier.weight(1f),
+                    onOpenUrl = onOpenUrl,
+                    onOpenMention = onOpenMention,
+                    onOpenHashtag = onOpenHashtag,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineDividerBlock() {
+    val colors = LocalHhhlColors.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(colors.border.copy(alpha = 0.48f)),
+    )
 }
 
 @Composable
@@ -618,6 +731,14 @@ internal sealed interface MarkdownBlock {
     data class Quote(val spans: List<InlineMarkdownSpan>) : MarkdownBlock
     data class Code(val value: String) : MarkdownBlock
     data class Center(val spans: List<InlineMarkdownSpan>) : MarkdownBlock
+    data class Heading(val level: Int, val spans: List<InlineMarkdownSpan>) : MarkdownBlock
+    data class ListBlock(val items: List<ListItem>) : MarkdownBlock
+    data object Divider : MarkdownBlock
+
+    data class ListItem(
+        val marker: String,
+        val spans: List<InlineMarkdownSpan>,
+    )
 }
 
 internal sealed interface InlineMarkdownSpan {
@@ -779,6 +900,15 @@ internal fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
             lineIndex = nextLineIndex
             continue
         }
+        val markdownListBlock = parseMarkdownListBlock(lines, lineIndex)
+        if (markdownListBlock != null) {
+            val (lineBlock, nextLineIndex) = markdownListBlock
+            flushParagraph()
+            flushQuote()
+            blocks.add(lineBlock)
+            lineIndex = nextLineIndex
+            continue
+        }
         if (trimmed.startsWith(">")) {
             flushParagraph()
             quote.append(trimmed.removePrefix(">").trimStart()).append('\n')
@@ -810,6 +940,11 @@ internal fun richTextPreviewPlainText(text: String): String {
             when (block) {
                 is MarkdownBlock.Code -> block.value
                 is MarkdownBlock.Center -> block.spans.joinToString(separator = "") { span -> span.plainTextValue() }
+                is MarkdownBlock.Divider -> ""
+                is MarkdownBlock.Heading -> block.spans.joinToString(separator = "") { span -> span.plainTextValue() }
+                is MarkdownBlock.ListBlock -> block.items.joinToString(separator = "\n") { item ->
+                    item.spans.joinToString(separator = "") { span -> span.plainTextValue() }
+                }
                 is MarkdownBlock.Paragraph -> block.spans.joinToString(separator = "") { span -> span.plainTextValue() }
                 is MarkdownBlock.Quote -> block.spans.joinToString(separator = "") { span -> span.plainTextValue() }
             }
@@ -1550,6 +1685,8 @@ private fun boundedMfmFunctionEndExclusive(
 
 private fun parseStaticLineBlock(line: String): MarkdownBlock? {
     val trimmed = line.trim()
+    parseMarkdownHeading(trimmed)?.let { return it }
+    if (trimmed.isMarkdownDivider()) return MarkdownBlock.Divider
     parseWrappedHtmlLine(trimmed, "center")?.let {
         return MarkdownBlock.Center(parseInlineMarkdown(it))
     }
@@ -1576,6 +1713,25 @@ private fun parseStaticLineBlock(line: String): MarkdownBlock? {
     return null
 }
 
+private fun parseMarkdownHeading(trimmed: String): MarkdownBlock.Heading? {
+    val markerCount = trimmed.takeWhile { it == '#' }.length
+    if (markerCount !in 1..6) return null
+    if (trimmed.getOrNull(markerCount) != ' ') return null
+    val headingText = trimmed.drop(markerCount).trim().removeSuffix("#").trimEnd()
+    if (headingText.isBlank()) return null
+    return MarkdownBlock.Heading(
+        level = markerCount,
+        spans = parseInlineMarkdown(headingText),
+    )
+}
+
+private fun String.isMarkdownDivider(): Boolean {
+    if (length < 3) return false
+    val marker = firstOrNull() ?: return false
+    if (marker != '-' && marker != '*' && marker != '_') return false
+    return all { it == marker || it == ' ' || it == '\t' } && count { it == marker } >= 3
+}
+
 private fun parseMultilineMfmBlock(
     lines: List<String>,
     startIndex: Int,
@@ -1597,6 +1753,42 @@ private fun parseMultilineMfmBlock(
         index += 1
     }
     return null
+}
+
+private fun parseMarkdownListBlock(
+    lines: List<String>,
+    startIndex: Int,
+): Pair<MarkdownBlock.ListBlock, Int>? {
+    val items = mutableListOf<MarkdownBlock.ListItem>()
+    var index = startIndex
+    while (index < lines.size) {
+        val parsed = parseMarkdownListItem(lines[index]) ?: break
+        items += parsed
+        index += 1
+    }
+    return if (items.isNotEmpty()) MarkdownBlock.ListBlock(items) to index else null
+}
+
+private fun parseMarkdownListItem(line: String): MarkdownBlock.ListItem? {
+    val trimmed = line.trimStart()
+    val unorderedMarker = markdownUnorderedListPattern.matchEntire(trimmed)
+    if (unorderedMarker != null) {
+        val checkedState = unorderedMarker.groupValues.getOrNull(1).orEmpty().lowercase()
+        val marker = when (checkedState) {
+            "x" -> "[x]"
+            " " -> "[ ]"
+            else -> "-"
+        }
+        return MarkdownBlock.ListItem(
+            marker = marker,
+            spans = parseInlineMarkdown(unorderedMarker.groupValues[2].trim()),
+        )
+    }
+    val orderedMarker = markdownOrderedListPattern.matchEntire(trimmed) ?: return null
+    return MarkdownBlock.ListItem(
+        marker = "${orderedMarker.groupValues[1]}.",
+        spans = parseInlineMarkdown(orderedMarker.groupValues[2].trim()),
+    )
 }
 
 private fun String.startsWithMfmBlockName(name: String): Boolean {
@@ -2324,7 +2516,9 @@ private fun canRenderPlainRichTextFastPath(
         val char = text[index]
         if (text.startsWithHttpUrl(index)) return false
         when (char) {
-            '`', '[', '*', '_', '<', '@', '#' -> return false
+            '`', '[', '_', '<', '@', '#' -> return false
+            '*', '-', '+', '=' -> if (lineCanStartBlock && text.hasMarkdownLineBlockAt(index)) return false else if (char == '*') return false
+            in '0'..'9' -> if (lineCanStartBlock && text.hasMarkdownLineBlockAt(index)) return false
             ':' -> if (parseCustomEmojiMatch(text, index, emojiUrls) != null) return false
             '$' -> if (text.startsWith("$[", index) || text.startsWith("\${", index)) return false
             '>' -> if (lineCanStartBlock) return false
@@ -2333,6 +2527,13 @@ private fun canRenderPlainRichTextFastPath(
         index += 1
     }
     return true
+}
+
+private fun String.hasMarkdownLineBlockAt(index: Int): Boolean {
+    val lineEnd = indexOf('\n', startIndex = index).takeIf { it >= 0 } ?: length
+    val line = substring(index, lineEnd).trimStart()
+    if (parseMarkdownListItem(line) != null) return true
+    return line.isMarkdownDivider()
 }
 
 private fun needsRichTextParsing(
@@ -2364,6 +2565,8 @@ private val htmlParagraphPattern = Regex("""(?i)</?p(?:\s+[^>]*)?>""")
 private val htmlRubyFallbackPattern = Regex("""(?i)<rp>.*?</rp>""")
 private val htmlSpanPattern = Regex("""(?i)</?span(?:\s+[^>]*)?>""")
 private val htmlTitleAttributePattern = Regex("""(?i)\btitle\s*=\s*(['"])(.*?)\1""")
+private val markdownOrderedListPattern = Regex("""^(\d{1,3})[.)]\s+(.+)$""")
+private val markdownUnorderedListPattern = Regex("""^[-+*]\s+(?:\[([ xX])\]\s+)?(.+)$""")
 private val mfmColorPattern = Regex("""[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8}""")
 private val wrappedHtmlOpenPatterns = listOf("blockquote", "center", "code", "p", "pre", "quote")
     .associateWith { tag -> Regex("""(?i)^<$tag(?:\s+[^>]*)?>""") }

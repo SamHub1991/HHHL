@@ -17,6 +17,7 @@ import cc.hhhl.client.model.ChatUserConversation
 import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.commonReactionOptions
+import cc.hhhl.client.model.isServerChatMessageId
 import cc.hhhl.client.presentation.chatMessageBodyText
 import cc.hhhl.client.presentation.truncateRichTextPreviewText
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
@@ -1611,6 +1612,15 @@ class ChatStateHolder(
     fun deleteMessage(messageId: String) {
         val cleanMessageId = messageId.trim()
         if (cleanMessageId.isEmpty() || state.value.pendingMessageDeleteIds.contains(cleanMessageId)) return
+        if (!isServerChatMessageId(cleanMessageId)) {
+            mutableState.update {
+                it.copy(
+                    messageErrorMessage = "这条消息还没有服务器 ID，无法同步删除",
+                    requiresRelogin = false,
+                )
+            }
+            return
+        }
         val current = state.value
         val roomId = current.selectedRoom?.id
         val userId = current.selectedUserConversation?.user?.id

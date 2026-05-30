@@ -362,13 +362,14 @@ private fun AiSettings.validationError(kind: AiTaskKind): String? {
         return "AI 未获得资料读取权限"
     }
     if (kind.name.startsWith("Compose") && !readDraftsAllowed) return "AI 未获得草稿读取权限"
+    if (kind == AiTaskKind.ComposeFromRecentPosts && !readTimelineAllowed) return "AI 未获得帖子读取权限"
     if (kind.name.startsWith("Automation") && !automationAllowed) return "AI 自动化未启用"
     return null
 }
 
 private fun AiSettings.cleaned(): AiSettings {
     return copy(
-        baseUrl = cleanBaseUrl.take(240),
+        baseUrl = baseUrl.trim().take(240),
         apiKey = apiKey.trim().take(1_000),
         chatModel = chatModel.trim().take(160),
         fastModel = fastModel.trim().take(160),

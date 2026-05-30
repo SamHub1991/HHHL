@@ -1,5 +1,6 @@
 package cc.hhhl.client.api
 
+import cc.hhhl.client.model.NotificationType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -41,6 +42,42 @@ class MainStreamingApiTest {
         )
 
         assertEquals(MainStreamingEvent.UnreadNotification, event)
+    }
+
+    @Test
+    fun parsesMainNotificationBody() {
+        val event = parseSharkeyMainStreamingEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "main",
+                "type": "notification",
+                "body": {
+                  "id": "notification-1",
+                  "createdAt": "2026-05-27T10:00:00.000Z",
+                  "type": "quote",
+                  "isRead": false,
+                  "user": {
+                    "id": "user-1",
+                    "username": "alice",
+                    "name": "Alice"
+                  },
+                  "note": {
+                    "id": "note-1",
+                    "text": "quoted text"
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val notificationEvent = event as MainStreamingEvent.NotificationReceived
+        assertEquals("notification-1", notificationEvent.notification.id)
+        assertEquals(NotificationType.Quote, notificationEvent.notification.type)
+        assertEquals("Alice", notificationEvent.notification.actor.displayName)
+        assertEquals("quoted text", notificationEvent.notification.notePreviewText)
     }
 
     @Test
@@ -112,6 +149,8 @@ class MainStreamingApiTest {
                   "id": "note-1",
                   "createdAt": "2026-05-27T10:00:00.000Z",
                   "text": "hello",
+                  "channelId": "channel-1",
+                  "channel": { "id": "channel-1", "name": "总部频道" },
                   "user": {
                     "id": "user-1",
                     "username": "alice",
@@ -129,6 +168,8 @@ class MainStreamingApiTest {
         assertEquals("note-1", timelineEvent.note?.id)
         assertEquals("user-1", timelineEvent.note?.author?.id)
         assertEquals("hello", timelineEvent.note?.text)
+        assertEquals("channel-1", timelineEvent.note?.channelId)
+        assertEquals("总部频道", timelineEvent.note?.channelName)
     }
 
     @Test

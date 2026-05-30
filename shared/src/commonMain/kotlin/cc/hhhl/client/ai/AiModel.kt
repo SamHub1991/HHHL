@@ -75,6 +75,7 @@ enum class AiTaskKind(val label: String) {
     ComposeContentWarning("生成 CW"),
     ComposeHashtags("推荐话题"),
     ComposeMentionSuggestions("推荐 @ 人"),
+    ComposeFromRecentPosts("结合最近帖子生成"),
     PostSummary("帖子总结"),
     PostReplyDraft("帖子回复草稿"),
     ThreadSummary("线程总结"),
@@ -95,6 +96,7 @@ enum class AiTaskKind(val label: String) {
     AutomationGeneratedAction("自动化 AI 动作"),
     AutomationExplain("自动化解释"),
     AutomationRuleSuggestions("自动化规则建议"),
+    AutomationRuleDraft("自动创建规则"),
     WorkspaceActionPlan("全局行动计划"),
     ConnectionTest("连接测试"),
 }

@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -454,46 +455,74 @@ fun NoteRow(
                         )
                     }
                     if (overflowActions.isNotEmpty()) {
-                        val menuActions = overflowActions.map { action ->
-                            HhhlOverflowMenuAction(
-                                label = action.label,
-                                destructive = action == NoteOverflowAction.Report ||
-                                    action == NoteOverflowAction.Delete,
-                                onClick = {
-                                    when (action) {
-                                        NoteOverflowAction.OpenDetail -> onClick(note.id)
-                                        NoteOverflowAction.CopyContent -> {
-                                            clipboardManager.setText(AnnotatedString(noteCopyText))
-                                        }
-                                        NoteOverflowAction.CopyLink -> {
-                                            clipboardManager.setText(AnnotatedString(noteLink))
-                                        }
-                                        NoteOverflowAction.Embed -> {
-                                            clipboardManager.setText(AnnotatedString(noteEmbedCode))
-                                        }
-                                        NoteOverflowAction.Share -> {
-                                            val shareNote = effectiveOnShareNote
-                                            if (shareNote != null) {
-                                                shareNote(noteLink)
-                                            } else {
-                                                clipboardManager.setText(AnnotatedString(noteLink))
-                                            }
-                                        }
-                                        NoteOverflowAction.AiSummary -> rowActions.onAiSummarizeNote(note)
-                                        NoteOverflowAction.AiReplyDraft -> rowActions.onAiReplyDraft(note)
-                                        NoteOverflowAction.Favorite -> onFavorite(note.id)
-                                        NoteOverflowAction.AddToClip -> onAddToClip?.invoke(note)
-                                        NoteOverflowAction.HideFromList -> effectiveOnHideFromList(note.id)
-                                        NoteOverflowAction.MuteNote -> effectiveOnMuteNote(note.id)
-                                        NoteOverflowAction.UnmuteNote -> effectiveOnUnmuteNote(note.id)
-                                        NoteOverflowAction.MuteRenotes -> effectiveOnMuteRenotes(note.id, note.author.id)
-                                        NoteOverflowAction.UnmuteRenotes -> effectiveOnUnmuteRenotes(note.id, note.author.id)
-                                        NoteOverflowAction.User -> onOpenUser(note.author.id)
-                                        NoteOverflowAction.Report -> reportConfirmOpen = true
-                                        NoteOverflowAction.Delete -> deleteConfirmOpen = true
+                        fun handleOverflowAction(action: NoteOverflowAction) {
+                            when (action) {
+                                NoteOverflowAction.OpenDetail -> onClick(note.id)
+                                NoteOverflowAction.CopyContent -> {
+                                    clipboardManager.setText(AnnotatedString(noteCopyText))
+                                }
+                                NoteOverflowAction.CopyLink -> {
+                                    clipboardManager.setText(AnnotatedString(noteLink))
+                                }
+                                NoteOverflowAction.Embed -> {
+                                    clipboardManager.setText(AnnotatedString(noteEmbedCode))
+                                }
+                                NoteOverflowAction.Share -> {
+                                    val shareNote = effectiveOnShareNote
+                                    if (shareNote != null) {
+                                        shareNote(noteLink)
+                                    } else {
+                                        clipboardManager.setText(AnnotatedString(noteLink))
                                     }
-                                },
-                            )
+                                }
+                                NoteOverflowAction.AiSummary -> rowActions.onAiSummarizeNote(note)
+                                NoteOverflowAction.AiReplyDraft -> rowActions.onAiReplyDraft(note)
+                                NoteOverflowAction.Favorite -> onFavorite(note.id)
+                                NoteOverflowAction.AddToClip -> onAddToClip?.invoke(note)
+                                NoteOverflowAction.HideFromList -> effectiveOnHideFromList(note.id)
+                                NoteOverflowAction.MuteNote -> effectiveOnMuteNote(note.id)
+                                NoteOverflowAction.UnmuteNote -> effectiveOnUnmuteNote(note.id)
+                                NoteOverflowAction.MuteRenotes -> effectiveOnMuteRenotes(note.id, note.author.id)
+                                NoteOverflowAction.UnmuteRenotes -> effectiveOnUnmuteRenotes(note.id, note.author.id)
+                                NoteOverflowAction.User -> onOpenUser(note.author.id)
+                                NoteOverflowAction.Report -> reportConfirmOpen = true
+                                NoteOverflowAction.Delete -> deleteConfirmOpen = true
+                            }
+                        }
+
+                        val aiOverflowActions = overflowActions.filter { action -> action.isAiAction }
+                        val menuActions = buildList {
+                            var aiGroupAdded = false
+                            overflowActions.forEach { action ->
+                                if (action.isAiAction) {
+                                    if (!aiGroupAdded) {
+                                        add(
+                                            HhhlOverflowMenuAction(
+                                                label = "AI",
+                                                icon = Icons.Filled.AutoAwesome,
+                                                onClick = {},
+                                                children = aiOverflowActions.map { aiAction ->
+                                                    HhhlOverflowMenuAction(
+                                                        label = aiAction.aiChildLabel,
+                                                        icon = Icons.Filled.AutoAwesome,
+                                                        onClick = { handleOverflowAction(aiAction) },
+                                                    )
+                                                },
+                                            ),
+                                        )
+                                        aiGroupAdded = true
+                                    }
+                                } else {
+                                    add(
+                                        HhhlOverflowMenuAction(
+                                            label = action.label,
+                                            destructive = action == NoteOverflowAction.Report ||
+                                                action == NoteOverflowAction.Delete,
+                                            onClick = { handleOverflowAction(action) },
+                                        ),
+                                    )
+                                }
+                            }
                         }
                         HhhlOverflowMenu(
                             actions = menuActions,
@@ -825,6 +854,16 @@ enum class NoteOverflowAction(val label: String) {
     Report("举报"),
     Delete("删除帖子"),
 }
+
+private val NoteOverflowAction.isAiAction: Boolean
+    get() = this == NoteOverflowAction.AiSummary || this == NoteOverflowAction.AiReplyDraft
+
+private val NoteOverflowAction.aiChildLabel: String
+    get() = when (this) {
+        NoteOverflowAction.AiSummary -> "总结"
+        NoteOverflowAction.AiReplyDraft -> "回复草稿"
+        else -> label
+    }
 
 enum class NoteRenoteAction(val label: String) {
     Repost("转发"),

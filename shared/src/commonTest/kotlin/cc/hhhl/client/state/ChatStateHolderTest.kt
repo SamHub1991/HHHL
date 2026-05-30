@@ -696,6 +696,60 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun deleteMessageRemovesMessageAfterServerSuccess() = runTest {
+        val room = sampleRoom()
+        val message = sampleMessage("message-1")
+        val deleteCalls = mutableListOf<String>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+                deleteMessageResult = ChatMessageRepositoryResult.Deleted("message-1"),
+                onDelete = deleteCalls::add,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.deleteMessage("message-1")
+        assertTrue(holder.state.value.pendingMessageDeleteIds.contains("message-1"))
+        advanceUntilIdle()
+
+        assertEquals(listOf("message-1"), deleteCalls)
+        assertTrue(holder.state.value.messages.isEmpty())
+        assertFalse(holder.state.value.pendingMessageDeleteIds.contains("message-1"))
+        assertEquals(null, holder.state.value.messageErrorMessage)
+    }
+
+    @Test
+    fun deleteMessageRejectsSyntheticLocalIdBeforeRepositoryCall() = runTest {
+        val room = sampleRoom()
+        val message = sampleMessage("local-chat-fallback")
+        val deleteCalls = mutableListOf<String>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+                deleteMessageResult = ChatMessageRepositoryResult.Deleted(message.id),
+                onDelete = deleteCalls::add,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.deleteMessage("local-chat-fallback")
+        advanceUntilIdle()
+
+        assertTrue(deleteCalls.isEmpty())
+        assertEquals(listOf(message), holder.state.value.messages)
+        assertEquals("这条消息还没有服务器 ID，无法同步删除", holder.state.value.messageErrorMessage)
+    }
+
+    @Test
     fun showMembersLoadsRoomMembers() = runTest {
         val room = sampleRoom()
         val member = sampleMember("membership-member-1")
@@ -1493,6 +1547,7 @@ class ChatStateHolderTest {
         loadMoreMessagesResult: ChatMessageRepositoryResult = refreshMessagesResult,
         sendMessageResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Created(sampleMessage("created")),
         reactResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.ReactionUpdated,
+        deleteMessageResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Deleted("message-1"),
         refreshMembersResult: ChatRoomMemberRepositoryResult = ChatRoomMemberRepositoryResult.Success(emptyList()),
         loadMoreMembersResult: ChatRoomMemberRepositoryResult = refreshMembersResult,
         refreshUserConversationsResult: ChatUserConversationRepositoryResult =
@@ -1503,6 +1558,7 @@ class ChatStateHolderTest {
         onRefreshMessages: (String) -> Unit = {},
         onRefreshMembers: (String) -> Unit = {},
         onSend: (String, String, List<String>, String?, String?) -> Unit = { _, _, _, _, _ -> },
+        onDelete: (String) -> Unit = {},
         cachedMessagesResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Success(emptyList()),
         cachedUserMessagesResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Success(emptyList()),
         onCacheRoomMessage: (String, ChatMessage) -> Unit = { _, _ -> },
@@ -1768,6 +1824,15 @@ class ChatStateHolderTest {
                 reaction: String,
             ): ChatMessageRepositoryResult {
                 return reactResult
+            }
+
+            override suspend fun deleteMessage(
+                messageId: String,
+                roomId: String?,
+                userId: String?,
+            ): ChatMessageRepositoryResult {
+                onDelete(messageId)
+                return deleteMessageResult
             }
 
             override suspend fun refreshMembers(roomId: String): ChatRoomMemberRepositoryResult {

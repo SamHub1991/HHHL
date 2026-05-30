@@ -22,6 +22,17 @@ data class ChatMessage(
     val quoteUnavailable: Boolean = false,
 )
 
+const val LOCAL_CHAT_MESSAGE_ID_PREFIX = "local-chat-"
+
+fun isServerChatMessageId(messageId: String): Boolean {
+    val cleanMessageId = messageId.trim()
+    return cleanMessageId.isNotEmpty() &&
+        !cleanMessageId.startsWith(LOCAL_CHAT_MESSAGE_ID_PREFIX) &&
+        !cleanMessageId.contains(SYNTHETIC_CHAT_MESSAGE_DUPLICATE_ID_MARKER)
+}
+
+private const val SYNTHETIC_CHAT_MESSAGE_DUPLICATE_ID_MARKER = "#dup-"
+
 @Immutable
 data class ChatMessageQuote(
     val messageId: String,

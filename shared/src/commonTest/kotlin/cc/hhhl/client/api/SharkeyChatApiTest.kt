@@ -364,6 +364,29 @@ class SharkeyChatApiTest {
     }
 
     @Test
+    fun deletesChatMessageFromDeleteEndpoint() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/messages/delete", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(ContentType.Application.Json, request.body.contentType)
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""messageId":"message-1""""))
+                respond("", status = HttpStatusCode.NoContent)
+            },
+        )
+
+        val result = api.deleteMessage(
+            token = " token-123 ",
+            messageId = " message-1 ",
+        )
+
+        assertIs<ChatMessageDeleteResult.Success>(result)
+    }
+
+    @Test
     fun loadsRoomMembersFromMembersEndpoint() = runTest {
         val api = SharkeyChatApi(
             baseUrl = "https://dc.hhhl.cc/",

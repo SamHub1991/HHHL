@@ -73,6 +73,7 @@ import cc.hhhl.client.model.UserSocialKind
 import cc.hhhl.client.state.UserProfileUiState
 import cc.hhhl.client.theme.HhhlThemePreset
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
@@ -936,43 +937,14 @@ private fun ProfileAiResultPanel(
     text: String,
     onDismiss: () -> Unit,
 ) {
-    val colors = LocalHhhlColors.current
-    Column(
+    AiResultPanel(
+        label = label,
+        text = text,
+        onDismiss = onDismiss,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(colors.surfaceElevated.copy(alpha = 0.78f))
-            .border(1.dp, colors.border.copy(alpha = 0.28f), RoundedCornerShape(14.dp))
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Filled.AutoAwesome,
-                contentDescription = null,
-                tint = colors.accent,
-                modifier = Modifier.size(16.dp),
-            )
-            Text(
-                text = label,
-                color = colors.textPrimary,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            HhhlTextButton(onClick = onDismiss) { Text("关闭") }
-        }
-        Text(
-            text = text,
-            color = colors.textSecondary,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 8,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
+            .padding(horizontal = 16.dp),
+    )
 }
 
 @Composable

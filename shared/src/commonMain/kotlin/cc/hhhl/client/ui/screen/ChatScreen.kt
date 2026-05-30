@@ -105,6 +105,7 @@ import cc.hhhl.client.model.ChatUserConversation
 import cc.hhhl.client.model.CustomEmoji
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.commonEmojiOptions
+import cc.hhhl.client.model.isServerChatMessageId
 import cc.hhhl.client.state.ChatAttentionKind
 import cc.hhhl.client.state.ChatUiState
 import cc.hhhl.client.state.SpecialCareChatToast
@@ -114,6 +115,7 @@ import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.theme.HhhlCustomTheme
 import cc.hhhl.client.theme.toColorOrNull
 import cc.hhhl.client.ui.component.Avatar
+import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.CustomEmojiPicker
 import cc.hhhl.client.ui.component.CustomEmojiReactionLabel
@@ -2487,34 +2489,16 @@ fun chatDetailSummaryActions(
     )
     add(
         HhhlOverflowMenuAction(
-            label = if (isAiProcessing) "AI 处理中" else "AI 总结聊天",
+            label = if (isAiProcessing) "AI 处理中" else "AI",
             enabled = aiEnabled && !isAiProcessing && !showingMembers,
             icon = Icons.Filled.AutoAwesome,
-            onClick = onAiSummary,
-        ),
-    )
-    add(
-        HhhlOverflowMenuAction(
-            label = "AI 回复草稿",
-            enabled = aiEnabled && !isAiProcessing && !showingMembers,
-            icon = Icons.Filled.AutoAwesome,
-            onClick = onAiReplyDraft,
-        ),
-    )
-    add(
-        HhhlOverflowMenuAction(
-            label = "AI 待办提取",
-            enabled = aiEnabled && !isAiProcessing && !showingMembers,
-            icon = Icons.Filled.AutoAwesome,
-            onClick = onAiActionItems,
-        ),
-    )
-    add(
-        HhhlOverflowMenuAction(
-            label = "AI 决策摘要",
-            enabled = aiEnabled && !isAiProcessing && !showingMembers,
-            icon = Icons.Filled.AutoAwesome,
-            onClick = onAiDecisionSummary,
+            onClick = {},
+            children = listOf(
+                HhhlOverflowMenuAction(label = "总结聊天", icon = Icons.Filled.AutoAwesome, onClick = onAiSummary),
+                HhhlOverflowMenuAction(label = "回复草稿", icon = Icons.Filled.AutoAwesome, onClick = onAiReplyDraft),
+                HhhlOverflowMenuAction(label = "待办提取", icon = Icons.Filled.AutoAwesome, onClick = onAiActionItems),
+                HhhlOverflowMenuAction(label = "决策摘要", icon = Icons.Filled.AutoAwesome, onClick = onAiDecisionSummary),
+            ),
         ),
     )
     add(
@@ -2688,41 +2672,18 @@ private fun ChatAiResultPanel(
     onAppendToDraft: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val colors = LocalHhhlColors.current
-    Column(
+    AiResultPanel(
+        label = label,
+        text = text,
+        onDismiss = onDismiss,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(colors.surfaceElevated.copy(alpha = 0.78f))
-            .border(1.dp, colors.border.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = label,
-                color = colors.textPrimary,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            HhhlIconActionButton(icon = Icons.Filled.Close, contentDescription = "关闭 AI 结果", onClick = onDismiss)
-        }
-        Text(
-            text = text,
-            color = colors.textSecondary,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 6,
-            overflow = TextOverflow.Ellipsis,
-        )
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        actions = {
             HhhlActionChip(label = "填入输入框", emphasized = true, onClick = onUseAsDraft)
             HhhlActionChip(label = "追加", onClick = onAppendToDraft)
-        }
-    }
+        },
+    )
 }
 
 @Composable
@@ -4438,6 +4399,7 @@ private fun ChatMessageRow(
     val presslessInteractionSource = rememberChatPresslessInteractionSource()
     val menuReactionOptions = remember(reactionOptions) { reactionOptions.chatMessageMenuReactionOptions() }
     val isOutgoing = alignment == ChatMessageAlignment.Outgoing
+    val canDeleteFromServer = isOutgoing && isServerChatMessageId(message.id)
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
     var reactionPickerExpanded by remember(message.id) { mutableStateOf(false) }
@@ -4449,6 +4411,7 @@ private fun ChatMessageRow(
         menuReactionOptions,
         isReactionPending,
         isOutgoing,
+        canDeleteFromServer,
         onReply,
         onQuote,
         onReact,
@@ -4461,6 +4424,7 @@ private fun ChatMessageRow(
             reactionOptions = menuReactionOptions,
             isReactionPending = isReactionPending,
             isOutgoing = isOutgoing,
+            canDelete = canDeleteFromServer,
             onReply = onReply,
             onQuote = onQuote,
             onOpenReactionPicker = { reactionPickerExpanded = true },
@@ -5745,6 +5709,7 @@ fun chatMessageOverflowActions(
     reactionOptions: List<String>,
     isReactionPending: Boolean,
     isOutgoing: Boolean = false,
+    canDelete: Boolean = isOutgoing,
     onReply: (String) -> Unit = {},
     onQuote: (String) -> Unit,
     onOpenReactionPicker: (String) -> Unit = {},
@@ -5789,7 +5754,7 @@ fun chatMessageOverflowActions(
             onClick = { onCopy(messageId) },
         ),
     )
-    if (isOutgoing) {
+    if (isOutgoing && canDelete) {
         add(
             HhhlOverflowMenuAction(
                 label = "删除",

@@ -30,6 +30,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.automation.AppAutomationActionExecutor
 import cc.hhhl.client.automation.AutomationAction
@@ -39,14 +41,20 @@ import cc.hhhl.client.automation.AutomationCondition
 import cc.hhhl.client.automation.AutomationConditionMode
 import cc.hhhl.client.automation.AutomationConditionType
 import cc.hhhl.client.automation.AutomationRule
+import cc.hhhl.client.automation.AutomationRuleDraftResolveInput
 import cc.hhhl.client.automation.AutomationStore
 import cc.hhhl.client.automation.AutomationStateHolder
 import cc.hhhl.client.automation.AutomationTrigger
 import cc.hhhl.client.automation.AutomationUiState
 import cc.hhhl.client.automation.NoopAutomationStore
+import cc.hhhl.client.automation.automationChatAttentionKind
+import cc.hhhl.client.automation.parseAutomationRuleDraft
+import cc.hhhl.client.automation.resolveAutomationRuleDraft
 import cc.hhhl.client.automation.toAutomationChatEvent
 import cc.hhhl.client.automation.toAutomationNotificationEvent
+import cc.hhhl.client.automation.toAutomationTimelineEvent
 import cc.hhhl.client.ai.AiProviderPreset
+import cc.hhhl.client.ai.AiRepositoryResult
 import cc.hhhl.client.ai.AiSettings
 import cc.hhhl.client.ai.AiStore
 import cc.hhhl.client.ai.AiStateHolder
@@ -92,6 +100,7 @@ import cc.hhhl.client.model.Clip
 import cc.hhhl.client.model.ClipListKind
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelListKind
 import cc.hhhl.client.model.InstanceCapabilities
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NotificationFilter
@@ -108,11 +117,13 @@ import cc.hhhl.client.repository.AdminRepository
 import cc.hhhl.client.repository.AchievementRepository
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRepository
+import cc.hhhl.client.repository.ChatRepositoryResult
 import cc.hhhl.client.repository.ChatStreamingRepository
 import cc.hhhl.client.repository.ChannelRepository
 import cc.hhhl.client.repository.ClipRepository
 import cc.hhhl.client.repository.ComposeRepository
 import cc.hhhl.client.repository.DiscoverRepository
+import cc.hhhl.client.repository.DiscoverRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.EmojiRepository
 import cc.hhhl.client.repository.FavoriteNoteRepository
@@ -134,6 +145,7 @@ import cc.hhhl.client.repository.UserListRepository
 import cc.hhhl.client.repository.UserProfileRepository
 import cc.hhhl.client.repository.UserRelationshipRepository
 import cc.hhhl.client.repository.UserSocialRepository
+import cc.hhhl.client.repository.ChannelsRepositoryResult
 import cc.hhhl.client.state.AntennaStateHolder
 import cc.hhhl.client.state.AntennaUiState
 import cc.hhhl.client.state.AnnouncementStateHolder
@@ -217,6 +229,10 @@ import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.theme.NoopThemeStore
 import cc.hhhl.client.theme.ThemeStore
 import cc.hhhl.client.theme.ThemeStateHolder
+import cc.hhhl.client.update.AppReleaseNotes
+import cc.hhhl.client.update.NoopReleaseNotesStore
+import cc.hhhl.client.update.ReleaseNotesStore
+import cc.hhhl.client.update.releaseNotesFor
 import cc.hhhl.client.ui.component.HhhlBottomNav
 import cc.hhhl.client.ui.component.HhhlAlertDialog
 import cc.hhhl.client.ui.component.HhhlTextButton
@@ -301,6 +317,8 @@ fun HhhlApp(
     onAiQueueChanged: () -> Unit = {},
     initialSharedText: String? = null,
     onInitialSharedTextConsumed: () -> Unit = {},
+    appVersionName: String = "",
+    releaseNotesStore: ReleaseNotesStore = NoopReleaseNotesStore,
     onCheckForUpdates: (((String) -> Unit) -> Unit) = { report -> report("当前平台暂不支持应用内更新") },
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit) = {},
     onAuthCallbackConsumed: () -> Unit = {},
@@ -378,9 +396,9 @@ fun HhhlApp(
                     timelineCache = timelineCache,
                     recentReactionStore = recentReactionStore,
                     specialCareStore = specialCareStore,
-                automationStore = automationStore,
-                aiStore = aiStore,
-                composeDraftStore = composeDraftStore,
+                    automationStore = automationStore,
+                    aiStore = aiStore,
+                    composeDraftStore = composeDraftStore,
                     chatMessageCache = chatMessageCache,
                     chatUnreadStore = chatUnreadStore,
                     notificationCache = notificationCache,
@@ -408,10 +426,12 @@ fun HhhlApp(
                     onSpecialCareBackgroundNotificationsChanged = onSpecialCareBackgroundNotificationsChanged,
                     onSpecialCareUsersChanged = onSpecialCareUsersChanged,
                     onSpecialCareSystemNotification = onSpecialCareSystemNotification,
-                onAutomationSystemNotification = onAutomationSystemNotification,
-                onAiQueueChanged = onAiQueueChanged,
+                    onAutomationSystemNotification = onAutomationSystemNotification,
+                    onAiQueueChanged = onAiQueueChanged,
                     initialSharedText = initialSharedText,
                     onInitialSharedTextConsumed = onInitialSharedTextConsumed,
+                    appVersionName = appVersionName,
+                    releaseNotesStore = releaseNotesStore,
                     onCheckForUpdates = onCheckForUpdates,
                     onBackHandlerChanged = onBackHandlerChanged,
                     onSwitchAccount = loginStateHolder::switchAccount,
@@ -569,6 +589,46 @@ private fun relationshipEntryForUser(
     return UserRelationshipListEntry(
         id = "$prefix-${user.id}",
         user = user,
+    )
+}
+
+@Composable
+private fun ReleaseNotesDialog(
+    notes: AppReleaseNotes,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(notes.title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = notes.summary,
+                    color = colors.textSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    notes.highlights.forEach { item ->
+                        Text(
+                            text = "· $item",
+                            color = colors.textPrimary,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+                Text(
+                    text = "此版本只展示一次，关闭后不会在下次打开时再次弹出。",
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        confirmButton = {
+            HhhlTextButton(onClick = onDismiss, emphasized = true) {
+                Text("知道了")
+            }
+        },
     )
 }
 
@@ -736,9 +796,11 @@ private const val CHAT_EVENT_RECHECK_DELAY_MS = 1_500L
 private const val TIMELINE_REFRESH_INTERVAL_MS = 12_000L
 private const val STREAMING_TIMELINE_FALLBACK_REFRESH_INTERVAL_MS = 60_000L
 private const val STREAMING_TIMELINE_REFRESH_DEBOUNCE_MS = 2_000L
+private const val AUTOMATION_CHANNEL_SCAN_INTERVAL_MS = 60_000L
+private const val AUTOMATION_CHANNEL_SCAN_LIMIT = 4
 private const val TREND_REFRESH_INTERVAL_MS = 5_000L
 private const val NOTIFICATION_REFRESH_INTERVAL_MS = 20_000L
-private const val STREAMING_NOTIFICATION_FALLBACK_REFRESH_INTERVAL_MS = 60_000L
+private const val STREAMING_NOTIFICATION_FALLBACK_REFRESH_INTERVAL_MS = 30_000L
 private const val MAX_AUTOMATION_SEEN_CHAT_EVENTS = 240
 private const val MAX_AUTOMATION_CHAT_SOURCES = 120
 private const val AUTOMATION_ROOM_SCAN_LIMIT = 8
@@ -760,6 +822,7 @@ private fun ChatMessage.automationMessageKey(): String {
 private data class AutomationRoomScanTarget(
     val sourceId: String,
     val roomId: String,
+    val roomName: String,
     val marker: String,
 )
 
@@ -1220,9 +1283,16 @@ private fun AutomationRouteContent(
     latestAiResultFor: (Array<out AiTaskKind>) -> AiTask?,
     onAiExplainRule: (AutomationRule?) -> Unit,
     onAiSuggestRules: (AutomationUiState) -> Unit,
+    onAiCreateRule: (String, AutomationUiState) -> Unit,
     onDismissAiResult: () -> Unit,
 ) {
-    val aiResult = latestAiResultFor(arrayOf(AiTaskKind.AutomationExplain, AiTaskKind.AutomationRuleSuggestions))
+    val aiResult = latestAiResultFor(
+        arrayOf(
+            AiTaskKind.AutomationExplain,
+            AiTaskKind.AutomationRuleSuggestions,
+            AiTaskKind.AutomationRuleDraft,
+        ),
+    )
     AutomationScreen(
         state = state,
         onBack = onBack,
@@ -1251,6 +1321,7 @@ private fun AutomationRouteContent(
         aiResultLabel = aiResult?.kind?.label,
         onAiExplainRule = onAiExplainRule,
         onAiSuggestRules = onAiSuggestRules,
+        onAiCreateRule = onAiCreateRule,
         onDismissAiResult = onDismissAiResult,
     )
 }
@@ -1372,6 +1443,7 @@ private fun ComposeRouteContent(
             AiTaskKind.ComposeContentWarning,
             AiTaskKind.ComposeHashtags,
             AiTaskKind.ComposeMentionSuggestions,
+            AiTaskKind.ComposeFromRecentPosts,
             AiTaskKind.PostReplyDraft,
             AiTaskKind.ThreadReplyDraft,
         ),
@@ -2230,6 +2302,8 @@ private fun MainShell(
     onAiQueueChanged: () -> Unit,
     initialSharedText: String?,
     onInitialSharedTextConsumed: () -> Unit,
+    appVersionName: String,
+    releaseNotesStore: ReleaseNotesStore,
     onCheckForUpdates: (((String) -> Unit) -> Unit),
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit),
     onSwitchAccount: (String) -> Unit,
@@ -2247,8 +2321,11 @@ private fun MainShell(
     var mediaPreviewSession by remember { mutableStateOf<MediaPreviewSession?>(null) }
     var viewedUserId by remember { mutableStateOf<String?>(null) }
     var authInvalidDialogOpen by remember { mutableStateOf(false) }
+    var pendingReleaseNotes by remember { mutableStateOf<AppReleaseNotes?>(null) }
     var lastStreamingTimelineRefreshAt by remember { mutableStateOf<Map<TimelineKind, Long>>(emptyMap()) }
     var notifiedSpecialCareNoteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var automationTimelineSourceBaselines by remember(currentAccountId) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var automationSeenTimelineNoteIds by remember(currentAccountId) { mutableStateOf<Set<String>>(emptySet()) }
     var automationSeenChatMessageIds by remember(currentAccountId) { mutableStateOf<Set<String>>(emptySet()) }
     var automationChatSourceBaselines by remember(currentAccountId) { mutableStateOf<Map<String, String>>(emptyMap()) }
     var automationRoomSourceMarkers by remember(currentAccountId) { mutableStateOf<Map<String, String>>(emptyMap()) }
@@ -2308,6 +2385,7 @@ private fun MainShell(
         accounts.firstOrNull { account -> account.id == currentAccountId }?.host
             ?: currentAccountId?.substringBefore(':')?.takeIf { host -> host.isNotBlank() && !host.startsWith("legacy-") }
     }
+    val clipboardManager = LocalClipboardManager.current
     val chatRepository = remember(sessionToken, currentAccountId, accountUser?.id, chatMessageCache) {
         ChatRepository(
             tokenProvider = { sessionToken },
@@ -2410,6 +2488,12 @@ private fun MainShell(
             executor = AppAutomationActionExecutor(
                 chatRepository = chatRepository,
                 notificationRepository = notificationRepository,
+                composeRepository = ComposeRepository(tokenProvider = { sessionToken }),
+                noteActionRepository = NoteActionRepository(tokenProvider = { sessionToken }),
+                clipboardWriter = { text ->
+                    clipboardManager.setText(AnnotatedString(text))
+                    true
+                },
                 systemNotificationPublisher = automationSystemNotificationPublisher,
                 aiBridge = aiStateHolder,
             ),
@@ -2528,6 +2612,12 @@ private fun MainShell(
         )
     }
     val channelState by channelStateHolder.state.collectAsState()
+    val automationChannelRepository = remember(sessionToken) {
+        ChannelRepository(tokenProvider = { sessionToken })
+    }
+    val automationDiscoverRepository = remember(sessionToken) {
+        DiscoverRepository(tokenProvider = { sessionToken })
+    }
     val pageStateHolder = remember {
         PageStateHolder(
             repository = PageRepository(tokenProvider = { sessionToken }),
@@ -2600,6 +2690,17 @@ private fun MainShell(
         notificationStateHolder.refresh()
         settingsStateHolder.refreshRemote()
         relationshipManagementStateHolder.refreshBlockedUsers()
+    }
+
+    LaunchedEffect(appVersionName) {
+        val cleanVersion = appVersionName.trim().removePrefix("v")
+        if (cleanVersion.isBlank()) return@LaunchedEffect
+        val lastShownVersion = runCatching { releaseNotesStore.loadLastShownVersion() }.getOrNull()
+            ?.trim()
+            ?.removePrefix("v")
+        if (lastShownVersion != cleanVersion) {
+            pendingReleaseNotes = releaseNotesFor(cleanVersion)
+        }
     }
 
     LaunchedEffect(initialSharedText, currentAccountId) {
@@ -2844,18 +2945,43 @@ private fun MainShell(
         }
     }
 
+    suspend fun refreshNotificationsAfterStreamingEvent() {
+        notificationStateHolder.refreshQuietly()
+        delay(1_500L)
+        notificationStateHolder.refreshQuietly()
+        delay(4_000L)
+        notificationStateHolder.refreshQuietly()
+    }
+
     LaunchedEffect(sessionToken, chatState.chatAvailable) {
         mainStreamingConnected = false
         while (true) {
             var unauthorized = false
             mainStreamingRepository.streamMain().collectLatest { event ->
                 when (event) {
-                    MainStreamingEvent.UnreadNotification -> notificationStateHolder.refreshQuietly()
+                    MainStreamingEvent.UnreadNotification -> refreshNotificationsAfterStreamingEvent()
+                    is MainStreamingEvent.NotificationReceived -> {
+                        notificationStateHolder.addStreamingNotification(event.notification)
+                        refreshNotificationsAfterStreamingEvent()
+                    }
                     MainStreamingEvent.ReadAllNotifications -> notificationStateHolder.syncAllReadFromStreaming()
                     is MainStreamingEvent.TimelineNote -> {
                         val currentTimelineState = latestTimelineState
                         val streamingNote = event.note
                         val now = Clock.System.now().toEpochMilliseconds()
+                        if (streamingNote != null) {
+                            val eventKey = "${event.kind.name}:${streamingNote.id}"
+                            if (eventKey !in automationSeenTimelineNoteIds) {
+                                automationSeenTimelineNoteIds = (automationSeenTimelineNoteIds + eventKey)
+                                    .takeLastSet(MAX_AUTOMATION_SEEN_CHAT_EVENTS)
+                                automationStateHolder.emit(
+                                    streamingNote.toAutomationTimelineEvent(
+                                        kind = event.kind,
+                                        currentUser = accountUser?.toDomainUser(host = currentAccountHost),
+                                    ),
+                                )
+                            }
+                        }
                         if (
                             streamingNote != null &&
                             streamingNote.author.id in latestSpecialCareUserIds &&
@@ -3052,6 +3178,7 @@ private fun MainShell(
                     AutomationRoomScanTarget(
                         sourceId = sourceId,
                         roomId = room.id,
+                        roomName = room.name,
                         marker = marker,
                     )
                 } else {
@@ -3075,20 +3202,31 @@ private fun MainShell(
             .takeLastSet(MAX_AUTOMATION_SEEN_CHAT_EVENTS)
 
         selectedMessageEvents.forEach { (_, message) ->
+            val attentionKind = message.automationChatAttentionKind(
+                currentUser = currentUser,
+                specialCareUserIds = specialCareState.userIds,
+            )
             automationStateHolder.emit(
                 message.toAutomationChatEvent(
                     roomId = chatState.selectedRoom?.id ?: message.roomId,
+                    roomName = chatState.selectedRoom?.name.orEmpty(),
                     directUserId = chatState.selectedUserConversation?.user?.id,
+                    attentionKind = attentionKind?.name.orEmpty(),
                     currentUser = currentUser,
                 ),
             )
         }
         userEvents.forEach { (_, pair) ->
             val (conversation, message) = pair
+            val attentionKind = message.automationChatAttentionKind(
+                currentUser = currentUser,
+                specialCareUserIds = specialCareState.userIds,
+            )
             automationStateHolder.emit(
                 message.toAutomationChatEvent(
                     roomId = message.roomId,
                     directUserId = conversation.user.id,
+                    attentionKind = attentionKind?.name.orEmpty(),
                     currentUser = currentUser,
                 ),
             )
@@ -3123,13 +3261,117 @@ private fun MainShell(
             automationRoomSourceMarkers = (automationRoomSourceMarkers + (target.sourceId to target.marker))
                 .takeLastEntries(MAX_AUTOMATION_CHAT_SOURCES)
             roomMessageEvents.forEach { (_, message) ->
+                val attentionKind = message.automationChatAttentionKind(
+                    currentUser = currentUser,
+                    specialCareUserIds = specialCareState.userIds,
+                )
                 automationStateHolder.emit(
                     message.toAutomationChatEvent(
                         roomId = target.roomId,
+                        roomName = target.roomName,
+                        attentionKind = attentionKind?.name.orEmpty(),
                         currentUser = currentUser,
                     ),
                 )
             }
+        }
+    }
+
+    LaunchedEffect(
+        channelState.selectedChannel?.id,
+        channelState.notes.map { it.id },
+    ) {
+        val channel = channelState.selectedChannel ?: return@LaunchedEffect
+        val latestNoteId = channelState.notes.firstOrNull()?.id.orEmpty()
+        val sourceId = "channel:${channel.id}"
+        val baselineId = automationTimelineSourceBaselines[sourceId]
+        if (baselineId == null) {
+            if (latestNoteId.isNotBlank()) {
+                automationTimelineSourceBaselines = (automationTimelineSourceBaselines + (sourceId to latestNoteId))
+                    .takeLastEntries(MAX_AUTOMATION_CHAT_SOURCES)
+            }
+            return@LaunchedEffect
+        }
+        if (latestNoteId.isBlank() || latestNoteId == baselineId) return@LaunchedEffect
+        val notesAfterBaseline = channelState.notes.takeWhile { it.id != baselineId }.asReversed()
+        val currentUser = accountUser?.toDomainUser(host = currentAccountHost)
+        notesAfterBaseline.forEach { note ->
+            val eventKey = "$sourceId:${note.id}"
+            if (eventKey !in automationSeenTimelineNoteIds) {
+                automationSeenTimelineNoteIds = (automationSeenTimelineNoteIds + eventKey)
+                    .takeLastSet(MAX_AUTOMATION_SEEN_CHAT_EVENTS)
+                automationStateHolder.emit(
+                    note.toAutomationTimelineEvent(
+                        kind = TimelineKind.Home,
+                        channelName = channel.name,
+                        timelineSource = "Channel",
+                        currentUser = currentUser,
+                    ),
+                )
+            }
+        }
+        automationTimelineSourceBaselines = (automationTimelineSourceBaselines + (sourceId to latestNoteId))
+            .takeLastEntries(MAX_AUTOMATION_CHAT_SOURCES)
+    }
+
+    LaunchedEffect(
+        automationState.rules.map { rule -> rule.id to rule.enabled to rule.trigger to rule.conditions.map { it.type to it.value } },
+        currentAccountId,
+    ) {
+        val channelRules = automationState.rules.filter { rule ->
+            rule.enabled && rule.trigger == AutomationTrigger.TimelineNote && rule.conditions.any { condition ->
+                condition.enabled && condition.type == AutomationConditionType.ChannelId && condition.value.isNotBlank()
+            }
+        }
+        if (channelRules.isEmpty()) return@LaunchedEffect
+        while (true) {
+            val targets = channelRules
+                .flatMap { rule ->
+                    rule.conditions.filter { it.enabled && it.type == AutomationConditionType.ChannelId }
+                        .map { it.value.trim() }
+                }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .take(AUTOMATION_CHANNEL_SCAN_LIMIT)
+            val knownChannels = buildList {
+                addAll(channelState.channels)
+                channelState.selectedChannel?.let { add(it) }
+            }.distinctBy { it.id }.associateBy { it.id }
+            val currentUser = accountUser?.toDomainUser(host = currentAccountHost)
+            targets.forEach { channelId ->
+                val result = automationChannelRepository.refreshTimeline(channelId)
+                if (result !is cc.hhhl.client.repository.ChannelTimelineRepositoryResult.Success) return@forEach
+                val latestNoteId = result.notes.firstOrNull()?.id.orEmpty()
+                val sourceId = "channel:$channelId"
+                val baselineId = automationTimelineSourceBaselines[sourceId]
+                if (baselineId == null) {
+                    if (latestNoteId.isNotBlank()) {
+                        automationTimelineSourceBaselines = (automationTimelineSourceBaselines + (sourceId to latestNoteId))
+                            .takeLastEntries(MAX_AUTOMATION_CHAT_SOURCES)
+                    }
+                    return@forEach
+                }
+                if (latestNoteId.isBlank() || latestNoteId == baselineId) return@forEach
+                val channelName = knownChannels[channelId]?.name.orEmpty()
+                result.notes.takeWhile { it.id != baselineId }.asReversed().forEach { note ->
+                    val eventKey = "$sourceId:${note.id}"
+                    if (eventKey !in automationSeenTimelineNoteIds) {
+                        automationSeenTimelineNoteIds = (automationSeenTimelineNoteIds + eventKey)
+                            .takeLastSet(MAX_AUTOMATION_SEEN_CHAT_EVENTS)
+                        automationStateHolder.emit(
+                            note.copy(channelId = note.channelId.ifBlank { channelId }).toAutomationTimelineEvent(
+                                kind = TimelineKind.Home,
+                                channelName = channelName,
+                                timelineSource = "Channel",
+                                currentUser = currentUser,
+                            ),
+                        )
+                    }
+                }
+                automationTimelineSourceBaselines = (automationTimelineSourceBaselines + (sourceId to latestNoteId))
+                    .takeLastEntries(MAX_AUTOMATION_CHAT_SOURCES)
+            }
+            delay(AUTOMATION_CHANNEL_SCAN_INTERVAL_MS)
         }
     }
 
@@ -3363,11 +3605,129 @@ private fun MainShell(
             noteActionToast = toast
         }
     }
+
+    fun automationKnownUsers(): List<User> {
+        return buildList {
+            accountUser?.toDomainUser(host = currentAccountHost)?.let { add(it) }
+            addAll(chatState.userConversations.map { it.user })
+            addAll(chatState.messages.map { it.fromUser })
+            addAll(chatState.messages.mapNotNull { it.toUser })
+            addAll(chatState.members.map { it.user })
+            addAll(loadedNotes.map { it.author })
+            addAll(notificationState.notifications.map { it.actor })
+            userProfileState.user?.let { add(it) }
+            viewedProfileState.user?.let { add(it) }
+        }.distinctBy { it.id }.take(120)
+    }
+
+    fun automationKnownChannels(): List<Channel> {
+        return buildList {
+            addAll(channelState.channels)
+            channelState.selectedChannel?.let { add(it) }
+        }.distinctBy { it.id }.take(80)
+    }
+
+    suspend fun loadAutomationRoomsForResolve(): List<cc.hhhl.client.model.ChatRoom> {
+        val joined = when (val result = chatRepository.refresh()) {
+            is ChatRepositoryResult.Success -> result.rooms
+            ChatRepositoryResult.Unauthorized,
+            is ChatRepositoryResult.Error -> emptyList()
+        }
+        val owned = when (val result = chatRepository.refreshOwnedRooms()) {
+            is ChatRepositoryResult.Success -> result.rooms
+            ChatRepositoryResult.Unauthorized,
+            is ChatRepositoryResult.Error -> emptyList()
+        }
+        return (chatState.rooms + chatState.ownedRooms + joined + owned).distinctBy { it.id }.take(160)
+    }
+
+    suspend fun loadAutomationChannelsForResolve(): List<Channel> {
+        val loaded = ChannelListKind.entries.flatMap { kind ->
+            when (val result = automationChannelRepository.refreshChannels(kind)) {
+                is ChannelsRepositoryResult.Success -> result.channels
+                ChannelsRepositoryResult.Unauthorized,
+                is ChannelsRepositoryResult.Error -> emptyList()
+            }
+        }
+        return (automationKnownChannels() + loaded).distinctBy { it.id }.take(160)
+    }
+
+    suspend fun searchAutomationUsers(query: String): List<User> {
+        return when (val result = automationDiscoverRepository.searchUsers(query)) {
+            is DiscoverRepositoryResult.UserSuccess -> result.users
+            DiscoverRepositoryResult.Unauthorized,
+            is DiscoverRepositoryResult.Error,
+            is DiscoverRepositoryResult.Success,
+            is DiscoverRepositoryResult.PinnedUsersSuccess,
+            is DiscoverRepositoryResult.RoleSuccess,
+            is DiscoverRepositoryResult.RoleDetailSuccess,
+            is DiscoverRepositoryResult.RoleUsersSuccess,
+            is DiscoverRepositoryResult.RoleNotesSuccess,
+            is DiscoverRepositoryResult.TrendSuccess,
+            is DiscoverRepositoryResult.HashtagSuccess,
+            is DiscoverRepositoryResult.FederationSuccess,
+            is DiscoverRepositoryResult.FederationInstanceSuccess,
+            is DiscoverRepositoryResult.FederationFollowSuccess,
+            is DiscoverRepositoryResult.FederationStatsSuccess,
+            DiscoverRepositoryResult.FederationActionSuccess -> emptyList()
+        }
+    }
+
+    fun automationContextText(state: AutomationUiState): String {
+        return buildString {
+            appendLine("现有规则：${state.rules.size} 条，启用 ${state.enabledRuleCount} 条")
+            state.rules.take(12).forEachIndexed { index, rule ->
+                appendLine("规则 ${index + 1}：${rule.name} · ${rule.trigger.label} · ${rule.conditionMode.label} · ${rule.actionMode.label}")
+                if (rule.conditions.isEmpty()) {
+                    appendLine("  条件：无")
+                } else {
+                    appendLine("  条件：${rule.conditions.joinToString("；") { "${it.type.label}=${it.value.ifBlank { "未填写" }}" }}")
+                }
+                if (rule.actions.isEmpty()) {
+                    appendLine("  动作：无")
+                } else {
+                    appendLine("  动作：${rule.actions.joinToString("；") { "${it.type.label}->${it.targetId.ifBlank { "本地" }}" }}")
+                }
+            }
+            if (state.logs.isNotEmpty()) {
+                appendLine()
+                appendLine("最近执行日志：")
+                state.logs.take(10).forEach { log ->
+                    appendLine("- ${log.eventLabel} · ${log.actionLabel} · ${if (log.success) "成功" else "失败"}：${log.message}")
+                }
+            }
+            appendLine()
+            appendLine("可用触发器：${AutomationTrigger.entries.joinToString("、") { it.label }}")
+            appendLine("可用条件：${AutomationConditionType.entries.joinToString("、") { it.label }}")
+            appendLine("可用动作：${AutomationActionType.entries.joinToString("、") { it.label }}")
+            appendLine("工具权限：${if (aiState.settings.toolsAllowed) "已开启" else "未开启"}")
+            appendLine()
+            appendLine("已加载聊天室（名称 -> ID）：")
+            (chatState.rooms + chatState.ownedRooms).distinctBy { it.id }.take(40).forEach { room ->
+                appendLine("- ${room.name} -> ${room.id}")
+            }
+            appendLine("已加载用户（名称 / 用户名 -> ID）：")
+            automationKnownUsers().take(60).forEach { user ->
+                appendLine("- ${user.displayName.ifBlank { user.username }} / @${user.username}${user.host?.let { "@$it" }.orEmpty()} -> ${user.id}")
+            }
+            appendLine("已加载频道（名称 -> ID）：")
+            automationKnownChannels().take(40).forEach { channel ->
+                appendLine("- ${channel.name} -> ${channel.id}")
+            }
+        }
+    }
+
     fun requestComposeAi(kind: AiTaskKind, draft: ComposeDraft, targetNote: Note?) {
-        if (draft.text.isBlank() && targetNote == null) {
+        val recentNotes = if (kind == AiTaskKind.ComposeFromRecentPosts) {
+            loadedNotes.take(24)
+        } else {
+            emptyList()
+        }
+        if (draft.text.isBlank() && targetNote == null && recentNotes.isEmpty()) {
             noteActionToast = "先输入草稿再使用 AI"
             return
         }
+        val allowSensitiveUpload = aiState.settings.uploadSensitiveContentAllowed
         requestAiTask(
             kind = kind,
             input = AiTaskInput(
@@ -3379,8 +3739,10 @@ private fun MainShell(
                 quotedNoteText = targetNote?.quotedNote?.let { quoted ->
                     "${quoted.author.displayName.ifBlank { quoted.author.username }}: ${notePreviewText(quoted, fallback = "")}"
                 }.orEmpty(),
+                timelineTitle = "最近帖子",
+                timelineNotes = recentNotes.toAiPostContexts(allowSensitiveUpload),
             ),
-            toast = "AI 已开始处理草稿",
+            toast = if (kind == AiTaskKind.ComposeFromRecentPosts) "AI 正在结合最近帖子生成" else "AI 已开始处理草稿",
         )
     }
     fun requestPostAi(kind: AiTaskKind, note: Note, openCompose: Boolean = false) {
@@ -3534,34 +3896,7 @@ private fun MainShell(
         )
     }
     fun requestAutomationRuleSuggestions(state: AutomationUiState) {
-        val contextText = buildString {
-            appendLine("现有规则：${state.rules.size} 条，启用 ${state.enabledRuleCount} 条")
-            state.rules.take(12).forEachIndexed { index, rule ->
-                appendLine("规则 ${index + 1}：${rule.name} · ${rule.trigger.label} · ${rule.conditionMode.label} · ${rule.actionMode.label}")
-                if (rule.conditions.isEmpty()) {
-                    appendLine("  条件：无")
-                } else {
-                    appendLine("  条件：${rule.conditions.joinToString("；") { "${it.type.label}=${it.value.ifBlank { "未填写" }}" }}")
-                }
-                if (rule.actions.isEmpty()) {
-                    appendLine("  动作：无")
-                } else {
-                    appendLine("  动作：${rule.actions.joinToString("；") { "${it.type.label}->${it.targetId.ifBlank { "本地" }}" }}")
-                }
-            }
-            if (state.logs.isNotEmpty()) {
-                appendLine()
-                appendLine("最近执行日志：")
-                state.logs.take(10).forEach { log ->
-                    appendLine("- ${log.eventLabel} · ${log.actionLabel} · ${if (log.success) "成功" else "失败"}：${log.message}")
-                }
-            }
-            appendLine()
-            appendLine("可用触发器：${AutomationTrigger.entries.joinToString("、") { it.label }}")
-            appendLine("可用条件：${AutomationConditionType.entries.joinToString("、") { it.label }}")
-            appendLine("可用动作：${AutomationActionType.entries.joinToString("、") { it.label }}")
-            appendLine("工具权限：${if (aiState.settings.toolsAllowed) "已开启" else "未开启"}")
-        }
+        val contextText = automationContextText(state)
         requestAiTask(
             kind = AiTaskKind.AutomationRuleSuggestions,
             input = AiTaskInput(
@@ -3571,6 +3906,54 @@ private fun MainShell(
             ),
             toast = "AI 已开始生成规则建议",
         )
+    }
+
+    fun requestAutomationRuleDraft(description: String, state: AutomationUiState) {
+        val cleanDescription = description.trim()
+        if (cleanDescription.isBlank()) {
+            noteActionToast = "先描述想自动完成的事"
+            return
+        }
+        appScope.launch {
+            noteActionToast = "AI 正在生成规则草稿"
+            when (val result = aiStateHolder.runBlockingTask(
+                AiTaskKind.AutomationRuleDraft,
+                AiTaskInput(
+                    prompt = cleanDescription,
+                    automationEventText = automationContextText(state),
+                ),
+            )) {
+                is AiRepositoryResult.Success -> {
+                    val parsed = parseAutomationRuleDraft(result.text)
+                    val rule = parsed.rule
+                    if (rule == null) {
+                        noteActionToast = parsed.errorMessage ?: "AI 规则草稿解析失败"
+                    } else {
+                        val resolved = resolveAutomationRuleDraft(
+                            rule = rule,
+                            input = AutomationRuleDraftResolveInput(
+                                rooms = (chatState.rooms + chatState.ownedRooms).distinctBy { it.id },
+                                users = automationKnownUsers(),
+                                channels = automationKnownChannels(),
+                                searchUsers = ::searchAutomationUsers,
+                                loadRooms = ::loadAutomationRoomsForResolve,
+                                loadChannels = ::loadAutomationChannelsForResolve,
+                            ),
+                        )
+                        automationStateHolder.addRuleDraft(resolved.rule.copy(enabled = resolved.rule.enabled))
+                        noteActionToast = buildString {
+                            append(if (resolved.rule.enabled) "AI 已生成并启用规则草稿" else "AI 已生成规则草稿")
+                            resolved.messages.take(4).takeIf { it.isNotEmpty() }?.let { messages ->
+                                append("：")
+                                append(messages.joinToString("；"))
+                            }
+                        }
+                    }
+                }
+                AiRepositoryResult.Unauthorized -> noteActionToast = "AI API Key 无效或权限不足"
+                is AiRepositoryResult.Error -> noteActionToast = result.message
+            }
+        }
     }
     fun requestWorkspaceActionPlan() {
         val settings = aiState.settings
@@ -4576,6 +4959,7 @@ private fun MainShell(
                     latestAiResultFor = { kinds -> latestAiResultFor(*kinds) },
                     onAiExplainRule = ::requestAutomationExplain,
                     onAiSuggestRules = ::requestAutomationRuleSuggestions,
+                    onAiCreateRule = ::requestAutomationRuleDraft,
                     onDismissAiResult = aiStateHolder::consumeLatestResult,
                 )
                 is AppRoute.SettingsManagement -> SettingsManagementScreen(
@@ -4861,6 +5245,15 @@ private fun MainShell(
                     onConfirm = {
                         authInvalidDialogOpen = false
                         onAuthInvalid()
+                    },
+                )
+            }
+            pendingReleaseNotes?.let { notes ->
+                ReleaseNotesDialog(
+                    notes = notes,
+                    onDismiss = {
+                        pendingReleaseNotes = null
+                        runCatching { releaseNotesStore.saveLastShownVersion(notes.versionName) }
                     },
                 )
             }

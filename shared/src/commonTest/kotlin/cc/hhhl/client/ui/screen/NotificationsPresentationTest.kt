@@ -54,8 +54,9 @@ class NotificationsPresentationTest {
             onSendReminderNotification = {},
         )
 
-        assertEquals(listOf("AI 总结通知", "AI 待处理", "AI 优先级", "测试通知", "提醒自己"), actions.map { it.label })
-        assertEquals(listOf(false, false, false, true, true), actions.map { it.enabled })
+        assertEquals(listOf("AI", "测试通知", "提醒自己"), actions.map { it.label })
+        assertEquals(listOf(false, true, true), actions.map { it.enabled })
+        assertEquals(listOf("总结通知", "待处理", "优先级"), actions.first().children.map { it.label })
     }
 
     @Test

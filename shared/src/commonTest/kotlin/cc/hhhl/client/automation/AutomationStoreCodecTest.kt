@@ -1,5 +1,8 @@
 package cc.hhhl.client.automation
 
+import cc.hhhl.client.model.ChatMessage
+import cc.hhhl.client.model.User
+import cc.hhhl.client.state.ChatAttentionKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -63,13 +66,46 @@ class AutomationStoreCodecTest {
             senderName = "Alice",
             roomId = "room-1",
             messageText = "hello",
+            chatMessageId = "message-1",
+            senderUsername = "alice",
+            senderHost = "example.com",
+            noteId = "note-1",
+            channelId = "channel-1",
         )
 
         val rendered = renderAutomationTemplate(
-            template = "{{sender.name}} @ {{room.id}}: {{message.text}}",
+            template = "{{sender.mention}} @ {{room.id}} / {{message.id}} / {{note.link}} / {{channel.link}}: {{message.text}}",
             event = event,
         )
 
-        assertEquals("Alice @ room-1: hello", rendered)
+        assertEquals("@alice@example.com @ room-1 / message-1 / https://dc.hhhl.cc/notes/note-1 / https://dc.hhhl.cc/channels/channel-1: hello", rendered)
+    }
+
+    @Test
+    fun chatAttentionKindDetectsMentionOfCurrentUser() {
+        val currentUser = User(
+            id = "me",
+            displayName = "Me",
+            username = "sunxiaochuan",
+            avatarInitial = "M",
+        )
+        val message = ChatMessage(
+            id = "message-mention",
+            roomId = "room-1",
+            fromUser = User(id = "alice", displayName = "Alice", username = "alice", avatarInitial = "A"),
+            text = "@sunxiaochuan 帮我总结下上下文",
+            createdAtLabel = "刚刚",
+        )
+
+        val attentionKind = message.automationChatAttentionKind(currentUser = currentUser)
+        val event = message.toAutomationChatEvent(
+            roomId = "room-1",
+            attentionKind = attentionKind?.name.orEmpty(),
+            currentUser = currentUser,
+        )
+
+        assertEquals(ChatAttentionKind.Mention, attentionKind)
+        assertEquals(AutomationTrigger.ChatAttention, event.trigger)
+        assertEquals("Mention", event.attentionKind)
     }
 }

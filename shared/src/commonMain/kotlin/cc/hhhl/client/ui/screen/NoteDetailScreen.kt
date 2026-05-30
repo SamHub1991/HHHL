@@ -37,6 +37,7 @@ import cc.hhhl.client.model.NoteReactionUser
 import cc.hhhl.client.model.NoteVersion
 import cc.hhhl.client.state.NoteDetailUiState
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
@@ -483,36 +484,12 @@ private fun NoteDetailAiResultPanel(
     text: String,
     onDismiss: () -> Unit,
 ) {
-    val colors = LocalHhhlColors.current
-    HhhlInlinePanel(
+    AiResultPanel(
+        label = label,
+        text = text,
+        onDismiss = onDismiss,
         modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-        emphasized = true,
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = label,
-                color = colors.accent,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            HhhlIconActionButton(
-                icon = Icons.Filled.Close,
-                contentDescription = "关闭 AI 结果",
-                onClick = onDismiss,
-            )
-        }
-        Text(
-            text = text,
-            color = colors.textPrimary,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 10,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
+    )
 }
 
 @Composable

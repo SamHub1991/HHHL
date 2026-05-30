@@ -162,6 +162,8 @@ class SharkeyTimelineApiTest {
         assertIs<TimelineLoadResult.Success>(result)
         val note = result.notes.single()
         assertEquals("note-1", note.id)
+        assertEquals("channel-1", note.channelId)
+        assertEquals("总部频道", note.channelName)
         assertEquals("Alice", note.author.displayName)
         assertEquals("alice", note.author.username)
         assertEquals("A", note.author.avatarInitial)
@@ -275,6 +277,8 @@ class SharkeyTimelineApiTest {
                     "id": "note-1",
                     "createdAt": "2026-05-25T00:12:34.000Z",
                     "text": "hello from Sharkey",
+                    "channelId": "channel-1",
+                    "channel": { "id": "channel-1", "name": "总部频道" },
                     "cw": "content warning",
                     "visibility": "home",
                     "renoteCount": 3,

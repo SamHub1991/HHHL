@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import cc.hhhl.client.theme.LocalHhhlColors
 
 internal val HhhlControlCornerRadius = 11.dp
@@ -138,7 +139,7 @@ fun HhhlActionChip(
         Text(
             text = label,
             color = targetContentColor,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelMedium.copy(lineHeight = 17.sp),
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,

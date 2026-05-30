@@ -1,6 +1,7 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NotificationItem
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
@@ -38,6 +39,10 @@ sealed interface MainStreamingEvent {
     data object Unauthorized : MainStreamingEvent
 
     data object UnreadNotification : MainStreamingEvent
+
+    data class NotificationReceived(
+        val notification: NotificationItem,
+    ) : MainStreamingEvent
 
     data object ReadAllNotifications : MainStreamingEvent
 
@@ -165,9 +170,12 @@ internal fun parseSharkeyMainStreamingEvent(
         }
     }
     if (channelId.isNotBlank() && channelId != MAIN_STREAM_ID) return null
+    val notification = body.obj("body")?.toStreamingNotificationOrNull(json)
     return when (eventType) {
-        "notification" -> MainStreamingEvent.UnreadNotification
-        "unreadNotification" -> MainStreamingEvent.UnreadNotification
+        "notification" -> notification?.let { MainStreamingEvent.NotificationReceived(it) }
+            ?: MainStreamingEvent.UnreadNotification
+        "unreadNotification" -> notification?.let { MainStreamingEvent.NotificationReceived(it) }
+            ?: MainStreamingEvent.UnreadNotification
         "readAllNotifications" -> MainStreamingEvent.ReadAllNotifications
         "readAllUnreadNotifications" -> MainStreamingEvent.ReadAllNotifications
         "newChatMessage" -> MainStreamingEvent.NewChatMessage
@@ -186,6 +194,11 @@ private fun JsonObject.string(key: String): String? {
 
 private fun JsonObject.toStreamingNoteOrNull(json: Json): Note? {
     return runCatching { json.decodeFromJsonElement<SharkeyNoteDto>(this).toDomainNote() }
+        .getOrNull()
+}
+
+private fun JsonObject.toStreamingNotificationOrNull(json: Json): NotificationItem? {
+    return runCatching { json.decodeFromJsonElement<NotificationDto>(this).toDomainNotification() }
         .getOrNull()
 }
 

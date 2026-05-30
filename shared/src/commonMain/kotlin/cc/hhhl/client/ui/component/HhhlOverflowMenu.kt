@@ -26,9 +26,27 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.FormatQuote
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Poll
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonRemove
@@ -83,6 +101,7 @@ data class HhhlOverflowMenuAction(
     val destructive: Boolean = false,
     val onClick: () -> Unit,
     val icon: ImageVector? = defaultOverflowMenuIcon(label),
+    val children: List<HhhlOverflowMenuAction> = emptyList(),
 )
 
 @Composable
@@ -100,6 +119,8 @@ fun HhhlOverflowMenu(
     labeledButtonIconSize: Dp = HhhlOverflowMenuLabeledIconSize,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var submenuActions by remember { mutableStateOf<List<HhhlOverflowMenuAction>>(emptyList()) }
+    var submenuLabel by remember { mutableStateOf("") }
     val colors = LocalHhhlColors.current
     val isDarkSurface = colors.surface.luminance() < 0.2f
     val visuallyEnabled = enabled || !showDisabledState
@@ -176,7 +197,11 @@ fun HhhlOverflowMenu(
         }
         HhhlDropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false },
+            onDismissRequest = {
+                expanded = false
+                submenuActions = emptyList()
+                submenuLabel = ""
+            },
             offset = DpOffset(x = HhhlOverflowMenuOffsetX, y = HhhlOverflowMenuOffsetY),
             modifier = Modifier
                 .widthIn(
@@ -184,62 +209,143 @@ fun HhhlOverflowMenu(
                     max = HhhlOverflowMenuMaxWidth,
                 ),
         ) {
-            actions.forEach { action ->
-                val itemContainerColor = when {
-                    action.destructive -> colors.danger.copy(alpha = 0.07f)
-                    else -> Color.Transparent
+            if (submenuActions.isEmpty()) {
+                actions.forEach { action ->
+                    HhhlOverflowMenuItem(
+                        action = action,
+                        onOpenSubmenu = { childLabel, childActions ->
+                            submenuLabel = childLabel
+                            submenuActions = childActions
+                        },
+                        onCloseMenu = {
+                            expanded = false
+                            submenuActions = emptyList()
+                            submenuLabel = ""
+                        },
+                    )
                 }
-                HhhlDropdownMenuItem(
-                    text = {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(
-                                modifier = Modifier.width(HhhlOverflowMenuItemIconSlotWidth),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                action.icon?.let { icon ->
-                                    Icon(
-                                        imageVector = icon,
-                                        contentDescription = null,
-                                        tint = if (action.destructive) {
-                                            colors.danger
-                                        } else {
-                                            colors.textSecondary
-                                        },
-                                        modifier = Modifier.size(HhhlOverflowMenuItemIconSize),
-                                    )
-                                }
-                            }
-                            Text(
-                                text = action.label,
-                                color = if (action.destructive) {
-                                    colors.danger
-                                } else {
-                                    colors.textPrimary
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                softWrap = false,
-                            )
-                        }
+            } else {
+                HhhlOverflowMenuSubmenuHeader(
+                    label = submenuLabel,
+                    onBack = {
+                        submenuActions = emptyList()
+                        submenuLabel = ""
                     },
-                    enabled = action.enabled,
-                    destructive = action.destructive,
-                    onClick = {
-                        expanded = false
-                        action.onClick()
-                    },
-                    modifier = Modifier
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(itemContainerColor),
                 )
+                submenuActions.forEach { action ->
+                    HhhlOverflowMenuItem(
+                        action = action,
+                        onOpenSubmenu = { _, _ -> },
+                        onCloseMenu = {
+                            expanded = false
+                            submenuActions = emptyList()
+                            submenuLabel = ""
+                        },
+                    )
+                }
             }
         }
     }
+}
+
+@Composable
+private fun HhhlOverflowMenuItem(
+    action: HhhlOverflowMenuAction,
+    onOpenSubmenu: (String, List<HhhlOverflowMenuAction>) -> Unit,
+    onCloseMenu: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val itemContainerColor = when {
+        action.destructive -> colors.danger.copy(alpha = 0.07f)
+        else -> Color.Transparent
+    }
+    val hasChildren = action.children.isNotEmpty()
+    HhhlDropdownMenuItem(
+        text = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier.width(HhhlOverflowMenuItemIconSlotWidth),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    action.icon?.let { icon ->
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = if (action.destructive) colors.danger else colors.textSecondary,
+                            modifier = Modifier.size(HhhlOverflowMenuItemIconSize),
+                        )
+                    }
+                }
+                Text(
+                    text = action.label,
+                    color = if (action.destructive) colors.danger else colors.textPrimary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                    modifier = Modifier.weight(1f),
+                )
+                if (hasChildren) {
+                    Icon(
+                        imageVector = Icons.Outlined.ChevronRight,
+                        contentDescription = null,
+                        tint = colors.textMuted,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        },
+        enabled = action.enabled,
+        destructive = action.destructive,
+        onClick = {
+            if (hasChildren) {
+                onOpenSubmenu(action.label, action.children)
+            } else {
+                onCloseMenu()
+                action.onClick()
+            }
+        },
+        modifier = Modifier
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(itemContainerColor),
+    )
+}
+
+@Composable
+private fun HhhlOverflowMenuSubmenuHeader(
+    label: String,
+    onBack: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    HhhlDropdownMenuItem(
+        text = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.ChevronLeft,
+                    contentDescription = null,
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = label,
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                )
+            }
+        },
+        onClick = onBack,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+    )
 }
 
 @Composable
@@ -304,8 +410,18 @@ private fun Color.withMultipliedAlpha(multiplier: Float): Color {
     return copy(alpha = (alpha * multiplier).coerceIn(0f, 1f))
 }
 
-private fun defaultOverflowMenuIcon(label: String): ImageVector? {
-    return when (label) {
+private fun defaultOverflowMenuIcon(label: String): ImageVector {
+    val trimmedLabel = label.trim()
+    when {
+        trimmedLabel.startsWith("当前：") -> return defaultOverflowMenuIcon(trimmedLabel.removePrefix("当前："))
+        trimmedLabel.startsWith("排序：") -> return sortOverflowMenuIcon(trimmedLabel.removePrefix("排序："))
+        trimmedLabel.startsWith("排序改为 ") -> return sortOverflowMenuIcon(trimmedLabel.removePrefix("排序改为 "))
+        trimmedLabel.startsWith("类型：") -> return typeFilterOverflowMenuIcon(trimmedLabel.removePrefix("类型："))
+        trimmedLabel.startsWith("只看") -> return typeFilterOverflowMenuIcon(trimmedLabel.removePrefix("只看"))
+        trimmedLabel.startsWith("外观 ·") -> return Icons.Filled.Palette
+    }
+    val normalizedLabel = trimmedLabel.normalizedOverflowMenuLabel()
+    return when (normalizedLabel) {
         "详情", "打开详情", "查看资料" -> Icons.AutoMirrored.Outlined.Article
         "回复" -> Icons.AutoMirrored.Outlined.Reply
         "引用" -> Icons.Outlined.FormatQuote
@@ -314,19 +430,84 @@ private fun defaultOverflowMenuIcon(label: String): ImageVector? {
         "复制链接" -> Icons.Outlined.Link
         "嵌入" -> Icons.Outlined.Code
         "分享" -> Icons.Outlined.Share
-        "AI 总结", "AI 回复草稿" -> Icons.Filled.AutoAwesome
+        "AI 总结", "AI 回复草稿", "总结通知", "待处理", "优先级" -> Icons.Filled.AutoAwesome
         "收藏", "收藏/取消收藏" -> Icons.Outlined.StarBorder
         "设为特别关心", "取消特别关心" -> Icons.Outlined.FavoriteBorder
         "回应", "回应处理中" -> Icons.Outlined.AddReaction
         "关注", "关注用户" -> Icons.Outlined.PersonAdd
-        "取消关注" -> Icons.Outlined.PersonRemove
-        "便签", "添加到剪辑" -> Icons.Outlined.Bookmark
-        "隐藏帖子列表" -> Icons.Outlined.VisibilityOff
-        "Mute note", "静音" -> Icons.AutoMirrored.Outlined.VolumeOff
+        "关注请求", "邀请成员", "创建邀请码" -> Icons.Outlined.PersonAdd
+        "取消关注", "移除成员", "拒绝", "撤销令牌", "删除邀请码" -> Icons.Outlined.PersonRemove
+        "便签", "添加到剪辑", "移出剪辑", "归档" -> Icons.Outlined.Bookmark
+        "隐藏帖子列表", "取消敏感", "停用", "停用 Webhook" -> Icons.Outlined.VisibilityOff
+        "敏感" -> Icons.Filled.Visibility
+        "Mute note", "静音", "取消静音", "静音聊天室" -> Icons.AutoMirrored.Outlined.VolumeOff
         "用户" -> Icons.Outlined.Person
-        "屏蔽", "取消屏蔽", "拉黑", "取消拉黑" -> Icons.Outlined.Block
-        "删除" -> Icons.Outlined.Delete
-        "举报" -> Icons.Outlined.Report
-        else -> null
+        "屏蔽", "取消屏蔽", "拉黑", "取消拉黑", "退出登录", "退出聊天室", "登出共享访问" -> Icons.Outlined.Block
+        "删除", "确认删除", "删除中", "删除作品", "删除聊天室", "删除选项", "移除附件", "移除投票" -> Icons.Outlined.Delete
+        "删除 Webhook" -> Icons.Outlined.Delete
+        "举报", "举报用户" -> Icons.Outlined.Report
+        "刷新", "刷新中", "刷新列表", "刷新动态", "刷新资料", "刷新消息", "刷新成员", "刷新全部关注",
+        "刷新关注", "同步中", "同步列表中", "同步动态中", "同步天线中", "同步剪辑中", "同步趋势中", "同步实例中",
+        "处理中", "上传中" -> Icons.Filled.Refresh
+        "编辑", "编辑作品", "编辑聊天室", "编辑 Webhook", "改名", "名称 A-Z", "名称 Z-A" -> Icons.Filled.Edit
+        "搜索", "搜索消息" -> Icons.Filled.Search
+        "过滤设置", "排序", "类型", "全部词", "任一词", "精确短语" -> Icons.Outlined.FilterList
+        "关系管理" -> Icons.Filled.Settings
+        "外观" -> Icons.Filled.Palette
+        "公告", "测试通知", "提醒自己", "通知", "提及", "互动", "系统", "特别关心" -> Icons.Filled.Notifications
+        "启用", "启用 Webhook", "测试", "测试 Webhook" -> Icons.Filled.PlayArrow
+        "Flash", "网页版运行" -> Icons.Filled.PlayArrow
+        "内容警告" -> Icons.Filled.Visibility
+        "关闭内容警告" -> Icons.Outlined.VisibilityOff
+        "添加投票" -> Icons.Filled.Poll
+        "添加附件", "更换附件" -> Icons.Filled.AttachFile
+        "最近文件流", "文件夹", "目录" -> Icons.Filled.Folder
+        "返回目录", "返回上级", "移到根目录", "首页" -> Icons.Filled.Home
+        "帖子", "社交", "本地", "联合", "全局", "气泡", "精选", "公开" -> Icons.Filled.Forum
+        "用户", "用户列表", "全部来源", "远程" -> Icons.Outlined.Person
+        "话题", "热门", "最新", "喜欢" -> Icons.Outlined.StarBorder
+        "角色" -> Icons.Filled.Settings
+        "趋势" -> Icons.Filled.AutoAwesome
+        "联邦" -> Icons.Filled.Folder
+        "我的", "私密" -> Icons.Filled.Visibility
+        "频道", "聊天" -> Icons.Filled.Forum
+        "天线", "剪辑", "页面", "文档" -> Icons.AutoMirrored.Outlined.Article
+        "图库", "图片" -> Icons.Filled.Image
+        "Play" -> Icons.Filled.PlayArrow
+        "文件" -> Icons.Filled.AttachFile
+        "音频", "视频", "其他" -> Icons.Filled.Folder
+        "最新", "最早", "大小 ↓", "大小 ↑" -> Icons.Filled.Tune
+        "成就" -> Icons.Outlined.StarBorder
+        else -> Icons.Filled.MoreVert
     }
+}
+
+private fun sortOverflowMenuIcon(label: String): ImageVector {
+    return when (label.trim()) {
+        "名称 A-Z", "名称 Z-A" -> Icons.Filled.Edit
+        "最新", "最早", "大小 ↓", "大小 ↑" -> Icons.Filled.Tune
+        else -> Icons.Filled.Tune
+    }
+}
+
+private fun typeFilterOverflowMenuIcon(label: String): ImageVector {
+    return when (label.trim()) {
+        "全部" -> Icons.Outlined.FilterList
+        "图片" -> Icons.Filled.Image
+        "视频", "音频", "其他" -> Icons.Filled.Folder
+        "文档" -> Icons.AutoMirrored.Outlined.Article
+        else -> Icons.Outlined.FilterList
+    }
+}
+
+private fun String.normalizedOverflowMenuLabel(): String {
+    val trimmed = trim()
+    val withoutStatePrefix = trimmed
+        .removePrefix("当前：")
+        .removePrefix("排序：")
+        .removePrefix("排序改为 ")
+        .removePrefix("类型：")
+        .removePrefix("只看")
+    val withoutAppearanceSummary = withoutStatePrefix.substringBefore(" · ")
+    return withoutAppearanceSummary.substringBefore('：').ifBlank { withoutAppearanceSummary }
 }

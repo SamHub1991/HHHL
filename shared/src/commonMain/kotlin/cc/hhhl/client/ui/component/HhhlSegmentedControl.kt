@@ -35,6 +35,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import cc.hhhl.client.theme.LocalHhhlColors
 
 @Composable
@@ -92,6 +94,7 @@ fun HhhlAnimatedSegmentedControl(
 
         Box(
             modifier = Modifier
+                .zIndex(0f)
                 .offset(x = sliderOffset)
                 .width(itemWidth)
                 .fillMaxHeight()
@@ -110,7 +113,9 @@ fun HhhlAnimatedSegmentedControl(
         )
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .zIndex(1f),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             labels.forEachIndexed { index, label ->
@@ -164,10 +169,11 @@ fun HhhlSegmentedItem(
         Text(
             text = label,
             color = if (selected) selectedColor else colors.textMuted,
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelLarge.copy(lineHeight = 18.sp),
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            softWrap = false,
         )
         HhhlControlBadge(count = badgeCount, selected = selected)
     }
@@ -199,10 +205,11 @@ fun HhhlFilterPill(
         Text(
             text = label,
             color = if (selected) hhhlReadableOnControlColor(containerColor, colors.accent) else colors.textMuted,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelMedium.copy(lineHeight = 17.sp),
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            softWrap = false,
         )
     }
 }
@@ -241,10 +248,11 @@ private fun HhhlAnimatedSegmentedItem(
         Text(
             text = label,
             color = textColor.value,
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelLarge.copy(lineHeight = 18.sp),
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            softWrap = false,
         )
         HhhlControlBadge(count = badgeCount, selected = selected)
     }
@@ -289,9 +297,10 @@ private fun HhhlControlBadge(
         Text(
             text = if (count > 99) "99+" else count.toString(),
             color = if (selected) hhhlReadableOnControlColor(containerColor, colors.accent) else colors.textMuted,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(lineHeight = 14.sp),
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
+            softWrap = false,
         )
     }
 }

@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,7 +32,9 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -64,6 +67,31 @@ fun HhhlTextInput(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     var focused by remember { mutableStateOf(false) }
+    var textFieldValue by remember {
+        mutableStateOf(TextFieldValue(text = value, selection = TextRange(value.length)))
+    }
+    var lastExternalValue by remember { mutableStateOf(value) }
+    var latestLocalText by remember { mutableStateOf(value) }
+
+    LaunchedEffect(value, focused) {
+        if (value != lastExternalValue) {
+            lastExternalValue = value
+        }
+        if (!focused || value == latestLocalText) {
+            if (textFieldValue.text != value) {
+                textFieldValue = TextFieldValue(
+                    text = value,
+                    selection = if (focused) {
+                        textFieldValue.selection.constrainToTextLength(value.length)
+                    } else {
+                        TextRange(value.length)
+                    },
+                )
+            }
+            latestLocalText = value
+        }
+    }
+
     val colors = LocalHhhlColors.current
     val fontScale = LocalDensity.current.fontScale.coerceIn(1f, 1.7f)
     val defaultMinHeight = if (singleLine || minLines <= 1) {
@@ -127,8 +155,15 @@ fun HhhlTextInput(
             )
         }
         BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
+            value = textFieldValue,
+            onValueChange = { nextValue ->
+                val textChanged = nextValue.text != textFieldValue.text
+                textFieldValue = nextValue
+                latestLocalText = nextValue.text
+                if (textChanged && nextValue.text != lastExternalValue) {
+                    onValueChange(nextValue.text)
+                }
+            },
             enabled = enabled,
             singleLine = singleLine,
             minLines = minLines,
@@ -185,7 +220,7 @@ fun HhhlTextInput(
                             .widthIn(min = 0.dp),
                         contentAlignment = Alignment.CenterStart,
                     ) {
-                        if (value.isBlank()) {
+                        if (textFieldValue.text.isBlank()) {
                             Text(
                                 text = placeholder,
                                 color = colors.textMuted,
@@ -200,6 +235,12 @@ fun HhhlTextInput(
             },
         )
     }
+}
+
+private fun TextRange.constrainToTextLength(textLength: Int): TextRange {
+    val constrainedStart = start.coerceIn(0, textLength)
+    val constrainedEnd = end.coerceIn(0, textLength)
+    return TextRange(constrainedStart, constrainedEnd)
 }
 
 private fun Color.withMultipliedAlpha(multiplier: Float): Color {

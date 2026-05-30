@@ -49,6 +49,7 @@ object AiPromptBuilder {
                     tone = tone,
                     input = compact,
                 )
+                AiTaskKind.ComposeFromRecentPosts -> composeFromRecentPostsPrompt(tone, compact)
                 AiTaskKind.PostSummary -> postPrompt(
                     instruction = "总结这条帖子，列出核心观点、情绪/立场、是否需要回应。用 3 到 5 行中文输出。",
                     input = compact,
@@ -117,6 +118,7 @@ object AiPromptBuilder {
                 AiTaskKind.AutomationGeneratedAction -> automationActionPrompt(compact)
                 AiTaskKind.AutomationExplain -> automationExplainPrompt(compact)
                 AiTaskKind.AutomationRuleSuggestions -> automationRuleSuggestionsPrompt(compact)
+                AiTaskKind.AutomationRuleDraft -> automationRuleDraftPrompt(compact)
                 AiTaskKind.WorkspaceActionPlan -> workspaceActionPlanPrompt(compact)
                 AiTaskKind.ConnectionTest -> "请只回复 OK。"
             },
@@ -124,7 +126,9 @@ object AiPromptBuilder {
                 AiTaskKind.ComposeContentWarning -> 80
                 AiTaskKind.ComposeHashtags -> 120
                 AiTaskKind.ComposeMentionSuggestions -> 160
+                AiTaskKind.ComposeFromRecentPosts -> settings.maxOutputTokens.coerceIn(160, 1_200)
                 AiTaskKind.AutomationSemanticCondition -> 40
+                AiTaskKind.AutomationRuleDraft -> settings.maxOutputTokens.coerceIn(320, 1_600)
                 AiTaskKind.WorkspaceActionPlan -> settings.maxOutputTokens.coerceIn(320, 4_000)
                 AiTaskKind.ConnectionTest -> 16
                 else -> settings.maxOutputTokens.coerceIn(64, 4_000)
@@ -172,6 +176,34 @@ object AiPromptBuilder {
                 val user = note.username.takeIf { it.isNotBlank() }?.let { "@$it" }.orEmpty()
                 appendLine("${index + 1}. ${time}${note.author} $user：${note.text}")
                 if (note.stats.isNotBlank()) appendLine("   ${note.stats}")
+            }
+        }.trim()
+    }
+
+    private fun composeFromRecentPostsPrompt(tone: String, input: AiTaskInput): String {
+        return buildString {
+            appendLine("结合我最近看到/发布的帖子上下文，生成一条适合现在发布的新帖子草稿。")
+            appendLine("要求：贴近当前账号语气，不要编造未出现的信息，不要复述原文；如果有草稿，优先保留草稿意图并补充最近帖子里的相关上下文。")
+            appendLine("语气偏好：$tone")
+            appendLine("只输出可直接放进发帖框的正文。")
+            if (input.text.isNotBlank()) {
+                appendLine()
+                appendLine("当前草稿：")
+                appendLine(input.text)
+            }
+            if (input.noteText.isNotBlank()) {
+                appendLine()
+                appendLine("回复/引用上下文：")
+                appendLine(input.noteText)
+            }
+            if (input.timelineNotes.isNotEmpty()) {
+                appendLine()
+                appendLine("最近帖子：")
+                input.timelineNotes.forEachIndexed { index, note ->
+                    val time = note.createdAtLabel.takeIf { it.isNotBlank() }?.let { "[$it] " }.orEmpty()
+                    val user = note.username.takeIf { it.isNotBlank() }?.let { "@$it" }.orEmpty()
+                    appendLine("${index + 1}. ${time}${note.author} $user：${note.text}")
+                }
             }
         }.trim()
     }
@@ -239,7 +271,8 @@ object AiPromptBuilder {
 
     private fun automationActionPrompt(input: AiTaskInput): String {
         return buildString {
-            appendLine("根据自动化事件生成一段可用于本地日志、系统通知或 Webhook 的简短文本。只输出生成文本。")
+            appendLine("根据自动化事件生成一段可直接执行的简短文本，可能会被用于日志、通知、Webhook、聊天回复或帖子回复。只输出正文。")
+            appendLine("如果上下文不应该自动回复、自动引用或自动执行，输出 SKIP。")
             if (input.prompt.isNotBlank()) appendLine("要求：${input.prompt}")
             appendLine()
             appendLine("事件：")
@@ -267,6 +300,39 @@ object AiPromptBuilder {
             appendLine()
             appendLine("自动化上下文：")
             appendLine(input.automationEventText.ifBlank { input.text })
+        }.trim()
+    }
+
+    private fun automationRuleDraftPrompt(input: AiTaskInput): String {
+        return buildString {
+            appendLine("把用户的一句话目标转换为 HHHL 自动化规则草案。只输出一个 JSON 对象，不要 Markdown，不要解释。")
+            appendLine("JSON 字段：name, enabled, trigger, conditionMode, conditions, actionMode, actions, ignoreOwnMessages, cooldownSeconds, safetyNote。enabled 默认输出 true，除非用户明确说只生成禁用草稿。")
+            appendLine("trigger 只能是 ChatMessage、ChatAttention、TimelineNote、Notification、SpecialCare。")
+            appendLine("conditionMode/actionMode 只能是 All、Any / Sequential、Parallel。")
+            appendLine("conditions 每项字段：type, value, enabled。type 只能是 SenderUserId、SenderUserIds、SenderUsername、SenderNameContains、MessageContains、RoomId、RoomNameContains、DirectUserId、SourceKind、AttentionKind、NotificationType、ChannelId、ChannelNameContains、MessageType、TimelineKind、NoteVisibility、AiSemantic。")
+            appendLine("如果你要表达名字，也可以在条件项里输出 roomName、userName、userNames、username、channelName、messageType、timelineKind、notificationType、attentionKind，解析器会转换成对应条件。")
+            appendLine("actions 每项字段：type, targetId, titleTemplate, bodyTemplate, mentionSender, replyToEvent, quoteEvent, enabled, failurePolicy。")
+            appendLine("action.type 只能是 AddLog、SystemNotification、ForwardToRoom、ForwardToUser、ReplyToChat、AiReplyToChat、ReplyToNote、AiReplyToNote、QuoteNote、AiQuoteNote、RenoteNote、PostToChannel、CopyChannelLink、Webhook、AiGenerateLog、AiGenerateNotification、AiGenerateWebhook。")
+            appendLine("不要编造 ID。只有当前上下文列出了名称 -> ID 时才使用 RoomId、SenderUserId/SenderUserIds、ChannelId；否则用 RoomNameContains、SenderNameContains/SenderUsername、ChannelNameContains，系统会再查服务器解析。")
+            appendLine("聊天室消息：trigger=ChatMessage，聊天室来源必须加 {type: SourceKind, value: room}；指定聊天室优先 RoomId，不知道 ID 用 RoomNameContains。私聊来源用 SourceKind=direct，指定私聊用户用 DirectUserId 或 SenderUserId。")
+            appendLine("某聊天室中某个/多个用户发消息：使用 ChatMessage + SourceKind=room + RoomId/RoomNameContains + SenderUserId/SenderUserIds 或 SenderNameContains。用户说全部/所有/任意用户时，不要添加发送者条件。")
+            appendLine("聊天消息类型：用 MessageType，值可为 text、file、image、video、audio、reply、quote，多个值用逗号分隔。")
+            appendLine("如果用户目标是聊天里“被 @ / 有人 @ 我 / @我时”触发，必须使用 trigger=ChatAttention，并添加条件 {type: AttentionKind, value: Mention, enabled: true}。如果要自动回复聊天，action.type 使用 AiReplyToChat，targetId 留空，replyToEvent 通常设为 true。")
+            appendLine("聊天回复/引用提醒分别使用 ChatAttention + AttentionKind=Reply/Quote；聊天特别关心消息使用 ChatAttention + AttentionKind=SpecialCare，或用户明确说特别关心时使用 SpecialCare。")
+            appendLine("帖子流/某人发帖/某频道有帖子：使用 trigger=TimelineNote；指定发帖用户用 SenderUserId 或 SenderNameContains；指定频道优先 ChannelId，不知道 ID 用 ChannelNameContains，并加 TimelineKind=Channel；帖子消息类型也用 MessageType，值可含 text、image、file、poll、reply、quote。")
+            appendLine("关注、帖子回复、帖子提及、帖子引用等来自通知的事件：使用 trigger=Notification，并添加 NotificationType=Follow/Reply/Mention/Quote/Renote/Reaction 等。不要把聊天 @ 误生成为 Notification。")
+            appendLine("failurePolicy 只能是 Continue 或 Stop。")
+            appendLine("优先生成低风险草案：AddLog、SystemNotification、AiGenerateLog、AiGenerateNotification。涉及自动发送、转发、引用、Webhook、剪贴板、频道发帖时，必须写清条件、加冷却，并在 safetyNote 说明需要用户确认。")
+            appendLine("不要输出删除、屏蔽、举报、关注、批量操作。动作目标 targetId 可以用 room:聊天室名、user:用户名、channel:频道名，系统会解析；若无法确定则留空并在 safetyNote 说明。")
+            appendLine("模板变量可用：{{sender.name}}、{{sender.username}}、{{sender.mention}}、{{message.text}}、{{message.id}}、{{message.type}}、{{room.id}}、{{room.name}}、{{direct.user.id}}、{{notification.text}}、{{note.id}}、{{note.link}}、{{channel.id}}、{{channel.name}}、{{channel.link}}、{{timeline.kind}}、{{event.body}}。")
+            appendLine()
+            appendLine("用户目标：")
+            appendLine(input.prompt.ifBlank { input.text })
+            if (input.automationEventText.isNotBlank()) {
+                appendLine()
+                appendLine("当前自动化上下文：")
+                appendLine(input.automationEventText)
+            }
         }.trim()
     }
 

@@ -48,6 +48,7 @@ import cc.hhhl.client.automation.AutomationTrigger
 import cc.hhhl.client.automation.AutomationUiState
 import cc.hhhl.client.ai.AiTaskKind
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlAlertDialog
 import cc.hhhl.client.ui.component.HhhlBackButton
@@ -87,6 +88,7 @@ fun AutomationScreen(
     aiResultLabel: String? = null,
     onAiExplainRule: (AutomationRule?) -> Unit = {},
     onAiSuggestRules: (AutomationUiState) -> Unit = {},
+    onAiCreateRule: (String, AutomationUiState) -> Unit = { _, _ -> },
     onDismissAiResult: () -> Unit = {},
 ) {
     val colors = LocalHhhlColors.current
@@ -122,6 +124,7 @@ fun AutomationScreen(
                     onCreate = { createMenuOpen = true },
                     onAiExplain = { onAiExplainRule(state.selectedRule ?: state.rules.firstOrNull()) },
                     onAiSuggestRules = { onAiSuggestRules(state) },
+                    onAiCreateRule = { description -> onAiCreateRule(description, state) },
                 )
             }
             if (!aiResultText.isNullOrBlank()) {
@@ -226,7 +229,9 @@ private fun AutomationOverviewCard(
     isAiProcessing: Boolean,
     onAiExplain: () -> Unit,
     onAiSuggestRules: () -> Unit,
+    onAiCreateRule: (String) -> Unit,
 ) {
+    var ruleGoal by remember { mutableStateOf("") }
     AutomationPanel {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -254,6 +259,21 @@ private fun AutomationOverviewCard(
                 onClick = onAiSuggestRules,
             )
         }
+        HhhlTextInput(
+            value = ruleGoal,
+            onValueChange = { ruleGoal = it },
+            placeholder = "一句话描述想自动完成的事",
+            label = "AI 自动创建",
+            minLines = 2,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            HhhlActionChip(
+                label = if (isAiProcessing) "AI 处理中" else "生成规则草稿",
+                emphasized = true,
+                enabled = aiEnabled && !isAiProcessing && ruleGoal.isNotBlank(),
+                onClick = { onAiCreateRule(ruleGoal) },
+            )
+        }
     }
 }
 
@@ -261,7 +281,7 @@ private fun AutomationOverviewCard(
 private fun AutomationEmptyCard(onCreate: () -> Unit) {
     AutomationPanel {
         AutomationTitle("还没有规则")
-        AutomationMutedText("可以从聊天消息、聊天提醒、通知或特别关心开始。每条规则可以配置多个条件和多个动作。")
+        AutomationMutedText("可以从聊天消息、聊天提醒、帖子、通知或特别关心开始。每条规则可以配置多个条件和多个动作。")
         HhhlActionChip(label = "创建第一条规则", emphasized = true, onClick = onCreate)
     }
 }
@@ -416,7 +436,7 @@ private fun AutomationRuleEditorDialog(
                 }
                 item(key = "template-help") {
                     AutomationStatusCard(
-                        "模板变量：{{sender.name}}、{{message.text}}、{{room.id}}、{{direct.user.id}}、{{notification.text}}、{{attention.kind}}",
+                        "模板变量：{{sender.name}}、{{sender.mention}}、{{message.text}}、{{message.id}}、{{message.type}}、{{room.id}}、{{room.name}}、{{direct.user.id}}、{{notification.text}}、{{note.id}}、{{note.link}}、{{channel.id}}、{{channel.name}}、{{channel.link}}、{{timeline.kind}}",
                         success = true,
                     )
                 }
@@ -524,6 +544,29 @@ private fun AutomationActionEditor(
             label = action.type.bodyLabel,
             minLines = if (action.type.isAiGeneratedAction()) 2 else 3,
         )
+        if (action.type.supportsSenderMention() || action.type.supportsChatReference()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (action.type.supportsSenderMention()) {
+                    HhhlActionChip(
+                        label = if (action.mentionSender) "已 @ 发送者" else "@ 发送者",
+                        emphasized = action.mentionSender,
+                        onClick = { onUpdate(action.copy(mentionSender = !action.mentionSender)) },
+                    )
+                }
+                if (action.type.supportsChatReference()) {
+                    HhhlActionChip(
+                        label = if (action.replyToEvent) "已回复原消息" else "回复原消息",
+                        emphasized = action.replyToEvent,
+                        onClick = { onUpdate(action.copy(replyToEvent = !action.replyToEvent)) },
+                    )
+                    HhhlActionChip(
+                        label = if (action.quoteEvent) "已引用原消息" else "引用原消息",
+                        emphasized = action.quoteEvent,
+                        onClick = { onUpdate(action.copy(quoteEvent = !action.quoteEvent)) },
+                    )
+                }
+            }
+        }
         AutomationEnumPicker(
             label = "失败策略",
             values = AutomationFailurePolicy.entries,
@@ -537,7 +580,24 @@ private fun AutomationActionEditor(
 private fun AutomationActionType.isAiGeneratedAction(): Boolean {
     return this == AutomationActionType.AiGenerateLog ||
         this == AutomationActionType.AiGenerateNotification ||
-        this == AutomationActionType.AiGenerateWebhook
+        this == AutomationActionType.AiGenerateWebhook ||
+        this == AutomationActionType.AiReplyToChat ||
+        this == AutomationActionType.AiReplyToNote ||
+        this == AutomationActionType.AiQuoteNote
+}
+
+private fun AutomationActionType.supportsSenderMention(): Boolean {
+    return this == AutomationActionType.ReplyToChat ||
+        this == AutomationActionType.AiReplyToChat ||
+        this == AutomationActionType.ReplyToNote ||
+        this == AutomationActionType.AiReplyToNote ||
+        this == AutomationActionType.QuoteNote ||
+        this == AutomationActionType.AiQuoteNote ||
+        this == AutomationActionType.PostToChannel
+}
+
+private fun AutomationActionType.supportsChatReference(): Boolean {
+    return this == AutomationActionType.ReplyToChat || this == AutomationActionType.AiReplyToChat
 }
 
 @Composable
@@ -692,27 +752,13 @@ private fun AutomationAiResultCard(
     text: String,
     onDismiss: () -> Unit,
 ) {
-    AutomationPanel(compact = true) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Filled.AutoAwesome,
-                contentDescription = null,
-                tint = LocalHhhlColors.current.accent,
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                AutomationTitle(label)
-                AutomationMutedText("AI 只解释和建议，不会自动修改规则")
-            }
-            HhhlActionChip(label = "关闭", onClick = onDismiss)
-        }
-        Text(
-            text = text,
-            color = LocalHhhlColors.current.textSecondary,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 8,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
+    AiResultPanel(
+        label = label,
+        text = text,
+        onDismiss = onDismiss,
+        supportingText = "AI 只解释和建议，不会自动修改规则",
+        emphasized = false,
+    )
 }
 
 @Composable

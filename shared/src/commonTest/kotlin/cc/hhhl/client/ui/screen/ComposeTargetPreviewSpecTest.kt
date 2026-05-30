@@ -114,17 +114,15 @@ class ComposeTargetPreviewSpecTest {
             listOf(
                 "内容警告",
                 "移除投票",
-                "AI 润色",
-                "AI 缩短",
-                "AI 扩写",
-                "AI 翻译中文",
-                "AI 生成 CW",
-                "AI 推荐话题",
-                "AI 推荐 @",
+                "AI",
             ),
             actions.map { it.label },
         )
-        assertEquals(listOf(false, true, false, false, false, false, false, false, false), actions.map { it.destructive })
+        assertEquals(listOf(false, true, false), actions.map { it.destructive })
+        assertEquals(
+            listOf("润色", "结合最近帖子生成", "缩短", "扩写", "翻译中文", "生成 CW", "推荐话题", "推荐 @"),
+            actions.last().children.map { it.label },
+        )
     }
 
     @Test

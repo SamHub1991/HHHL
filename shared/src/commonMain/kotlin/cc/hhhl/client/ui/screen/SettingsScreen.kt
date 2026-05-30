@@ -584,11 +584,13 @@ private fun SettingsRow(
                     checked = state.backgroundNotificationsEnabled,
                     enabled = true,
                     onCheckedChange = onBackgroundNotificationsChanged,
+                    supportingText = "开启后后台会保持实时同步，并把聊天/通知事件交给自动化规则。",
                 )
                 SettingsItemKey.SpecialCareBackgroundNotifications -> SettingsSwitchLine(
                     checked = state.specialCareBackgroundNotificationsEnabled,
                     enabled = state.backgroundNotificationsEnabled,
                     onCheckedChange = onSpecialCareBackgroundNotificationsChanged,
+                    supportingText = "只控制特别关心提醒展示，不影响普通聊天自动化扫描。",
                 )
                 SettingsItemKey.ChatMessageCache -> SettingsCacheLine(
                     text = item.value.orEmpty(),
@@ -1161,23 +1163,33 @@ private fun SettingsSwitchLine(
     checked: Boolean,
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    supportingText: String? = null,
 ) {
     val colors = LocalHhhlColors.current
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = if (checked) "开启" else "关闭",
-            color = colors.textMuted,
-            style = MaterialTheme.typography.labelMedium,
-        )
-        HhhlSwitch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled,
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (checked) "开启" else "关闭",
+                color = colors.textMuted,
+                style = MaterialTheme.typography.labelMedium,
+            )
+            HhhlSwitch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                enabled = enabled,
+            )
+        }
+        supportingText?.takeIf { it.isNotBlank() }?.let { text ->
+            Text(
+                text = text,
+                color = colors.textMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
     }
 }
 

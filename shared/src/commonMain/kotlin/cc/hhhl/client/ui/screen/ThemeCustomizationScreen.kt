@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import cc.hhhl.client.theme.HhhlCustomTheme
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.theme.ThemeCustomizationCatalog
@@ -981,10 +982,11 @@ private fun ThemePreviewPill(
         Text(
             text = text,
             color = content,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(lineHeight = 14.sp),
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            softWrap = false,
             modifier = Modifier.padding(horizontal = 6.dp),
         )
     }
