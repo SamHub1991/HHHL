@@ -57,6 +57,7 @@ fun rootRouteFor(route: AppRoute): RootRoute {
         AppRoute.Profile,
         AppRoute.ProfileNotes,
         AppRoute.Settings,
+        AppRoute.ReleaseNotes,
         AppRoute.ThemeCustomization,
         AppRoute.Automation,
         is AppRoute.SettingsManagement,
@@ -83,6 +84,7 @@ sealed interface AppRoute {
     data object Profile : AppRoute
     data object ProfileNotes : AppRoute
     data object Settings : AppRoute
+    data object ReleaseNotes : AppRoute
     data object ThemeCustomization : AppRoute
     data object Automation : AppRoute
     data class SettingsManagement(val key: SettingsManagementSectionKey) : AppRoute

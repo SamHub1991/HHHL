@@ -1756,7 +1756,20 @@ class ChatStateHolder(
         mutableState.update { current ->
             var next = current.copy(isLoadingRoomExtras = false)
             when (ownedResult) {
-                is ChatRepositoryResult.Success -> next = next.copy(ownedRooms = ownedResult.rooms)
+                is ChatRepositoryResult.Success -> {
+                    val ownedRooms = ownedResult.rooms
+                    next = next.copy(
+                        ownedRooms = ownedRooms,
+                        rooms = next.rooms
+                            .mergeOwnedChatRooms(ownedRooms)
+                            .sortedByPinnedIds(next.pinnedRoomIds) { room -> room.id },
+                        selectedRoom = next.selectedRoom?.let { selectedRoom ->
+                            ownedRooms.firstOrNull { room -> room.id == selectedRoom.id }?.let { ownedRoom ->
+                                selectedRoom.mergeOwnedChatRoom(ownedRoom)
+                            } ?: selectedRoom
+                        },
+                    )
+                }
                 ChatRepositoryResult.Unauthorized -> next = next.copy(
                     roomManagementMessage = "登录已失效，请重新登录",
                     requiresRelogin = true,
@@ -2379,8 +2392,13 @@ class ChatStateHolder(
                         )
                     }
                     ?: result.room
+                val savedOwnedRoom = it.ownedRooms.firstOrNull { room -> room.id == result.room.id }
+                    ?.mergeOwnedChatRoom(result.room)
+                    ?: result.room
                 it.copy(
                     rooms = (listOf(savedRoom) + it.rooms.filterNot { room -> room.id == savedRoom.id })
+                        .sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
+                    ownedRooms = (listOf(savedOwnedRoom) + it.ownedRooms.filterNot { room -> room.id == savedOwnedRoom.id })
                         .sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
                     selectedRoom = if (selectSavedRoom) savedRoom else it.selectedRoom,
                     isManagingRoom = false,
@@ -2396,6 +2414,10 @@ class ChatStateHolder(
                 mutableState.update {
                     it.copy(
                         rooms = it.rooms.filterNot { room -> room.id == result.roomId },
+                        ownedRooms = it.ownedRooms.filterNot { room -> room.id == result.roomId },
+                        roomInvitationOutbox = it.roomInvitationOutbox.filterNot { invitation ->
+                            invitation.room.id == result.roomId
+                        },
                         pinnedRoomIds = it.pinnedRoomIds - result.roomId,
                         selectedRoom = null,
                         messages = emptyList(),
@@ -2778,6 +2800,25 @@ private fun List<ChatRoom>.withChatRoomLatestMessage(
     val next = toMutableList()
     next[index] = this[index].withLatestMessageAt(message)
     return next
+}
+
+private fun List<ChatRoom>.mergeOwnedChatRooms(ownedRooms: List<ChatRoom>): List<ChatRoom> {
+    if (ownedRooms.isEmpty()) return this
+    val ownedById = ownedRooms.associateBy { room -> room.id }
+    val currentRoomIds = mapTo(HashSet()) { room -> room.id }
+    val mergedCurrentRooms = map { room ->
+        ownedById[room.id]?.let { ownedRoom -> room.mergeOwnedChatRoom(ownedRoom) } ?: room
+    }
+    return mergedCurrentRooms + ownedRooms.filterNot { room -> room.id in currentRoomIds }
+}
+
+private fun ChatRoom.mergeOwnedChatRoom(ownedRoom: ChatRoom): ChatRoom {
+    return ownedRoom.copy(
+        membershipId = membershipId.ifBlank { ownedRoom.membershipId },
+        unreadCount = maxOf(unreadCount.coerceAtLeast(0), ownedRoom.unreadCount.coerceAtLeast(0)),
+        latestMessageAtLabel = latestMessageAtLabel.ifBlank { ownedRoom.latestMessageAtLabel },
+        latestMessageMarker = latestMessageMarker.ifBlank { ownedRoom.latestMessageMarker },
+    )
 }
 
 private fun ChatRoom.withLatestMessageAt(message: ChatMessage): ChatRoom {

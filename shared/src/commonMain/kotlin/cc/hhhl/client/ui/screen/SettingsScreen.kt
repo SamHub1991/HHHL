@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.automirrored.outlined.VolumeOff
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AdminPanelSettings
@@ -83,6 +85,7 @@ import cc.hhhl.client.theme.HhhlThemePreset
 import cc.hhhl.client.theme.HhhlCustomTheme
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.theme.toColorOrNull
+import cc.hhhl.client.update.AppReleaseNotes
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
@@ -120,6 +123,8 @@ fun SettingsScreen(
     onBackgroundNotificationsChanged: (Boolean) -> Unit = {},
     onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit = {},
     onCheckForUpdates: (((String) -> Unit) -> Unit) = { report -> report("当前平台暂不支持应用内更新") },
+    appVersionName: String = "",
+    onOpenReleaseNotes: () -> Unit = {},
     onClearChatMessageCache: () -> Unit = {},
     onOpenThemeCustomization: () -> Unit = {},
     accounts: List<AccountSession> = emptyList(),
@@ -256,6 +261,7 @@ fun SettingsScreen(
                 SettingsAppUpdatePanel(
                     status = updateStatus,
                     isChecking = isCheckingUpdate,
+                    appVersionName = appVersionName,
                     onCheck = {
                         if (isCheckingUpdate) return@SettingsAppUpdatePanel
                         isCheckingUpdate = true
@@ -265,6 +271,7 @@ fun SettingsScreen(
                             isCheckingUpdate = false
                         }
                     },
+                    onOpenReleaseNotes = onOpenReleaseNotes,
                 )
             }
         }
@@ -275,9 +282,12 @@ fun SettingsScreen(
 private fun SettingsAppUpdatePanel(
     status: String?,
     isChecking: Boolean,
+    appVersionName: String,
     onCheck: () -> Unit,
+    onOpenReleaseNotes: () -> Unit,
 ) {
     val colors = LocalHhhlColors.current
+    val currentVersionText = appVersionName.trim().removePrefix("v").ifBlank { "未知版本" }
     HhhlInlinePanel(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
         emphasized = true,
@@ -311,7 +321,7 @@ private fun SettingsAppUpdatePanel(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = status ?: "从 GitHub Release 检查新版 APK，覆盖安装会保留缓存和本地数据",
+                    text = status ?: "当前版本 $currentVersionText · 从 GitHub Release 检查新版 APK",
                     color = colors.textMuted,
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 3,
@@ -324,6 +334,130 @@ private fun SettingsAppUpdatePanel(
                 enabled = !isChecking,
                 onClick = onCheck,
             )
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            HhhlActionChip(
+                label = "当前 $currentVersionText",
+                enabled = false,
+                onClick = {},
+            )
+            HhhlActionChip(
+                label = "更新日志",
+                onClick = onOpenReleaseNotes,
+            )
+        }
+    }
+}
+
+@Composable
+fun ReleaseNotesTimelineScreen(
+    notes: List<AppReleaseNotes>,
+    currentVersionName: String,
+    onBack: () -> Unit,
+) {
+    val cleanCurrentVersion = currentVersionName.trim().removePrefix("v")
+    Column(modifier = Modifier.fillMaxSize()) {
+        HhhlTopBar(
+            title = "更新日志",
+            supportingText = cleanCurrentVersion.takeIf { it.isNotBlank() }?.let { "当前版本 $it" },
+            navigation = { HhhlBackButton(onClick = onBack) },
+        )
+        HhhlDivider()
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(
+                items = notes,
+                key = { item -> "release-notes-${item.versionName}" },
+                contentType = { "release-notes-item" },
+            ) { item ->
+                ReleaseNotesTimelineItem(
+                    notes = item,
+                    isCurrent = item.versionName == cleanCurrentVersion,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReleaseNotesTimelineItem(
+    notes: AppReleaseNotes,
+    isCurrent: Boolean,
+) {
+    val colors = LocalHhhlColors.current
+    HhhlInlinePanel(
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        emphasized = isCurrent,
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (isCurrent) colors.buttonSelectedBackground else colors.inputBackground)
+                    .border(1.dp, colors.focusRing.copy(alpha = 0.22f), RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.Article,
+                    contentDescription = null,
+                    tint = if (isCurrent) {
+                        hhhlReadableOnControlColor(colors.buttonSelectedBackground, colors.accent)
+                    } else {
+                        colors.textSecondary
+                    },
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = notes.title,
+                        color = colors.textPrimary,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (isCurrent) {
+                        HhhlActionChip(label = "当前", emphasized = true, enabled = false, onClick = {})
+                    }
+                }
+                Text(
+                    text = notes.summary,
+                    color = colors.textSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 0.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            notes.highlights.forEach { item ->
+                Text(
+                    text = "· $item",
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
     }
 }

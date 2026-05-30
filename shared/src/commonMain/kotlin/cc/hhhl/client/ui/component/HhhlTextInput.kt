@@ -74,10 +74,16 @@ fun HhhlTextInput(
     var latestLocalText by remember { mutableStateOf(value) }
 
     LaunchedEffect(value, focused) {
+        val shouldSyncExternalValue = shouldSyncHhhlTextInputExternalValue(
+            focused = focused,
+            externalValue = value,
+            latestLocalText = latestLocalText,
+            lastExternalValue = lastExternalValue,
+        )
         if (value != lastExternalValue) {
             lastExternalValue = value
         }
-        if (!focused || value == latestLocalText) {
+        if (shouldSyncExternalValue) {
             if (textFieldValue.text != value) {
                 textFieldValue = TextFieldValue(
                     text = value,
@@ -235,6 +241,19 @@ fun HhhlTextInput(
             },
         )
     }
+}
+
+internal fun shouldSyncHhhlTextInputExternalValue(
+    focused: Boolean,
+    externalValue: String,
+    latestLocalText: String,
+    lastExternalValue: String,
+): Boolean {
+    val externalValueChanged = externalValue != lastExternalValue
+    val hasPendingLocalEdit = latestLocalText != lastExternalValue
+    return !focused ||
+        externalValue == latestLocalText ||
+        (externalValueChanged && (!hasPendingLocalEdit || externalValue.isEmpty()))
 }
 
 private fun TextRange.constrainToTextLength(textLength: Int): TextRange {

@@ -233,6 +233,7 @@ import cc.hhhl.client.update.AppReleaseNotes
 import cc.hhhl.client.update.NoopReleaseNotesStore
 import cc.hhhl.client.update.ReleaseNotesStore
 import cc.hhhl.client.update.releaseNotesFor
+import cc.hhhl.client.update.releaseNotesTimeline
 import cc.hhhl.client.ui.component.HhhlBottomNav
 import cc.hhhl.client.ui.component.HhhlAlertDialog
 import cc.hhhl.client.ui.component.HhhlTextButton
@@ -274,6 +275,7 @@ import cc.hhhl.client.ui.screen.PageScreen
 import cc.hhhl.client.ui.screen.ProfileNotesScreen
 import cc.hhhl.client.ui.screen.ProfileScreen
 import cc.hhhl.client.ui.screen.RelationshipManagementScreen
+import cc.hhhl.client.ui.screen.ReleaseNotesTimelineScreen
 import cc.hhhl.client.ui.screen.SettingsScreen
 import cc.hhhl.client.ui.screen.SettingsManagementScreen
 import cc.hhhl.client.ui.screen.settingsWebManagementPath
@@ -552,6 +554,7 @@ private fun routeLabel(route: AppRoute): String {
         AppRoute.Profile -> "我的"
         AppRoute.ProfileNotes -> "我的帖子"
         AppRoute.Settings -> "设置"
+        AppRoute.ReleaseNotes -> "更新日志"
         AppRoute.ThemeCustomization -> "主题自定义"
         AppRoute.Automation -> "自动化"
         is AppRoute.SettingsManagement -> "设置管理"
@@ -595,6 +598,7 @@ private fun relationshipEntryForUser(
 @Composable
 private fun ReleaseNotesDialog(
     notes: AppReleaseNotes,
+    onOpenTimeline: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = LocalHhhlColors.current
@@ -627,6 +631,11 @@ private fun ReleaseNotesDialog(
         confirmButton = {
             HhhlTextButton(onClick = onDismiss, emphasized = true) {
                 Text("知道了")
+            }
+        },
+        dismissButton = {
+            HhhlTextButton(onClick = onOpenTimeline) {
+                Text("更新日志")
             }
         },
     )
@@ -1595,6 +1604,8 @@ private fun SettingsRouteContent(
     onBackgroundNotificationsChanged: (Boolean) -> Unit,
     onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit,
     onCheckForUpdates: (((String) -> Unit) -> Unit),
+    appVersionName: String,
+    onOpenReleaseNotes: () -> Unit,
     onClearChatMessageCache: () -> Unit,
     onOpenThemeCustomization: () -> Unit,
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit),
@@ -1631,6 +1642,8 @@ private fun SettingsRouteContent(
         onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
         onSpecialCareBackgroundNotificationsChanged = onSpecialCareBackgroundNotificationsChanged,
         onCheckForUpdates = onCheckForUpdates,
+        appVersionName = appVersionName,
+        onOpenReleaseNotes = onOpenReleaseNotes,
         onClearChatMessageCache = onClearChatMessageCache,
         onOpenThemeCustomization = onOpenThemeCustomization,
         accounts = accounts,
@@ -4373,6 +4386,11 @@ private fun MainShell(
                 rootRoute = RootRoute.Profile
                 true
             }
+            AppRoute.ReleaseNotes -> {
+                route = AppRoute.Settings
+                rootRoute = RootRoute.Profile
+                true
+            }
             AppRoute.ThemeCustomization -> {
                 route = AppRoute.Settings
                 rootRoute = RootRoute.Profile
@@ -4883,6 +4901,8 @@ private fun MainShell(
                     onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
                     onSpecialCareBackgroundNotificationsChanged = onSpecialCareBackgroundNotificationsChanged,
                     onCheckForUpdates = onCheckForUpdates,
+                    appVersionName = appVersionName,
+                    onOpenReleaseNotes = { route = AppRoute.ReleaseNotes },
                     onClearChatMessageCache = {
                         currentAccountId?.let { accountId ->
                             appScope.launch {
@@ -4912,6 +4932,11 @@ private fun MainShell(
                     onAiWorkspacePlan = ::requestWorkspaceActionPlan,
                     aiConnectionMessage = aiState.message ?: aiState.errorMessage,
                     isTestingAiConnection = aiState.isTestingConnection,
+                )
+                AppRoute.ReleaseNotes -> ReleaseNotesTimelineScreen(
+                    notes = releaseNotesTimeline(),
+                    currentVersionName = appVersionName,
+                    onBack = { route = AppRoute.Settings },
                 )
                 AppRoute.ThemeCustomization -> ThemeCustomizationScreen(
                     customTheme = customTheme,
@@ -5251,6 +5276,12 @@ private fun MainShell(
             pendingReleaseNotes?.let { notes ->
                 ReleaseNotesDialog(
                     notes = notes,
+                    onOpenTimeline = {
+                        pendingReleaseNotes = null
+                        runCatching { releaseNotesStore.saveLastShownVersion(notes.versionName) }
+                        rootRoute = RootRoute.Profile
+                        route = AppRoute.ReleaseNotes
+                    },
                     onDismiss = {
                         pendingReleaseNotes = null
                         runCatching { releaseNotesStore.saveLastShownVersion(notes.versionName) }

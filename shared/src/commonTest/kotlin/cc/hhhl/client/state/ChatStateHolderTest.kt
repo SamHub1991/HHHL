@@ -23,6 +23,7 @@ import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.commonReactionOptions
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
+import cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult
 import cc.hhhl.client.repository.ChatRoomMemberRepositoryResult
 import cc.hhhl.client.repository.ChatRoomMutationRepositoryResult
 import cc.hhhl.client.repository.ChatRepository
@@ -1525,6 +1526,59 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun refreshRoomExtrasAddsOwnedOnlyRoomToMainRoomList() = runTest {
+        val joinedRoom = sampleRoom(id = "room-joined")
+        val ownedRoom = sampleRoom(id = "room-owned").copy(
+            membershipId = "room-owned",
+            name = "Only mine",
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(joinedRoom)),
+                refreshOwnedRoomsResult = ChatRepositoryResult.Success(listOf(ownedRoom)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+
+        assertEquals(listOf(ownedRoom), holder.state.value.ownedRooms)
+        assertEquals(listOf("room-joined", "room-owned"), holder.state.value.rooms.map { it.id })
+    }
+
+    @Test
+    fun deleteSelectedOwnedRoomRemovesItFromMainAndOwnedRoomLists() = runTest {
+        val ownedRoom = sampleRoom(id = "room-owned")
+        val deleteCalls = mutableListOf<String>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshOwnedRoomsResult = ChatRepositoryResult.Success(listOf(ownedRoom)),
+                deleteRoomResult = ChatRoomMutationRepositoryResult.RoomRemoved(ownedRoom.id),
+                onDeleteRoom = deleteCalls::add,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refreshRoomExtras()
+        advanceUntilIdle()
+        holder.selectRoom(ownedRoom)
+        advanceUntilIdle()
+
+        holder.deleteSelectedRoom()
+        advanceUntilIdle()
+
+        assertEquals(listOf(ownedRoom.id), deleteCalls)
+        assertEquals(emptyList(), holder.state.value.rooms)
+        assertEquals(emptyList(), holder.state.value.ownedRooms)
+        assertEquals(null, holder.state.value.selectedRoom)
+        assertEquals("聊天室已删除", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
     fun updateReactionOptionsPrependsLoadedReactionsForChatMenu() {
         val holder = ChatStateHolder(
             repository = fakeRepository(ChatRepositoryResult.Success(emptyList())),
@@ -1552,6 +1606,14 @@ class ChatStateHolderTest {
         loadMoreMembersResult: ChatRoomMemberRepositoryResult = refreshMembersResult,
         refreshUserConversationsResult: ChatUserConversationRepositoryResult =
             ChatUserConversationRepositoryResult.Success(emptyList()),
+        refreshOwnedRoomsResult: ChatRepositoryResult = ChatRepositoryResult.Success(emptyList()),
+        refreshInvitationInboxResult: ChatRoomInvitationRepositoryResult = ChatRoomInvitationRepositoryResult.Success(emptyList()),
+        refreshInvitationOutboxResult: ChatRoomInvitationRepositoryResult = ChatRoomInvitationRepositoryResult.Success(emptyList()),
+        createRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomSaved(sampleRoom()),
+        updateRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomSaved(sampleRoom()),
+        leaveRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomRemoved("room-1"),
+        deleteRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomRemoved("room-1"),
+        muteRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomMuted("room-1", true),
         refreshUserMessagesResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Success(emptyList()),
         onRefresh: () -> Unit = {},
         onLoadMore: () -> Unit = {},
@@ -1573,6 +1635,7 @@ class ChatStateHolderTest {
         joinRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.ActionCompleted("已加入聊天室"),
         onShowRoom: (String) -> Unit = {},
         onJoinRoom: (String) -> Unit = {},
+        onDeleteRoom: (String) -> Unit = {},
         throwOnSearchMessages: Boolean = false,
     ): ChatRepository {
         return object : ChatRepository(
@@ -1735,6 +1798,18 @@ class ChatStateHolderTest {
                 return loadMoreResult
             }
 
+            override suspend fun refreshOwnedRooms(): ChatRepositoryResult {
+                return refreshOwnedRoomsResult
+            }
+
+            override suspend fun refreshInvitationInbox(): ChatRoomInvitationRepositoryResult {
+                return refreshInvitationInboxResult
+            }
+
+            override suspend fun refreshInvitationOutbox(): ChatRoomInvitationRepositoryResult {
+                return refreshInvitationOutboxResult
+            }
+
             override suspend fun refreshMessages(roomId: String): ChatMessageRepositoryResult {
                 onRefreshMessages(roomId)
                 return refreshMessagesResultProvider?.invoke() ?: refreshMessagesResult
@@ -1798,6 +1873,31 @@ class ChatStateHolderTest {
             override suspend fun joinRoom(roomId: String): ChatRoomMutationRepositoryResult {
                 onJoinRoom(roomId)
                 return joinRoomResult
+            }
+
+            override suspend fun createRoom(name: String, description: String): ChatRoomMutationRepositoryResult {
+                return createRoomResult
+            }
+
+            override suspend fun updateRoom(
+                roomId: String,
+                name: String,
+                description: String,
+            ): ChatRoomMutationRepositoryResult {
+                return updateRoomResult
+            }
+
+            override suspend fun leaveRoom(roomId: String): ChatRoomMutationRepositoryResult {
+                return leaveRoomResult
+            }
+
+            override suspend fun deleteRoom(roomId: String): ChatRoomMutationRepositoryResult {
+                onDeleteRoom(roomId)
+                return deleteRoomResult
+            }
+
+            override suspend fun muteRoom(roomId: String, muted: Boolean): ChatRoomMutationRepositoryResult {
+                return muteRoomResult
             }
 
             override suspend fun sendMessage(

@@ -41,5 +41,6 @@ class AppRouteCapabilityTest {
         assertEquals(AppRoute.Chat, supportedRouteOrFallback(AppRoute.Chat, capabilities))
         assertEquals(AppRoute.Clips, supportedRouteOrFallback(AppRoute.Clips, capabilities))
         assertEquals(RootRoute.Profile, rootRouteFor(AppRoute.Clips))
+        assertEquals(RootRoute.Profile, rootRouteFor(AppRoute.ReleaseNotes))
     }
 }

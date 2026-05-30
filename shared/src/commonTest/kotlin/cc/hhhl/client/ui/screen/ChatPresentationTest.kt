@@ -4,6 +4,7 @@ import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageQuote
 import cc.hhhl.client.model.ChatMessageReference
+import cc.hhhl.client.model.ChatRoom
 import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
@@ -73,6 +74,28 @@ class ChatPresentationTest {
         assertEquals(
             "0 位成员",
             chatDetailStatusText(ChatUiState(showingMembers = true)),
+        )
+    }
+
+    @Test
+    fun ownedRoomListAllowsRoomManagementEvenWhenOwnerFallbackIsUnknown() {
+        val room = chatRoom("room-owned", ownerId = "unknown")
+
+        assertEquals(
+            true,
+            canManageChatRoom(
+                room = room,
+                ownedRooms = listOf(room),
+                currentUserId = "me",
+            ),
+        )
+        assertEquals(
+            false,
+            canManageChatRoom(
+                room = room,
+                ownedRooms = emptyList(),
+                currentUserId = "me",
+            ),
         )
     }
 
@@ -811,6 +834,22 @@ class ChatPresentationTest {
             roomId = "room-1",
             user = user,
             joinedAtLabel = "now",
+        )
+    }
+
+    private fun chatRoom(
+        id: String,
+        ownerId: String = "owner",
+    ): ChatRoom {
+        return ChatRoom(
+            id = id,
+            membershipId = "membership-$id",
+            name = "Room $id",
+            description = "desc",
+            joinMode = "open",
+            memberCount = 1,
+            isMuted = false,
+            owner = chatUser(ownerId, "Owner", "owner"),
         )
     }
 

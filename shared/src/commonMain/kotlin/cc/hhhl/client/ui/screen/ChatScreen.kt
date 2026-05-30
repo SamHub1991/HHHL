@@ -1601,7 +1601,11 @@ private fun ChatDetailScreen(
     val hasAttachment = attachmentCount > 0
     val primaryAttachmentFile = state.primaryChatAttachmentFile()
     val refreshCurrentPane = if (state.showingMembers) onShowMembers else onRefresh
-    val canManageRoom = room != null && currentUserId != null && currentUserId == room.owner.id
+    val canManageRoom = canManageChatRoom(
+        room = room,
+        ownedRooms = state.ownedRooms,
+        currentUserId = currentUserId,
+    )
     val canLeaveRoom = room != null && !canManageRoom
 
     if (showingMessageSearch) {
@@ -2445,6 +2449,16 @@ fun chatDetailStatusText(state: ChatUiState): String {
         state.isSendingMessage -> "发送消息中"
         else -> "${state.messages.size} 条消息"
     }
+}
+
+fun canManageChatRoom(
+    room: ChatRoom?,
+    ownedRooms: List<ChatRoom>,
+    currentUserId: String?,
+): Boolean {
+    val targetRoom = room ?: return false
+    return currentUserId?.takeIf { it.isNotBlank() } == targetRoom.owner.id ||
+        ownedRooms.any { ownedRoom -> ownedRoom.id == targetRoom.id }
 }
 
 fun chatDetailSummaryActions(

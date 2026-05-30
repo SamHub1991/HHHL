@@ -13,4 +13,30 @@ class HhhlTextInputSpecTest {
         assertEquals(12.dp, HhhlTextInputHorizontalPadding)
         assertEquals(8.dp, HhhlTextInputVerticalPadding)
     }
+
+    @Test
+    fun focusedInputSyncsExternalClearAfterSend() {
+        assertEquals(
+            true,
+            shouldSyncHhhlTextInputExternalValue(
+                focused = true,
+                externalValue = "",
+                latestLocalText = "hello",
+                lastExternalValue = "hello",
+            ),
+        )
+    }
+
+    @Test
+    fun focusedInputKeepsPendingLocalEditWhenExternalValueIsStale() {
+        assertEquals(
+            false,
+            shouldSyncHhhlTextInputExternalValue(
+                focused = true,
+                externalValue = "he",
+                latestLocalText = "hello",
+                lastExternalValue = "he",
+            ),
+        )
+    }
 }
