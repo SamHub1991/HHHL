@@ -102,6 +102,8 @@ class BackgroundNotificationSyncer(
         val chatRepository = ChatRepository(
             tokenProvider = { token },
             currentUserIdProvider = { session.user?.id },
+            cacheAccountIdProvider = { session.id },
+            messageCache = AndroidChatMessageCache(context),
         )
         val chatUnreadStore = AndroidChatUnreadStore(context)
         val localChatSnapshot = chatUnreadStore.load(session.id)
@@ -140,6 +142,7 @@ class BackgroundNotificationSyncer(
         session: AccountSession,
         message: ChatMessage,
         directUserId: String?,
+        roomId: String? = null,
     ) {
         val token = session.token.trim()
         if (token.isEmpty()) return
@@ -150,10 +153,11 @@ class BackgroundNotificationSyncer(
             messageCache = AndroidChatMessageCache(context),
         )
         val cleanDirectUserId = directUserId?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanRoomId = roomId?.trim()?.takeIf { it.isNotEmpty() } ?: message.roomId.trim().takeIf { it.isNotEmpty() }
         if (cleanDirectUserId != null) {
             repository.cacheUserMessage(cleanDirectUserId, message)
-        } else if (message.roomId.isNotBlank()) {
-            repository.cacheRoomMessage(message.roomId, message)
+        } else if (cleanRoomId != null) {
+            repository.cacheRoomMessage(cleanRoomId, message.copy(roomId = cleanRoomId))
         }
     }
 
@@ -161,12 +165,16 @@ class BackgroundNotificationSyncer(
         session: AccountSession,
         message: ChatMessage,
         directUserId: String?,
+        roomId: String? = null,
         roomName: String = "",
     ): Boolean {
         val token = session.token.trim()
         if (token.isEmpty()) return false
         val settings = AndroidBackgroundNotificationStore(context)
         if (!settings.isBackgroundSyncEnabled()) return false
+        val cleanDirectUserId = directUserId?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanRoomId = roomId?.trim()?.takeIf { it.isNotEmpty() } ?: message.roomId.trim().takeIf { it.isNotEmpty() }
+        if (cleanDirectUserId == null && cleanRoomId == null) return false
         val seenIds = settings.loadSeenIds()
         val specialCareUserIds = AndroidSpecialCareStore(context).loadSpecialCareUserIds(session.id)
         val currentUser = session.user?.let { user ->
@@ -185,29 +193,44 @@ class BackgroundNotificationSyncer(
             cacheAccountIdProvider = { session.id },
             messageCache = AndroidChatMessageCache(context),
         )
-        val resolvedMessage = chatRepository.resolveRealtimeMessage(message, directUserId)
-        val resolvedRoomName = if (directUserId.isNullOrBlank()) {
+        val sourceMessage = if (cleanDirectUserId == null && cleanRoomId != null && message.roomId != cleanRoomId) {
+            message.copy(roomId = cleanRoomId)
+        } else {
+            message
+        }
+        val resolvedMessage = chatRepository.resolveRealtimeMessage(sourceMessage, cleanDirectUserId)
+        val resolvedRoomId = if (cleanDirectUserId == null) {
+            resolvedMessage.roomId.ifBlank { cleanRoomId.orEmpty() }
+        } else {
+            resolvedMessage.roomId
+        }
+        val normalizedMessage = if (resolvedRoomId.isNotBlank() && resolvedMessage.roomId != resolvedRoomId) {
+            resolvedMessage.copy(roomId = resolvedRoomId)
+        } else {
+            resolvedMessage
+        }
+        val resolvedRoomName = if (cleanDirectUserId == null) {
             roomName.ifBlank {
-                chatRepository.resolveRealtimeRoomName(resolvedMessage.roomId)
+                chatRepository.resolveRealtimeRoomName(resolvedRoomId)
             }
         } else {
             ""
         }
-        val attentionKind = resolvedMessage.chatAttentionKind(
+        val attentionKind = normalizedMessage.chatAttentionKind(
             specialCareUserIds = if (settings.isSpecialCareEnabled()) specialCareUserIds else emptySet(),
             currentUser = currentUser,
         )
-        val chatEvent = resolvedMessage.toAutomationChatEvent(
-            roomId = resolvedMessage.roomId,
+        val chatEvent = normalizedMessage.toAutomationChatEvent(
+            roomId = resolvedRoomId,
             roomName = resolvedRoomName,
-            directUserId = directUserId.orEmpty(),
+            directUserId = cleanDirectUserId.orEmpty(),
             currentUser = currentUser,
         )
         val attentionEvent = attentionKind?.let { kind ->
-            resolvedMessage.toAutomationChatEvent(
-                roomId = resolvedMessage.roomId,
+            normalizedMessage.toAutomationChatEvent(
+                roomId = resolvedRoomId,
                 roomName = resolvedRoomName,
-                directUserId = directUserId.orEmpty(),
+                directUserId = cleanDirectUserId.orEmpty(),
                 attentionKind = kind.name,
                 currentUser = currentUser,
             ).asBackgroundChatAttentionEvent(kind)
@@ -216,12 +239,12 @@ class BackgroundNotificationSyncer(
         val attentionSeenId = attentionEvent?.id?.automationSeenId()
         val isNewChatEvent = chatSeenId !in seenIds
 
-        cacheRealtimeChatMessage(session, resolvedMessage, directUserId)
+        cacheRealtimeChatMessage(session, normalizedMessage, cleanDirectUserId, resolvedRoomId)
         if (isNewChatEvent) {
             recordRealtimeUnread(
                 session = session,
-                message = resolvedMessage,
-                directUserId = directUserId,
+                message = normalizedMessage,
+                directUserId = cleanDirectUserId,
                 currentUser = currentUser,
             )
         }
@@ -244,14 +267,14 @@ class BackgroundNotificationSyncer(
         automationEvents.distinctBy { it.id }.forEach { event -> automationHolder.emitNow(event) }
 
         val notification = attentionKind?.let { kind ->
-            resolvedMessage.toRealtimeChatAttentionEvent(
+            normalizedMessage.toRealtimeChatAttentionEvent(
                 kind = kind,
-                directUserId = directUserId,
+                directUserId = cleanDirectUserId,
                 roomName = resolvedRoomName,
             )
         }
         val fallbackNotificationSeenId = notification?.let {
-            resolvedMessage.realtimeFallbackNotificationEventId(directUserId)
+            normalizedMessage.realtimeFallbackNotificationEventId(cleanDirectUserId)
         }
         val claimedNotificationIds = notification
             ?.let { event -> settings.claimSeenIds(listOf(event.id), MAX_STORED_SEEN_IDS) }
@@ -370,6 +393,8 @@ class BackgroundNotificationSyncer(
                 val chatRepository = ChatRepository(
                     tokenProvider = { token },
                     currentUserIdProvider = { session.user?.id },
+                    cacheAccountIdProvider = { session.id },
+                    messageCache = AndroidChatMessageCache(context),
                 )
                 val automationHolder = backgroundAutomationHolder(
                     accountId = session.id,

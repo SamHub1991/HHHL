@@ -39,6 +39,19 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.5.1",
+            title = "HHHL 0.5.1 更新内容",
+            summary = "这版重点修复自动化在多入口收消息时可能重复触发的问题。",
+            highlights = listOf(
+                "自动化会持久记录已处理的消息、帖子和通知，同一条远程事件重启后也不会被同一规则重复执行。",
+                "同一条聊天室或私聊消息从实时通道、后台轮询、打开聊天室懒加载等入口重复到达时，会按真实消息 ID 去重。",
+                "修复手机后台同步拿到聊天室消息后，回到 App 仍可能看不到本地缓存新消息的问题。",
+                "帖子按 noteId 去重，通知和其他事件按稳定事件 ID 去重，减少特别关心、@、回复、引用通知重复触发。",
+                "手动模拟和手动重试不受持久去重影响，方便继续调试规则和重跑失败动作。",
+                "补充自动化缓存编解码和跨恢复去重测试，提升后台实时链路稳定性。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.5.0",
             title = "HHHL 0.5.0 更新内容",
             summary = "这版把 AI 助手升级为全局入口和自动化中枢，并重点修复后台实时收消息链路。",

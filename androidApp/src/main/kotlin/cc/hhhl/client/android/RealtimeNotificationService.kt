@@ -109,11 +109,16 @@ class RealtimeNotificationService : Service() {
                             } else {
                                 null
                             }
-                            val handledRealtime = BackgroundNotificationSyncer(applicationContext).handleRealtimeChatMessage(
-                                session = session,
-                                message = event.message,
-                                directUserId = directUserId,
-                            )
+                            val handledRealtime = if (event.message.roomId.isNotBlank() || directUserId != null) {
+                                BackgroundNotificationSyncer(applicationContext).handleRealtimeChatMessage(
+                                    session = session,
+                                    message = event.message,
+                                    directUserId = directUserId,
+                                    roomId = event.message.roomId,
+                                )
+                            } else {
+                                false
+                            }
                             if (!handledRealtime) syncRealtimeChatEvent(debounce = true)
                         }
                         MainStreamingEvent.NewChatMessage -> syncRealtimeChatEvent()
@@ -194,6 +199,7 @@ class RealtimeNotificationService : Service() {
                                     session = session,
                                     message = event.message,
                                     directUserId = directUserId,
+                                    roomId = roomId,
                                     roomName = roomId?.let { id -> targets.roomNamesById[id] }.orEmpty(),
                                 )
                                 if (!handledRealtime) syncRealtimeChatEvent(debounce = true)
@@ -415,11 +421,13 @@ class RealtimeNotificationService : Service() {
 
     private fun ChatMessage.directPeerId(currentUserId: String?): String? {
         val cleanCurrentUserId = currentUserId?.trim().orEmpty()
+        val recipientId = toUserId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: toUser?.id?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return null
         return when {
-            cleanCurrentUserId.isNotBlank() && fromUser.id != cleanCurrentUserId -> fromUser.id
+            cleanCurrentUserId.isNotBlank() && fromUser.id == cleanCurrentUserId -> recipientId
+            cleanCurrentUserId.isNotBlank() && recipientId == cleanCurrentUserId -> fromUser.id
             cleanCurrentUserId.isBlank() && fromUser.id.isNotBlank() -> fromUser.id
-            !toUserId.isNullOrBlank() -> toUserId
-            !toUser?.id.isNullOrBlank() -> toUser?.id
             else -> null
         }?.takeIf { it.isNotBlank() }
     }

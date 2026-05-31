@@ -78,6 +78,77 @@ class AutomationStateHolderTest {
     }
 
     @Test
+    fun emitSkipsPersistedDuplicateChatMessageAcrossRestore() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-1",
+                        name = "Log once",
+                        trigger = AutomationTrigger.ChatMessage,
+                        conditions = listOf(
+                            AutomationCondition(
+                                id = "condition-1",
+                                type = AutomationConditionType.MessageContains,
+                                value = "hello",
+                            ),
+                        ),
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-1",
+                                type = AutomationActionType.AddLog,
+                                bodyTemplate = "{{message.id}}: {{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val firstHolder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        firstHolder.restore()
+
+        firstHolder.emit(
+            AutomationEvent(
+                id = "chat-message:message-1",
+                trigger = AutomationTrigger.ChatMessage,
+                chatMessageId = "message-1",
+                messageText = "hello world",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(1, store.lastSnapshot.logs.size)
+        assertEquals("message-1: hello world", store.lastSnapshot.logs.single().message)
+        assertEquals(1, store.lastSnapshot.executedEvents.size)
+        assertEquals("chat-message:message-1", store.lastSnapshot.executedEvents.single().eventKey)
+
+        val restoredHolder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        restoredHolder.restore()
+
+        restoredHolder.emit(
+            AutomationEvent(
+                id = "background-poll:room-1:message-1",
+                trigger = AutomationTrigger.ChatMessage,
+                chatMessageId = "message-1",
+                messageText = "hello world",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(1, store.lastSnapshot.logs.size)
+        assertEquals(1, store.lastSnapshot.executedEvents.size)
+        assertTrue(restoredHolder.state.value.debugRecords.first().reason.contains("去重"))
+    }
+
+    @Test
     fun emitIgnoresOwnMessageWhenRuleRequestsIt() = runTest {
         val store = MemoryAutomationStore(
             AutomationSnapshot(

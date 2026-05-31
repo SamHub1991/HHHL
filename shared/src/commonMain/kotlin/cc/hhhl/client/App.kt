@@ -994,11 +994,13 @@ private fun ChatUserConversation.unreadMarker(): String {
 
 private fun ChatMessage.directPeerId(currentUserId: String): String? {
     val cleanCurrentUserId = currentUserId.trim()
+    val recipientId = toUserId?.trim()?.takeIf { it.isNotEmpty() }
+        ?: toUser?.id?.trim()?.takeIf { it.isNotEmpty() }
+        ?: return null
     return when {
-        cleanCurrentUserId.isNotBlank() && fromUser.id != cleanCurrentUserId -> fromUser.id
+        cleanCurrentUserId.isNotBlank() && fromUser.id == cleanCurrentUserId -> recipientId
+        cleanCurrentUserId.isNotBlank() && recipientId == cleanCurrentUserId -> fromUser.id
         cleanCurrentUserId.isBlank() && fromUser.id.isNotBlank() -> fromUser.id
-        !toUserId.isNullOrBlank() -> toUserId
-        !toUser?.id.isNullOrBlank() -> toUser?.id
         else -> null
     }?.takeIf { it.isNotBlank() }
 }

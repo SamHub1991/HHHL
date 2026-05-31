@@ -94,10 +94,16 @@ class AutomationStateHolder(
     private var cooldownMarkers: Map<String, Long> = emptyMap()
     private var ruleExecutionWindows: Map<String, List<Long>> = emptyMap()
     private var recentEventRuleKeys: List<String> = emptyList()
+    private var executedEvents: List<AutomationExecutedEvent> = emptyList()
+    private var executedEventKeys: Set<String> = emptySet()
     private var nextLocalId = 0
 
     fun restore() {
         val snapshot = runCatching { store.read(cleanAccountId()) }.getOrDefault(AutomationSnapshot())
+        executedEvents = snapshot.executedEvents
+            .dedupeAutomationExecutedEvents()
+            .take(AutomationStoreCodec.MAX_EXECUTED_EVENTS)
+        executedEventKeys = executedEvents.mapTo(HashSet()) { it.key }
         mutableState.update {
             it.copy(
                 rules = snapshot.rules.sortedByDescending { rule -> rule.updatedAtEpochMillis },
@@ -438,13 +444,17 @@ class AutomationStateHolder(
                 )
                 return@forEach
             }
-            val dedupeKey = "${event.id}:${rule.id}"
-            if (dedupeKey in recentEventRuleKeys) {
+            val transientDedupeKey = "${event.id}:${rule.id}"
+            val persistentDedupeKey = rule.persistentAutomationDedupeKey(event)
+            if (
+                transientDedupeKey in recentEventRuleKeys ||
+                (!event.isManualAutomationEvent() && persistentDedupeKey in executedEventKeys)
+            ) {
                 addDebugRecord(
                     rule = rule,
                     event = event,
                     matched = false,
-                    reason = "同一事件和规则已经处理过，已去重跳过",
+                    reason = "同一消息、帖子或通知已被这条规则处理过，已去重跳过",
                     conditionResults = evaluation.conditionResults,
                 )
                 return@forEach
@@ -456,7 +466,18 @@ class AutomationStateHolder(
                 reason = evaluation.reason,
                 conditionResults = evaluation.conditionResults,
             )
-            recentEventRuleKeys = (listOf(dedupeKey) + recentEventRuleKeys).take(MAX_RECENT_EVENT_KEYS)
+            recentEventRuleKeys = (listOf(transientDedupeKey) + recentEventRuleKeys).take(MAX_RECENT_EVENT_KEYS)
+            if (!event.isManualAutomationEvent()) {
+                recordExecutedEvent(
+                    AutomationExecutedEvent(
+                        key = persistentDedupeKey,
+                        ruleId = rule.id,
+                        eventKey = event.persistentAutomationEventKey(),
+                        eventId = event.id,
+                        createdAtEpochMillis = nowMillis(),
+                    ),
+                )
+            }
             cooldownMarkers = cooldownMarkers + (rule.id to nowMillis())
             recordRuleExecution(rule)
             executeRule(rule, event)
@@ -649,6 +670,12 @@ class AutomationStateHolder(
 
     private fun persist() {
         val current = state.value
+        val mergedExecutedEvents = runCatching {
+            store.read(cleanAccountId()).executedEvents.mergeAutomationExecutedEvents(executedEvents)
+        }.getOrDefault(executedEvents)
+            .take(AutomationStoreCodec.MAX_EXECUTED_EVENTS)
+        executedEvents = mergedExecutedEvents
+        executedEventKeys = mergedExecutedEvents.mapTo(HashSet()) { it.key }
         runCatching {
             store.write(
                 cleanAccountId(),
@@ -656,6 +683,7 @@ class AutomationStateHolder(
                     rules = current.rules,
                     logs = current.logs,
                     debugRecords = current.debugRecords,
+                    executedEvents = mergedExecutedEvents,
                 ),
             )
         }
@@ -719,16 +747,34 @@ class AutomationStateHolder(
     private fun AutomationRule.cooldownReady(event: AutomationEvent): Boolean {
         if (cooldownSeconds <= 0) return true
         val lastRun = cooldownMarkers[id] ?: return true
-        return nowMillis() - lastRun >= cooldownSeconds * 1000L || event.id.startsWith("manual:")
+        return nowMillis() - lastRun >= cooldownSeconds * 1000L || event.isManualAutomationEvent()
     }
 
     private fun AutomationRule.burstLimitReady(event: AutomationEvent): Boolean {
-        if (maxExecutionsPer30Seconds <= 0 || event.id.startsWith("manual:")) return true
+        if (maxExecutionsPer30Seconds <= 0 || event.isManualAutomationEvent()) return true
         val now = nowMillis()
         val windowStart = now - BURST_WINDOW_MILLIS
         val recent = ruleExecutionWindows[id].orEmpty().filter { timestamp -> timestamp >= windowStart }
         ruleExecutionWindows = ruleExecutionWindows + (id to recent)
         return recent.size < maxExecutionsPer30Seconds
+    }
+
+    private fun AutomationRule.persistentAutomationDedupeKey(event: AutomationEvent): String {
+        return "${cleanAccountId()}:$id:${event.persistentAutomationEventKey()}"
+    }
+
+    private fun recordExecutedEvent(record: AutomationExecutedEvent) {
+        val cleanRecord = record.copy(
+            key = record.key.trim(),
+            ruleId = record.ruleId.trim(),
+            eventKey = record.eventKey.trim(),
+            eventId = record.eventId.trim(),
+        )
+        if (cleanRecord.key.isBlank() || cleanRecord.key in executedEventKeys) return
+        executedEvents = (listOf(cleanRecord) + executedEvents)
+            .dedupeAutomationExecutedEvents()
+            .take(AutomationStoreCodec.MAX_EXECUTED_EVENTS)
+        executedEventKeys = executedEvents.mapTo(HashSet()) { it.key }
     }
 
     private fun recordRuleExecution(rule: AutomationRule) {
@@ -866,6 +912,59 @@ class AutomationStateHolder(
         const val MAX_DRAFT_SOURCE_TEXT_LENGTH = 1200
         const val MAX_DRAFT_MESSAGES = 12
     }
+}
+
+private fun AutomationEvent.isManualAutomationEvent(): Boolean {
+    return id.startsWith("manual:") ||
+        id.startsWith("manual-simulate:") ||
+        id.startsWith("manual-retry:")
+}
+
+private fun AutomationEvent.persistentAutomationEventKey(): String {
+    val cleanChatMessageId = chatMessageId.trim()
+    if (cleanChatMessageId.isNotEmpty()) return "chat-message:$cleanChatMessageId"
+
+    val cleanNoteId = noteId.trim()
+    if (cleanNoteId.isNotEmpty()) return "note:$cleanNoteId"
+
+    val cleanId = id.trim()
+    if (cleanId.isNotEmpty()) return "event:$cleanId"
+
+    return buildList {
+        add(trigger.name)
+        if (sourceKind.isNotBlank()) add(sourceKind)
+        if (senderUserId.isNotBlank()) add(senderUserId)
+        if (roomId.isNotBlank()) add(roomId)
+        if (directUserId.isNotBlank()) add(directUserId)
+        if (notificationType.isNotBlank()) add(notificationType)
+        if (createdAtEpochMillis > 0L) add(createdAtEpochMillis.toString())
+        if (defaultBody.isNotBlank()) add(defaultBody.take(120))
+    }.joinToString(":").ifBlank { trigger.name }
+}
+
+private fun List<AutomationExecutedEvent>.mergeAutomationExecutedEvents(
+    events: List<AutomationExecutedEvent>,
+): List<AutomationExecutedEvent> {
+    return (this + events)
+        .dedupeAutomationExecutedEvents()
+        .take(AutomationStoreCodec.MAX_EXECUTED_EVENTS)
+}
+
+private fun List<AutomationExecutedEvent>.dedupeAutomationExecutedEvents(): List<AutomationExecutedEvent> {
+    val seenKeys = HashSet<String>()
+    return asSequence()
+        .map { record ->
+            record.copy(
+                key = record.key.trim(),
+                ruleId = record.ruleId.trim(),
+                eventKey = record.eventKey.trim(),
+                eventId = record.eventId.trim(),
+            )
+        }
+        .filter { record -> record.key.isNotBlank() }
+        .sortedByDescending { record -> record.createdAtEpochMillis }
+        .filter { record -> seenKeys.add(record.key) }
+        .toList()
 }
 
 private fun AutomationAction.requiresToolPermission(): Boolean {

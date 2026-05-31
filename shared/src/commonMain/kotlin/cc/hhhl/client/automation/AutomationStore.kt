@@ -9,6 +9,16 @@ data class AutomationSnapshot(
     val rules: List<AutomationRule> = emptyList(),
     val logs: List<AutomationExecutionLog> = emptyList(),
     val debugRecords: List<AutomationRuleDebugRecord> = emptyList(),
+    val executedEvents: List<AutomationExecutedEvent> = emptyList(),
+)
+
+@Serializable
+data class AutomationExecutedEvent(
+    val key: String,
+    val ruleId: String,
+    val eventKey: String,
+    val eventId: String,
+    val createdAtEpochMillis: Long,
 )
 
 interface AutomationStore {
@@ -39,6 +49,7 @@ object AutomationStoreCodec {
                 rules = snapshot.rules.take(MAX_RULES),
                 logs = snapshot.logs.take(MAX_LOGS),
                 debugRecords = snapshot.debugRecords.take(MAX_DEBUG_RECORDS),
+                executedEvents = snapshot.executedEvents.take(MAX_EXECUTED_EVENTS),
             ),
         )
     }
@@ -51,6 +62,7 @@ object AutomationStoreCodec {
                 rules = envelope.rules.take(MAX_RULES),
                 logs = envelope.logs.take(MAX_LOGS),
                 debugRecords = envelope.debugRecords.take(MAX_DEBUG_RECORDS),
+                executedEvents = envelope.executedEvents.take(MAX_EXECUTED_EVENTS),
             )
         }.getOrDefault(AutomationSnapshot())
     }
@@ -58,6 +70,7 @@ object AutomationStoreCodec {
     const val MAX_RULES = 80
     const val MAX_LOGS = 160
     const val MAX_DEBUG_RECORDS = 240
+    const val MAX_EXECUTED_EVENTS = 2_000
 }
 
 @Serializable
@@ -66,4 +79,5 @@ private data class CachedAutomationEnvelope(
     val rules: List<AutomationRule> = emptyList(),
     val logs: List<AutomationExecutionLog> = emptyList(),
     val debugRecords: List<AutomationRuleDebugRecord> = emptyList(),
+    val executedEvents: List<AutomationExecutedEvent> = emptyList(),
 )

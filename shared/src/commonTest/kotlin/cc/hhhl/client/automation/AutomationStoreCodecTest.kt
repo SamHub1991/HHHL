@@ -78,6 +78,15 @@ class AutomationStoreCodecTest {
                     createdAtEpochMillis = index.toLong(),
                 )
             },
+            executedEvents = (0 until 2100).map { index ->
+                AutomationExecutedEvent(
+                    key = "account-1:rule-$index:chat-message:message-$index",
+                    ruleId = "rule-$index",
+                    eventKey = "chat-message:message-$index",
+                    eventId = "event-$index",
+                    createdAtEpochMillis = index.toLong(),
+                )
+            },
         )
 
         val decoded = AutomationStoreCodec.decode(AutomationStoreCodec.encode(snapshot))
@@ -93,6 +102,9 @@ class AutomationStoreCodecTest {
         assertEquals(AutomationStoreCodec.MAX_DEBUG_RECORDS, decoded.debugRecords.size)
         assertEquals("debug-0", decoded.debugRecords.first().id)
         assertEquals("debug-239", decoded.debugRecords.last().id)
+        assertEquals(AutomationStoreCodec.MAX_EXECUTED_EVENTS, decoded.executedEvents.size)
+        assertEquals("account-1:rule-0:chat-message:message-0", decoded.executedEvents.first().key)
+        assertEquals("account-1:rule-1999:chat-message:message-1999", decoded.executedEvents.last().key)
     }
 
     @Test
