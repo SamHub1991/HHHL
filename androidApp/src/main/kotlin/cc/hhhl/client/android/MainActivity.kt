@@ -10,6 +10,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.PowerManager
+import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -284,6 +286,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 },
+                onOpenBatteryOptimizationSettings = ::openBatteryOptimizationSettings,
                 onBackHandlerChanged = { handler ->
                     systemBackHandler = handler
                 },
@@ -401,6 +404,36 @@ class MainActivity : ComponentActivity() {
                 this,
                 Manifest.permission.POST_NOTIFICATIONS,
             ) != PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun openBatteryOptimizationSettings() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            Toast.makeText(this, "当前系统无需单独设置电池优化", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val packageUri = Uri.parse("package:$packageName")
+        val alreadyIgnored = powerManager?.isIgnoringBatteryOptimizations(packageName) == true
+        val primaryIntent = if (alreadyIgnored) {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = packageUri
+            }
+        } else {
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = packageUri
+            }
+        }
+        val opened = runCatching {
+            startActivity(primaryIntent)
+            true
+        }.getOrDefault(false)
+        if (!opened) {
+            runCatching {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }.onFailure {
+                Toast.makeText(this, "无法打开电池优化设置，请在系统设置里允许 HHHL 后台运行", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private suspend fun publishChatAttentionSystemNotification(notification: NotificationItem) {

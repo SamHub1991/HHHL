@@ -39,6 +39,18 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.5.2",
+            title = "HHHL 0.5.2 更新内容",
+            summary = "这版继续修复后台实时收消息和自动化触发链路，并补充后台保活入口。",
+            highlights = listOf(
+                "后台收到聊天室和私聊新消息时，不再因为通知去重误挡自动化、特别关心、@、回复和引用触发。",
+                "实时同步服务增加后台保活处理，降低应用退到后台后消息和自动化明显延迟的概率。",
+                "设置页新增“后台实时保活”入口，可直接打开系统电池优化设置，方便把 HHHL 加入不受限制。",
+                "修复后台同步拿到新消息后，只有重新打开聊天室才更容易触发自动化的问题。",
+                "拆分主界面设置路由，避免设置功能继续增加后触发组合函数过大导致编译失败。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.5.1",
             title = "HHHL 0.5.1 更新内容",
             summary = "这版重点修复自动化在多入口收消息时可能重复触发的问题。",

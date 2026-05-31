@@ -112,6 +112,7 @@ enum class SettingsItemKey {
     NotificationBadges,
     BackgroundNotifications,
     SpecialCareBackgroundNotifications,
+    BatteryOptimization,
     ChatNoiseAggregate,
     ChatNoiseImportantOnly,
     ChatNoiseAiImportance,

@@ -135,6 +135,7 @@ fun SettingsScreen(
     appVersionName: String = "",
     onOpenReleaseNotes: () -> Unit = {},
     onClearChatMessageCache: () -> Unit = {},
+    onOpenBatteryOptimizationSettings: () -> Unit = {},
     onOpenThemeCustomization: () -> Unit = {},
     accounts: List<AccountSession> = emptyList(),
     currentAccountId: String? = null,
@@ -265,6 +266,7 @@ fun SettingsScreen(
                         onOpenWebSettings = onOpenWebSettings,
                         onOpenManagement = onOpenManagement,
                         onOpenAiSettings = onOpenAiSettings,
+                        onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
                         onAiSettingsChanged = onAiSettingsChanged,
                         onAiProviderSelected = onAiProviderSelected,
                         onTestAiConnection = onTestAiConnection,
@@ -702,6 +704,7 @@ private fun SettingsRow(
     onOpenWebSettings: (SettingsItemKey) -> Unit = {},
     onOpenManagement: (SettingsManagementSectionKey) -> Unit = {},
     onOpenAiSettings: () -> Unit = {},
+    onOpenBatteryOptimizationSettings: () -> Unit = {},
     onAiSettingsChanged: (AiSettings) -> Unit = {},
     onAiProviderSelected: (AiProviderPreset) -> Unit = {},
     onTestAiConnection: () -> Unit = {},
@@ -728,6 +731,9 @@ private fun SettingsRow(
                     }
                     item.key == SettingsItemKey.AiSettingsEntry -> {
                         Modifier.clickable(enabled = item.enabled, onClick = onOpenAiSettings)
+                    }
+                    item.key == SettingsItemKey.BatteryOptimization -> {
+                        Modifier.clickable(enabled = item.enabled, onClick = onOpenBatteryOptimizationSettings)
                     }
                     webManagementPath != null -> {
                         Modifier.clickable(enabled = item.enabled) { onOpenWebSettings(item.key) }
@@ -803,6 +809,12 @@ private fun SettingsRow(
                     enabled = state.backgroundNotificationsEnabled,
                     onCheckedChange = onSpecialCareBackgroundNotificationsChanged,
                     supportingText = "只控制特别关心提醒展示，不影响普通聊天自动化扫描。",
+                )
+                SettingsItemKey.BatteryOptimization -> SettingsNavigationLine(
+                    text = "允许系统放宽后台省电限制，降低锁屏后实时同步被挂起的概率。",
+                    enabled = item.enabled,
+                    onOpen = onOpenBatteryOptimizationSettings,
+                    label = "去设置",
                 )
                 SettingsItemKey.ChatNoiseAggregate -> SettingsChatNoiseAggregateLine(
                     settings = state.chatNoiseReductionSettings,
@@ -1683,6 +1695,7 @@ private fun settingsItemIcon(key: SettingsItemKey): ImageVector {
         SettingsItemKey.NotificationBadges -> Icons.Filled.Notifications
         SettingsItemKey.BackgroundNotifications -> Icons.Filled.Sync
         SettingsItemKey.SpecialCareBackgroundNotifications -> Icons.Outlined.FavoriteBorder
+        SettingsItemKey.BatteryOptimization -> Icons.Filled.Security
         SettingsItemKey.ChatNoiseAggregate -> Icons.Filled.Notifications
         SettingsItemKey.ChatNoiseImportantOnly -> Icons.Filled.Tune
         SettingsItemKey.ChatNoiseAiImportance -> Icons.Filled.AutoAwesome

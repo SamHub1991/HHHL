@@ -320,6 +320,7 @@ import cc.hhhl.client.ui.screen.ThemeCustomizationScreen
 import cc.hhhl.client.ui.screen.TimelineScreen
 import cc.hhhl.client.ui.screen.UserListScreen
 import cc.hhhl.client.ui.screen.UserSocialScreen
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -367,6 +368,7 @@ fun HhhlApp(
     appVersionName: String = "",
     releaseNotesStore: ReleaseNotesStore = NoopReleaseNotesStore,
     onCheckForUpdates: (((String) -> Unit) -> Unit) = { report -> report("当前平台暂不支持应用内更新") },
+    onOpenBatteryOptimizationSettings: () -> Unit = {},
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit) = {},
     onAuthCallbackConsumed: () -> Unit = {},
 ) {
@@ -485,6 +487,7 @@ fun HhhlApp(
                     appVersionName = appVersionName,
                     releaseNotesStore = releaseNotesStore,
                     onCheckForUpdates = onCheckForUpdates,
+                    onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
                     onBackHandlerChanged = onBackHandlerChanged,
                     onSwitchAccount = loginStateHolder::switchAccount,
                     onRemoveAccount = loginStateHolder::removeAccount,
@@ -2051,6 +2054,7 @@ private fun SettingsRouteContent(
     appVersionName: String,
     onOpenReleaseNotes: () -> Unit,
     onClearChatMessageCache: () -> Unit,
+    onOpenBatteryOptimizationSettings: () -> Unit,
     onOpenThemeCustomization: () -> Unit,
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit),
     onSwitchAccount: (String) -> Unit,
@@ -2097,6 +2101,7 @@ private fun SettingsRouteContent(
         appVersionName = appVersionName,
         onOpenReleaseNotes = onOpenReleaseNotes,
         onClearChatMessageCache = onClearChatMessageCache,
+        onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
         onOpenThemeCustomization = onOpenThemeCustomization,
         accounts = accounts,
         currentAccountId = currentAccountId,
@@ -2125,6 +2130,114 @@ private fun SettingsRouteContent(
         onAiWorkspacePlan = onAiWorkspacePlan,
         aiConnectionMessage = aiConnectionMessage,
         isTestingAiConnection = isTestingAiConnection,
+    )
+}
+
+@Composable
+private fun MainShellSettingsRoute(
+    settingsState: SettingsUiState,
+    settingsStateHolder: SettingsStateHolder,
+    instanceMetaState: InstanceMetaUiState,
+    accounts: List<AccountSession>,
+    currentAccountId: String?,
+    appScope: CoroutineScope,
+    mediaPicker: MediaPicker?,
+    chatMessageCache: ChatMessageCache,
+    chatUnreadStore: ChatUnreadStore,
+    openUrl: (String) -> Unit,
+    onNavigate: (AppRoute) -> Unit,
+    onThemeSelected: (HhhlThemePreset) -> Unit,
+    customTheme: HhhlCustomTheme,
+    onCustomThemeChanged: (HhhlCustomTheme) -> Unit,
+    onResetCustomTheme: () -> Unit,
+    onSetGlobalBackgroundImage: (cc.hhhl.client.api.DriveFileUpload) -> Unit,
+    onClearGlobalBackgroundImage: () -> Unit,
+    onSetChatBackgroundImage: (cc.hhhl.client.api.DriveFileUpload) -> Unit,
+    onClearChatBackgroundImage: () -> Unit,
+    onTimelineDensitySelected: (TimelineDensity) -> Unit,
+    onListGesturesEnabledChanged: (Boolean) -> Unit,
+    onDefaultNoteVisibilitySelected: (DefaultNoteVisibility) -> Unit,
+    onNotificationBadgeModeSelected: (NotificationBadgeMode) -> Unit,
+    onBackgroundNotificationsChanged: (Boolean) -> Unit,
+    onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit,
+    onChatNoiseReductionSettingsChanged: (ChatNoiseReductionSettings) -> Unit,
+    onCheckForUpdates: (((String) -> Unit) -> Unit),
+    appVersionName: String,
+    onOpenBatteryOptimizationSettings: () -> Unit,
+    onBackHandlerChanged: (((() -> Boolean)?) -> Unit),
+    onSwitchAccount: (String) -> Unit,
+    onRemoveAccount: (String) -> Unit,
+    onAddAccount: () -> Unit,
+    aiState: AiUiState,
+    aiStateHolder: AiStateHolder,
+    onAiWorkspacePlan: () -> Unit,
+) {
+    SettingsRouteContent(
+        state = settingsState,
+        stateHolder = settingsStateHolder,
+        instanceMetaState = instanceMetaState,
+        accounts = accounts,
+        currentAccountId = currentAccountId,
+        onBack = { onNavigate(AppRoute.Profile) },
+        onThemeSelected = onThemeSelected,
+        customTheme = customTheme,
+        onCustomThemeChanged = onCustomThemeChanged,
+        onResetCustomTheme = onResetCustomTheme,
+        onPickGlobalBackgroundImage = {
+            mediaPicker?.pickImages(
+                onPicked = onSetGlobalBackgroundImage,
+                onError = {},
+            )
+        },
+        onClearGlobalBackgroundImage = onClearGlobalBackgroundImage,
+        onPickChatBackgroundImage = {
+            mediaPicker?.pickImages(
+                onPicked = onSetChatBackgroundImage,
+                onError = {},
+            )
+        },
+        onClearChatBackgroundImage = onClearChatBackgroundImage,
+        onTimelineDensitySelected = onTimelineDensitySelected,
+        onListGesturesEnabledChanged = onListGesturesEnabledChanged,
+        onDefaultNoteVisibilitySelected = onDefaultNoteVisibilitySelected,
+        onNotificationBadgeModeSelected = onNotificationBadgeModeSelected,
+        onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
+        onSpecialCareBackgroundNotificationsChanged = onSpecialCareBackgroundNotificationsChanged,
+        onChatNoiseReductionSettingsChanged = onChatNoiseReductionSettingsChanged,
+        onCheckForUpdates = onCheckForUpdates,
+        appVersionName = appVersionName,
+        onOpenReleaseNotes = { onNavigate(AppRoute.ReleaseNotes) },
+        onClearChatMessageCache = {
+            currentAccountId?.let { accountId ->
+                appScope.launch {
+                    chatMessageCache.clearAccount(accountId)
+                }
+                chatUnreadStore.clearAccount(accountId)
+            }
+        },
+        onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
+        onOpenThemeCustomization = { onNavigate(AppRoute.ThemeCustomization) },
+        onBackHandlerChanged = onBackHandlerChanged,
+        onSwitchAccount = onSwitchAccount,
+        onRemoveAccount = onRemoveAccount,
+        onAddAccount = onAddAccount,
+        onOpenAdminDashboard = { onNavigate(AppRoute.AdminDashboard) },
+        onOpenWebSettings = { key ->
+            settingsWebManagementPath(key)?.let { path ->
+                openUrl("${SharkeyAuthApi.DEFAULT_BASE_URL}$path")
+            }
+        },
+        onOpenManagement = { key ->
+            settingsStateHolder.openManagement(key)
+            onNavigate(AppRoute.SettingsManagement(key))
+        },
+        onOpenAiSettings = { onNavigate(AppRoute.AiSettings) },
+        onAiSettingsChanged = aiStateHolder::updateSettings,
+        onAiProviderSelected = aiStateHolder::applyProviderPreset,
+        onTestAiConnection = aiStateHolder::testConnection,
+        onAiWorkspacePlan = onAiWorkspacePlan,
+        aiConnectionMessage = aiState.message ?: aiState.errorMessage,
+        isTestingAiConnection = aiState.isTestingConnection,
     )
 }
 
@@ -2795,6 +2908,7 @@ private fun MainShell(
     appVersionName: String,
     releaseNotesStore: ReleaseNotesStore,
     onCheckForUpdates: (((String) -> Unit) -> Unit),
+    onOpenBatteryOptimizationSettings: () -> Unit,
     onBackHandlerChanged: (((() -> Boolean)?) -> Unit),
     onSwitchAccount: (String) -> Unit,
     onRemoveAccount: (String) -> Unit,
@@ -7523,30 +7637,25 @@ private fun MainShell(
                     onRefresh = userProfileStateHolder::load,
                     onLoadMoreNotes = userProfileStateHolder::loadMoreNotes,
                 )
-                AppRoute.Settings -> SettingsRouteContent(
-                    state = settingsState,
-                    stateHolder = settingsStateHolder,
+                AppRoute.Settings -> MainShellSettingsRoute(
+                    settingsState = settingsState,
+                    settingsStateHolder = settingsStateHolder,
                     instanceMetaState = instanceMetaState,
                     accounts = accounts,
                     currentAccountId = currentAccountId,
-                    onBack = { route = AppRoute.Profile },
+                    appScope = appScope,
+                    mediaPicker = mediaPicker,
+                    chatMessageCache = chatMessageCache,
+                    chatUnreadStore = chatUnreadStore,
+                    openUrl = openUrl,
+                    onNavigate = { route = it },
                     onThemeSelected = onThemeSelected,
                     customTheme = customTheme,
                     onCustomThemeChanged = onCustomThemeChanged,
                     onResetCustomTheme = onResetCustomTheme,
-                    onPickGlobalBackgroundImage = {
-                        mediaPicker?.pickImages(
-                            onPicked = onSetGlobalBackgroundImage,
-                            onError = {},
-                        )
-                    },
+                    onSetGlobalBackgroundImage = onSetGlobalBackgroundImage,
                     onClearGlobalBackgroundImage = onClearGlobalBackgroundImage,
-                    onPickChatBackgroundImage = {
-                        mediaPicker?.pickImages(
-                            onPicked = onSetChatBackgroundImage,
-                            onError = {},
-                        )
-                    },
+                    onSetChatBackgroundImage = onSetChatBackgroundImage,
                     onClearChatBackgroundImage = onClearChatBackgroundImage,
                     onTimelineDensitySelected = onTimelineDensitySelected,
                     onListGesturesEnabledChanged = onListGesturesEnabledChanged,
@@ -7557,37 +7666,14 @@ private fun MainShell(
                     onChatNoiseReductionSettingsChanged = onChatNoiseReductionSettingsChanged,
                     onCheckForUpdates = onCheckForUpdates,
                     appVersionName = appVersionName,
-                    onOpenReleaseNotes = { route = AppRoute.ReleaseNotes },
-                    onClearChatMessageCache = {
-                        currentAccountId?.let { accountId ->
-                            appScope.launch {
-                                chatMessageCache.clearAccount(accountId)
-                            }
-                            chatUnreadStore.clearAccount(accountId)
-                        }
-                    },
-                    onOpenThemeCustomization = { route = AppRoute.ThemeCustomization },
+                    onOpenBatteryOptimizationSettings = onOpenBatteryOptimizationSettings,
                     onBackHandlerChanged = onBackHandlerChanged,
                     onSwitchAccount = onSwitchAccount,
                     onRemoveAccount = onRemoveAccount,
                     onAddAccount = onAddAccount,
-                    onOpenAdminDashboard = { route = AppRoute.AdminDashboard },
-                    onOpenWebSettings = { key ->
-                        settingsWebManagementPath(key)?.let { path ->
-                            openUrl("${SharkeyAuthApi.DEFAULT_BASE_URL}$path")
-                        }
-                    },
-                    onOpenManagement = { key ->
-                        settingsStateHolder.openManagement(key)
-                        route = AppRoute.SettingsManagement(key)
-                    },
-                    onOpenAiSettings = { route = AppRoute.AiSettings },
-                    onAiSettingsChanged = aiStateHolder::updateSettings,
-                    onAiProviderSelected = aiStateHolder::applyProviderPreset,
-                    onTestAiConnection = aiStateHolder::testConnection,
+                    aiState = aiState,
+                    aiStateHolder = aiStateHolder,
                     onAiWorkspacePlan = ::requestWorkspaceActionPlan,
-                    aiConnectionMessage = aiState.message ?: aiState.errorMessage,
-                    isTestingAiConnection = aiState.isTestingConnection,
                 )
                 AppRoute.AiSettings -> AiSettingsScreen(
                     state = settingsState,

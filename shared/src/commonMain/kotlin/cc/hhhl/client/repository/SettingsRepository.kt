@@ -457,6 +457,13 @@ open class SettingsRepository(
                         enabled = backgroundNotificationsEnabled,
                     ),
                     SettingsItem(
+                        key = SettingsItemKey.BatteryOptimization,
+                        label = "后台实时保活",
+                        value = "允许系统放宽电池优化限制",
+                        icon = "电",
+                        enabled = backgroundNotificationsEnabled,
+                    ),
+                    SettingsItem(
                         key = SettingsItemKey.ChatNoiseAggregate,
                         label = "聊天室通知合并",
                         value = chatNoiseReductionSettings.aggregateBurstNotifications.onOffLabel(),

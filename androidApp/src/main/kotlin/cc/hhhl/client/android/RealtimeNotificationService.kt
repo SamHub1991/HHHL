@@ -8,6 +8,7 @@ import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import cc.hhhl.client.automation.AutomationTrigger
@@ -35,6 +36,7 @@ class RealtimeNotificationService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastTimelineSyncAt: Long = 0L
     private var lastRealtimeChatSyncAt: Long = 0L
+    private var realtimeWakeLock: PowerManager.WakeLock? = null
     @Volatile
     private var shouldScheduleRecovery: Boolean = true
 
@@ -46,6 +48,7 @@ class RealtimeNotificationService : Service() {
             stopSelf()
             return
         }
+        renewRealtimeWakeLock()
         scope.launch {
             runRealtimeLoop()
         }
@@ -70,6 +73,7 @@ class RealtimeNotificationService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        releaseRealtimeWakeLock()
         if (shouldScheduleRecovery && AndroidBackgroundNotificationStore(applicationContext).isBackgroundSyncEnabled()) {
             BackgroundNotificationScheduler.syncSoon(applicationContext)
         }
@@ -84,6 +88,7 @@ class RealtimeNotificationService : Service() {
     private suspend fun runRealtimeLoop() {
         val settings = AndroidBackgroundNotificationStore(applicationContext)
         while (settings.isBackgroundSyncEnabled()) {
+            renewRealtimeWakeLock()
             val session = AndroidAuthTokenStore(applicationContext)
                 .readAccountSessions()
                 .firstOrNull { it.current }
@@ -148,6 +153,7 @@ class RealtimeNotificationService : Service() {
         val settings = AndroidBackgroundNotificationStore(applicationContext)
         val syncer = BackgroundNotificationSyncer(applicationContext)
         while (scope.isActive && settings.isBackgroundSyncEnabled()) {
+            renewRealtimeWakeLock()
             syncer.sync(trigger = BackgroundNotificationSyncTrigger.PollingSafety)
             delay(POLLING_SAFETY_INTERVAL_MS)
         }
@@ -156,6 +162,7 @@ class RealtimeNotificationService : Service() {
     private suspend fun runRealtimeChatLoop() {
         val settings = AndroidBackgroundNotificationStore(applicationContext)
         while (scope.isActive && settings.isBackgroundSyncEnabled()) {
+            renewRealtimeWakeLock()
             val session = AndroidAuthTokenStore(applicationContext)
                 .readAccountSessions()
                 .firstOrNull { it.current }
@@ -419,6 +426,28 @@ class RealtimeNotificationService : Service() {
             .build()
     }
 
+    private fun renewRealtimeWakeLock() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+        val wakeLock = realtimeWakeLock ?: powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "$packageName:RealtimeNotificationService",
+        ).apply {
+            setReferenceCounted(false)
+            realtimeWakeLock = this
+        }
+        runCatching {
+            wakeLock.acquire(REALTIME_WAKE_LOCK_TIMEOUT_MS)
+        }
+    }
+
+    private fun releaseRealtimeWakeLock() {
+        val wakeLock = realtimeWakeLock ?: return
+        runCatching {
+            if (wakeLock.isHeld) wakeLock.release()
+        }
+        realtimeWakeLock = null
+    }
+
     private fun ChatMessage.directPeerId(currentUserId: String?): String? {
         val cleanCurrentUserId = currentUserId?.trim().orEmpty()
         val recipientId = toUserId?.trim()?.takeIf { it.isNotEmpty() }
@@ -442,6 +471,7 @@ class RealtimeNotificationService : Service() {
         private const val NOTIFICATION_EVENT_RECHECK_DELAY_MS = 1_500L
         private const val NOTIFICATION_EVENT_LATE_RECHECK_DELAY_MS = 4_000L
         private const val POLLING_SAFETY_INTERVAL_MS = 30_000L
+        private const val REALTIME_WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 1000L
         private const val MAX_REALTIME_SEEN_IDS = 1_000
         private const val MAX_STREAMING_CHANNELS = 4
 
