@@ -582,28 +582,50 @@ class ChatPresentationTest {
         )
         val messageAuthor = chatUser(id = "message-user", displayName = "Alice", username = "alice")
         val searchAuthor = chatUser(id = "search-user", displayName = "Bob", username = "bob")
+        val remoteAuthor = chatUser(id = "remote-user", displayName = "赵远程", username = "zhao", host = "remote.example")
         val filters = buildChatSearchAuthorFilters(
             members = listOf(chatRoomMember(memberOnly)),
             messages = listOf(chatMessage("message", authorId = messageAuthor.id, username = messageAuthor.username)),
             searchResults = listOf(chatMessage("search", authorId = searchAuthor.id, username = searchAuthor.username)),
+            remoteUsers = listOf(remoteAuthor),
         )
 
-        assertEquals(listOf("member-only", "search-user", "message-user"), filters.map { it.userId })
+        assertEquals(listOf("remote-user", "member-only", "search-user", "message-user"), filters.map { it.userId })
+        assertEquals(listOf("remote-user"), filters.filterByChatSearchAuthorQuery("赵").map { it.userId })
+        assertEquals(listOf("remote-user"), filters.filterByChatSearchAuthorQuery("@zhao@remote").map { it.userId })
         assertEquals(listOf("member-only"), filters.filterByChatSearchAuthorQuery("@lin@example").map { it.userId })
         assertEquals(listOf("member-only"), filters.filterByChatSearchAuthorQuery("林").map { it.userId })
     }
 
     @Test
+    fun chatFilterUsersIncludeRemoteUserSearchResults() {
+        val remoteUser = chatUser(id = "remote-user", displayName = "远端用户", username = "remote", host = "remote.example")
+        val memberUser = chatUser(id = "member-user", displayName = "成员用户", username = "member")
+        val messageUser = chatUser(id = "message-user", displayName = "消息用户", username = "message")
+
+        val users = buildChatMessageFilterUsers(
+            members = listOf(chatRoomMember(memberUser)),
+            messages = listOf(chatMessage("message", authorId = messageUser.id, username = messageUser.username)),
+            searchResults = emptyList(),
+            remoteUsers = listOf(remoteUser),
+        )
+
+        assertEquals(listOf("member-user", "message-user", "remote-user"), users.map { it.id }.sorted())
+        assertEquals(listOf("remote-user"), users.filterByChatFilterUserQuery("@remote@remote").map { it.id })
+        assertEquals(listOf("member-user"), users.filterByChatFilterUserQuery("成员").map { it.id })
+    }
+
+    @Test
     fun chatSearchAuthorFiltersAreBoundedForLargeRooms() {
-        val members = List(260) { index ->
+        val members = List(540) { index ->
             chatRoomMember(chatUser(id = "member-$index", displayName = "Member $index", username = "member$index"))
         }
 
         val filters = buildChatSearchAuthorFilters(members = members, messages = emptyList(), searchResults = emptyList())
 
-        assertEquals(240, filters.size)
+        assertEquals(500, filters.size)
         assertEquals("member-0", filters.first().userId)
-        assertEquals("member-239", filters.last().userId)
+        assertEquals("member-499", filters.last().userId)
     }
 
     @Test

@@ -438,5 +438,5 @@ private fun CachedChatDriveFile.toDomainDriveFile(): DriveFile {
 }
 
 private const val KEY_SEPARATOR = "|"
-private const val MAX_CHAT_CACHE_CONVERSATIONS = 64
-private const val MAX_CHAT_CACHE_MESSAGES_PER_CONVERSATION = 500
+private const val MAX_CHAT_CACHE_CONVERSATIONS = 96
+private const val MAX_CHAT_CACHE_MESSAGES_PER_CONVERSATION = 1_000

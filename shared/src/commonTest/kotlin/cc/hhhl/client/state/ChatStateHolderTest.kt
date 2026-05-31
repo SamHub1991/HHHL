@@ -31,6 +31,8 @@ import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ChatRepositoryResult
 import cc.hhhl.client.repository.ChatStreamingRepository
 import cc.hhhl.client.repository.ChatUserConversationRepositoryResult
+import cc.hhhl.client.repository.DiscoverRepository
+import cc.hhhl.client.repository.DiscoverRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.DriveFileRepositoryResult
 import kotlin.test.Test
@@ -344,6 +346,34 @@ class ChatStateHolderTest {
         assertFalse(holder.state.value.isLoadingMoreMessageSearch)
         assertEquals(listOf(first), holder.state.value.messageSearchResults)
         assertEquals("聊天搜索异常", holder.state.value.messageSearchErrorMessage)
+    }
+
+    @Test
+    fun searchChatUsersStoresRemoteUserResults() = runTest {
+        val remoteUser = User("remote-user", "赵远程", "zhao", "赵", host = "remote.example")
+        val queries = mutableListOf<String>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(ChatRepositoryResult.Success(emptyList())),
+            discoverRepository = object : DiscoverRepository(tokenProvider = { "token-123" }) {
+                override suspend fun searchUsers(
+                    query: String,
+                    filters: DiscoverAdvancedFilters,
+                ): DiscoverRepositoryResult {
+                    queries += query
+                    return DiscoverRepositoryResult.UserSuccess(listOf(remoteUser, remoteUser))
+                }
+            },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.searchChatUsers(" 赵 ")
+        advanceUntilIdle()
+
+        assertEquals(listOf("赵"), queries)
+        assertFalse(holder.state.value.isSearchingChatUsers)
+        assertEquals("赵", holder.state.value.chatUserSearchQuery)
+        assertEquals(listOf(remoteUser), holder.state.value.chatUserSearchResults)
+        assertEquals(null, holder.state.value.chatUserSearchErrorMessage)
     }
 
     @Test

@@ -577,10 +577,36 @@ open class ChatRepository(
         ) {
             is ChatMessageLoadResult.Success -> {
                 val messages = currentMessages.mergeChronologicalMessages(result.messages)
-                writeCachedMessages(ChatMessageCacheConversationType.Room, cleanRoomId, messages)
+                val initialLoad = if (untilId == null && currentMessages.isEmpty()) {
+                    messages.withCachedHistoryBridge(
+                        type = ChatMessageCacheConversationType.Room,
+                        conversationId = cleanRoomId,
+                        initialEndReached = result.messages.isEmpty(),
+                    ) { cursor ->
+                        api.loadRoomMessages(
+                            token = token,
+                            roomId = cleanRoomId,
+                            limit = DEFAULT_HISTORY_INDEX_PAGE_SIZE,
+                            untilId = cursor,
+                        )
+                    }
+                } else {
+                    CachedMessageLoad(
+                        displayMessages = messages,
+                        cacheMessages = messages,
+                        endReached = result.messages.isEmpty(),
+                        mergeExistingCache = true,
+                    )
+                }
+                writeCachedMessages(
+                    type = ChatMessageCacheConversationType.Room,
+                    conversationId = cleanRoomId,
+                    messages = initialLoad.cacheMessages,
+                    mergeExisting = initialLoad.mergeExistingCache,
+                )
                 ChatMessageRepositoryResult.Success(
-                    messages = messages,
-                    endReached = result.messages.isEmpty(),
+                    messages = initialLoad.displayMessages,
+                    endReached = initialLoad.endReached,
                 )
             }
             ChatMessageLoadResult.Unauthorized -> ChatMessageRepositoryResult.Unauthorized
@@ -661,10 +687,36 @@ open class ChatRepository(
         ) {
             is ChatMessageLoadResult.Success -> {
                 val messages = currentMessages.mergeChronologicalMessages(result.messages)
-                writeCachedMessages(ChatMessageCacheConversationType.User, cleanUserId, messages)
+                val initialLoad = if (untilId == null && currentMessages.isEmpty()) {
+                    messages.withCachedHistoryBridge(
+                        type = ChatMessageCacheConversationType.User,
+                        conversationId = cleanUserId,
+                        initialEndReached = result.messages.isEmpty(),
+                    ) { cursor ->
+                        api.loadUserMessages(
+                            token = token,
+                            userId = cleanUserId,
+                            limit = DEFAULT_HISTORY_INDEX_PAGE_SIZE,
+                            untilId = cursor,
+                        )
+                    }
+                } else {
+                    CachedMessageLoad(
+                        displayMessages = messages,
+                        cacheMessages = messages,
+                        endReached = result.messages.isEmpty(),
+                        mergeExistingCache = true,
+                    )
+                }
+                writeCachedMessages(
+                    type = ChatMessageCacheConversationType.User,
+                    conversationId = cleanUserId,
+                    messages = initialLoad.cacheMessages,
+                    mergeExisting = initialLoad.mergeExistingCache,
+                )
                 ChatMessageRepositoryResult.Success(
-                    messages = messages,
-                    endReached = result.messages.isEmpty(),
+                    messages = initialLoad.displayMessages,
+                    endReached = initialLoad.endReached,
                 )
             }
             ChatMessageLoadResult.Unauthorized -> ChatMessageRepositoryResult.Unauthorized
@@ -880,13 +932,113 @@ open class ChatRepository(
         type: ChatMessageCacheConversationType,
         conversationId: String,
         messages: List<ChatMessage>,
+        mergeExisting: Boolean = true,
     ) {
         val key = cacheKey(type, conversationId) ?: return
         messageCacheMutex.withLock {
-            val mergedMessages = messageCache.read(key)
-                .mergeReplacingRepositoryMessages(messages)
+            val cleanMessages = messages.dedupeSortedMessages()
+            if (cleanMessages.isEmpty()) {
+                return@withLock
+            }
+            val cachedMessages = messageCache.read(key).dedupeSortedMessages()
+            val mergedMessages = if (mergeExisting) {
+                if (cachedMessages.isNotEmpty() && !cleanMessages.overlapsByMessageId(cachedMessages)) {
+                    return@withLock
+                }
+                cachedMessages.mergeReplacingRepositoryMessages(cleanMessages)
+            } else {
+                cleanMessages
+            }
             messageCache.write(key, mergedMessages)
         }
+    }
+
+    private suspend fun List<ChatMessage>.withCachedHistoryBridge(
+        type: ChatMessageCacheConversationType,
+        conversationId: String,
+        initialEndReached: Boolean,
+        loadBefore: suspend (untilId: String) -> ChatMessageLoadResult,
+    ): CachedMessageLoad {
+        val initialMessages = dedupeSortedMessages()
+        if (initialMessages.isEmpty()) {
+            return CachedMessageLoad(
+                displayMessages = initialMessages,
+                cacheMessages = initialMessages,
+                endReached = initialEndReached,
+                mergeExistingCache = true,
+            )
+        }
+        val key = cacheKey(type, conversationId)
+            ?: return CachedMessageLoad(
+                displayMessages = initialMessages,
+                cacheMessages = initialMessages,
+                endReached = initialEndReached,
+                mergeExistingCache = true,
+            )
+        val cachedMessages = messageCacheMutex.withLock {
+            messageCache.read(key).dedupeSortedMessages()
+        }
+        if (cachedMessages.isEmpty()) {
+            return CachedMessageLoad(
+                displayMessages = initialMessages,
+                cacheMessages = initialMessages,
+                endReached = initialEndReached,
+                mergeExistingCache = true,
+            )
+        }
+
+        var bridgedMessages = initialMessages
+        if (bridgedMessages.overlapsByMessageId(cachedMessages)) {
+            val mergedMessages = cachedMessages.mergeReplacingRepositoryMessages(bridgedMessages)
+            return CachedMessageLoad(
+                displayMessages = mergedMessages.takeLast(MAX_RESTORED_MESSAGES_PER_CONVERSATION),
+                cacheMessages = mergedMessages,
+                endReached = initialEndReached,
+                mergeExistingCache = true,
+            )
+        }
+
+        var reachedEnd = initialEndReached
+        var fetchedPages = 0
+        while (!reachedEnd && fetchedPages < MAX_REFRESH_GAP_BRIDGE_PAGES) {
+            val cursor = bridgedMessages.firstOrNull()?.id?.takeIf(::isServerChatMessageId)
+                ?: break
+            when (val page = loadBefore(cursor)) {
+                is ChatMessageLoadResult.Success -> {
+                    fetchedPages += 1
+                    if (page.messages.isEmpty()) {
+                        reachedEnd = true
+                    } else {
+                        val nextMessages = bridgedMessages.mergeChronologicalMessages(page.messages)
+                        if (nextMessages.size == bridgedMessages.size) {
+                            reachedEnd = true
+                        } else {
+                            bridgedMessages = nextMessages
+                            if (bridgedMessages.overlapsByMessageId(cachedMessages)) {
+                                val mergedMessages = cachedMessages.mergeReplacingRepositoryMessages(bridgedMessages)
+                                return CachedMessageLoad(
+                                    displayMessages = mergedMessages.takeLast(MAX_RESTORED_MESSAGES_PER_CONVERSATION),
+                                    cacheMessages = mergedMessages,
+                                    endReached = false,
+                                    mergeExistingCache = true,
+                                )
+                            }
+                        }
+                    }
+                }
+                ChatMessageLoadResult.Unauthorized,
+                is ChatMessageLoadResult.NetworkError,
+                is ChatMessageLoadResult.ServerError,
+                    -> break
+            }
+        }
+
+        return CachedMessageLoad(
+            displayMessages = bridgedMessages.takeLast(MAX_RESTORED_MESSAGES_PER_CONVERSATION),
+            cacheMessages = bridgedMessages,
+            endReached = reachedEnd,
+            mergeExistingCache = true,
+        )
     }
 
     private suspend fun readCachedMessages(
@@ -1088,9 +1240,17 @@ open class ChatRepository(
         const val DEFAULT_MESSAGE_SEARCH_PAGE_SIZE = 30
         const val DEFAULT_MEMBER_PAGE_SIZE = 100
         const val MAX_UNREAD_COUNT_RESOLUTION_PER_REFRESH = 6
-        const val MAX_RESTORED_MESSAGES_PER_CONVERSATION = 160
+        const val MAX_RESTORED_MESSAGES_PER_CONVERSATION = 240
+        const val MAX_REFRESH_GAP_BRIDGE_PAGES = 6
     }
 }
+
+private data class CachedMessageLoad(
+    val displayMessages: List<ChatMessage>,
+    val cacheMessages: List<ChatMessage>,
+    val endReached: Boolean,
+    val mergeExistingCache: Boolean,
+)
 
 suspend fun ChatRepository.resolveRealtimeMessage(
     message: ChatMessage,
@@ -1236,6 +1396,12 @@ private fun List<ChatMessage>.mergeReplacingRepositoryMessages(incoming: List<Ch
     return (stableCurrent.map { message -> incomingById[message.id] ?: message } + stableIncoming.filterNot { incomingMessage ->
         incomingMessage.id in existingIds
     }).dedupeSortedMessages()
+}
+
+private fun List<ChatMessage>.overlapsByMessageId(other: List<ChatMessage>): Boolean {
+    if (isEmpty() || other.isEmpty()) return false
+    val ids = mapTo(HashSet(size)) { it.id }
+    return other.any { it.id.isNotBlank() && it.id in ids }
 }
 
 private fun List<ChatMessage>.dedupeSortedMessages(): List<ChatMessage> {

@@ -14,12 +14,12 @@ class ChatMessageCacheTest {
         val cache = InMemoryChatMessageCache()
         val key = cacheKey("room-1")
 
-        cache.write(key, (0 until 520).map { index -> sampleMessage("m$index") })
+        cache.write(key, (0 until 1_020).map { index -> sampleMessage("m$index") })
 
         val restored = cache.read(key)
-        assertEquals(500, restored.size)
+        assertEquals(1_000, restored.size)
         assertEquals("m20", restored.first().id)
-        assertEquals("m519", restored.last().id)
+        assertEquals("m1019", restored.last().id)
     }
 
     @Test
@@ -27,7 +27,7 @@ class ChatMessageCacheTest {
         val cache = InMemoryChatMessageCache()
         val oldestKey = cacheKey("room-0")
 
-        repeat(65) { index ->
+        repeat(97) { index ->
             val key = cacheKey("room-$index")
             cache.write(key, listOf(sampleMessage("m$index")))
             cache.markComplete(key)
@@ -35,21 +35,21 @@ class ChatMessageCacheTest {
 
         assertTrue(cache.read(oldestKey).isEmpty())
         assertFalse(cache.isComplete(oldestKey))
-        assertEquals(64, cache.readAccount("account-1").size)
-        assertTrue(cache.isComplete(cacheKey("room-64")))
+        assertEquals(96, cache.readAccount("account-1").size)
+        assertTrue(cache.isComplete(cacheKey("room-96")))
     }
 
     @Test
     fun codecTrimsMessagesPerConversation() {
         val key = cacheKey("room-1")
         val payload = ChatMessageCacheCodec.encode(
-            mapOf(key to (0 until 520).map { index -> sampleMessage("m$index") }),
+            mapOf(key to (0 until 1_020).map { index -> sampleMessage("m$index") }),
         )
 
         val restored = ChatMessageCacheCodec.decode(payload).getValue(key)
-        assertEquals(500, restored.size)
+        assertEquals(1_000, restored.size)
         assertEquals("m20", restored.first().id)
-        assertEquals("m519", restored.last().id)
+        assertEquals("m1019", restored.last().id)
     }
 
     private fun cacheKey(conversationId: String): ChatMessageCacheKey {

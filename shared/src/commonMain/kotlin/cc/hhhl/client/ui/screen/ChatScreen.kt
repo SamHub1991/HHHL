@@ -92,6 +92,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import coil3.compose.AsyncImage
@@ -211,8 +212,10 @@ private const val CHAT_MEMBER_ACTIVE_WINDOW_MILLIS = 30 * 60 * 1000L
 private const val CHAT_MEMBER_ACTIVE_FALLBACK_MESSAGE_LIMIT = 48
 private const val CHAT_MEMBER_ACTIVE_FALLBACK_USER_LIMIT = 8
 private const val CHAT_MESSAGE_UI_FILTER_MAX_MATCH_TEXT_LENGTH = 4_096
-private const val CHAT_SEARCH_AUTHOR_FILTER_MAX_USERS = 240
+private const val CHAT_SEARCH_AUTHOR_FILTER_MAX_USERS = 500
 private const val CHAT_SEARCH_AUTHOR_MENU_VISIBLE_USERS = 12
+private const val CHAT_FILTER_USER_CANDIDATE_MAX_USERS = 500
+private const val CHAT_USER_SEARCH_DEBOUNCE_MS = 320L
 private const val CHAT_ROOM_GROUP_MAX_LENGTH = 24
 private const val CHAT_ROOM_GROUP_UNGROUPED_TITLE = "未分组"
 
@@ -255,6 +258,7 @@ fun ChatScreen(
     onLoadOlderMessages: () -> Unit = {},
     onSearchMessages: (String) -> Unit = {},
     onLoadMoreMessageSearch: () -> Unit = {},
+    onSearchChatUsers: (String) -> Unit = {},
     onShowMessages: () -> Unit = {},
     onShowMembers: () -> Unit = {},
     onLoadMoreMembers: () -> Unit = {},
@@ -290,6 +294,7 @@ fun ChatScreen(
     onDismissErrorMessage: () -> Unit = {},
     onDismissMessageErrorMessage: () -> Unit = {},
     onDismissMessageSearchErrorMessage: () -> Unit = {},
+    onDismissChatUserSearchErrorMessage: () -> Unit = {},
     onDismissMemberErrorMessage: () -> Unit = {},
     onDismissRoomManagementMessage: () -> Unit = {},
     onDismissStreamingErrorMessage: () -> Unit = {},
@@ -323,6 +328,7 @@ fun ChatScreen(
             onLoadOlderMessages = onLoadOlderMessages,
             onSearchMessages = onSearchMessages,
             onLoadMoreMessageSearch = onLoadMoreMessageSearch,
+            onSearchChatUsers = onSearchChatUsers,
             onShowMessages = onShowMessages,
             onShowMembers = onShowMembers,
             onLoadMoreMembers = onLoadMoreMembers,
@@ -357,6 +363,7 @@ fun ChatScreen(
             onDismissSpecialCareToast = onDismissSpecialCareToast,
             onDismissMessageErrorMessage = onDismissMessageErrorMessage,
             onDismissMessageSearchErrorMessage = onDismissMessageSearchErrorMessage,
+            onDismissChatUserSearchErrorMessage = onDismissChatUserSearchErrorMessage,
             onDismissMemberErrorMessage = onDismissMemberErrorMessage,
             onDismissRoomManagementMessage = onDismissRoomManagementMessage,
             onDismissStreamingErrorMessage = onDismissStreamingErrorMessage,
@@ -1679,6 +1686,7 @@ private fun ChatDetailScreen(
     onLoadOlderMessages: () -> Unit,
     onSearchMessages: (String) -> Unit,
     onLoadMoreMessageSearch: () -> Unit,
+    onSearchChatUsers: (String) -> Unit,
     onShowMessages: () -> Unit,
     onShowMembers: () -> Unit,
     onLoadMoreMembers: () -> Unit,
@@ -1713,6 +1721,7 @@ private fun ChatDetailScreen(
     onDismissSpecialCareToast: () -> Unit,
     onDismissMessageErrorMessage: () -> Unit,
     onDismissMessageSearchErrorMessage: () -> Unit,
+    onDismissChatUserSearchErrorMessage: () -> Unit,
     onDismissMemberErrorMessage: () -> Unit,
     onDismissRoomManagementMessage: () -> Unit,
     onDismissStreamingErrorMessage: () -> Unit,
@@ -1824,17 +1833,19 @@ private fun ChatDetailScreen(
     val visibleMessageFingerprint = remember(visibleMessages) {
         visibleMessages.chatMessageIdFingerprint()
     }
-    val filterableAuthors = remember(state.messages) {
-        state.messages
-            .map { it.fromUser }
-            .distinctBy { it.id }
-            .sortedBy { it.displayName.ifBlank { it.username } }
+    val displayBaseSearchResults = remember(state.messageSearchResults, blockedUserIds) {
+        state.messageSearchResults.filterNot { message -> message.isHiddenByBlockedChatUser(blockedUserIds) }
+    }
+    val filterableAuthors = remember(state.members, state.messages, displayBaseSearchResults, state.chatUserSearchResults) {
+        buildChatMessageFilterUsers(
+            members = state.members,
+            messages = state.messages,
+            searchResults = displayBaseSearchResults,
+            remoteUsers = state.chatUserSearchResults,
+        )
     }
     val visibleMembers = remember(state.members, memberSearchQuery) {
         state.members.filterByChatRoomMemberQuery(memberSearchQuery)
-    }
-    val displayBaseSearchResults = remember(state.messageSearchResults, blockedUserIds) {
-        state.messageSearchResults.filterNot { message -> message.isHiddenByBlockedChatUser(blockedUserIds) }
     }
     val canRefreshMessages = !state.isLoadingMessages && !state.isLoadingOlderMessages
     val canRefreshMembers = !state.isLoadingMembers && !state.isLoadingMoreMembers
@@ -1860,6 +1871,7 @@ private fun ChatDetailScreen(
             messages = displayBaseMessages,
             searchResults = displayBaseSearchResults,
             members = state.members,
+            remoteUsers = state.chatUserSearchResults,
             searchQuery = state.messageSearchQuery,
             canLoadOlderMessages = !state.messagesEndReached,
             isLoadingMessages = state.isLoadingMessages,
@@ -1867,8 +1879,10 @@ private fun ChatDetailScreen(
             isSearchingMessages = state.isSearchingMessages,
             isLoadingMoreSearch = state.isLoadingMoreMessageSearch,
             canLoadMoreSearch = !state.messageSearchEndReached,
+            isSearchingUsers = state.isSearchingChatUsers,
             messageErrorMessage = state.messageErrorMessage,
             searchErrorMessage = state.messageSearchErrorMessage,
+            userSearchErrorMessage = state.chatUserSearchErrorMessage,
             uiFilter = activeMessageUiFilter,
             uiFilterRegexes = compiledFilterRegexes,
             onBack = { showingMessageSearch = false },
@@ -1876,8 +1890,10 @@ private fun ChatDetailScreen(
             onLoadOlderMessages = onLoadOlderMessages,
             onSearch = onSearchMessages,
             onLoadMoreSearch = onLoadMoreMessageSearch,
+            onSearchUsers = onSearchChatUsers,
             onDismissMessageError = onDismissMessageErrorMessage,
             onDismissSearchError = onDismissMessageSearchErrorMessage,
+            onDismissUserSearchError = onDismissChatUserSearchErrorMessage,
             onSelectMessage = { messageId ->
                 showingMessageSearch = false
                 if (messageUiFilter.shouldResetForLoadedHiddenMessage(messageId, loadedMessageIds, messageIndexById)) {
@@ -1901,6 +1917,10 @@ private fun ChatDetailScreen(
             filteredMessageCount = filteredMessageCount,
             totalMessageCount = displayBaseMessages.size,
             authors = filterableAuthors,
+            isSearchingUsers = state.isSearchingChatUsers,
+            userSearchErrorMessage = state.chatUserSearchErrorMessage,
+            onSearchUsers = onSearchChatUsers,
+            onDismissUserSearchError = onDismissChatUserSearchErrorMessage,
             onBack = { showingMessageFilters = false },
             onFilterChanged = { messageUiFilter = it },
         )
@@ -3223,6 +3243,10 @@ private fun ChatMessageFilterScreen(
     filteredMessageCount: Int,
     totalMessageCount: Int,
     authors: List<User>,
+    isSearchingUsers: Boolean,
+    userSearchErrorMessage: String?,
+    onSearchUsers: (String) -> Unit,
+    onDismissUserSearchError: () -> Unit,
     onBack: () -> Unit,
     onFilterChanged: (ChatMessageUiFilterState) -> Unit,
 ) {
@@ -3244,6 +3268,18 @@ private fun ChatMessageFilterScreen(
         filter.hiddenUserIds.size < CHAT_MESSAGE_UI_FILTER_MAX_HIDDEN_USERS
     val normalizedHiddenUserIds = remember(filter.hiddenUserIds) {
         filter.hiddenUserIds.normalizedChatMessageUiHiddenUserRules()
+    }
+    val hiddenUserSearchQuery = filter.hiddenUserDraft.trim()
+    LaunchedEffect(hiddenUserSearchQuery) {
+        if (hiddenUserSearchQuery.isBlank()) {
+            onSearchUsers("")
+        } else {
+            delay(CHAT_USER_SEARCH_DEBOUNCE_MS)
+            onSearchUsers(hiddenUserSearchQuery)
+        }
+    }
+    val visibleAuthors = remember(authors, hiddenUserSearchQuery) {
+        authors.filterByChatFilterUserQuery(hiddenUserSearchQuery)
     }
     Column(
         modifier = Modifier
@@ -3451,13 +3487,26 @@ private fun ChatMessageFilterScreen(
                     }
                 }
             }
-            if (authors.isEmpty()) {
+            if (isSearchingUsers && hiddenUserSearchQuery.isNotBlank()) {
+                item(key = "filter-users-searching", contentType = "filter-users-searching") {
+                    ChatStatusRow(text = "正在搜索服务器用户...", loading = true)
+                }
+            }
+            userSearchErrorMessage?.let { message ->
+                item(key = "filter-users-search-error", contentType = "filter-users-search-error") {
+                    ChatStatusRow(
+                        text = message,
+                        onDismiss = onDismissUserSearchError,
+                    )
+                }
+            }
+            if (visibleAuthors.isEmpty()) {
                 item(key = "filter-users-empty", contentType = "filter-users-empty") {
-                    ChatStatusRow(text = "暂无可过滤用户")
+                    ChatStatusRow(text = if (hiddenUserSearchQuery.isBlank()) "暂无可过滤用户" else "没有匹配的用户")
                 }
             }
             itemsIndexed(
-                items = authors,
+                items = visibleAuthors,
                 key = { index, user -> user.stableChatUserListKey(index) },
                 contentType = { _, _ -> "filter-user" },
             ) { _, user ->
@@ -3602,6 +3651,7 @@ private fun ChatMessageSearchScreen(
     messages: List<ChatMessage>,
     searchResults: List<ChatMessage>,
     members: List<ChatRoomMember>,
+    remoteUsers: List<User>,
     searchQuery: String,
     canLoadOlderMessages: Boolean,
     isLoadingMessages: Boolean,
@@ -3609,8 +3659,10 @@ private fun ChatMessageSearchScreen(
     isSearchingMessages: Boolean,
     isLoadingMoreSearch: Boolean,
     canLoadMoreSearch: Boolean,
+    isSearchingUsers: Boolean,
     messageErrorMessage: String?,
     searchErrorMessage: String?,
+    userSearchErrorMessage: String?,
     uiFilter: ChatMessageUiFilterState,
     uiFilterRegexes: List<Regex>,
     onBack: () -> Unit,
@@ -3618,8 +3670,10 @@ private fun ChatMessageSearchScreen(
     onLoadOlderMessages: () -> Unit,
     onSearch: (String) -> Unit,
     onLoadMoreSearch: () -> Unit,
+    onSearchUsers: (String) -> Unit,
     onDismissMessageError: () -> Unit,
     onDismissSearchError: () -> Unit,
+    onDismissUserSearchError: () -> Unit,
     onSelectMessage: (String) -> Unit,
     onOpenFilters: () -> Unit,
 ) {
@@ -3649,8 +3703,17 @@ private fun ChatMessageSearchScreen(
         sourceResults.filterByChatMessageUiFilter(uiFilter, uiFilterRegexes)
     }
     val uiFilteredSearchCount = sourceResults.size - baseResults.size
-    val authorFilters = remember(members, messages, searchResults) {
-        buildChatSearchAuthorFilters(members, messages, searchResults)
+    LaunchedEffect(authorFilterExpanded, authorFilterQuery) {
+        val cleanAuthorQuery = authorFilterQuery.trim()
+        if (!authorFilterExpanded || cleanAuthorQuery.isBlank()) {
+            onSearchUsers("")
+        } else {
+            delay(CHAT_USER_SEARCH_DEBOUNCE_MS)
+            onSearchUsers(cleanAuthorQuery)
+        }
+    }
+    val authorFilters = remember(members, messages, searchResults, remoteUsers) {
+        buildChatSearchAuthorFilters(members, messages, searchResults, remoteUsers)
     }
     val selectedAuthor = authorFilters.firstOrNull { it.userId == authorFilterUserId }
     LaunchedEffect(authorFilters, authorFilterUserId) {
@@ -3818,8 +3881,11 @@ private fun ChatMessageSearchScreen(
                 selectedUserId = authorFilterUserId,
                 query = authorFilterQuery,
                 expanded = authorFilterExpanded,
+                isSearchingUsers = isSearchingUsers && authorFilterQuery.trim().isNotBlank(),
+                userSearchErrorMessage = userSearchErrorMessage,
                 onQueryChanged = { authorFilterQuery = it },
                 onExpandedChanged = { authorFilterExpanded = it },
+                onDismissUserSearchError = onDismissUserSearchError,
                 onSelected = { userId ->
                     authorFilterUserId = userId
                     authorFilterExpanded = false
@@ -3997,11 +4063,13 @@ private fun ChatMessageAuthorFilterPicker(
     selectedUserId: String?,
     query: String,
     expanded: Boolean,
+    isSearchingUsers: Boolean,
+    userSearchErrorMessage: String?,
     onQueryChanged: (String) -> Unit,
     onExpandedChanged: (Boolean) -> Unit,
+    onDismissUserSearchError: () -> Unit,
     onSelected: (String?) -> Unit,
 ) {
-    if (authors.isEmpty()) return
     val selectedAuthor = authors.firstOrNull { it.userId == selectedUserId }
     val visibleAuthors = remember(authors, query) {
         authors.filterByChatSearchAuthorQuery(query).take(CHAT_SEARCH_AUTHOR_MENU_VISIBLE_USERS)
@@ -4036,11 +4104,38 @@ private fun ChatMessageAuthorFilterPicker(
             )
             if (visibleAuthors.isEmpty()) {
                 Text(
-                    text = "没有匹配的用户",
+                    text = if (query.isBlank()) "没有可选用户" else "没有匹配的用户",
                     color = LocalHhhlColors.current.textMuted,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 )
+            }
+            if (isSearchingUsers) {
+                Text(
+                    text = "正在搜索服务器用户...",
+                    color = LocalHhhlColors.current.textMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+            userSearchErrorMessage?.takeIf { query.isNotBlank() }?.let { message ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = message,
+                        color = LocalHhhlColors.current.textMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    HhhlTextButton(onClick = onDismissUserSearchError) {
+                        Text("关闭")
+                    }
+                }
             }
             visibleAuthors.forEach { author ->
                 ChatMessageAuthorDropdownItem(
@@ -6691,6 +6786,7 @@ internal fun buildChatSearchAuthorFilters(
     members: List<ChatRoomMember>,
     messages: List<ChatMessage>,
     searchResults: List<ChatMessage>,
+    remoteUsers: List<User> = emptyList(),
 ): List<ChatSearchAuthorFilter> {
     val seenUserIds = HashSet<String>(CHAT_SEARCH_AUTHOR_FILTER_MAX_USERS)
     val filters = ArrayList<ChatSearchAuthorFilter>(CHAT_SEARCH_AUTHOR_FILTER_MAX_USERS)
@@ -6699,10 +6795,37 @@ internal fun buildChatSearchAuthorFilters(
         if (user.id.isBlank() || !seenUserIds.add(user.id)) return
         filters += user.toChatSearchAuthorFilter()
     }
+    remoteUsers.forEach(::visit)
     members.forEach { member -> visit(member.user) }
     for (index in searchResults.indices.reversed()) visit(searchResults[index].fromUser)
     for (index in messages.indices.reversed()) visit(messages[index].fromUser)
     return filters
+}
+
+internal fun buildChatMessageFilterUsers(
+    members: List<ChatRoomMember>,
+    messages: List<ChatMessage>,
+    searchResults: List<ChatMessage>,
+    remoteUsers: List<User> = emptyList(),
+): List<User> {
+    val seenUserIds = HashSet<String>(CHAT_FILTER_USER_CANDIDATE_MAX_USERS)
+    val users = ArrayList<User>(CHAT_FILTER_USER_CANDIDATE_MAX_USERS)
+    fun visit(user: User) {
+        if (users.size >= CHAT_FILTER_USER_CANDIDATE_MAX_USERS) return
+        if (user.id.isBlank() || !seenUserIds.add(user.id)) return
+        users += user
+    }
+    remoteUsers.forEach(::visit)
+    members.forEach { member -> visit(member.user) }
+    for (index in searchResults.indices.reversed()) visit(searchResults[index].fromUser)
+    for (index in messages.indices.reversed()) visit(messages[index].fromUser)
+    return users.sortedBy { user -> user.displayName.ifBlank { user.username.ifBlank { user.id } } }
+}
+
+internal fun List<User>.filterByChatFilterUserQuery(query: String): List<User> {
+    val cleanQuery = query.trim()
+    if (cleanQuery.isBlank()) return this
+    return filter { user -> user.toChatSearchAuthorFilter().matchesChatSearchAuthorQuery(cleanQuery) }
 }
 
 private fun User.toChatSearchAuthorFilter(): ChatSearchAuthorFilter {

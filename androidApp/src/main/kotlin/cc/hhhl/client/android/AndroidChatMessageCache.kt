@@ -104,7 +104,7 @@ class AndroidChatMessageCache(context: Context) : ChatMessageCache {
         const val PREFERENCES_NAME = "hhhl_chat_message_cache"
         const val KEY_SNAPSHOTS = "snapshots"
         const val KEY_COMPLETE_SNAPSHOTS = "complete_snapshots"
-        const val MAX_CONVERSATIONS = 120
+        const val MAX_CONVERSATIONS = 160
     }
 }
 

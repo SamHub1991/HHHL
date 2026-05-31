@@ -263,7 +263,7 @@ class ChatRepositoryTest {
 
     @Test
     fun restoreCachedRoomMessagesCapsInitialPayload() = runTest {
-        val messages = (1..220).map { index ->
+        val messages = (1..260).map { index ->
             sampleMessage(
                 id = "message-${index.paddedId()}",
                 createdAtLabel = index.paddedId(),
@@ -288,9 +288,122 @@ class ChatRepositoryTest {
         val cached = repository.restoreCachedMessages("room-1")
 
         assertIs<ChatMessageRepositoryResult.Success>(cached)
-        assertEquals(160, cached.messages.size)
-        assertEquals("message-061", cached.messages.first().id)
-        assertEquals("message-220", cached.messages.last().id)
+        assertEquals(240, cached.messages.size)
+        assertEquals("message-021", cached.messages.first().id)
+        assertEquals("message-260", cached.messages.last().id)
+    }
+
+    @Test
+    fun refreshRoomMessagesBridgesGapToCachedHistory() = runTest {
+        val cachedOldest = sampleMessage("message-001", createdAtLabel = "001")
+        val bridgeSecond = sampleMessage("message-002", createdAtLabel = "002")
+        val bridgeThird = sampleMessage("message-003", createdAtLabel = "003")
+        val bridgeFourth = sampleMessage("message-004", createdAtLabel = "004")
+        val latestOldest = sampleMessage("message-005", createdAtLabel = "005")
+        val latestNewest = sampleMessage("message-006", createdAtLabel = "006")
+        val calls = mutableListOf<MessageCall>()
+        val cache = InMemoryChatMessageCache()
+        cache.write(
+            ChatMessageCacheKey(
+                accountId = "account-1",
+                type = ChatMessageCacheConversationType.Room,
+                conversationId = "room-1",
+            ),
+            listOf(cachedOldest),
+        )
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { "account-1" },
+            messageCache = cache,
+            api = fakeApi(
+                messageCalls = calls,
+                messageResultProvider = { untilId ->
+                    when (untilId) {
+                        null -> ChatMessageLoadResult.Success(listOf(latestNewest, latestOldest))
+                        "message-005" -> ChatMessageLoadResult.Success(listOf(bridgeFourth, bridgeThird))
+                        "message-003" -> ChatMessageLoadResult.Success(listOf(bridgeSecond, cachedOldest))
+                        else -> ChatMessageLoadResult.Success(emptyList())
+                    }
+                },
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.refreshMessages("room-1")
+
+        assertIs<ChatMessageRepositoryResult.Success>(result)
+        assertEquals(
+            listOf("message-001", "message-002", "message-003", "message-004", "message-005", "message-006"),
+            result.messages.map { it.id },
+        )
+        assertEquals(listOf(null, "message-005", "message-003"), calls.map { it.untilId })
+        val cached = repository.restoreCachedMessages("room-1")
+        assertIs<ChatMessageRepositoryResult.Success>(cached)
+        assertEquals(result.messages.map { it.id }, cached.messages.map { it.id })
+    }
+
+    @Test
+    fun loadMoreRoomMessagesKeepsFillingUnbridgedRefreshUntilCachedHistoryOverlaps() = runTest {
+        val cachedOldest = sampleMessage("message-001", createdAtLabel = "001")
+        val calls = mutableListOf<MessageCall>()
+        val cache = InMemoryChatMessageCache()
+        cache.write(
+            ChatMessageCacheKey(
+                accountId = "account-1",
+                type = ChatMessageCacheConversationType.Room,
+                conversationId = "room-1",
+            ),
+            listOf(cachedOldest),
+        )
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            currentUserIdProvider = { "account-1" },
+            messageCache = cache,
+            api = fakeApi(
+                messageCalls = calls,
+                messageResultProvider = { untilId ->
+                    when (untilId) {
+                        null -> ChatMessageLoadResult.Success(
+                            listOf(
+                                sampleMessage("message-010", createdAtLabel = "010"),
+                                sampleMessage("message-009", createdAtLabel = "009"),
+                            ),
+                        )
+                        "message-009" -> ChatMessageLoadResult.Success(listOf(sampleMessage("message-008", createdAtLabel = "008")))
+                        "message-008" -> ChatMessageLoadResult.Success(listOf(sampleMessage("message-007", createdAtLabel = "007")))
+                        "message-007" -> ChatMessageLoadResult.Success(listOf(sampleMessage("message-006", createdAtLabel = "006")))
+                        "message-006" -> ChatMessageLoadResult.Success(listOf(sampleMessage("message-005", createdAtLabel = "005")))
+                        "message-005" -> ChatMessageLoadResult.Success(listOf(sampleMessage("message-004", createdAtLabel = "004")))
+                        "message-004" -> ChatMessageLoadResult.Success(listOf(sampleMessage("message-003", createdAtLabel = "003")))
+                        "message-003" -> ChatMessageLoadResult.Success(
+                            listOf(
+                                sampleMessage("message-002", createdAtLabel = "002"),
+                                cachedOldest,
+                            ),
+                        )
+                        else -> ChatMessageLoadResult.Success(emptyList())
+                    }
+                },
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val refreshed = repository.refreshMessages("room-1")
+        assertIs<ChatMessageRepositoryResult.Success>(refreshed)
+        assertEquals("message-003", refreshed.messages.first().id)
+        assertEquals(listOf("message-001"), (repository.restoreCachedMessages("room-1") as ChatMessageRepositoryResult.Success).messages.map { it.id })
+
+        val loadedMore = repository.loadMoreMessages("room-1", refreshed.messages)
+
+        assertIs<ChatMessageRepositoryResult.Success>(loadedMore)
+        assertEquals(
+            (1..10).map { "message-${it.paddedId()}" },
+            loadedMore.messages.map { it.id },
+        )
+        val cached = repository.restoreCachedMessages("room-1")
+        assertIs<ChatMessageRepositoryResult.Success>(cached)
+        assertEquals(loadedMore.messages.map { it.id }, cached.messages.map { it.id })
+        assertEquals(listOf(null, "message-009", "message-008", "message-007", "message-006", "message-005", "message-004", "message-003"), calls.map { it.untilId })
     }
 
     @Test
@@ -389,7 +502,7 @@ class ChatRepositoryTest {
 
     @Test
     fun restoreCachedUserMessagesCapsInitialPayload() = runTest {
-        val messages = (1..220).map { index ->
+        val messages = (1..260).map { index ->
             sampleMessage(
                 id = "user-message-${index.paddedId()}",
                 createdAtLabel = index.paddedId(),
@@ -415,9 +528,9 @@ class ChatRepositoryTest {
         val cached = repository.restoreCachedUserMessages("user-2")
 
         assertIs<ChatMessageRepositoryResult.Success>(cached)
-        assertEquals(160, cached.messages.size)
-        assertEquals("user-message-061", cached.messages.first().id)
-        assertEquals("user-message-220", cached.messages.last().id)
+        assertEquals(240, cached.messages.size)
+        assertEquals("user-message-021", cached.messages.first().id)
+        assertEquals("user-message-260", cached.messages.last().id)
     }
 
     @Test

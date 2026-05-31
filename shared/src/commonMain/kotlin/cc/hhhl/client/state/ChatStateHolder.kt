@@ -27,6 +27,8 @@ import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ChatRepositoryResult
 import cc.hhhl.client.repository.ChatStreamingRepository
 import cc.hhhl.client.repository.ChatUserConversationRepositoryResult
+import cc.hhhl.client.repository.DiscoverRepository
+import cc.hhhl.client.repository.DiscoverRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.DriveFileRepositoryResult
 import cc.hhhl.client.repository.requiresRealtimeAttentionResolution
@@ -54,6 +56,8 @@ data class ChatUiState(
     val messageSearchResults: List<ChatMessage> = emptyList(),
     val messageSearchQuery: String = "",
     val messageSearchServerUntilId: String? = null,
+    val chatUserSearchQuery: String = "",
+    val chatUserSearchResults: List<User> = emptyList(),
     val members: List<ChatRoomMember> = emptyList(),
     val isLoading: Boolean = false,
     val isLoadingRoomExtras: Boolean = false,
@@ -62,6 +66,7 @@ data class ChatUiState(
     val isLoadingOlderMessages: Boolean = false,
     val isSearchingMessages: Boolean = false,
     val isLoadingMoreMessageSearch: Boolean = false,
+    val isSearchingChatUsers: Boolean = false,
     val isLoadingMembers: Boolean = false,
     val isLoadingMoreMembers: Boolean = false,
     val isManagingRoom: Boolean = false,
@@ -95,6 +100,7 @@ data class ChatUiState(
     val errorMessage: String? = null,
     val messageErrorMessage: String? = null,
     val messageSearchErrorMessage: String? = null,
+    val chatUserSearchErrorMessage: String? = null,
     val memberErrorMessage: String? = null,
     val roomManagementMessage: String? = null,
     val requiresRelogin: Boolean = false,
@@ -142,6 +148,7 @@ class ChatStateHolder(
     private val driveFileRepository: DriveFileRepository? = null,
     private val streamingRepository: ChatStreamingRepository? = null,
     private val relationshipRepository: UserRelationshipRepository? = null,
+    private val discoverRepository: DiscoverRepository? = null,
     private val scope: CoroutineScope,
     private val accountIdProvider: () -> String? = { null },
     private val unreadStore: ChatUnreadStore = NoopChatUnreadStore,
@@ -254,6 +261,11 @@ class ChatStateHolder(
     fun dismissMessageSearchErrorMessage() {
         if (state.value.messageSearchErrorMessage == null) return
         mutableState.update { it.copy(messageSearchErrorMessage = null) }
+    }
+
+    fun dismissChatUserSearchErrorMessage() {
+        if (state.value.chatUserSearchErrorMessage == null) return
+        mutableState.update { it.copy(chatUserSearchErrorMessage = null) }
     }
 
     fun dismissMemberErrorMessage() {
@@ -1267,6 +1279,59 @@ class ChatStateHolder(
                     loadingMore = false,
                 )
             }
+        }
+    }
+
+    fun searchChatUsers(query: String) {
+        val cleanQuery = query.trim()
+        if (cleanQuery.isBlank()) {
+            mutableState.update {
+                it.copy(
+                    chatUserSearchQuery = "",
+                    chatUserSearchResults = emptyList(),
+                    isSearchingChatUsers = false,
+                    chatUserSearchErrorMessage = null,
+                    requiresRelogin = false,
+                )
+            }
+            return
+        }
+        val repository = discoverRepository
+        if (repository == null) {
+            mutableState.update {
+                it.copy(
+                    chatUserSearchQuery = cleanQuery,
+                    chatUserSearchResults = emptyList(),
+                    isSearchingChatUsers = false,
+                    chatUserSearchErrorMessage = "当前界面暂不可搜索服务器用户",
+                    requiresRelogin = false,
+                )
+            }
+            return
+        }
+        val current = state.value
+        if (current.isSearchingChatUsers && current.chatUserSearchQuery == cleanQuery) return
+
+        mutableState.update {
+            it.copy(
+                chatUserSearchQuery = cleanQuery,
+                isSearchingChatUsers = true,
+                chatUserSearchErrorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+
+        scope.launch {
+            val result = try {
+                withTimeoutOrNull(CHAT_USER_SEARCH_TIMEOUT_MS) {
+                    repository.searchUsers(cleanQuery)
+                } ?: DiscoverRepositoryResult.Error("搜索用户超时，请稍后重试")
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                DiscoverRepositoryResult.Error(error.message ?: "搜索用户失败")
+            }
+            applyChatUserSearchResult(cleanQuery, result)
         }
     }
 
@@ -2557,6 +2622,64 @@ class ChatStateHolder(
                 it.copy(
                     isSearchingMessages = false,
                     isLoadingMoreMessageSearch = false,
+                )
+            }
+        }
+    }
+
+    private fun applyChatUserSearchResult(
+        query: String,
+        result: DiscoverRepositoryResult,
+    ) {
+        when (result) {
+            is DiscoverRepositoryResult.UserSuccess -> mutableState.update { current ->
+                if (current.chatUserSearchQuery != query) return@update current
+                current.copy(
+                    chatUserSearchResults = result.users.distinctBy { user -> user.id }.take(CHAT_USER_SEARCH_RESULT_LIMIT),
+                    isSearchingChatUsers = false,
+                    chatUserSearchErrorMessage = null,
+                    requiresRelogin = false,
+                )
+            }
+            DiscoverRepositoryResult.Unauthorized -> mutableState.update { current ->
+                if (current.chatUserSearchQuery != query) return@update current
+                current.copy(
+                    isSearchingChatUsers = false,
+                    chatUserSearchErrorMessage = "登录已失效，请重新登录",
+                    requiresRelogin = true,
+                )
+            }
+            is DiscoverRepositoryResult.Error -> mutableState.update { current ->
+                if (current.chatUserSearchQuery != query) return@update current
+                current.copy(
+                    isSearchingChatUsers = false,
+                    chatUserSearchErrorMessage = result.message,
+                    requiresRelogin = false,
+                )
+            }
+            is DiscoverRepositoryResult.Success,
+            is DiscoverRepositoryResult.PinnedUsersSuccess,
+            is DiscoverRepositoryResult.DiscoverySectionsSuccess,
+            is DiscoverRepositoryResult.SearchTrendsSuccess,
+            DiscoverRepositoryResult.RecommendationFeedbackSuccess,
+            is DiscoverRepositoryResult.RoleSuccess,
+            is DiscoverRepositoryResult.RoleDetailSuccess,
+            is DiscoverRepositoryResult.RoleUsersSuccess,
+            is DiscoverRepositoryResult.RoleNotesSuccess,
+            is DiscoverRepositoryResult.TrendSuccess,
+            is DiscoverRepositoryResult.HashtagSuccess,
+            is DiscoverRepositoryResult.FederationSuccess,
+            is DiscoverRepositoryResult.FederationInstanceSuccess,
+            is DiscoverRepositoryResult.FederationFollowSuccess,
+            is DiscoverRepositoryResult.FederationStatsSuccess,
+            is DiscoverRepositoryResult.RecommendedTimelineSuccess,
+            DiscoverRepositoryResult.FederationActionSuccess,
+                -> mutableState.update { current ->
+                if (current.chatUserSearchQuery != query) return@update current
+                current.copy(
+                    isSearchingChatUsers = false,
+                    chatUserSearchErrorMessage = "用户搜索返回了无法识别的结果",
+                    requiresRelogin = false,
                 )
             }
         }
@@ -3854,6 +3977,8 @@ private fun ChatMessage.chatMessageSortKey(): String {
 }
 
 private const val CHAT_MESSAGE_SEARCH_TIMEOUT_MS = 20_000L
+private const val CHAT_USER_SEARCH_TIMEOUT_MS = 12_000L
+private const val CHAT_USER_SEARCH_RESULT_LIMIT = 80
 
 private fun Throwable.toChatSearchErrorMessage(): String {
     return message?.takeIf { it.isNotBlank() } ?: "搜索消息失败，请稍后重试"
