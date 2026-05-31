@@ -28,6 +28,7 @@ import cc.hhhl.client.model.SettingsManagementSection
 import cc.hhhl.client.model.SettingsWebhookDetail
 import cc.hhhl.client.model.SettingsWebhookCreateInput
 import cc.hhhl.client.model.SettingsWebhookUpdateInput
+import cc.hhhl.client.notification.ChatNoiseReductionSettings
 import cc.hhhl.client.state.SettingsGroup
 import cc.hhhl.client.state.SettingsGroupKey
 import cc.hhhl.client.state.SettingsItem
@@ -275,6 +276,7 @@ open class SettingsRepository(
         listGesturesEnabled: Boolean = true,
         backgroundNotificationsEnabled: Boolean = false,
         specialCareBackgroundNotificationsEnabled: Boolean = true,
+        chatNoiseReductionSettings: ChatNoiseReductionSettings = ChatNoiseReductionSettings(),
         accountDisplayName: String = "未登录",
         remotePreferences: SettingsPreferences? = null,
         isRemoteLoading: Boolean = false,
@@ -308,6 +310,24 @@ open class SettingsRepository(
                         label = "列表手势",
                         value = listGesturesEnabled.onOffLabel(),
                         icon = "滑",
+                    ),
+                ),
+            ),
+            SettingsGroup(
+                key = SettingsGroupKey.Ai,
+                label = "AI",
+                items = listOf(
+                    SettingsItem(
+                        key = SettingsItemKey.AiFloatingAssistant,
+                        label = "AI 小光球",
+                        value = aiSettings.floatingAssistantEnabled.onOffLabel(),
+                        icon = "光",
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.AiSettingsEntry,
+                        label = "AI 设置",
+                        value = aiSettingsSummary(aiSettings, aiTasks, aiUsage),
+                        icon = "AI",
                     ),
                 ),
             ),
@@ -437,6 +457,41 @@ open class SettingsRepository(
                         enabled = backgroundNotificationsEnabled,
                     ),
                     SettingsItem(
+                        key = SettingsItemKey.ChatNoiseAggregate,
+                        label = "聊天室通知合并",
+                        value = chatNoiseReductionSettings.aggregateBurstNotifications.onOffLabel(),
+                        icon = "合",
+                        enabled = backgroundNotificationsEnabled,
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.ChatNoiseImportantOnly,
+                        label = "只提醒重点聊天",
+                        value = chatNoiseReductionSettings.importantOnly.onOffLabel(),
+                        icon = "重",
+                        enabled = backgroundNotificationsEnabled,
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.ChatNoiseAiImportance,
+                        label = "AI 判断重要消息",
+                        value = chatNoiseReductionSettings.aiImportanceEnabled.onOffLabel(),
+                        icon = "AI",
+                        enabled = backgroundNotificationsEnabled && chatNoiseReductionSettings.importantOnly,
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.ChatNoiseKeywords,
+                        label = "聊天提醒关键词",
+                        value = chatNoiseReductionSettings.keywordRules.size.let { if (it > 0) "$it 条" else "未设置" },
+                        icon = "词",
+                        enabled = backgroundNotificationsEnabled,
+                    ),
+                    SettingsItem(
+                        key = SettingsItemKey.ChatNoiseUsers,
+                        label = "聊天提醒用户",
+                        value = chatNoiseReductionSettings.userRules.size.let { if (it > 0) "$it 个" else "未设置" },
+                        icon = "人",
+                        enabled = backgroundNotificationsEnabled,
+                    ),
+                    SettingsItem(
                         key = SettingsItemKey.ChatMessageCache,
                         label = "聊天缓存",
                         value = "用于离线保留与按日期搜索历史消息",
@@ -479,119 +534,6 @@ open class SettingsRepository(
                         label = "静音实例",
                         value = remotePreferences?.filters?.mutedInstances?.size?.let { "$it 个" } ?: remoteValue,
                         icon = "域",
-                    ),
-                ),
-            ),
-            SettingsGroup(
-                key = SettingsGroupKey.Ai,
-                label = "AI",
-                items = listOf(
-                    SettingsItem(
-                        key = SettingsItemKey.AiEnabled,
-                        label = "AI 助手",
-                        value = aiSettings.enabled.onOffLabel(),
-                        icon = "AI",
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiProvider,
-                        label = "Provider",
-                        value = aiSettings.provider.label,
-                        icon = "源",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiBaseUrl,
-                        label = "Base URL",
-                        value = aiSettings.cleanBaseUrl.ifBlank { "未配置" },
-                        icon = "址",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiApiKey,
-                        label = "API Key",
-                        value = if (aiSettings.apiKey.isBlank()) "未配置" else "已配置",
-                        icon = "钥",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiChatModel,
-                        label = "对话模型",
-                        value = aiSettings.chatModel.ifBlank { "未配置" },
-                        icon = "模",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiFastModel,
-                        label = "快速模型",
-                        value = aiSettings.fastModel.ifBlank { "未配置" },
-                        icon = "快",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiLongContextModel,
-                        label = "长上下文模型",
-                        value = aiSettings.longContextModel.ifBlank { "未配置" },
-                        icon = "长",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiVisionModel,
-                        label = "视觉模型",
-                        value = aiSettings.visionModel.ifBlank { "未配置" },
-                        icon = "视",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiEmbeddingModel,
-                        label = "向量模型",
-                        value = aiSettings.embeddingModel.ifBlank { "未配置" },
-                        icon = "向",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiReadPermissions,
-                        label = "读取权限",
-                        value = aiReadPermissionSummary(aiSettings),
-                        icon = "权",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiAutomation,
-                        label = "AI 自动化",
-                        value = aiSettings.automationAllowed.onOffLabel(),
-                        icon = "自",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiBackground,
-                        label = "后台 AI 队列",
-                        value = buildString {
-                            append(aiSettings.backgroundAllowed.onOffLabel())
-                            if (aiSettings.wifiOnlyBackground) append(" · 仅 Wi-Fi")
-                        },
-                        icon = "队",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiQueue,
-                        label = "AI 队列",
-                        value = aiQueueSummary(aiTasks, aiSettings, aiUsage),
-                        icon = "列",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiLimits,
-                        label = "用量限制",
-                        value = "${aiSettings.maxInputChars} 字输入 · ${aiSettings.maxOutputTokens} token · ${aiSettings.dailyRequestLimit} 次/日",
-                        icon = "限",
-                        enabled = aiSettings.enabled,
-                    ),
-                    SettingsItem(
-                        key = SettingsItemKey.AiTone,
-                        label = "语气偏好",
-                        value = aiSettings.tonePreference.ifBlank { "默认" },
-                        icon = "调",
-                        enabled = aiSettings.enabled,
                     ),
                 ),
             ),
@@ -760,6 +702,146 @@ open class SettingsRepository(
         }
     }
 
+    fun aiSettingsGroup(
+        aiSettings: AiSettings = AiSettings(),
+        aiTasks: List<AiTask> = emptyList(),
+        aiUsage: AiUsageWindow = AiUsageWindow(),
+    ): SettingsGroup {
+        return SettingsGroup(
+            key = SettingsGroupKey.Ai,
+            label = "AI 设置",
+            items = listOf(
+                SettingsItem(
+                    key = SettingsItemKey.AiEnabled,
+                    label = "AI 助手",
+                    value = aiSettings.enabled.onOffLabel(),
+                    icon = "AI",
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiFloatingAssistant,
+                    label = "AI 小光球",
+                    value = aiSettings.floatingAssistantEnabled.onOffLabel(),
+                    icon = "光",
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiProvider,
+                    label = "Provider",
+                    value = aiSettings.provider.label,
+                    icon = "源",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiBaseUrl,
+                    label = "Base URL",
+                    value = aiSettings.cleanBaseUrl.ifBlank { "未配置" },
+                    icon = "址",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiApiKey,
+                    label = "API Key",
+                    value = if (aiSettings.apiKey.isBlank()) "未配置" else "已配置",
+                    icon = "钥",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiChatModel,
+                    label = "对话模型",
+                    value = aiSettings.chatModel.ifBlank { "未配置" },
+                    icon = "模",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiFastModel,
+                    label = "快速模型",
+                    value = aiSettings.fastModel.ifBlank { "未配置" },
+                    icon = "快",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiLongContextModel,
+                    label = "长上下文模型",
+                    value = aiSettings.longContextModel.ifBlank { "未配置" },
+                    icon = "长",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiVisionModel,
+                    label = "视觉模型",
+                    value = aiSettings.visionModel.ifBlank { "未配置" },
+                    icon = "视",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiEmbeddingModel,
+                    label = "向量模型",
+                    value = aiSettings.embeddingModel.ifBlank { "未配置" },
+                    icon = "向",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiReadPermissions,
+                    label = "读取权限",
+                    value = aiReadPermissionSummary(aiSettings),
+                    icon = "权",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiAutomation,
+                    label = "AI 自动化",
+                    value = aiSettings.automationAllowed.onOffLabel(),
+                    icon = "自",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiAssistantLowRiskAutoApproval,
+                    label = "助手低风险自动批准",
+                    value = aiSettings.assistantLowRiskAutoApproval.onOffLabel(),
+                    icon = "批",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiAssistantHighRiskAutoApproval,
+                    label = "助手高风险自动批准",
+                    value = aiSettings.assistantHighRiskAutoApproval.onOffLabel(),
+                    icon = "危",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiBackground,
+                    label = "后台 AI 队列",
+                    value = buildString {
+                        append(aiSettings.backgroundAllowed.onOffLabel())
+                        if (aiSettings.wifiOnlyBackground) append(" · 仅 Wi-Fi")
+                    },
+                    icon = "队",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiQueue,
+                    label = "AI 队列",
+                    value = aiQueueSummary(aiTasks, aiSettings, aiUsage),
+                    icon = "列",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiLimits,
+                    label = "用量限制",
+                    value = "${aiSettings.maxInputChars} 字输入 · ${aiSettings.maxOutputTokens} token · ${aiSettings.dailyRequestLimit} 次/日",
+                    icon = "限",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
+                    key = SettingsItemKey.AiTone,
+                    label = "语气偏好",
+                    value = aiSettings.tonePreference.ifBlank { "默认" },
+                    icon = "调",
+                    enabled = aiSettings.enabled,
+                ),
+            ),
+        )
+    }
+
     companion object {
         fun defaultGroups(): List<SettingsGroup> = SettingsRepository().groups()
     }
@@ -819,6 +901,11 @@ private fun aiReadPermissionSummary(settings: AiSettings): String {
         if (settings.readProfileAllowed) add("资料")
     }
     return enabled.joinToString("、").ifBlank { "未授权读取" }
+}
+
+private fun aiSettingsSummary(settings: AiSettings, tasks: List<AiTask>, usage: AiUsageWindow): String {
+    val model = settings.activeChatModel.ifBlank { "未配置模型" }
+    return "${settings.enabled.onOffLabel()} · ${settings.provider.label} · $model · ${aiQueueSummary(tasks, settings, usage)}"
 }
 
 private fun aiQueueSummary(tasks: List<AiTask>, settings: AiSettings, usage: AiUsageWindow): String {

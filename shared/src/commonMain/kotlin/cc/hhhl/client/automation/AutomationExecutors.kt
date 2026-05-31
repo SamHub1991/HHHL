@@ -1,6 +1,7 @@
 package cc.hhhl.client.automation
 
 import cc.hhhl.client.api.ComposeDraft
+import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.NoteVisibility
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRepository
@@ -38,6 +39,8 @@ class AppAutomationActionExecutor(
     private val clipboardWriter: ((String) -> Boolean?)? = null,
     private val systemNotificationPublisher: ((String, String) -> Boolean?)? = null,
     private val aiBridge: AiBridge = NoopAiBridge,
+    private val aiGeneratedChatMessageReporter: ((ChatMessage) -> Unit)? = null,
+    private val aiGeneratedNoteReporter: ((String) -> Unit)? = null,
     private val httpClient: HttpClient = defaultAutomationHttpClient(),
 ) : AutomationActionExecutor {
     override suspend fun execute(
@@ -50,6 +53,7 @@ class AppAutomationActionExecutor(
             AutomationActionType.AddLog -> AutomationActionExecutionResult(true, body)
             AutomationActionType.SystemNotification -> createNotification(title, body)
             AutomationActionType.ForwardToRoom -> forwardToRoom(action.targetId, body)
+            AutomationActionType.AiForwardToRoom -> generateAndForwardToRoom(action, event)
             AutomationActionType.ForwardToUser -> forwardToUser(action.targetId, body)
             AutomationActionType.ReplyToChat -> replyToChat(action, event, body)
             AutomationActionType.AiReplyToChat -> generateAndReplyToChat(action, event)
@@ -67,6 +71,23 @@ class AppAutomationActionExecutor(
         }
     }
 
+    private suspend fun generateAndForwardToRoom(
+        action: AutomationAction,
+        event: AutomationEvent,
+    ): AutomationActionExecutionResult {
+        return when (val result = generateOutgoingText(action.bodyTemplate, event, "聊天室转发内容")) {
+            is AiBridgeResult.Success -> {
+                val generated = result.text.cleanedOutgoingText()
+                if (generated.shouldSkipGeneratedAction()) {
+                    AutomationActionExecutionResult(true, "AI 判断无需转发")
+                } else {
+                    forwardToRoom(action.targetId, generated, aiGenerated = true)
+                }
+            }
+            is AiBridgeResult.Error -> AutomationActionExecutionResult(false, result.message)
+        }
+    }
+
     private suspend fun generateAndReplyToChat(
         action: AutomationAction,
         event: AutomationEvent,
@@ -77,7 +98,7 @@ class AppAutomationActionExecutor(
                 if (generated.shouldSkipGeneratedAction()) {
                     AutomationActionExecutionResult(true, "AI 判断无需回复")
                 } else {
-                    replyToChat(action, event, generated)
+                    replyToChat(action, event, generated, aiGenerated = true)
                 }
             }
             is AiBridgeResult.Error -> AutomationActionExecutionResult(false, result.message)
@@ -94,7 +115,7 @@ class AppAutomationActionExecutor(
                 if (generated.shouldSkipGeneratedAction()) {
                     AutomationActionExecutionResult(true, "AI 判断无需回复帖子")
                 } else {
-                    replyToNote(action, event, generated)
+                    replyToNote(action, event, generated, aiGenerated = true)
                 }
             }
             is AiBridgeResult.Error -> AutomationActionExecutionResult(false, result.message)
@@ -111,7 +132,7 @@ class AppAutomationActionExecutor(
                 if (generated.shouldSkipGeneratedAction()) {
                     AutomationActionExecutionResult(true, "AI 判断无需引用")
                 } else {
-                    quoteNote(action, event, generated)
+                    quoteNote(action, event, generated, aiGenerated = true)
                 }
             }
             is AiBridgeResult.Error -> AutomationActionExecutionResult(false, result.message)
@@ -195,11 +216,15 @@ class AppAutomationActionExecutor(
     private suspend fun forwardToRoom(
         roomId: String,
         body: String,
+        aiGenerated: Boolean = false,
     ): AutomationActionExecutionResult {
         val cleanRoomId = roomId.trim()
         if (cleanRoomId.isBlank()) return AutomationActionExecutionResult(false, "聊天室 ID 不能为空")
         return when (val result = chatRepository.sendMessage(roomId = cleanRoomId, text = body)) {
-            is ChatMessageRepositoryResult.Created -> AutomationActionExecutionResult(true, "已转发到聊天室")
+            is ChatMessageRepositoryResult.Created -> {
+                if (aiGenerated) aiGeneratedChatMessageReporter?.invoke(result.message)
+                AutomationActionExecutionResult(true, "已转发到聊天室")
+            }
             ChatMessageRepositoryResult.Unauthorized -> AutomationActionExecutionResult(false, "登录已失效，无法转发")
             is ChatMessageRepositoryResult.Error -> AutomationActionExecutionResult(false, result.message)
             is ChatMessageRepositoryResult.Success,
@@ -212,11 +237,15 @@ class AppAutomationActionExecutor(
     private suspend fun forwardToUser(
         userId: String,
         body: String,
+        aiGenerated: Boolean = false,
     ): AutomationActionExecutionResult {
         val cleanUserId = userId.trim()
         if (cleanUserId.isBlank()) return AutomationActionExecutionResult(false, "用户 ID 不能为空")
         return when (val result = chatRepository.sendUserMessage(userId = cleanUserId, text = body)) {
-            is ChatMessageRepositoryResult.Created -> AutomationActionExecutionResult(true, "已转发给用户")
+            is ChatMessageRepositoryResult.Created -> {
+                if (aiGenerated) aiGeneratedChatMessageReporter?.invoke(result.message)
+                AutomationActionExecutionResult(true, "已转发给用户")
+            }
             ChatMessageRepositoryResult.Unauthorized -> AutomationActionExecutionResult(false, "登录已失效，无法转发")
             is ChatMessageRepositoryResult.Error -> AutomationActionExecutionResult(false, result.message)
             is ChatMessageRepositoryResult.Success,
@@ -230,6 +259,7 @@ class AppAutomationActionExecutor(
         action: AutomationAction,
         event: AutomationEvent,
         body: String,
+        aiGenerated: Boolean = false,
     ): AutomationActionExecutionResult {
         val target = resolveChatTarget(action.targetId, event)
             ?: return AutomationActionExecutionResult(false, "找不到可回复的聊天会话")
@@ -248,6 +278,7 @@ class AppAutomationActionExecutor(
                 ),
                 successMessage = "已自动回复聊天室",
                 unauthorizedMessage = "登录已失效，无法回复聊天室",
+                aiGenerated = aiGenerated,
             )
             is AutomationChatTarget.User -> mapChatSendResult(
                 chatRepository.sendUserMessage(
@@ -258,6 +289,7 @@ class AppAutomationActionExecutor(
                 ),
                 successMessage = "已自动回复私聊",
                 unauthorizedMessage = "登录已失效，无法回复私聊",
+                aiGenerated = aiGenerated,
             )
         }
     }
@@ -266,6 +298,7 @@ class AppAutomationActionExecutor(
         action: AutomationAction,
         event: AutomationEvent,
         body: String,
+        aiGenerated: Boolean = false,
     ): AutomationActionExecutionResult {
         val noteId = action.targetId.trim().ifBlank { event.noteId }.takeIf { it.isNotBlank() }
             ?: return AutomationActionExecutionResult(false, "帖子 ID 不能为空")
@@ -278,6 +311,7 @@ class AppAutomationActionExecutor(
                 visibility = NoteVisibility.Public,
             ),
             successMessage = "已回复帖子",
+            aiGenerated = aiGenerated,
         )
     }
 
@@ -285,6 +319,7 @@ class AppAutomationActionExecutor(
         action: AutomationAction,
         event: AutomationEvent,
         body: String,
+        aiGenerated: Boolean = false,
     ): AutomationActionExecutionResult {
         val noteId = action.targetId.trim().ifBlank { event.noteId }.takeIf { it.isNotBlank() }
             ?: return AutomationActionExecutionResult(false, "帖子 ID 不能为空")
@@ -297,6 +332,7 @@ class AppAutomationActionExecutor(
                 visibility = NoteVisibility.Public,
             ),
             successMessage = "已引用帖子",
+            aiGenerated = aiGenerated,
         )
     }
 
@@ -356,11 +392,15 @@ class AppAutomationActionExecutor(
     private suspend fun sendComposeDraft(
         draft: ComposeDraft,
         successMessage: String,
+        aiGenerated: Boolean = false,
     ): AutomationActionExecutionResult {
         val repository = composeRepository
             ?: return AutomationActionExecutionResult(false, "发帖执行器未接入")
         return when (val result = repository.send(draft)) {
-            is ComposeRepositoryResult.Success -> AutomationActionExecutionResult(true, successMessage)
+            is ComposeRepositoryResult.Success -> {
+                if (aiGenerated) result.createdNoteId?.let { aiGeneratedNoteReporter?.invoke(it) }
+                AutomationActionExecutionResult(true, successMessage)
+            }
             ComposeRepositoryResult.Unauthorized -> AutomationActionExecutionResult(false, "登录已失效，无法发帖")
             is ComposeRepositoryResult.ValidationError -> AutomationActionExecutionResult(false, result.message)
             is ComposeRepositoryResult.Error -> AutomationActionExecutionResult(false, result.message)
@@ -371,9 +411,13 @@ class AppAutomationActionExecutor(
         result: ChatMessageRepositoryResult,
         successMessage: String,
         unauthorizedMessage: String,
+        aiGenerated: Boolean = false,
     ): AutomationActionExecutionResult {
         return when (result) {
-            is ChatMessageRepositoryResult.Created -> AutomationActionExecutionResult(true, successMessage)
+            is ChatMessageRepositoryResult.Created -> {
+                if (aiGenerated) aiGeneratedChatMessageReporter?.invoke(result.message)
+                AutomationActionExecutionResult(true, successMessage)
+            }
             ChatMessageRepositoryResult.Unauthorized -> AutomationActionExecutionResult(false, unauthorizedMessage)
             is ChatMessageRepositoryResult.Error -> AutomationActionExecutionResult(false, result.message)
             is ChatMessageRepositoryResult.Success,

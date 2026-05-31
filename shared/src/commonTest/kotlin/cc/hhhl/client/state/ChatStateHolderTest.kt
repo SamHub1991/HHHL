@@ -14,6 +14,7 @@ import cc.hhhl.client.api.ChatStreamingEvent
 import cc.hhhl.client.api.ChatUserHistoryLoadResult
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.model.ChatMessage
+import cc.hhhl.client.model.ChatMessageReference
 import cc.hhhl.client.model.ChatMessageReaction
 import cc.hhhl.client.model.ChatRoom
 import cc.hhhl.client.model.CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX
@@ -114,6 +115,71 @@ class ChatStateHolderTest {
 
         assertEquals(emptyList(), calls)
         assertEquals("实例未启用聊天", holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun dismissErrorMessageClearsHomeStatusPrompt() = runTest {
+        val holder = ChatStateHolder(
+            repository = fakeRepository(ChatRepositoryResult.Error("服务器连接错误")),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        assertEquals("服务器连接错误", holder.state.value.errorMessage)
+
+        holder.dismissErrorMessage()
+
+        assertEquals(null, holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun dismissChatStatusMessagesClearsDetailPromptFields() = runTest {
+        val room = sampleRoom()
+        val stream = MutableSharedFlow<ChatStreamingEvent>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Error("消息加载失败"),
+                searchMessagesResult = ChatMessageRepositoryResult.Error("搜索失败"),
+                refreshMembersResult = ChatRoomMemberRepositoryResult.Error("成员加载失败"),
+                updateRoomManagementResult = ChatRoomMutationRepositoryResult.RoomSaved(room.copy(messageRetentionDays = 7)),
+            ),
+            streamingRepository = fakeStreamingRepository(stream),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        assertEquals("消息加载失败", holder.state.value.messageErrorMessage)
+        holder.dismissMessageErrorMessage()
+        assertEquals(null, holder.state.value.messageErrorMessage)
+
+        holder.searchMessages("关键字")
+        advanceUntilIdle()
+        assertEquals("搜索失败", holder.state.value.messageSearchErrorMessage)
+        holder.dismissMessageSearchErrorMessage()
+        assertEquals(null, holder.state.value.messageSearchErrorMessage)
+
+        holder.showMembers()
+        advanceUntilIdle()
+        assertEquals("成员加载失败", holder.state.value.memberErrorMessage)
+        holder.dismissMemberErrorMessage()
+        assertEquals(null, holder.state.value.memberErrorMessage)
+
+        holder.updateSelectedRoomManagement(7)
+        advanceUntilIdle()
+        assertEquals("管理设置已更新", holder.state.value.roomManagementMessage)
+        holder.dismissRoomManagementMessage()
+        assertEquals(null, holder.state.value.roomManagementMessage)
+
+        stream.emit(ChatStreamingEvent.Error("connection refused"))
+        advanceUntilIdle()
+        assertEquals("实时连接已断开，请稍后重试", holder.state.value.streamingErrorMessage)
+        holder.dismissStreamingErrorMessage()
+        assertEquals(null, holder.state.value.streamingErrorMessage)
     }
 
     @Test
@@ -1093,6 +1159,185 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun externalRealtimeRoomMessageCreatesAttentionWithoutOpeningRoom() = runTest {
+        val currentUser = User("me", "Me", "me", "M", host = "hhhl.cc")
+        val room = sampleRoom()
+        val message = sampleMessage("message-external-mention", roomId = room.id, text = "hello @me")
+        val holder = ChatStateHolder(
+            repository = fakeRepository(result = ChatRepositoryResult.Success(listOf(room))),
+            scope = TestScope(testScheduler),
+            currentUserProvider = { currentUser },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.recordRealtimeMessage(message)
+        advanceUntilIdle()
+
+        assertEquals(message.id, holder.state.value.specialCareToast?.messageId)
+        assertEquals(ChatAttentionKind.Mention, holder.state.value.specialCareToast?.kind)
+        assertEquals(ChatAttentionKind.Mention, holder.state.value.roomAttentionKinds[room.id])
+        assertEquals(message.id, holder.state.value.rooms.first { it.id == room.id }.latestMessageMarker)
+        assertEquals(1, holder.state.value.rooms.first { it.id == room.id }.unreadCount)
+    }
+
+    @Test
+    fun externalRealtimeUnknownRoomMessageCreatesTemporaryRoom() = runTest {
+        val currentUser = User("me", "Me", "me", "M", host = "hhhl.cc")
+        val message = sampleMessage(
+            id = "message-new-room-mention",
+            roomId = "room-new",
+            text = "hello @me",
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(result = ChatRepositoryResult.Success(emptyList())),
+            scope = TestScope(testScheduler),
+            currentUserProvider = { currentUser },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.recordRealtimeMessage(message)
+        advanceUntilIdle()
+
+        val room = holder.state.value.rooms.first()
+        assertEquals("room-new", room.id)
+        assertEquals(message.id, room.latestMessageMarker)
+        assertEquals(1, room.unreadCount)
+        assertEquals(ChatAttentionKind.Mention, holder.state.value.roomAttentionKinds["room-new"])
+    }
+
+    @Test
+    fun externalRealtimeUnknownRoomMessageSurvivesNormalRefresh() = runTest {
+        val message = sampleMessage(
+            id = "message-new-room",
+            roomId = "room-new",
+            text = "new message",
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(result = ChatRepositoryResult.Success(emptyList())),
+            scope = TestScope(testScheduler),
+            currentUserProvider = { User("me", "Me", "me", "M", host = "hhhl.cc") },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.recordRealtimeMessage(message)
+        advanceUntilIdle()
+        holder.refresh()
+        advanceUntilIdle()
+
+        val room = holder.state.value.rooms.single()
+        assertEquals("room-new", room.id)
+        assertEquals(message.id, room.latestMessageMarker)
+        assertEquals(1, room.unreadCount)
+    }
+
+    @Test
+    fun externalRealtimeDirectMessageCreatesAttentionWithoutOpeningConversation() = runTest {
+        val currentUser = User("me", "Me", "me", "M", host = "hhhl.cc")
+        val peer = User("user-1", "Alice", "alice", "A")
+        val message = sampleMessage("message-external-dm", roomId = "", text = "hello @me").copy(
+            fromUser = peer,
+            toUserId = currentUser.id,
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(result = ChatRepositoryResult.Success(emptyList())),
+            scope = TestScope(testScheduler),
+            currentUserProvider = { currentUser },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.recordRealtimeMessage(message, directUserId = peer.id)
+        advanceUntilIdle()
+
+        assertEquals(message.id, holder.state.value.specialCareToast?.messageId)
+        assertEquals(ChatAttentionKind.Mention, holder.state.value.specialCareToast?.kind)
+        assertEquals(ChatAttentionKind.Mention, holder.state.value.userConversationAttentionKinds[peer.id])
+        assertEquals(peer.id, holder.state.value.userConversations.first().user.id)
+        assertEquals(1, holder.state.value.userConversations.first().unreadCount)
+    }
+
+    @Test
+    fun duplicateExternalRealtimeMessagesDoNotIncrementUnreadTwice() = runTest {
+        val currentUser = User("me", "Me", "me", "M", host = "hhhl.cc")
+        val room = sampleRoom()
+        val roomMessage = sampleMessage("message-external-room", roomId = room.id, text = "hello")
+        val peer = User("user-1", "Alice", "alice", "A")
+        val directMessage = sampleMessage("message-external-dm", roomId = "", text = "hello").copy(
+            fromUser = peer,
+            toUserId = currentUser.id,
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(result = ChatRepositoryResult.Success(listOf(room))),
+            scope = TestScope(testScheduler),
+            currentUserProvider = { currentUser },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.recordRealtimeMessage(roomMessage)
+        holder.recordRealtimeMessage(roomMessage)
+        holder.recordRealtimeMessage(directMessage, directUserId = peer.id)
+        holder.recordRealtimeMessage(directMessage, directUserId = peer.id)
+        advanceUntilIdle()
+
+        assertEquals(1, holder.state.value.rooms.first { it.id == room.id }.unreadCount)
+        assertEquals(1, holder.state.value.userConversations.first { it.user.id == peer.id }.unreadCount)
+    }
+
+    @Test
+    fun externalRealtimeSelfRoomMessageDoesNotCreateUnreadOrAttention() = runTest {
+        val currentUser = User("me", "Me", "me", "M", host = "hhhl.cc")
+        val room = sampleRoom()
+        val message = sampleMessage("message-self-room", roomId = room.id, text = "hello @me").copy(
+            fromUser = currentUser,
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(result = ChatRepositoryResult.Success(listOf(room))),
+            scope = TestScope(testScheduler),
+            currentUserProvider = { currentUser },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.recordRealtimeMessage(message)
+        advanceUntilIdle()
+
+        assertEquals(null, holder.state.value.specialCareToast)
+        assertEquals(null, holder.state.value.roomAttentionKinds[room.id])
+        assertEquals(message.id, holder.state.value.rooms.first { it.id == room.id }.latestMessageMarker)
+        assertEquals(0, holder.state.value.rooms.first { it.id == room.id }.unreadCount)
+    }
+
+    @Test
+    fun externalRealtimeSelfDirectMessageDoesNotCreateUnreadOrAttention() = runTest {
+        val currentUser = User("me", "Me", "me", "M", host = "hhhl.cc")
+        val peer = User("user-1", "Alice", "alice", "A")
+        val message = sampleMessage("message-self-dm", roomId = "", text = "hello @me").copy(
+            fromUser = currentUser,
+            toUserId = peer.id,
+            toUser = peer,
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(result = ChatRepositoryResult.Success(emptyList())),
+            scope = TestScope(testScheduler),
+            currentUserProvider = { currentUser },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.recordRealtimeMessage(message, directUserId = peer.id)
+        advanceUntilIdle()
+
+        assertEquals(null, holder.state.value.specialCareToast)
+        assertEquals(null, holder.state.value.userConversationAttentionKinds[peer.id])
+        assertEquals(peer.id, holder.state.value.userConversations.first().user.id)
+        assertEquals(message.id, holder.state.value.userConversations.first().latestMessage?.id)
+        assertEquals(0, holder.state.value.userConversations.first().unreadCount)
+    }
+
+    @Test
     fun messagesStayOldestToNewestUsingApiTimestamp() = runTest {
         val room = sampleRoom()
         val newer = sampleMessage(
@@ -1285,6 +1530,48 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun refreshingUserConversationsResolvesMissingReplyReferenceBeforeAttentionToast() = runTest {
+        val currentUser = User("me", "Me", "me", "M")
+        val peer = User("user-1", "Alice", "alice", "A")
+        val first = sampleMessage("message-1", roomId = "").copy(fromUser = peer)
+        val unresolvedReply = sampleMessage("message-2", roomId = "", text = "reply").copy(
+            fromUser = peer,
+            replyUnavailable = true,
+        )
+        val resolvedReply = unresolvedReply.copy(
+            replyUnavailable = false,
+            reply = ChatMessageReference(
+                id = "message-me",
+                fromUser = currentUser,
+                text = "original",
+            ),
+        )
+        var conversations = listOf(ChatUserConversation(peer, first))
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                userConversationResultProvider = {
+                    ChatUserConversationRepositoryResult.Success(conversations)
+                },
+                refreshUserMessagesResult = ChatMessageRepositoryResult.Success(listOf(resolvedReply)),
+            ),
+            scope = TestScope(testScheduler),
+            currentUserProvider = { currentUser },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refreshUserConversationsQuietly()
+        advanceUntilIdle()
+        conversations = listOf(ChatUserConversation(peer, unresolvedReply))
+        holder.refreshUserConversationsQuietly()
+        advanceUntilIdle()
+
+        assertEquals(resolvedReply.id, holder.state.value.specialCareToast?.messageId)
+        assertEquals(ChatAttentionKind.Reply, holder.state.value.specialCareToast?.kind)
+        assertEquals(ChatAttentionKind.Reply, holder.state.value.userConversationAttentionKinds[peer.id])
+    }
+
+    @Test
     fun refreshingSpecialCareRoomsOnlyToastsNewMessagesAfterBaseline() = runTest {
         val room = sampleRoom(id = "room-1")
         val first = sampleMessage("message-1", roomId = room.id).copy(fromUser = User("user-1", "Alice", "alice", "A"))
@@ -1317,6 +1604,163 @@ class ChatStateHolderTest {
 
         assertEquals(next.id, holder.state.value.specialCareToast?.messageId)
         assertEquals(room.id, holder.state.value.specialCareToast?.roomId)
+    }
+
+    @Test
+    fun refreshingSpecialCareRoomsIncludesOwnedOnlyRooms() = runTest {
+        val specialUser = User("user-special", "Special", "special", "S")
+        val room = sampleRoom(
+            id = "room-owned-only",
+            unreadCount = 1,
+            latestMessageMarker = "message-1",
+        ).copy(name = "Owned only")
+        val first = sampleMessage("message-1", roomId = room.id).copy(fromUser = specialUser)
+        val next = sampleMessage("message-2", roomId = room.id, text = "owned room update")
+            .copy(fromUser = specialUser)
+        var ownedRooms = listOf(room)
+        var roomMessages = listOf(first)
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshOwnedRoomsResultProvider = { ChatRepositoryResult.Success(ownedRooms) },
+                refreshMessagesResultProvider = { ChatMessageRepositoryResult.Success(roomMessages) },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.updateSpecialCareUsers(setOf(specialUser.id))
+        holder.refreshSpecialCareMessagesQuietly()
+        advanceUntilIdle()
+        assertEquals(null, holder.state.value.specialCareToast)
+
+        ownedRooms = listOf(room.copy(latestMessageMarker = next.id))
+        roomMessages = listOf(first, next)
+        holder.refreshSpecialCareMessagesQuietly()
+        advanceUntilIdle()
+
+        assertEquals(next.id, holder.state.value.specialCareToast?.messageId)
+        assertEquals(room.id, holder.state.value.specialCareToast?.roomId)
+    }
+
+    @Test
+    fun refreshingSpecialCareRoomsScansPastOldLimitForLaterRooms() = runTest {
+        val specialUser = User("user-special", "Special", "special", "S")
+        val baseRooms = (1..9).map { index ->
+            sampleRoom(
+                id = "room-$index",
+                unreadCount = 0,
+                latestMessageAtLabel = "2026-05-25 10:${index.toString().padStart(2, '0')}",
+                latestMessageMarker = "message-base-$index",
+            )
+        }
+        var rooms = baseRooms
+        var currentRoomId: String? = null
+        val roomMessages = buildMap {
+            baseRooms.dropLast(1).forEach { room ->
+                put(room.id, emptyList())
+            }
+            put(
+                "room-9",
+                listOf(
+                    sampleMessage(
+                        "message-target",
+                        roomId = "room-9",
+                        text = "hello @special@hhhl.cc",
+                        createdAt = "2026-05-25T10:09:00.000Z",
+                    ).copy(fromUser = specialUser),
+                ),
+            )
+        }
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(baseRooms),
+                refreshResultProvider = { ChatRepositoryResult.Success(rooms) },
+                refreshMessagesResultProvider = {
+                    ChatMessageRepositoryResult.Success(roomMessages[currentRoomId].orEmpty())
+                },
+                onRefreshMessages = { roomId -> currentRoomId = roomId },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+
+        rooms = baseRooms.map { room ->
+            if (room.id != "room-9") return@map room
+            room.copy(
+                unreadCount = 1,
+                latestMessageAtLabel = "2026-05-25 10:09",
+                latestMessageMarker = "message-target",
+            )
+        }
+        holder.updateSpecialCareUsers(setOf(specialUser.id))
+        holder.refreshSpecialCareMessagesQuietly()
+        advanceUntilIdle()
+
+        assertEquals("message-target", holder.state.value.specialCareToast?.messageId)
+        assertEquals("room-9", holder.state.value.specialCareToast?.roomId)
+    }
+
+    @Test
+    fun refreshingSpecialCareRoomsLoadsMorePagesForLaterRooms() = runTest {
+        val specialUser = User("user-special", "Special", "special", "S")
+        val firstPageRooms = (1..8).map { index ->
+            sampleRoom(
+                id = "room-$index",
+                unreadCount = 0,
+                latestMessageAtLabel = "2026-05-25 10:${index.toString().padStart(2, '0')}",
+                latestMessageMarker = "message-base-$index",
+            )
+        }
+        val laterRoom = sampleRoom(
+            id = "room-9",
+            unreadCount = 1,
+            latestMessageAtLabel = "2026-05-25 10:09",
+            latestMessageMarker = "message-target",
+        )
+        val loadMoreCalls = mutableListOf<String>()
+        var currentRoomId: String? = null
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(firstPageRooms, endReached = false),
+                loadMoreResult = ChatRepositoryResult.Success(firstPageRooms + laterRoom, endReached = true),
+                refreshMessagesResultProvider = {
+                    ChatMessageRepositoryResult.Success(
+                        if (currentRoomId == laterRoom.id) {
+                            listOf(
+                                sampleMessage(
+                                    "message-target",
+                                    roomId = laterRoom.id,
+                                    text = "hello @special@hhhl.cc",
+                                    createdAt = "2026-05-25T10:09:00.000Z",
+                                ).copy(fromUser = specialUser),
+                            )
+                        } else {
+                            emptyList()
+                        },
+                    )
+                },
+                onRefreshMessages = { roomId -> currentRoomId = roomId },
+                onLoadMore = { loadMoreCalls += "load-more" },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.updateSpecialCareUsers(setOf(specialUser.id))
+        holder.refreshSpecialCareMessagesQuietly()
+        advanceUntilIdle()
+
+        assertEquals(listOf("load-more"), loadMoreCalls)
+        assertEquals("message-target", holder.state.value.specialCareToast?.messageId)
+        assertEquals(laterRoom.id, holder.state.value.specialCareToast?.roomId)
     }
 
     @Test
@@ -1579,6 +2023,231 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun deleteRoomRemovesOwnedRoomFromMainAndOwnedRoomListsWithoutSelectingIt() = runTest {
+        val ownedRoom = sampleRoom(id = "room-owned")
+        val deleteCalls = mutableListOf<String>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshOwnedRoomsResult = ChatRepositoryResult.Success(listOf(ownedRoom)),
+                deleteRoomResult = ChatRoomMutationRepositoryResult.RoomRemoved(ownedRoom.id),
+                onDeleteRoom = deleteCalls::add,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refreshRoomExtras()
+        advanceUntilIdle()
+
+        holder.deleteRoom(ownedRoom.id)
+        advanceUntilIdle()
+
+        assertEquals(listOf(ownedRoom.id), deleteCalls)
+        assertEquals(emptyList(), holder.state.value.rooms)
+        assertEquals(emptyList(), holder.state.value.ownedRooms)
+        assertEquals(null, holder.state.value.selectedRoom)
+        assertEquals("聊天室已删除", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
+    fun deleteRoomDoesNotCloseDifferentSelectedRoom() = runTest {
+        val selectedRoom = sampleRoom(id = "room-selected")
+        val ownedRoom = sampleRoom(id = "room-owned").copy(name = "Owned room")
+        val message = sampleMessage("message-selected", roomId = selectedRoom.id)
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(selectedRoom, ownedRoom)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+                deleteRoomResult = ChatRoomMutationRepositoryResult.RoomRemoved(ownedRoom.id),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectRoom(selectedRoom)
+        advanceUntilIdle()
+
+        holder.deleteRoom(ownedRoom.id)
+        advanceUntilIdle()
+
+        assertEquals(selectedRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals(listOf(message.id), holder.state.value.messages.map { it.id })
+        assertEquals(listOf(selectedRoom.id), holder.state.value.rooms.map { it.id })
+        assertEquals("聊天室已删除", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
+    fun createRoomDoesNotShowSuccessStatusRowMessage() = runTest {
+        val createdRoom = sampleRoom(id = "room-created")
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                createRoomResult = ChatRoomMutationRepositoryResult.RoomSaved(createdRoom),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.createRoom("新聊天室", "")
+        advanceUntilIdle()
+
+        assertEquals(listOf(createdRoom.id), holder.state.value.rooms.map { it.id })
+        assertEquals(null, holder.state.value.roomManagementMessage)
+    }
+
+    @Test
+    fun updateSelectedRoomManagementAppliesReturnedRetentionDays() = runTest {
+        val room = sampleRoom(id = "room-owned").copy(canManage = true, messageRetentionDays = null)
+        val updatedRoom = room.copy(messageRetentionDays = 30)
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                updateRoomManagementResult = ChatRoomMutationRepositoryResult.RoomSaved(updatedRoom),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.updateSelectedRoomManagement(30)
+        advanceUntilIdle()
+
+        assertEquals(30, holder.state.value.selectedRoom?.messageRetentionDays)
+        assertEquals(30, holder.state.value.rooms.first().messageRetentionDays)
+        assertEquals("管理设置已更新", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
+    fun clearSelectedRoomMessagesClearsCurrentMessagesAndRoomMarkers() = runTest {
+        val room = sampleRoom(
+            id = "room-owned",
+            unreadCount = 3,
+            latestMessageAtLabel = "2026-05-25 01:23",
+            latestMessageMarker = "message-1",
+        ).copy(canManage = true)
+        val message = sampleMessage("message-1", roomId = room.id)
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.clearSelectedRoomMessages()
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), holder.state.value.messages)
+        assertEquals(0, holder.state.value.selectedRoom?.unreadCount)
+        assertEquals("", holder.state.value.selectedRoom?.latestMessageMarker)
+        assertEquals("", holder.state.value.rooms.first().latestMessageAtLabel)
+        assertEquals("聊天室消息已清空", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
+    fun clearRoomMessagesClearsNonSelectedRoomMarkersById() = runTest {
+        val selectedRoom = sampleRoom(id = "room-selected")
+        val targetRoom = sampleRoom(
+            id = "room-target",
+            unreadCount = 5,
+            latestMessageAtLabel = "2026-05-25 03:00",
+            latestMessageMarker = "message-target",
+        ).copy(canManage = true)
+        val selectedMessage = sampleMessage("message-selected", roomId = selectedRoom.id)
+        val clearCalls = mutableListOf<String>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(selectedRoom, targetRoom)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(selectedMessage)),
+                onClearRoomMessages = clearCalls::add,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectRoom(selectedRoom)
+        advanceUntilIdle()
+
+        holder.clearRoomMessages(targetRoom.id)
+        advanceUntilIdle()
+
+        assertEquals(listOf(targetRoom.id), clearCalls)
+        assertEquals(listOf(selectedMessage.id), holder.state.value.messages.map { it.id })
+        assertEquals(0, holder.state.value.rooms.first { it.id == targetRoom.id }.unreadCount)
+        assertEquals("", holder.state.value.rooms.first { it.id == targetRoom.id }.latestMessageMarker)
+        assertEquals(selectedRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals("聊天室消息已清空", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
+    fun leaveRoomRemovesNonSelectedRoomById() = runTest {
+        val selectedRoom = sampleRoom(id = "room-selected")
+        val targetRoom = sampleRoom(id = "room-target")
+        val selectedMessage = sampleMessage("message-selected", roomId = selectedRoom.id)
+        val leaveCalls = mutableListOf<String>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(selectedRoom, targetRoom)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(selectedMessage)),
+                leaveRoomResult = ChatRoomMutationRepositoryResult.RoomRemoved(targetRoom.id),
+                onLeaveRoom = leaveCalls::add,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectRoom(selectedRoom)
+        advanceUntilIdle()
+
+        holder.leaveRoom(targetRoom.id)
+        advanceUntilIdle()
+
+        assertEquals(listOf(targetRoom.id), leaveCalls)
+        assertEquals(listOf(selectedRoom.id), holder.state.value.rooms.map { it.id })
+        assertEquals(selectedRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals(listOf(selectedMessage.id), holder.state.value.messages.map { it.id })
+        assertEquals("已退出聊天室", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
+    fun muteRoomUpdatesNonSelectedRoomAndOwnedRoomById() = runTest {
+        val targetRoom = sampleRoom(id = "room-target")
+        val muteCalls = mutableListOf<Pair<String, Boolean>>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(targetRoom)),
+                refreshOwnedRoomsResult = ChatRepositoryResult.Success(listOf(targetRoom)),
+                muteRoomResult = ChatRoomMutationRepositoryResult.RoomMuted(targetRoom.id, true),
+                onMuteRoom = { roomId, muted -> muteCalls += roomId to muted },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+
+        holder.muteRoom(targetRoom.id, true)
+        advanceUntilIdle()
+
+        assertEquals(listOf(targetRoom.id to true), muteCalls)
+        assertTrue(holder.state.value.rooms.first { it.id == targetRoom.id }.isMuted)
+        assertTrue(holder.state.value.ownedRooms.first { it.id == targetRoom.id }.isMuted)
+        assertEquals("聊天室已静音", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
     fun updateReactionOptionsPrependsLoadedReactionsForChatMenu() {
         val holder = ChatStateHolder(
             repository = fakeRepository(ChatRepositoryResult.Success(emptyList())),
@@ -1611,6 +2280,7 @@ class ChatStateHolderTest {
         refreshInvitationOutboxResult: ChatRoomInvitationRepositoryResult = ChatRoomInvitationRepositoryResult.Success(emptyList()),
         createRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomSaved(sampleRoom()),
         updateRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomSaved(sampleRoom()),
+        updateRoomManagementResult: ChatRoomMutationRepositoryResult = updateRoomResult,
         leaveRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomRemoved("room-1"),
         deleteRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomRemoved("room-1"),
         muteRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomMuted("room-1", true),
@@ -1629,6 +2299,7 @@ class ChatStateHolderTest {
         refreshResultProvider: (() -> ChatRepositoryResult)? = null,
         refreshMessagesResultProvider: (() -> ChatMessageRepositoryResult)? = null,
         refreshMembersResultProvider: (() -> ChatRoomMemberRepositoryResult)? = null,
+        refreshOwnedRoomsResultProvider: (() -> ChatRepositoryResult)? = null,
         userConversationResultProvider: (() -> ChatUserConversationRepositoryResult)? = null,
         searchMessagesResultProvider: (() -> ChatMessageRepositoryResult)? = null,
         showRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomSaved(sampleRoom()),
@@ -1636,6 +2307,9 @@ class ChatStateHolderTest {
         onShowRoom: (String) -> Unit = {},
         onJoinRoom: (String) -> Unit = {},
         onDeleteRoom: (String) -> Unit = {},
+        onClearRoomMessages: (String) -> Unit = {},
+        onLeaveRoom: (String) -> Unit = {},
+        onMuteRoom: (String, Boolean) -> Unit = { _, _ -> },
         throwOnSearchMessages: Boolean = false,
     ): ChatRepository {
         return object : ChatRepository(
@@ -1687,6 +2361,7 @@ class ChatStateHolderTest {
                     token: String,
                     name: String,
                     description: String,
+                    joinMode: String,
                 ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom())
 
                 override suspend fun showRoom(
@@ -1751,9 +2426,18 @@ class ChatStateHolderTest {
                 override suspend fun updateRoom(
                     token: String,
                     roomId: String,
-                    name: String,
-                    description: String,
+                    name: String?,
+                    description: String?,
+                    joinMode: String?,
                 ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom())
+
+                override suspend fun updateRoomManagement(
+                    token: String,
+                    roomId: String,
+                    messageRetentionDays: Int?,
+                ): ChatRoomMutationResult = ChatRoomMutationResult.Success(
+                    sampleRoom(roomId).copy(messageRetentionDays = messageRetentionDays),
+                )
 
                 override suspend fun inviteRoomMember(
                     token: String,
@@ -1772,6 +2456,11 @@ class ChatStateHolderTest {
                 ): ChatRoomActionResult = ChatRoomActionResult.Success
 
                 override suspend fun deleteRoom(
+                    token: String,
+                    roomId: String,
+                ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+                override suspend fun deleteAllRoomMessages(
                     token: String,
                     roomId: String,
                 ): ChatRoomActionResult = ChatRoomActionResult.Success
@@ -1799,7 +2488,7 @@ class ChatStateHolderTest {
             }
 
             override suspend fun refreshOwnedRooms(): ChatRepositoryResult {
-                return refreshOwnedRoomsResult
+                return refreshOwnedRoomsResultProvider?.invoke() ?: refreshOwnedRoomsResult
             }
 
             override suspend fun refreshInvitationInbox(): ChatRoomInvitationRepositoryResult {
@@ -1875,19 +2564,33 @@ class ChatStateHolderTest {
                 return joinRoomResult
             }
 
-            override suspend fun createRoom(name: String, description: String): ChatRoomMutationRepositoryResult {
+            override suspend fun createRoom(name: String, description: String, joinMode: String): ChatRoomMutationRepositoryResult {
                 return createRoomResult
             }
 
             override suspend fun updateRoom(
                 roomId: String,
-                name: String,
-                description: String,
+                name: String?,
+                description: String?,
+                joinMode: String?,
             ): ChatRoomMutationRepositoryResult {
                 return updateRoomResult
             }
 
+            override suspend fun updateRoomManagement(
+                roomId: String,
+                messageRetentionDays: Int?,
+            ): ChatRoomMutationRepositoryResult {
+                return updateRoomManagementResult
+            }
+
+            override suspend fun deleteAllRoomMessages(roomId: String): ChatRoomMutationRepositoryResult {
+                onClearRoomMessages(roomId)
+                return ChatRoomMutationRepositoryResult.RoomMessagesCleared(roomId)
+            }
+
             override suspend fun leaveRoom(roomId: String): ChatRoomMutationRepositoryResult {
+                onLeaveRoom(roomId)
                 return leaveRoomResult
             }
 
@@ -1897,6 +2600,7 @@ class ChatStateHolderTest {
             }
 
             override suspend fun muteRoom(roomId: String, muted: Boolean): ChatRoomMutationRepositoryResult {
+                onMuteRoom(roomId, muted)
                 return muteRoomResult
             }
 

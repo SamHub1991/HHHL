@@ -1,7 +1,14 @@
 package cc.hhhl.client.state
 
+import cc.hhhl.client.api.DiscoverRecommendationFeedbackEvent
+import cc.hhhl.client.api.DiscoverRecommendedTimelineCategory
+import cc.hhhl.client.api.DiscoverRecommendedTimelineOptions
+import cc.hhhl.client.api.DiscoverRecommendedTimelineScope
+import cc.hhhl.client.api.DiscoverRecommendedTimelineSurface
+import cc.hhhl.client.model.DiscoverySections
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.FederationInstance
+import cc.hhhl.client.model.NoteSearchTrends
 import cc.hhhl.client.model.RoleSummary
 import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.model.User
@@ -72,6 +79,20 @@ data class DiscoverUiState(
     val pinnedUsers: List<User> = emptyList(),
     val isLoadingPinnedUsers: Boolean = false,
     val pinnedUsersMessage: String? = null,
+    val discoverySections: DiscoverySections = DiscoverySections(),
+    val searchTrends: NoteSearchTrends = NoteSearchTrends(),
+    val recommendedNotes: List<Note> = emptyList(),
+    val recommendedScope: DiscoverRecommendedTimelineScope = DiscoverRecommendedTimelineScope.Mixed,
+    val recommendedCategory: DiscoverRecommendedTimelineCategory = DiscoverRecommendedTimelineCategory.ForYou,
+    val recommendedWithFiles: Boolean = false,
+    val isLoadingDiscoverySections: Boolean = false,
+    val isLoadingSearchTrends: Boolean = false,
+    val isLoadingRecommendedNotes: Boolean = false,
+    val isLoadingMoreRecommendedNotes: Boolean = false,
+    val recommendedEndReached: Boolean = false,
+    val discoveryMessage: String? = null,
+    val searchTrendsMessage: String? = null,
+    val recommendedMessage: String? = null,
     val roles: List<RoleSummary> = emptyList(),
     val selectedRole: RoleSummary? = null,
     val roleUsers: List<User> = emptyList(),
@@ -113,6 +134,10 @@ class DiscoverStateHolder(
     private var hashtagDetailRequestId = 0
     private var pinnedUsersRequestId = 0
     private var roleDetailRequestId = 0
+    private var discoveryHomeRequestId = 0
+    private var searchTrendsRequestId = 0
+    private var recommendedTimelineRequestId = 0
+    private val recommendedImpressionNoteIds = mutableSetOf<String>()
 
     fun refreshPinnedUsersQuietly(force: Boolean = false) {
         val current = state.value
@@ -155,6 +180,135 @@ class DiscoverStateHolder(
                 else -> mutableState.update {
                     if (requestId != pinnedUsersRequestId) return@update it
                     it.copy(isLoadingPinnedUsers = false)
+                }
+            }
+        }
+    }
+
+    fun refreshHomeQuietly(force: Boolean = false) {
+        refreshDiscoverySectionsQuietly(force)
+        refreshSearchTrendsQuietly(force)
+        refreshRecommendedTimeline(force = force)
+    }
+
+    fun refreshDiscoverySectionsQuietly(force: Boolean = false) {
+        val current = state.value
+        if (current.isLoadingDiscoverySections) return
+        if (!force && !current.discoverySections.isEmpty) return
+        val requestId = ++discoveryHomeRequestId
+
+        mutableState.update {
+            it.copy(
+                isLoadingDiscoverySections = true,
+                discoveryMessage = null,
+            )
+        }
+
+        scope.launch {
+            try {
+                when (val result = repository.loadDiscoverySections()) {
+                    is DiscoverRepositoryResult.DiscoverySectionsSuccess -> mutableState.update {
+                        if (requestId != discoveryHomeRequestId) return@update it
+                        it.copy(
+                            discoverySections = result.sections,
+                            searchTrends = if (result.sections.searchTrends.isEmpty) it.searchTrends else result.sections.searchTrends,
+                            isLoadingDiscoverySections = false,
+                            discoveryMessage = if (result.sections.isEmpty) "暂无发现内容" else null,
+                            requiresRelogin = false,
+                        )
+                    }
+                    DiscoverRepositoryResult.Unauthorized -> mutableState.update {
+                        if (requestId != discoveryHomeRequestId) return@update it
+                        it.copy(
+                            isLoadingDiscoverySections = false,
+                            discoveryMessage = "登录已失效，请重新登录",
+                            requiresRelogin = true,
+                        )
+                    }
+                    is DiscoverRepositoryResult.Error -> mutableState.update {
+                        if (requestId != discoveryHomeRequestId) return@update it
+                        it.copy(
+                            isLoadingDiscoverySections = false,
+                            discoveryMessage = result.message,
+                            requiresRelogin = false,
+                        )
+                    }
+                    else -> mutableState.update {
+                        if (requestId != discoveryHomeRequestId) return@update it
+                        it.copy(isLoadingDiscoverySections = false)
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                mutableState.update {
+                    if (requestId != discoveryHomeRequestId) return@update it
+                    it.copy(
+                        isLoadingDiscoverySections = false,
+                        discoveryMessage = error.toDiscoverErrorMessage(),
+                        requiresRelogin = false,
+                    )
+                }
+            }
+        }
+    }
+
+    fun refreshSearchTrendsQuietly(force: Boolean = false) {
+        val current = state.value
+        if (current.isLoadingSearchTrends) return
+        if (!force && !current.searchTrends.isEmpty) return
+        val requestId = ++searchTrendsRequestId
+
+        mutableState.update {
+            it.copy(
+                isLoadingSearchTrends = true,
+                searchTrendsMessage = null,
+            )
+        }
+
+        scope.launch {
+            try {
+                when (val result = repository.loadSearchTrends()) {
+                    is DiscoverRepositoryResult.SearchTrendsSuccess -> mutableState.update {
+                        if (requestId != searchTrendsRequestId) return@update it
+                        it.copy(
+                            searchTrends = result.trends,
+                            isLoadingSearchTrends = false,
+                            searchTrendsMessage = if (result.trends.isEmpty) "暂无搜索趋势" else null,
+                            requiresRelogin = false,
+                        )
+                    }
+                    DiscoverRepositoryResult.Unauthorized -> mutableState.update {
+                        if (requestId != searchTrendsRequestId) return@update it
+                        it.copy(
+                            isLoadingSearchTrends = false,
+                            searchTrendsMessage = "登录已失效，请重新登录",
+                            requiresRelogin = true,
+                        )
+                    }
+                    is DiscoverRepositoryResult.Error -> mutableState.update {
+                        if (requestId != searchTrendsRequestId) return@update it
+                        it.copy(
+                            isLoadingSearchTrends = false,
+                            searchTrendsMessage = result.message,
+                            requiresRelogin = false,
+                        )
+                    }
+                    else -> mutableState.update {
+                        if (requestId != searchTrendsRequestId) return@update it
+                        it.copy(isLoadingSearchTrends = false)
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                mutableState.update {
+                    if (requestId != searchTrendsRequestId) return@update it
+                    it.copy(
+                        isLoadingSearchTrends = false,
+                        searchTrendsMessage = error.toDiscoverErrorMessage(),
+                        requiresRelogin = false,
+                    )
                 }
             }
         }
@@ -224,6 +378,97 @@ class DiscoverStateHolder(
                         requiresRelogin = false,
                     )
                 }
+            }
+        }
+    }
+
+    fun updateRecommendedScope(scope: DiscoverRecommendedTimelineScope) {
+        if (state.value.recommendedScope == scope) return
+        recommendedTimelineRequestId += 1
+        recommendedImpressionNoteIds.clear()
+        mutableState.update {
+            it.copy(
+                recommendedScope = scope,
+                recommendedNotes = emptyList(),
+                recommendedEndReached = false,
+                recommendedMessage = null,
+                isLoadingRecommendedNotes = false,
+                isLoadingMoreRecommendedNotes = false,
+                requiresRelogin = false,
+            )
+        }
+        refreshRecommendedTimeline(force = true)
+    }
+
+    fun updateRecommendedCategory(category: DiscoverRecommendedTimelineCategory) {
+        if (state.value.recommendedCategory == category) return
+        recommendedTimelineRequestId += 1
+        recommendedImpressionNoteIds.clear()
+        mutableState.update {
+            it.copy(
+                recommendedCategory = category,
+                recommendedNotes = emptyList(),
+                recommendedEndReached = false,
+                recommendedMessage = null,
+                isLoadingRecommendedNotes = false,
+                isLoadingMoreRecommendedNotes = false,
+                requiresRelogin = false,
+            )
+        }
+        refreshRecommendedTimeline(force = true)
+    }
+
+    fun toggleRecommendedWithFiles() {
+        recommendedTimelineRequestId += 1
+        recommendedImpressionNoteIds.clear()
+        mutableState.update {
+            it.copy(
+                recommendedWithFiles = !it.recommendedWithFiles,
+                recommendedNotes = emptyList(),
+                recommendedEndReached = false,
+                recommendedMessage = null,
+                isLoadingRecommendedNotes = false,
+                isLoadingMoreRecommendedNotes = false,
+                requiresRelogin = false,
+            )
+        }
+        refreshRecommendedTimeline(force = true)
+    }
+
+    fun refreshRecommendedTimeline(force: Boolean = false) {
+        val current = state.value
+        if (current.isLoadingRecommendedNotes || current.isLoadingMoreRecommendedNotes) return
+        if (!force && current.recommendedNotes.isNotEmpty()) return
+        loadRecommendedTimeline(loadMore = false)
+    }
+
+    fun loadMoreRecommendedTimeline() {
+        val current = state.value
+        if (
+            current.isLoadingRecommendedNotes ||
+            current.isLoadingMoreRecommendedNotes ||
+            current.recommendedEndReached ||
+            current.recommendedNotes.isEmpty()
+        ) {
+            return
+        }
+        loadRecommendedTimeline(loadMore = true)
+    }
+
+    fun sendRecommendationFeedback(
+        noteId: String,
+        event: DiscoverRecommendationFeedbackEvent,
+        dwellMs: Int? = null,
+    ) {
+        val cleanNoteId = noteId.trim()
+        if (cleanNoteId.isBlank()) return
+        if (event == DiscoverRecommendationFeedbackEvent.Impression && !recommendedImpressionNoteIds.add(cleanNoteId)) {
+            return
+        }
+        scope.launch {
+            when (repository.sendRecommendationFeedback(cleanNoteId, event, dwellMs)) {
+                DiscoverRepositoryResult.Unauthorized -> mutableState.update { it.copy(requiresRelogin = true) }
+                else -> Unit
             }
         }
     }
@@ -451,6 +696,20 @@ class DiscoverStateHolder(
                 }
                 next
             }
+        }
+    }
+
+    fun closeRoleDetail() {
+        roleDetailRequestId += 1
+        mutableState.update {
+            it.copy(
+                selectedRole = null,
+                roleUsers = emptyList(),
+                roleNotes = emptyList(),
+                isLoadingRoleDetails = false,
+                roleDetailMessage = null,
+                requiresRelogin = false,
+            )
         }
     }
 
@@ -812,8 +1071,105 @@ class DiscoverStateHolder(
         mutableState.update {
             it.copy(
                 notes = it.notes.applyNoteLocalMutation(mutation),
+                recommendedNotes = it.recommendedNotes.applyNoteLocalMutation(mutation),
+                discoverySections = it.discoverySections.applyNoteLocalMutation(mutation),
                 requiresRelogin = false,
             )
+        }
+    }
+
+    private fun loadRecommendedTimeline(loadMore: Boolean) {
+        val current = state.value
+        val requestId = ++recommendedTimelineRequestId
+        val offset = if (loadMore) current.recommendedNotes.size else 0
+        val options = DiscoverRecommendedTimelineOptions(
+            scope = current.recommendedScope,
+            surface = DiscoverRecommendedTimelineSurface.Explore,
+            category = current.recommendedCategory,
+            withFiles = current.recommendedWithFiles,
+            withRenotes = true,
+            withBots = true,
+            limit = RECOMMENDED_TIMELINE_PAGE_SIZE,
+            offset = offset,
+        )
+
+        mutableState.update {
+            if (loadMore) {
+                it.copy(
+                    isLoadingMoreRecommendedNotes = true,
+                    recommendedMessage = null,
+                    requiresRelogin = false,
+                )
+            } else {
+                it.copy(
+                    isLoadingRecommendedNotes = true,
+                    isLoadingMoreRecommendedNotes = false,
+                    recommendedEndReached = false,
+                    recommendedMessage = null,
+                    requiresRelogin = false,
+                )
+            }
+        }
+
+        scope.launch {
+            try {
+                val baseNotes = if (loadMore) state.value.recommendedNotes else emptyList()
+                when (
+                    val result = repository.loadRecommendedTimeline(
+                        currentNotes = baseNotes,
+                        options = options,
+                    )
+                ) {
+                    is DiscoverRepositoryResult.RecommendedTimelineSuccess -> mutableState.update {
+                        if (requestId != recommendedTimelineRequestId) return@update it
+                        it.copy(
+                            recommendedNotes = result.notes,
+                            isLoadingRecommendedNotes = false,
+                            isLoadingMoreRecommendedNotes = false,
+                            recommendedEndReached = result.endReached,
+                            recommendedMessage = if (result.notes.isEmpty()) "暂无推荐帖子" else null,
+                            requiresRelogin = false,
+                        )
+                    }
+                    DiscoverRepositoryResult.Unauthorized -> mutableState.update {
+                        if (requestId != recommendedTimelineRequestId) return@update it
+                        it.copy(
+                            isLoadingRecommendedNotes = false,
+                            isLoadingMoreRecommendedNotes = false,
+                            recommendedMessage = "登录已失效，请重新登录",
+                            requiresRelogin = true,
+                        )
+                    }
+                    is DiscoverRepositoryResult.Error -> mutableState.update {
+                        if (requestId != recommendedTimelineRequestId) return@update it
+                        it.copy(
+                            isLoadingRecommendedNotes = false,
+                            isLoadingMoreRecommendedNotes = false,
+                            recommendedMessage = result.message,
+                            requiresRelogin = false,
+                        )
+                    }
+                    else -> mutableState.update {
+                        if (requestId != recommendedTimelineRequestId) return@update it
+                        it.copy(
+                            isLoadingRecommendedNotes = false,
+                            isLoadingMoreRecommendedNotes = false,
+                        )
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                mutableState.update {
+                    if (requestId != recommendedTimelineRequestId) return@update it
+                    it.copy(
+                        isLoadingRecommendedNotes = false,
+                        isLoadingMoreRecommendedNotes = false,
+                        recommendedMessage = error.toDiscoverErrorMessage(),
+                        requiresRelogin = false,
+                    )
+                }
+            }
         }
     }
 
@@ -1019,6 +1375,46 @@ class DiscoverStateHolder(
                     requiresRelogin = false,
                 )
             }
+            is DiscoverRepositoryResult.DiscoverySectionsSuccess -> mutableState.update {
+                if (requestId != searchRequestId) return@update it
+                it.copy(
+                    discoverySections = result.sections,
+                    searchTrends = if (result.sections.searchTrends.isEmpty) it.searchTrends else result.sections.searchTrends,
+                    isSearching = false,
+                    isLoadingMore = false,
+                    isLoadingDiscoverySections = false,
+                    discoveryMessage = if (result.sections.isEmpty) "暂无发现内容" else null,
+                    requiresRelogin = false,
+                )
+            }
+            is DiscoverRepositoryResult.SearchTrendsSuccess -> mutableState.update {
+                if (requestId != searchRequestId) return@update it
+                it.copy(
+                    searchTrends = result.trends,
+                    isSearching = false,
+                    isLoadingMore = false,
+                    isLoadingSearchTrends = false,
+                    searchTrendsMessage = if (result.trends.isEmpty) "暂无搜索趋势" else null,
+                    requiresRelogin = false,
+                )
+            }
+            is DiscoverRepositoryResult.RecommendedTimelineSuccess -> mutableState.update {
+                if (requestId != searchRequestId) return@update it
+                it.copy(
+                    recommendedNotes = result.notes,
+                    isSearching = false,
+                    isLoadingMore = false,
+                    isLoadingRecommendedNotes = false,
+                    isLoadingMoreRecommendedNotes = false,
+                    recommendedEndReached = result.endReached,
+                    recommendedMessage = if (result.notes.isEmpty()) "暂无推荐帖子" else null,
+                    requiresRelogin = false,
+                )
+            }
+            DiscoverRepositoryResult.RecommendationFeedbackSuccess -> mutableState.update {
+                if (requestId != searchRequestId) return@update it
+                it.copy(isSearching = false, isLoadingMore = false, requiresRelogin = false)
+            }
             DiscoverRepositoryResult.FederationActionSuccess -> mutableState.update {
                 if (requestId != searchRequestId) return@update it
                 it.copy(
@@ -1129,3 +1525,16 @@ private fun List<FederationInstance>.replaceFederationInstance(
     val index = indexOfFirst { it.id == instance.id || it.host == instance.host }
     return if (index == -1) this else toMutableList().also { it[index] = instance }
 }
+
+private fun DiscoverySections.applyNoteLocalMutation(mutation: NoteLocalMutation): DiscoverySections {
+    return copy(
+        coverNotes = coverNotes.applyNoteLocalMutation(mutation),
+        hotNotes = hotNotes.applyNoteLocalMutation(mutation),
+        tutorialNotes = tutorialNotes.applyNoteLocalMutation(mutation),
+        channels = channels.map { channel ->
+            channel.copy(pinnedNotes = channel.pinnedNotes.applyNoteLocalMutation(mutation))
+        },
+    )
+}
+
+private const val RECOMMENDED_TIMELINE_PAGE_SIZE = 20

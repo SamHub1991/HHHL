@@ -71,6 +71,7 @@ fun parseAutomationRuleDraft(raw: String): AutomationRuleDraftParseResult {
             actions = actions,
             ignoreOwnMessages = root.booleanValue("ignoreOwnMessages", default = true),
             cooldownSeconds = root.intValue("cooldownSeconds", default = defaultCooldownSeconds(actions)),
+            maxExecutionsPer30Seconds = root.intValue("maxExecutionsPer30Seconds", default = defaultBurstLimit(actions)),
             updatedAtEpochMillis = now,
         ),
     )
@@ -103,6 +104,7 @@ private fun defaultDraftBodyTemplate(type: AutomationActionType): String {
         AutomationActionType.AiGenerateLog,
         AutomationActionType.AiGenerateNotification,
         AutomationActionType.AiGenerateWebhook,
+        AutomationActionType.AiForwardToRoom,
         AutomationActionType.AiReplyToChat,
         AutomationActionType.AiReplyToNote,
         AutomationActionType.AiQuoteNote -> "根据事件生成简短、克制、可直接使用的内容。"
@@ -112,6 +114,10 @@ private fun defaultDraftBodyTemplate(type: AutomationActionType): String {
 
 private fun defaultCooldownSeconds(actions: List<AutomationAction>): Int {
     return if (actions.any { it.type.requiresCautiousConfirmation() }) 300 else 60
+}
+
+private fun defaultBurstLimit(actions: List<AutomationAction>): Int {
+    return if (actions.any { it.type.requiresCautiousConfirmation() }) 2 else 12
 }
 
 private fun JsonObject.inferredCondition(): Pair<AutomationConditionType, String>? {

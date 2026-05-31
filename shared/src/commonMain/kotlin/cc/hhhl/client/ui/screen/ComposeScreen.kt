@@ -69,6 +69,7 @@ import cc.hhhl.client.state.isComposeVisibleUserMention
 import cc.hhhl.client.state.toComposeVisibleUserTokens
 import cc.hhhl.client.state.toExpiresAtIso
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultCommonActionChips
 import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlActionChip
@@ -132,6 +133,7 @@ fun ComposeScreen(
     aiResultLabel: String? = null,
     isAiProcessing: Boolean = false,
     onAiAction: (AiTaskKind, ComposeDraft, Note?) -> Unit = { _, _, _ -> },
+    onCopyAiResult: ((String) -> Unit)? = null,
     onDismissAiResult: () -> Unit = {},
     onBack: () -> Unit = {},
 ) {
@@ -317,10 +319,15 @@ fun ComposeScreen(
                 poll != null -> "含投票"
                 else -> "草稿"
             },
-            navigation = { HhhlBackButton(onClick = onBack, label = "取消发帖") },
+            navigation = { HhhlBackButton(onClick = onBack, label = if (isEditingScheduled) "取消编辑" else "取消发帖") },
             action = {
                 HhhlActionChip(
-                    label = if (isSending) "发送中" else "发送",
+                    label = when {
+                        isSending && isEditingScheduled -> "保存中"
+                        isSending -> "发送中"
+                        isEditingScheduled -> "保存"
+                        else -> "发送"
+                    },
                     emphasized = true,
                     enabled = sendEnabled,
                     onClick = onSend,
@@ -381,6 +388,7 @@ fun ComposeScreen(
                         onUse = { textUpdater(aiResultText) },
                         onAppend = { insertTextUpdater(aiResultText) },
                         onUseAsCw = { cwUpdater(aiResultText) },
+                        onCopyAiResult = onCopyAiResult,
                         onDismiss = onDismissAiResult,
                     )
                 }
@@ -609,11 +617,15 @@ fun ComposeScreen(
     if (resetDraftDialogOpen) {
         HhhlAlertDialog(
             onDismissRequest = { resetDraftDialogOpen = false },
-            title = { Text("重置发帖") },
+            title = { Text(if (isEditingScheduled) "重置编辑" else "重置发帖") },
             text = {
                 val colors = LocalHhhlColors.current
                 Text(
-                    text = "当前文字、附件、投票和发帖设置都会清空。",
+                    text = if (isEditingScheduled) {
+                        "当前修改会恢复为打开编辑时的帖子内容，本机保存的编辑草稿也会清除。"
+                    } else {
+                        "当前文字、附件、投票和发帖设置都会清空。"
+                    },
                     color = colors.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -1050,6 +1062,7 @@ private fun ComposeAiResultPanel(
     onUse: () -> Unit,
     onAppend: () -> Unit,
     onUseAsCw: () -> Unit,
+    onCopyAiResult: ((String) -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     AiResultPanel(
@@ -1061,6 +1074,10 @@ private fun ComposeAiResultPanel(
             HhhlActionChip(label = "替换正文", emphasized = true, onClick = onUse)
             HhhlActionChip(label = "追加", onClick = onAppend)
             HhhlActionChip(label = "作为 CW", onClick = onUseAsCw)
+            AiResultCommonActionChips(
+                text = text,
+                onCopyChecklist = onCopyAiResult,
+            )
         },
     )
 }

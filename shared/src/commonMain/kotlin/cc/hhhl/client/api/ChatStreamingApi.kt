@@ -22,8 +22,12 @@ import io.ktor.websocket.send
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNames
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -43,6 +47,12 @@ interface ChatStreamingApi {
         token: String,
         userId: String,
     ): Flow<ChatStreamingEvent>
+
+    fun streamMessages(
+        token: String,
+        roomIds: List<String>,
+        userIds: List<String>,
+    ): Flow<ChatStreamingEvent> = flowOf(ChatStreamingEvent.Closed)
 }
 
 sealed interface ChatStreamingEvent {
@@ -52,12 +62,20 @@ sealed interface ChatStreamingEvent {
 
     data object Unauthorized : ChatStreamingEvent
 
-    data class MessageReceived(val message: ChatMessage) : ChatStreamingEvent
+    data class MessageReceived(
+        val message: ChatMessage,
+        val source: ChatStreamingMessageSource = ChatStreamingMessageSource(),
+    ) : ChatStreamingEvent
 
     data class Error(val message: String) : ChatStreamingEvent
 
     data object Closed : ChatStreamingEvent
 }
+
+data class ChatStreamingMessageSource(
+    val roomId: String? = null,
+    val userId: String? = null,
+)
 
 class SharkeyChatStreamingApi(
     private val baseUrl: String = SharkeyChatApi.DEFAULT_BASE_URL,
@@ -100,7 +118,7 @@ class SharkeyChatStreamingApi(
             session.send(Frame.Text(roomConnectPayload(cleanRoomId)))
             for (frame in session.incoming) {
                 if (frame is Frame.Text) {
-                    parseSharkeyStreamingChatEvent(frame.readText(), json)?.let { emit(it) }
+                    parseSharkeyStreamingChatEvents(frame.readText(), json).forEach { emit(it) }
                 }
             }
             emit(ChatStreamingEvent.Closed)
@@ -151,7 +169,60 @@ class SharkeyChatStreamingApi(
             session.send(Frame.Text(userConnectPayload(cleanUserId)))
             for (frame in session.incoming) {
                 if (frame is Frame.Text) {
-                    parseSharkeyStreamingChatEvent(frame.readText(), json)?.let { emit(it) }
+                    parseSharkeyStreamingChatEvents(frame.readText(), json).forEach { emit(it) }
+                }
+            }
+            emit(ChatStreamingEvent.Closed)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            val message = error.message ?: "实时连接中断"
+            emit(if (message.isUnauthorizedStreamingTransportError()) ChatStreamingEvent.Unauthorized else ChatStreamingEvent.Error(message))
+            emit(ChatStreamingEvent.Closed)
+        } finally {
+            runCatching { session.close() }
+        }
+    }
+
+    override fun streamMessages(
+        token: String,
+        roomIds: List<String>,
+        userIds: List<String>,
+    ): Flow<ChatStreamingEvent> = flow {
+        val cleanToken = token.trim()
+        val cleanRoomIds = roomIds.mapNotNull { it.trim().takeIf(String::isNotEmpty) }.distinct()
+        val cleanUserIds = userIds.mapNotNull { it.trim().takeIf(String::isNotEmpty) }.distinct()
+        if (cleanToken.isEmpty()) {
+            emit(ChatStreamingEvent.Unauthorized)
+            emit(ChatStreamingEvent.Closed)
+            return@flow
+        }
+        if (cleanRoomIds.isEmpty() && cleanUserIds.isEmpty()) {
+            emit(ChatStreamingEvent.Closed)
+            return@flow
+        }
+
+        emit(ChatStreamingEvent.Connecting)
+        val session = try {
+            client.webSocketSession {
+                url(streamingUrl(cleanToken))
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            val message = error.message ?: "实时连接失败"
+            emit(if (message.isUnauthorizedStreamingTransportError()) ChatStreamingEvent.Unauthorized else ChatStreamingEvent.Error(message))
+            emit(ChatStreamingEvent.Closed)
+            return@flow
+        }
+
+        try {
+            emit(ChatStreamingEvent.Connected)
+            cleanRoomIds.forEach { roomId -> session.send(Frame.Text(roomConnectPayload(roomId))) }
+            cleanUserIds.forEach { userId -> session.send(Frame.Text(userConnectPayload(userId))) }
+            for (frame in session.incoming) {
+                if (frame is Frame.Text) {
+                    parseSharkeyStreamingChatEvents(frame.readText(), json).forEach { emit(it) }
                 }
             }
             emit(ChatStreamingEvent.Closed)
@@ -229,15 +300,68 @@ internal fun parseSharkeyStreamingChatEvent(
     raw: String,
     json: Json = defaultChatStreamingJson,
 ): ChatStreamingEvent? {
-    val root = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
-    if (root.string("type") != "channel") return null
-    val body = root.obj("body") ?: return null
-    if (body.string("type") != "message") return null
-    val messageElement = body["body"] ?: return null
-    val message = runCatching {
-        json.decodeFromJsonElement<StreamingChatMessageDto>(messageElement).toDomainMessage()
-    }.getOrNull() ?: return null
-    return ChatStreamingEvent.MessageReceived(message)
+    return parseSharkeyStreamingChatEvents(raw, json).firstOrNull()
+}
+
+internal fun parseSharkeyStreamingChatEvents(
+    raw: String,
+    json: Json = defaultChatStreamingJson,
+): List<ChatStreamingEvent.MessageReceived> {
+    val root = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return emptyList()
+    if (root.string("type") != "channel") return emptyList()
+    val body = root.obj("body") ?: return emptyList()
+    if (!body.string("type").isChatStreamingMessageEventType()) return emptyList()
+    val source = body.string("id").toChatStreamingMessageSource()
+    val messageElement = body["body"] ?: return emptyList()
+    return messageElement.chatMessageElements()
+        .mapNotNull { element -> parseSharkeyStreamingChatMessage(element, source, json) }
+        .map { message -> ChatStreamingEvent.MessageReceived(message = message, source = source) }
+}
+
+private fun JsonElement.chatMessageElements(): List<JsonElement> {
+    return when (this) {
+        is JsonArray -> this.toList()
+        is JsonObject -> {
+            val wrappedMessages = listOfNotNull(
+                this["message"],
+                this["chatMessage"],
+                this["messagingMessage"],
+                this["messages"],
+                this["chatMessages"],
+                this["messagingMessages"],
+                this["unreadChatMessages"],
+                this["unreadMessagingMessages"],
+            ).flatMap { element -> element.chatMessageElements() }
+            wrappedMessages.ifEmpty { listOf(this) }
+        }
+        else -> listOf(this)
+    }
+}
+
+private fun String?.isChatStreamingMessageEventType(): Boolean {
+    return when (this) {
+        "message",
+        "chatMessage",
+        "newChatMessage",
+        "unreadChatMessage",
+        "unreadChatMessages",
+        "messagingMessage",
+        "unreadMessagingMessage",
+            -> true
+        else -> false
+    }
+}
+
+internal fun parseSharkeyStreamingChatMessage(
+    element: JsonElement,
+    source: ChatStreamingMessageSource = ChatStreamingMessageSource(),
+    json: Json = defaultChatStreamingJson,
+): ChatMessage? {
+    return runCatching {
+        json.decodeFromJsonElement<StreamingChatMessageDto>(element)
+            .takeIf { it.hasPayload() }
+            ?.toDomainMessage(source)
+    }.getOrNull()
 }
 
 @Serializable
@@ -248,6 +372,8 @@ private data class StreamingChatMessageDto(
     val fromUserId: String = "",
     val toUser: StreamingChatUserDto? = null,
     val toUserId: String? = null,
+    @OptIn(ExperimentalSerializationApi::class)
+    @JsonNames("roomId")
     val toRoomId: String? = null,
     val text: String? = null,
     val file: StreamingChatDriveFileDto? = null,
@@ -258,29 +384,48 @@ private data class StreamingChatMessageDto(
     val quote: StreamingChatMessageReferenceDto? = null,
     val isRead: Boolean = true,
 ) {
-    fun toDomainMessage(): ChatMessage {
+    fun hasPayload(): Boolean {
+        return id.isNotBlank() ||
+            createdAt.isNotBlank() ||
+            fromUser != null ||
+            fromUserId.isNotBlank() ||
+            toUser != null ||
+            !toUserId.isNullOrBlank() ||
+            !toRoomId.isNullOrBlank() ||
+            text != null ||
+            file != null ||
+            replyId != null ||
+            quoteId != null
+    }
+
+    fun toDomainMessage(source: ChatStreamingMessageSource = ChatStreamingMessageSource()): ChatMessage {
         val user = fromUser?.toDomainUser() ?: User(
             id = fromUserId.ifBlank { "unknown" },
             displayName = fromUserId.ifBlank { "成员" },
             username = fromUserId.ifBlank { "unknown" },
             avatarInitial = fromUserId.ifBlank { "成" }.avatarInitial(),
         )
+        val effectiveRoomId = toRoomId?.takeIf { it.isNotBlank() }
+            ?: source.roomId?.takeIf { it.isNotBlank() }
+            ?: ""
+        val effectiveToUserId = toUserId?.takeIf { it.isNotBlank() }
+            ?: source.userId?.takeIf { effectiveRoomId.isBlank() && it.isNotBlank() && it != user.id }
         return ChatMessage(
             id = stableStreamingChatMessageId(
                 id = id,
-                roomId = toRoomId.orEmpty(),
-                toUserId = toUserId.orEmpty(),
+                roomId = effectiveRoomId,
+                toUserId = effectiveToUserId.orEmpty(),
                 fromUserId = user.id,
                 createdAt = createdAt,
                 text = text.orEmpty(),
                 fileId = file?.id.orEmpty(),
             ),
-            roomId = toRoomId.orEmpty(),
+            roomId = effectiveRoomId,
             fromUser = user,
             text = text.orEmpty(),
             createdAtLabel = createdAt.toLocalCompactDateLabel(),
             createdAt = createdAt,
-            toUserId = toUserId,
+            toUserId = effectiveToUserId,
             toUser = toUser?.toDomainUser(),
             isRead = isRead,
             file = file?.toDomainFile(),
@@ -398,6 +543,19 @@ private fun JsonObject.obj(key: String): JsonObject? {
 
 private fun JsonObject.string(key: String): String? {
     return (this[key] as? JsonElement)?.jsonPrimitive?.contentOrNull
+}
+
+private fun String?.toChatStreamingMessageSource(): ChatStreamingMessageSource {
+    val cleanId = this?.trim().orEmpty()
+    return when {
+        cleanId.startsWith("chat-room-") -> ChatStreamingMessageSource(
+            roomId = cleanId.removePrefix("chat-room-").takeIf { it.isNotBlank() },
+        )
+        cleanId.startsWith("chat-user-") -> ChatStreamingMessageSource(
+            userId = cleanId.removePrefix("chat-user-").takeIf { it.isNotBlank() },
+        )
+        else -> ChatStreamingMessageSource()
+    }
 }
 
 private fun String.avatarInitial(): String {

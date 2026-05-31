@@ -10,5 +10,7 @@ class HhhlOverflowMenuTest {
         assertNotNull(HhhlOverflowMenuAction("引用", onClick = {}).icon)
         assertNotNull(HhhlOverflowMenuAction("复制", onClick = {}).icon)
         assertNotNull(HhhlOverflowMenuAction("举报", destructive = true, onClick = {}).icon)
+        assertNotNull(HhhlOverflowMenuAction("全部已读", onClick = {}).icon)
+        assertNotNull(HhhlOverflowMenuAction("清空", destructive = true, onClick = {}).icon)
     }
 }

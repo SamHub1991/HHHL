@@ -39,6 +39,21 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.5.0",
+            title = "HHHL 0.5.0 更新内容",
+            summary = "这版把 AI 助手升级为全局入口和自动化中枢，并重点修复后台实时收消息链路。",
+            highlights = listOf(
+                "新增默认开启的 AI 小光球，可拖动贴边，点击语音输入，长按调整高风险自动批准等快捷设置。",
+                "设置页新增 AI 助手入口和独立 AI 配置页，补充 Claude、小米等供应商和对应默认模型。",
+                "AI 助手现在能理解发帖、指定聊天室发消息、私聊、按名字 @ 人、回复和引用等更复杂操作。",
+                "不打开聊天室也会持续拉取远程消息，并触发特别关心、自动化、回复、引用和 @ 通知。",
+                "修复高风险自动批准已开启时，AI 助手仍不能直接执行高风险动作的问题。",
+                "收藏页从稍后看升级为帖子/信息分段，支持收藏聊天室和私聊信息，并保留渲染格式和附件。",
+                "完善 notes 相关接口、发现页和 Markdown 渲染操作，AI 总结卡片显示更稳定。",
+                "聊天顶部状态提示支持关闭，移除聊天室创建提示，并补齐自建聊天室删除和管理入口。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.4.2",
             title = "HHHL 0.4.2 更新内容",
             summary = "这版修复聊天输入框和自建聊天室管理问题，并完善更新日志展示。",

@@ -22,7 +22,7 @@ class ProfilePresentationTest {
             profilePrimaryActionLabels(capabilities),
         )
         assertEquals(
-            listOf("稍后看", "关注请求", "关系管理"),
+            listOf("收藏", "关注请求", "关系管理"),
             profileAccountActionLabels(),
         )
         assertEquals(
@@ -44,7 +44,7 @@ class ProfilePresentationTest {
             profilePrimaryActionLabels(capabilities),
         )
         assertEquals(
-            listOf("稍后看", "关注请求", "关系管理"),
+            listOf("收藏", "关注请求", "关系管理"),
             profileAccountActionLabels(),
         )
         assertEquals(
@@ -61,7 +61,7 @@ class ProfilePresentationTest {
         )
 
         assertEquals(
-            listOf("外观", "账号与安全", "管理", "隐私", "通知", "过滤", "AI", "授权"),
+            listOf("外观", "AI", "账号与安全", "管理", "隐私", "通知", "过滤", "授权"),
             settingsGroupLabels(groups),
         )
         assertEquals(
@@ -70,6 +70,8 @@ class ProfilePresentationTest {
                 "高级自定义主题",
                 "信息流密度",
                 "列表手势",
+                "AI 小光球",
+                "AI 设置",
                 "账号资料",
                 "双重验证",
                 "Passkey",
@@ -85,13 +87,30 @@ class ProfilePresentationTest {
                 "未读角标",
                 "后台收消息与自动化",
                 "特别关心后台提醒",
+                "聊天室通知合并",
+                "只提醒重点聊天",
+                "AI 判断重要消息",
+                "聊天提醒关键词",
+                "聊天提醒用户",
                 "聊天缓存",
                 "静音回应通知",
                 "静音关注通知",
                 "词语静音",
                 "强过滤词",
                 "静音实例",
+                "访问令牌",
+                "邀请码",
+                "共享访问",
+                "Webhook",
+                "已授权应用",
+            ),
+            settingsItemLabels(groups),
+        )
+
+        assertEquals(
+            listOf(
                 "AI 助手",
+                "AI 小光球",
                 "Provider",
                 "Base URL",
                 "API Key",
@@ -102,17 +121,14 @@ class ProfilePresentationTest {
                 "向量模型",
                 "读取权限",
                 "AI 自动化",
+                "助手低风险自动批准",
+                "助手高风险自动批准",
                 "后台 AI 队列",
                 "AI 队列",
                 "用量限制",
                 "语气偏好",
-                "访问令牌",
-                "邀请码",
-                "共享访问",
-                "Webhook",
-                "已授权应用",
             ),
-            settingsItemLabels(groups),
+            settingsItemLabels(SettingsRepository().aiSettingsGroup().let(::listOf)),
         )
     }
 

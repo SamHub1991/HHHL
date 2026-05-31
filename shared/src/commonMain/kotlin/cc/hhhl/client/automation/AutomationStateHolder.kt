@@ -26,11 +26,21 @@ private suspend fun <T> Iterable<T>.anySuspend(predicate: suspend (T) -> Boolean
 private data class AutomationConditionMatch(
     val matched: Boolean,
     val failureMessage: String? = null,
+    val actualValue: String = "",
+    val detailMessage: String = "",
+)
+
+private data class AutomationRuleMatchEvaluation(
+    val matched: Boolean,
+    val reason: String,
+    val conditionResults: List<AutomationConditionDebugResult> = emptyList(),
 )
 
 data class AutomationUiState(
     val rules: List<AutomationRule> = emptyList(),
     val logs: List<AutomationExecutionLog> = emptyList(),
+    val debugRecords: List<AutomationRuleDebugRecord> = emptyList(),
+    val pendingDraftPreview: AutomationRuleDraftPreview? = null,
     val selectedRuleId: String? = null,
     val editorOpen: Boolean = false,
     val message: String? = null,
@@ -82,6 +92,7 @@ class AutomationStateHolder(
     private val mutableState = MutableStateFlow(AutomationUiState())
     val state: StateFlow<AutomationUiState> = mutableState
     private var cooldownMarkers: Map<String, Long> = emptyMap()
+    private var ruleExecutionWindows: Map<String, List<Long>> = emptyMap()
     private var recentEventRuleKeys: List<String> = emptyList()
     private var nextLocalId = 0
 
@@ -91,6 +102,7 @@ class AutomationStateHolder(
             it.copy(
                 rules = snapshot.rules.sortedByDescending { rule -> rule.updatedAtEpochMillis },
                 logs = snapshot.logs.sortedByDescending { log -> log.createdAtEpochMillis },
+                debugRecords = snapshot.debugRecords.sortedByDescending { record -> record.createdAtEpochMillis },
                 message = null,
                 errorMessage = null,
             )
@@ -106,7 +118,7 @@ class AutomationStateHolder(
             conditions = listOf(defaultConditionFor(trigger)),
             actions = listOf(defaultActionFor(trigger)),
             updatedAtEpochMillis = now,
-        )
+        ).withDefaultRiskControls()
         updateRules(
             transform = { rules -> listOf(rule) + rules },
             selectedRuleId = rule.id,
@@ -116,11 +128,56 @@ class AutomationStateHolder(
     }
 
     fun addRuleDraft(rule: AutomationRule) {
+        confirmRuleDraft(
+            AutomationRuleDraftPreview(
+                id = nextId("draft-preview"),
+                sourceText = "",
+                rule = rule,
+                createdAtEpochMillis = nowMillis(),
+            ),
+        )
+    }
+
+    fun previewRuleDraft(
+        sourceText: String,
+        rule: AutomationRule,
+        messages: List<String>,
+    ) {
+        val preview = AutomationRuleDraftPreview(
+            id = nextId("draft-preview"),
+            sourceText = sourceText.trim().take(MAX_DRAFT_SOURCE_TEXT_LENGTH),
+            rule = rule.cleaned(),
+            messages = messages.distinct().take(MAX_DRAFT_MESSAGES),
+            createdAtEpochMillis = nowMillis(),
+        )
+        mutableState.update {
+            it.copy(
+                pendingDraftPreview = preview,
+                selectedRuleId = null,
+                editorOpen = false,
+                message = "AI 已生成规则草稿，确认后再创建",
+                errorMessage = null,
+            )
+        }
+    }
+
+    fun approveRuleDraft() {
+        val preview = state.value.pendingDraftPreview ?: return
+        confirmRuleDraft(preview)
+    }
+
+    fun rejectRuleDraft() {
+        mutableState.update {
+            it.copy(pendingDraftPreview = null, message = "已拒绝 AI 规则草稿", errorMessage = null)
+        }
+    }
+
+    private fun confirmRuleDraft(preview: AutomationRuleDraftPreview) {
         val now = nowMillis()
-        val draft = rule.copy(
+        val draft = preview.rule.copy(
             id = nextId("rule"),
-            conditions = rule.conditions.map { condition -> condition.copy(id = nextId("condition")) },
-            actions = rule.actions.map { action -> action.copy(id = nextId("action")) },
+            conditions = preview.rule.conditions.map { condition -> condition.copy(id = nextId("condition")) },
+            actions = preview.rule.actions.map { action -> action.copy(id = nextId("action")) },
             updatedAtEpochMillis = now,
         ).cleaned()
         updateRules(
@@ -128,6 +185,7 @@ class AutomationStateHolder(
             selectedRuleId = draft.id,
             editorOpen = true,
             message = if (draft.enabled) "AI 已生成并启用规则草稿" else "AI 已生成规则草稿",
+            pendingDraftPreview = null,
         )
     }
 
@@ -201,6 +259,12 @@ class AutomationStateHolder(
         }
     }
 
+    fun updateRuleBurstLimit(ruleId: String, limit: Int) {
+        updateRule(ruleId) { rule ->
+            rule.copy(maxExecutionsPer30Seconds = limit.coerceIn(0, MAX_BURST_EXECUTIONS_PER_30_SECONDS), updatedAtEpochMillis = nowMillis())
+        }
+    }
+
     fun addCondition(ruleId: String, type: AutomationConditionType = AutomationConditionType.MessageContains) {
         updateRule(ruleId) { rule ->
             rule.copy(
@@ -265,25 +329,136 @@ class AutomationStateHolder(
         persist()
     }
 
+    fun clearDebugRecords() {
+        mutableState.update { it.copy(debugRecords = emptyList(), message = "调试记录已清空", errorMessage = null) }
+        persist()
+    }
+
     fun emit(event: AutomationEvent) {
         scope.launch {
             emitNow(event)
         }
     }
 
+    fun simulate(event: AutomationEvent) {
+        scope.launch {
+            simulateNow(event)
+        }
+    }
+
+    suspend fun simulateNow(event: AutomationEvent) {
+        val simulationEvent = event.copy(id = "manual-simulate:${event.id}")
+        val rules = state.value.rules
+        if (rules.isEmpty()) {
+            mutableState.update { it.copy(message = "暂无规则可模拟", errorMessage = null) }
+            return
+        }
+
+        var matchedCount = 0
+        rules.forEach { rule ->
+            when {
+                !rule.enabled -> addDebugRecord(rule, simulationEvent, matched = false, reason = "模拟运行：规则未启用")
+                rule.trigger != simulationEvent.trigger -> addDebugRecord(
+                    rule = rule,
+                    event = simulationEvent,
+                    matched = false,
+                    reason = "模拟运行：触发器不匹配，规则 ${rule.trigger.label}，事件 ${simulationEvent.trigger.label}",
+                )
+                rule.ignoreOwnMessages && simulationEvent.isFromCurrentUser -> addDebugRecord(
+                    rule = rule,
+                    event = simulationEvent,
+                    matched = false,
+                    reason = "模拟运行：已按规则设置忽略自己发送的消息",
+                )
+                else -> {
+                    val evaluation = rule.evaluateMatch(simulationEvent)
+                    if (evaluation.matched) matchedCount += 1
+                    addDebugRecord(
+                        rule = rule,
+                        event = simulationEvent,
+                        matched = evaluation.matched,
+                        reason = "模拟运行：${evaluation.reason}，未执行任何动作",
+                        conditionResults = evaluation.conditionResults,
+                    )
+                }
+            }
+        }
+        mutableState.update {
+            it.copy(
+                message = "模拟完成：${matchedCount}/${rules.size} 条规则会命中，未执行动作",
+                errorMessage = null,
+            )
+        }
+        persist()
+    }
+
     suspend fun emitNow(event: AutomationEvent) {
         val rules = state.value.rules
-            .filter { rule -> rule.enabled && rule.trigger == event.trigger }
-            .filter { rule -> !rule.ignoreOwnMessages || !event.isFromCurrentUser }
-            .filter { rule -> rule.cooldownReady(event) }
         if (rules.isEmpty()) return
 
         rules.forEach { rule ->
-            if (!rule.matches(event)) return@forEach
+            if (!rule.enabled) {
+                addDebugRecord(rule, event, matched = false, reason = "规则未启用")
+                return@forEach
+            }
+            if (rule.trigger != event.trigger) {
+                addDebugRecord(rule, event, matched = false, reason = "触发器不匹配：规则 ${rule.trigger.label}，事件 ${event.trigger.label}")
+                return@forEach
+            }
+            if (rule.ignoreOwnMessages && event.isFromCurrentUser) {
+                addDebugRecord(rule, event, matched = false, reason = "已按规则设置忽略自己发送的消息")
+                return@forEach
+            }
+            if (event.isAiGenerated) {
+                addDebugRecord(rule, event, matched = false, reason = "已忽略 AI 产生的消息，避免自动化循环")
+                return@forEach
+            }
+            if (!rule.cooldownReady(event)) {
+                addDebugRecord(rule, event, matched = false, reason = "规则冷却中，${rule.cooldownSeconds}s 内不会重复触发")
+                return@forEach
+            }
+            if (!rule.burstLimitReady(event)) {
+                addDebugRecord(
+                    rule = rule,
+                    event = event,
+                    matched = false,
+                    reason = "风控拦截：30 秒内执行次数已达到 ${rule.maxExecutionsPer30Seconds} 次",
+                )
+                addExecutionLog(rule, event, "风控保护", "30 秒内执行次数已达到上限，已阻止自动动作", success = false)
+                return@forEach
+            }
+            val evaluation = rule.evaluateMatch(event)
+            if (!evaluation.matched) {
+                addDebugRecord(
+                    rule = rule,
+                    event = event,
+                    matched = false,
+                    reason = evaluation.reason,
+                    conditionResults = evaluation.conditionResults,
+                )
+                return@forEach
+            }
             val dedupeKey = "${event.id}:${rule.id}"
-            if (dedupeKey in recentEventRuleKeys) return@forEach
+            if (dedupeKey in recentEventRuleKeys) {
+                addDebugRecord(
+                    rule = rule,
+                    event = event,
+                    matched = false,
+                    reason = "同一事件和规则已经处理过，已去重跳过",
+                    conditionResults = evaluation.conditionResults,
+                )
+                return@forEach
+            }
+            addDebugRecord(
+                rule = rule,
+                event = event,
+                matched = true,
+                reason = evaluation.reason,
+                conditionResults = evaluation.conditionResults,
+            )
             recentEventRuleKeys = (listOf(dedupeKey) + recentEventRuleKeys).take(MAX_RECENT_EVENT_KEYS)
             cooldownMarkers = cooldownMarkers + (rule.id to nowMillis())
+            recordRuleExecution(rule)
             executeRule(rule, event)
         }
     }
@@ -310,6 +485,7 @@ class AutomationStateHolder(
         rule: AutomationRule,
         action: AutomationAction,
         event: AutomationEvent,
+        retryOfLogId: String = "",
     ): Boolean {
         val title = renderAutomationTemplate(action.titleTemplate.ifBlank { rule.name }, event)
         val body = renderAutomationTemplate(action.bodyTemplate, event)
@@ -320,6 +496,9 @@ class AutomationStateHolder(
                 actionLabel = action.type.label,
                 message = "AI 工具权限未开启，已阻止外部写入动作",
                 success = false,
+                eventSnapshot = event.snapshot(),
+                actionSnapshot = action,
+                retryOfLogId = retryOfLogId,
             )
             return false
         }
@@ -338,8 +517,37 @@ class AutomationStateHolder(
             actionLabel = action.type.label,
             message = result.message.ifBlank { body },
             success = result.success,
+            eventSnapshot = event.snapshot(),
+            actionSnapshot = action,
+            retryOfLogId = retryOfLogId,
         )
         return result.success
+    }
+
+    fun retryLog(logId: String) {
+        scope.launch {
+            retryLogNow(logId)
+        }
+    }
+
+    suspend fun retryLogNow(logId: String) {
+        val log = state.value.logs.firstOrNull { it.id == logId }
+        if (log == null) {
+            mutableState.update { it.copy(errorMessage = "未找到要重试的日志") }
+            return
+        }
+        val action = log.actionSnapshot
+        val event = log.eventSnapshot?.toEvent()
+        val rule = state.value.rules.firstOrNull { it.id == log.ruleId }
+        when {
+            log.success -> mutableState.update { it.copy(errorMessage = "成功日志不需要重试") }
+            action == null || event == null -> mutableState.update { it.copy(errorMessage = "这条日志没有可重试的事件或动作快照") }
+            rule == null -> mutableState.update { it.copy(errorMessage = "原规则已不存在，无法重试") }
+            else -> {
+                mutableState.update { it.copy(message = "正在重试自动化动作", errorMessage = null) }
+                executeAction(rule, action, event.copy(id = "manual-retry:${event.id}"), retryOfLogId = log.id)
+            }
+        }
     }
 
     private fun addExecutionLog(
@@ -348,6 +556,9 @@ class AutomationStateHolder(
         actionLabel: String,
         message: String,
         success: Boolean,
+        eventSnapshot: AutomationEventSnapshot? = null,
+        actionSnapshot: AutomationAction? = null,
+        retryOfLogId: String = "",
     ) {
         val log = AutomationExecutionLog(
             id = nextId("log"),
@@ -359,12 +570,43 @@ class AutomationStateHolder(
             message = message.take(MAX_LOG_MESSAGE_LENGTH),
             success = success,
             createdAtEpochMillis = nowMillis(),
+            eventSnapshot = eventSnapshot,
+            actionSnapshot = actionSnapshot,
+            retryOfLogId = retryOfLogId,
         )
         mutableState.update {
             it.copy(
                 logs = (listOf(log) + it.logs).take(AutomationStoreCodec.MAX_LOGS),
                 message = if (success) "自动化已执行" else it.message,
                 errorMessage = if (success) null else message,
+            )
+        }
+        persist()
+    }
+
+    private fun addDebugRecord(
+        rule: AutomationRule,
+        event: AutomationEvent,
+        matched: Boolean,
+        reason: String,
+        conditionResults: List<AutomationConditionDebugResult> = emptyList(),
+    ) {
+        val record = AutomationRuleDebugRecord(
+            id = nextId("debug"),
+            ruleId = rule.id,
+            ruleName = rule.name,
+            eventId = event.id,
+            eventLabel = event.displayLabel,
+            eventSummary = event.debugSummary().take(MAX_DEBUG_TEXT_LENGTH),
+            matched = matched,
+            reason = reason.take(MAX_DEBUG_TEXT_LENGTH),
+            conditionResults = conditionResults.take(MAX_DEBUG_CONDITIONS),
+            resolvedEntities = event.debugResolvedEntities().take(MAX_DEBUG_RESOLVED_ENTITIES),
+            createdAtEpochMillis = nowMillis(),
+        )
+        mutableState.update {
+            it.copy(
+                debugRecords = (listOf(record) + it.debugRecords).take(AutomationStoreCodec.MAX_DEBUG_RECORDS),
             )
         }
         persist()
@@ -387,6 +629,7 @@ class AutomationStateHolder(
         selectedRuleId: String?,
         editorOpen: Boolean,
         message: String?,
+        pendingDraftPreview: AutomationRuleDraftPreview? = state.value.pendingDraftPreview,
     ) {
         mutableState.update {
             val nextRules = transform(it.rules)
@@ -396,6 +639,7 @@ class AutomationStateHolder(
                 rules = nextRules,
                 selectedRuleId = selectedRuleId,
                 editorOpen = editorOpen,
+                pendingDraftPreview = pendingDraftPreview,
                 message = message,
                 errorMessage = null,
             )
@@ -411,36 +655,63 @@ class AutomationStateHolder(
                 AutomationSnapshot(
                     rules = current.rules,
                     logs = current.logs,
+                    debugRecords = current.debugRecords,
                 ),
             )
         }
     }
 
-    private suspend fun AutomationRule.matches(event: AutomationEvent): Boolean {
+    private suspend fun AutomationRule.evaluateMatch(event: AutomationEvent): AutomationRuleMatchEvaluation {
         val enabledConditions = conditions.filter { it.enabled }
-        if (enabledConditions.isEmpty()) return true
+        if (enabledConditions.isEmpty()) {
+            return AutomationRuleMatchEvaluation(matched = true, reason = "没有启用条件，事件直接命中规则")
+        }
         return when (conditionMode) {
             AutomationConditionMode.All -> {
+                val conditionResults = mutableListOf<AutomationConditionDebugResult>()
                 for (condition in enabledConditions) {
                     val result = condition.matches(event)
+                    conditionResults += condition.toDebugResult(result)
                     result.failureMessage?.let { message ->
                         addExecutionLog(this, event, "条件判断", message, success = false)
                     }
-                    if (!result.matched) return false
+                    if (!result.matched) {
+                        return AutomationRuleMatchEvaluation(
+                            matched = false,
+                            reason = "条件未满足：${condition.type.label}",
+                            conditionResults = conditionResults,
+                        )
+                    }
                 }
-                true
+                AutomationRuleMatchEvaluation(
+                    matched = true,
+                    reason = "全部 ${conditionResults.size} 个条件已满足",
+                    conditionResults = conditionResults,
+                )
             }
             AutomationConditionMode.Any -> {
                 val failureMessages = mutableListOf<String>()
+                val conditionResults = mutableListOf<AutomationConditionDebugResult>()
                 for (condition in enabledConditions) {
                     val result = condition.matches(event)
-                    if (result.matched) return true
+                    conditionResults += condition.toDebugResult(result)
+                    if (result.matched) {
+                        return AutomationRuleMatchEvaluation(
+                            matched = true,
+                            reason = "条件已命中：${condition.type.label}",
+                            conditionResults = conditionResults,
+                        )
+                    }
                     result.failureMessage?.let(failureMessages::add)
                 }
                 failureMessages.firstOrNull()?.let { message ->
                     addExecutionLog(this, event, "条件判断", message, success = false)
                 }
-                false
+                AutomationRuleMatchEvaluation(
+                    matched = false,
+                    reason = "任一条件均未满足",
+                    conditionResults = conditionResults,
+                )
             }
         }
     }
@@ -451,33 +722,124 @@ class AutomationStateHolder(
         return nowMillis() - lastRun >= cooldownSeconds * 1000L || event.id.startsWith("manual:")
     }
 
+    private fun AutomationRule.burstLimitReady(event: AutomationEvent): Boolean {
+        if (maxExecutionsPer30Seconds <= 0 || event.id.startsWith("manual:")) return true
+        val now = nowMillis()
+        val windowStart = now - BURST_WINDOW_MILLIS
+        val recent = ruleExecutionWindows[id].orEmpty().filter { timestamp -> timestamp >= windowStart }
+        ruleExecutionWindows = ruleExecutionWindows + (id to recent)
+        return recent.size < maxExecutionsPer30Seconds
+    }
+
+    private fun recordRuleExecution(rule: AutomationRule) {
+        val now = nowMillis()
+        val windowStart = now - BURST_WINDOW_MILLIS
+        val recent = (ruleExecutionWindows[rule.id].orEmpty() + now)
+            .filter { timestamp -> timestamp >= windowStart }
+            .takeLast(MAX_BURST_EXECUTIONS_PER_30_SECONDS)
+        ruleExecutionWindows = ruleExecutionWindows + (rule.id to recent)
+    }
+
     private suspend fun AutomationCondition.matches(event: AutomationEvent): AutomationConditionMatch {
         val cleanValue = value.trim()
-        if (cleanValue.isEmpty()) return AutomationConditionMatch(true)
+        if (cleanValue.isEmpty()) return AutomationConditionMatch(
+            matched = true,
+            actualValue = event.debugActualValueFor(type),
+            detailMessage = "匹配值为空，视为通过",
+        )
         return when (type) {
-            AutomationConditionType.SenderUserId -> AutomationConditionMatch(event.senderUserId.equals(cleanValue, ignoreCase = true))
-            AutomationConditionType.SenderUserIds -> AutomationConditionMatch(cleanValue.splitAutomationValues().any { value -> event.senderUserId.equals(value, ignoreCase = true) })
-            AutomationConditionType.SenderUsername -> AutomationConditionMatch(event.matchesAutomationUsername(cleanValue))
-            AutomationConditionType.SenderNameContains -> AutomationConditionMatch(event.matchesAutomationSenderName(cleanValue))
-            AutomationConditionType.MessageContains -> AutomationConditionMatch(event.defaultBody.contains(cleanValue, ignoreCase = true))
-            AutomationConditionType.RoomId -> AutomationConditionMatch(event.roomId.equals(cleanValue, ignoreCase = true))
-            AutomationConditionType.RoomNameContains -> AutomationConditionMatch(event.roomName.contains(cleanValue, ignoreCase = true))
-            AutomationConditionType.DirectUserId -> AutomationConditionMatch(event.directUserId.equals(cleanValue, ignoreCase = true))
-            AutomationConditionType.SourceKind -> AutomationConditionMatch(
-                event.sourceKind.normalizedAutomationSourceKind() == cleanValue.normalizedAutomationSourceKind(),
+            AutomationConditionType.SenderUserId -> AutomationConditionMatch(
+                matched = event.senderUserId.equals(cleanValue, ignoreCase = true),
+                actualValue = event.senderUserId,
             )
-            AutomationConditionType.AttentionKind -> AutomationConditionMatch(event.attentionKind.matchesAutomationTokenValue(cleanValue))
-            AutomationConditionType.NotificationType -> AutomationConditionMatch(event.notificationType.matchesAutomationTokenValue(cleanValue))
-            AutomationConditionType.ChannelId -> AutomationConditionMatch(event.channelId.equals(cleanValue, ignoreCase = true))
-            AutomationConditionType.ChannelNameContains -> AutomationConditionMatch(event.channelName.contains(cleanValue, ignoreCase = true))
-            AutomationConditionType.MessageType -> AutomationConditionMatch(event.messageType.matchesAutomationTokenValue(cleanValue))
-            AutomationConditionType.TimelineKind -> AutomationConditionMatch(event.timelineKind.matchesAutomationTokenValue(cleanValue))
-            AutomationConditionType.NoteVisibility -> AutomationConditionMatch(event.noteVisibility.matchesAutomationTokenValue(cleanValue))
+            AutomationConditionType.SenderUserIds -> AutomationConditionMatch(
+                matched = cleanValue.splitAutomationValues().any { value -> event.senderUserId.equals(value, ignoreCase = true) },
+                actualValue = event.senderUserId,
+            )
+            AutomationConditionType.SenderUsername -> AutomationConditionMatch(
+                matched = event.matchesAutomationUsername(cleanValue),
+                actualValue = event.senderMention.ifBlank { event.senderUsername },
+            )
+            AutomationConditionType.SenderNameContains -> AutomationConditionMatch(
+                matched = event.matchesAutomationSenderName(cleanValue),
+                actualValue = listOf(event.senderName, event.senderUsername, event.senderMention).filter { it.isNotBlank() }.joinToString(" / "),
+            )
+            AutomationConditionType.MessageContains -> AutomationConditionMatch(
+                matched = event.defaultBody.contains(cleanValue, ignoreCase = true),
+                actualValue = event.defaultBody,
+            )
+            AutomationConditionType.RoomId -> AutomationConditionMatch(
+                matched = event.roomId.equals(cleanValue, ignoreCase = true),
+                actualValue = event.roomId,
+            )
+            AutomationConditionType.RoomNameContains -> AutomationConditionMatch(
+                matched = event.roomName.contains(cleanValue, ignoreCase = true),
+                actualValue = event.roomName,
+            )
+            AutomationConditionType.DirectUserId -> AutomationConditionMatch(
+                matched = event.directUserId.equals(cleanValue, ignoreCase = true),
+                actualValue = event.directUserId,
+            )
+            AutomationConditionType.SourceKind -> AutomationConditionMatch(
+                matched = event.sourceKind.normalizedAutomationSourceKind() == cleanValue.normalizedAutomationSourceKind(),
+                actualValue = event.sourceKind,
+            )
+            AutomationConditionType.AttentionKind -> AutomationConditionMatch(
+                matched = event.attentionKind.matchesAutomationTokenValue(cleanValue),
+                actualValue = event.attentionKind,
+            )
+            AutomationConditionType.NotificationType -> AutomationConditionMatch(
+                matched = event.notificationType.matchesAutomationTokenValue(cleanValue),
+                actualValue = event.notificationType,
+            )
+            AutomationConditionType.ChannelId -> AutomationConditionMatch(
+                matched = event.channelId.equals(cleanValue, ignoreCase = true),
+                actualValue = event.channelId,
+            )
+            AutomationConditionType.ChannelNameContains -> AutomationConditionMatch(
+                matched = event.channelName.contains(cleanValue, ignoreCase = true),
+                actualValue = event.channelName,
+            )
+            AutomationConditionType.MessageType -> AutomationConditionMatch(
+                matched = event.messageType.matchesAutomationTokenValue(cleanValue),
+                actualValue = event.messageType,
+            )
+            AutomationConditionType.TimelineKind -> AutomationConditionMatch(
+                matched = event.timelineKind.matchesAutomationTokenValue(cleanValue),
+                actualValue = event.timelineKind,
+            )
+            AutomationConditionType.NoteVisibility -> AutomationConditionMatch(
+                matched = event.noteVisibility.matchesAutomationTokenValue(cleanValue),
+                actualValue = event.noteVisibility,
+            )
             AutomationConditionType.AiSemantic -> when (val result = aiBridge.evaluateSemanticCondition(cleanValue, event.aiContextText())) {
-                is AiBridgeResult.Success -> AutomationConditionMatch(automationAiConditionSatisfied(result.text))
-                is AiBridgeResult.Error -> AutomationConditionMatch(false, "AI 语义条件失败：${result.message}")
+                is AiBridgeResult.Success -> AutomationConditionMatch(
+                    matched = automationAiConditionSatisfied(result.text),
+                    actualValue = result.text,
+                    detailMessage = "AI 返回：${result.text}",
+                )
+                is AiBridgeResult.Error -> AutomationConditionMatch(
+                    matched = false,
+                    failureMessage = "AI 语义条件失败：${result.message}",
+                    actualValue = result.message,
+                    detailMessage = "AI 语义条件失败：${result.message}",
+                )
             }
         }
+    }
+
+    private fun AutomationCondition.toDebugResult(match: AutomationConditionMatch): AutomationConditionDebugResult {
+        val expected = value.trim()
+        return AutomationConditionDebugResult(
+            conditionId = id,
+            conditionLabel = type.label,
+            expectedValue = expected,
+            actualValue = match.actualValue.ifBlank { "无" }.take(MAX_DEBUG_TEXT_LENGTH),
+            matched = match.matched,
+            message = match.detailMessage.ifBlank {
+                if (match.matched) "已命中 ${type.label}" else "未命中 ${type.label}：期望 ${expected.ifBlank { "空" }}，实际 ${match.actualValue.ifBlank { "无" }}"
+            }.take(MAX_DEBUG_TEXT_LENGTH),
+        )
     }
 
     private fun cleanAccountId(): String {
@@ -494,13 +856,21 @@ class AutomationStateHolder(
     private companion object {
         const val MAX_RULE_NAME_LENGTH = 48
         const val MAX_COOLDOWN_SECONDS = 86_400
+        const val MAX_BURST_EXECUTIONS_PER_30_SECONDS = 60
+        const val BURST_WINDOW_MILLIS = 30_000L
         const val MAX_LOG_MESSAGE_LENGTH = 400
         const val MAX_RECENT_EVENT_KEYS = 120
+        const val MAX_DEBUG_CONDITIONS = 12
+        const val MAX_DEBUG_RESOLVED_ENTITIES = 8
+        const val MAX_DEBUG_TEXT_LENGTH = 360
+        const val MAX_DRAFT_SOURCE_TEXT_LENGTH = 1200
+        const val MAX_DRAFT_MESSAGES = 12
     }
 }
 
 private fun AutomationAction.requiresToolPermission(): Boolean {
     return type == AutomationActionType.ForwardToRoom ||
+        type == AutomationActionType.AiForwardToRoom ||
         type == AutomationActionType.ForwardToUser ||
         type == AutomationActionType.ReplyToChat ||
         type == AutomationActionType.AiReplyToChat ||
@@ -516,11 +886,30 @@ private fun AutomationAction.requiresToolPermission(): Boolean {
 }
 
 private fun AutomationRule.cleaned(): AutomationRule {
-    return copy(
+    val defaulted = withDefaultRiskControls()
+    return defaulted.copy(
         name = name.trim().ifBlank { defaultRuleName(trigger) }.take(48),
-        conditions = conditions.map { it.cleaned() }.take(12),
-        actions = actions.map { it.cleaned() }.take(12),
-        cooldownSeconds = cooldownSeconds.coerceIn(0, 86_400),
+        conditions = defaulted.conditions.map { it.cleaned() }.take(12),
+        actions = defaulted.actions.map { it.cleaned() }.take(12),
+        cooldownSeconds = defaulted.cooldownSeconds.coerceIn(0, 86_400),
+        maxExecutionsPer30Seconds = defaulted.maxExecutionsPer30Seconds.coerceIn(0, 60),
+    )
+}
+
+private fun AutomationRule.withDefaultRiskControls(): AutomationRule {
+    val hasRiskyAction = actions.any { action -> action.type.isLoopRiskAction() || action.mentionSender }
+    return copy(
+        ignoreOwnMessages = ignoreOwnMessages || hasRiskyAction,
+        cooldownSeconds = when {
+            cooldownSeconds > 0 -> cooldownSeconds
+            hasRiskyAction -> DEFAULT_RISKY_ACTION_COOLDOWN_SECONDS
+            else -> cooldownSeconds
+        },
+        maxExecutionsPer30Seconds = when {
+            maxExecutionsPer30Seconds > 0 -> maxExecutionsPer30Seconds
+            hasRiskyAction -> DEFAULT_RISKY_ACTION_BURST_LIMIT
+            else -> DEFAULT_SAFE_ACTION_BURST_LIMIT
+        },
     )
 }
 
@@ -552,6 +941,26 @@ private fun AutomationActionType.supportsSenderMention(): Boolean {
 private fun AutomationActionType.supportsChatReference(): Boolean {
     return this == AutomationActionType.ReplyToChat || this == AutomationActionType.AiReplyToChat
 }
+
+private fun AutomationActionType.isLoopRiskAction(): Boolean {
+    return this == AutomationActionType.ForwardToRoom ||
+        this == AutomationActionType.AiForwardToRoom ||
+        this == AutomationActionType.ForwardToUser ||
+        this == AutomationActionType.ReplyToChat ||
+        this == AutomationActionType.AiReplyToChat ||
+        this == AutomationActionType.ReplyToNote ||
+        this == AutomationActionType.AiReplyToNote ||
+        this == AutomationActionType.QuoteNote ||
+        this == AutomationActionType.AiQuoteNote ||
+        this == AutomationActionType.RenoteNote ||
+        this == AutomationActionType.PostToChannel ||
+        this == AutomationActionType.Webhook ||
+        this == AutomationActionType.AiGenerateWebhook
+}
+
+private const val DEFAULT_RISKY_ACTION_COOLDOWN_SECONDS = 30
+private const val DEFAULT_RISKY_ACTION_BURST_LIMIT = 2
+private const val DEFAULT_SAFE_ACTION_BURST_LIMIT = 12
 
 private fun String.normalizedAutomationSourceKind(): String {
     return when (trim().lowercase().replace("_", "").replace("-", "")) {
@@ -590,6 +999,58 @@ private fun AutomationEvent.matchesAutomationSenderName(value: String): Boolean 
         senderName.contains(expected, ignoreCase = true) ||
             senderUsername.contains(expected.trim('@'), ignoreCase = true) ||
             senderMention.contains(expected, ignoreCase = true)
+    }
+}
+
+private fun AutomationEvent.debugSummary(): String {
+    return buildList {
+        add(displayLabel)
+        if (roomName.isNotBlank() || roomId.isNotBlank()) add("聊天室 ${roomName.ifBlank { roomId }}")
+        if (directUserId.isNotBlank()) add("私聊用户 $directUserId")
+        if (channelName.isNotBlank() || channelId.isNotBlank()) add("频道 ${channelName.ifBlank { channelId }}")
+        if (senderName.isNotBlank() || senderUsername.isNotBlank() || senderUserId.isNotBlank()) {
+            add("发送者 ${senderName.ifBlank { senderMention.ifBlank { senderUserId } }}")
+        }
+        if (messageType.isNotBlank()) add("类型 $messageType")
+        if (attentionKind.isNotBlank()) add("提醒 $attentionKind")
+        if (notificationType.isNotBlank()) add("通知 $notificationType")
+        defaultBody.takeIf { it.isNotBlank() }?.let { body -> add(body.take(96)) }
+    }.joinToString(" · ")
+}
+
+private fun AutomationEvent.debugResolvedEntities(): List<String> {
+    return buildList {
+        if (roomId.isNotBlank() || roomName.isNotBlank()) add("聊天室 ${roomName.ifBlank { "未命名" }} -> ${roomId.ifBlank { "未解析" }}")
+        if (senderUserId.isNotBlank() || senderUsername.isNotBlank() || senderName.isNotBlank()) {
+            add("发送者 ${senderName.ifBlank { senderMention.ifBlank { senderUsername.ifBlank { "未命名" } } }} -> ${senderUserId.ifBlank { "未解析" }}")
+        }
+        if (directUserId.isNotBlank()) add("私聊目标 -> $directUserId")
+        if (channelId.isNotBlank() || channelName.isNotBlank()) add("频道 ${channelName.ifBlank { "未命名" }} -> ${channelId.ifBlank { "未解析" }}")
+        if (noteId.isNotBlank()) add("帖子 -> $noteId")
+        if (chatMessageId.isNotBlank()) add("消息 -> $chatMessageId")
+    }.distinct()
+}
+
+private fun AutomationEvent.debugActualValueFor(type: AutomationConditionType): String {
+    return when (type) {
+        AutomationConditionType.SenderUserId,
+        AutomationConditionType.SenderUserIds,
+            -> senderUserId
+        AutomationConditionType.SenderUsername -> senderMention.ifBlank { senderUsername }
+        AutomationConditionType.SenderNameContains -> listOf(senderName, senderUsername, senderMention).filter { it.isNotBlank() }.joinToString(" / ")
+        AutomationConditionType.MessageContains -> defaultBody
+        AutomationConditionType.RoomId -> roomId
+        AutomationConditionType.RoomNameContains -> roomName
+        AutomationConditionType.DirectUserId -> directUserId
+        AutomationConditionType.SourceKind -> sourceKind
+        AutomationConditionType.AttentionKind -> attentionKind
+        AutomationConditionType.NotificationType -> notificationType
+        AutomationConditionType.ChannelId -> channelId
+        AutomationConditionType.ChannelNameContains -> channelName
+        AutomationConditionType.MessageType -> messageType
+        AutomationConditionType.TimelineKind -> timelineKind
+        AutomationConditionType.NoteVisibility -> noteVisibility
+        AutomationConditionType.AiSemantic -> aiContextText()
     }
 }
 

@@ -20,6 +20,9 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class SharkeyDiscoverApiTest {
     @Test
@@ -259,6 +262,115 @@ class SharkeyDiscoverApiTest {
         assertEquals("AI", trend.tag)
         assertEquals(12, trend.usersCount)
         assertEquals(listOf(1, 3, 8), trend.chart)
+    }
+
+    @Test
+    fun loadsDiscoverySectionsFromNotesDiscoverySectionsEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notes/discovery-sections", request.url.toString())
+                assertEquals(HttpMethod.Post, request.method)
+                assertEquals(3, (request.body as TextContent).text.jsonBody()["limit"]?.jsonPrimitive?.int)
+                respondDiscoverySections()
+            },
+        )
+
+        val result = api.loadDiscoverySections(limit = 3)
+
+        assertIs<DiscoverDiscoverySectionsResult.Success>(result)
+        assertEquals(listOf("key"), result.sections.searchTrends.popularSearches)
+        assertEquals("note-1", result.sections.coverNotes.single().id)
+        assertEquals("channel-1", result.sections.channels.single().id)
+        assertEquals("Alice", result.sections.users.single().displayName)
+    }
+
+    @Test
+    fun loadsSearchTrendsFromNotesSearchTrendsEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notes/search-trends", request.url.toString())
+                assertEquals(5, (request.body as TextContent).text.jsonBody()["limit"]?.jsonPrimitive?.int)
+                respond(
+                    content = """
+                        {
+                          "popularSearches": ["key", "key", "sk-"],
+                          "recentTerms": ["bug"],
+                          "hashtags": ["#AI", "AI"]
+                        }
+                    """.trimIndent(),
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = api.loadSearchTrends(limit = 5)
+
+        assertIs<DiscoverSearchTrendsResult.Success>(result)
+        assertEquals(listOf("key", "sk-"), result.trends.popularSearches)
+        assertEquals(listOf("AI"), result.trends.hashtags)
+    }
+
+    @Test
+    fun loadsRecommendedTimelineFromNotesRecommendedTimelineEndpoint() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notes/recommended-timeline", request.url.toString())
+                val body = (request.body as TextContent).text.jsonBody()
+                assertEquals("local", body["scope"]?.jsonPrimitive?.content)
+                assertEquals("explore", body["surface"]?.jsonPrimitive?.content)
+                assertEquals("resources", body["category"]?.jsonPrimitive?.content)
+                assertEquals(true, body["withFiles"]?.jsonPrimitive?.content?.toBoolean())
+                assertEquals(false, body["withRenotes"]?.jsonPrimitive?.content?.toBoolean())
+                assertEquals(false, body["withBots"]?.jsonPrimitive?.content?.toBoolean())
+                assertEquals(12, body["limit"]?.jsonPrimitive?.int)
+                assertEquals(24, body["offset"]?.jsonPrimitive?.int)
+                respondNoteArray()
+            },
+        )
+
+        val result = api.loadRecommendedTimeline(
+            DiscoverRecommendedTimelineOptions(
+                scope = DiscoverRecommendedTimelineScope.Local,
+                category = DiscoverRecommendedTimelineCategory.Resources,
+                withFiles = true,
+                withRenotes = false,
+                withBots = false,
+                limit = 12,
+                offset = 24,
+            ),
+        )
+
+        assertIs<DiscoverSearchResult.Success>(result)
+        assertEquals("note-1", result.notes.single().id)
+    }
+
+    @Test
+    fun sendsRecommendationFeedbackWithTokenAndEvent() = runTest {
+        val api = SharkeyDiscoverApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/notes/recommendation-feedback", request.url.toString())
+                val body = (request.body as TextContent).text.jsonBody()
+                assertEquals("token-123", body["i"]?.jsonPrimitive?.content)
+                assertEquals("note-1", body["noteId"]?.jsonPrimitive?.content)
+                assertEquals("dwell", body["event"]?.jsonPrimitive?.content)
+                assertEquals(600000, body["dwellMs"]?.jsonPrimitive?.int)
+                respond("", status = HttpStatusCode.NoContent)
+            },
+        )
+
+        val result = api.sendRecommendationFeedback(
+            token = "token-123",
+            noteId = "note-1",
+            event = DiscoverRecommendationFeedbackEvent.Dwell,
+            dwellMs = 700_000,
+        )
+
+        assertIs<DiscoverRecommendationFeedbackResult.Success>(result)
     }
 
     @Test
@@ -562,6 +674,59 @@ class SharkeyDiscoverApiTest {
         )
     }
 
+    private fun MockRequestHandleScope.respondDiscoverySections(): HttpResponseData {
+        return respond(
+            content = """
+                {
+                  "trends": {
+                    "popularSearches": ["key"],
+                    "recentTerms": ["bug"],
+                    "hashtags": ["AI"]
+                  },
+                  "coverNotes": [
+                    {
+                      "id": "note-1",
+                      "createdAt": "2026-05-25T03:00:00.000Z",
+                      "text": "cover note",
+                      "visibility": "public",
+                      "user": { "id": "user-1", "username": "alice", "name": "Alice" }
+                    }
+                  ],
+                  "hotNotes": [],
+                  "tutorialNotes": [],
+                  "channels": [
+                    {
+                      "id": "channel-1",
+                      "createdAt": "2026-05-24T03:00:00.000Z",
+                      "lastNotedAt": "2026-05-25T03:00:00.000Z",
+                      "name": "Resources",
+                      "description": "resource channel",
+                      "color": "#40c057",
+                      "usersCount": 3,
+                      "notesCount": 4,
+                      "isSensitive": false,
+                      "allowRenoteToExternal": true
+                    }
+                  ],
+                  "users": [
+                    {
+                      "id": "user-1",
+                      "username": "alice",
+                      "name": "Alice",
+                      "description": "bio text",
+                      "avatarDecorations": [
+                        { "id": "decoration-1", "url": "https://example.com/decoration.png" }
+                      ],
+                      "onlineStatus": "active"
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
     private fun MockRequestHandleScope.respondTrendArray(): HttpResponseData {
         return respond(
             content = """
@@ -761,6 +926,8 @@ class SharkeyDiscoverApiTest {
             }
         }
     }
+
+    private fun String.jsonBody() = Json.parseToJsonElement(this).jsonObject
 
     private companion object {
         val jsonHeaders = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())

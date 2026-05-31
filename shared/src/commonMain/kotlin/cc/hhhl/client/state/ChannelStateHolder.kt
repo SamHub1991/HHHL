@@ -129,6 +129,18 @@ class ChannelStateHolder(
         }
     }
 
+    fun openDiscoveredChannel(channel: Channel) {
+        mutableState.update { current ->
+            val channels = if (current.channels.any { it.id == channel.id }) {
+                current.channels.map { if (it.id == channel.id) channel else it }
+            } else {
+                listOf(channel) + current.channels
+            }
+            current.copy(channels = channels)
+        }
+        selectChannel(channel)
+    }
+
     fun refreshTimeline() {
         val channel = state.value.selectedChannel ?: return
         if (state.value.isLoadingTimeline) return

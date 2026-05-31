@@ -1,9 +1,14 @@
 package cc.hhhl.client.api
 
-import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.AvatarDecoration
+import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelDefaultColorHex
+import cc.hhhl.client.model.DiscoverySections
 import cc.hhhl.client.model.FederationFollow
 import cc.hhhl.client.model.FederationInstance
 import cc.hhhl.client.model.FederationStats
+import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NoteSearchTrends
 import cc.hhhl.client.model.RoleSummary
 import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.model.User
@@ -74,6 +79,23 @@ interface DiscoverApi {
         DiscoverSearchResult.ServerError(501, "角色帖子接口未实现")
 
     suspend fun loadTrendingHashtags(): DiscoverTrendResult
+
+    suspend fun loadDiscoverySections(limit: Int = 6): DiscoverDiscoverySectionsResult =
+        DiscoverDiscoverySectionsResult.ServerError(501, "发现分区接口未实现")
+
+    suspend fun loadSearchTrends(limit: Int = 10): DiscoverSearchTrendsResult =
+        DiscoverSearchTrendsResult.ServerError(501, "搜索趋势接口未实现")
+
+    suspend fun loadRecommendedTimeline(
+        options: DiscoverRecommendedTimelineOptions = DiscoverRecommendedTimelineOptions(),
+    ): DiscoverSearchResult = DiscoverSearchResult.ServerError(501, "推荐时间线接口未实现")
+
+    suspend fun sendRecommendationFeedback(
+        token: String,
+        noteId: String,
+        event: DiscoverRecommendationFeedbackEvent,
+        dwellMs: Int? = null,
+    ): DiscoverRecommendationFeedbackResult = DiscoverRecommendationFeedbackResult.ServerError(501, "推荐反馈接口未实现")
 
     suspend fun searchHashtags(
         token: String,
@@ -206,6 +228,41 @@ sealed interface DiscoverTrendResult {
     ) : DiscoverTrendResult
 
     data class NetworkError(val message: String) : DiscoverTrendResult
+}
+
+sealed interface DiscoverDiscoverySectionsResult {
+    data class Success(val sections: DiscoverySections) : DiscoverDiscoverySectionsResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : DiscoverDiscoverySectionsResult
+
+    data class NetworkError(val message: String) : DiscoverDiscoverySectionsResult
+}
+
+sealed interface DiscoverSearchTrendsResult {
+    data class Success(val trends: NoteSearchTrends) : DiscoverSearchTrendsResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : DiscoverSearchTrendsResult
+
+    data class NetworkError(val message: String) : DiscoverSearchTrendsResult
+}
+
+sealed interface DiscoverRecommendationFeedbackResult {
+    data object Success : DiscoverRecommendationFeedbackResult
+
+    data object Unauthorized : DiscoverRecommendationFeedbackResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : DiscoverRecommendationFeedbackResult
+
+    data class NetworkError(val message: String) : DiscoverRecommendationFeedbackResult
 }
 
 sealed interface DiscoverHashtagResult {
@@ -587,6 +644,119 @@ class SharkeyDiscoverApi(
             throw error
         } catch (error: Throwable) {
             DiscoverTrendResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun loadDiscoverySections(limit: Int): DiscoverDiscoverySectionsResult {
+        return try {
+            val response = client.post(apiUrl("notes", "discovery-sections")) {
+                contentType(ContentType.Application.Json)
+                setBody(DiscoveryLimitRequest(limit = limit.coerceIn(1, 10)))
+            }
+
+            when (response.status) {
+                HttpStatusCode.OK -> DiscoverDiscoverySectionsResult.Success(
+                    response.body<DiscoverySectionsDto>().toDomainSections(),
+                )
+                else -> DiscoverDiscoverySectionsResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            DiscoverDiscoverySectionsResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun loadSearchTrends(limit: Int): DiscoverSearchTrendsResult {
+        return try {
+            val response = client.post(apiUrl("notes", "search-trends")) {
+                contentType(ContentType.Application.Json)
+                setBody(DiscoveryLimitRequest(limit = limit.coerceIn(1, 20)))
+            }
+
+            when (response.status) {
+                HttpStatusCode.OK -> DiscoverSearchTrendsResult.Success(
+                    response.body<NoteSearchTrendsDto>().toDomainTrends(),
+                )
+                else -> DiscoverSearchTrendsResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            DiscoverSearchTrendsResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun loadRecommendedTimeline(
+        options: DiscoverRecommendedTimelineOptions,
+    ): DiscoverSearchResult {
+        return try {
+            val response = client.post(apiUrl("notes", "recommended-timeline")) {
+                contentType(ContentType.Application.Json)
+                setBody(RecommendedTimelineRequest.fromOptions(options))
+            }
+
+            when (response.status) {
+                HttpStatusCode.OK -> DiscoverSearchResult.Success(
+                    response.body<List<SharkeyNoteDto>>().map { it.toDomainNote() },
+                )
+                else -> DiscoverSearchResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            DiscoverSearchResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun sendRecommendationFeedback(
+        token: String,
+        noteId: String,
+        event: DiscoverRecommendationFeedbackEvent,
+        dwellMs: Int?,
+    ): DiscoverRecommendationFeedbackResult {
+        val cleanToken = token.trim()
+        val cleanNoteId = noteId.trim()
+        if (cleanToken.isEmpty()) return DiscoverRecommendationFeedbackResult.Unauthorized
+        if (cleanNoteId.isEmpty()) {
+            return DiscoverRecommendationFeedbackResult.ServerError(400, "帖子 ID 不能为空")
+        }
+
+        return try {
+            val response = client.post(apiUrl("notes", "recommendation-feedback")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    RecommendationFeedbackRequest(
+                        i = cleanToken,
+                        noteId = cleanNoteId,
+                        event = event.apiValue,
+                        dwellMs = dwellMs?.coerceIn(0, 600_000),
+                    ),
+                )
+            }
+
+            if (response.isSharkeyUnauthorized()) return DiscoverRecommendationFeedbackResult.Unauthorized
+            when (response.status) {
+                HttpStatusCode.OK, HttpStatusCode.NoContent -> DiscoverRecommendationFeedbackResult.Success
+                HttpStatusCode.Unauthorized -> DiscoverRecommendationFeedbackResult.Unauthorized
+                else -> DiscoverRecommendationFeedbackResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            DiscoverRecommendationFeedbackResult.NetworkError(error.message ?: "网络请求失败")
         }
     }
 
@@ -1028,6 +1198,54 @@ data class DiscoverNoteSearchOptions(
     val includeReplies: Boolean = true,
 )
 
+enum class DiscoverRecommendedTimelineScope(val apiValue: String, val label: String) {
+    Mixed("mixed", "混合"),
+    Local("local", "本地"),
+    Social("social", "社交"),
+    Global("global", "全局"),
+}
+
+enum class DiscoverRecommendedTimelineSurface(val apiValue: String) {
+    Home("home"),
+    Explore("explore"),
+}
+
+enum class DiscoverRecommendedTimelineCategory(val apiValue: String, val label: String) {
+    ForYou("forYou", "为你"),
+    Trending("trending", "热门"),
+    Messages("messages", "消息"),
+    Sports("sports", "运动"),
+    Entertainment("entertainment", "娱乐"),
+    Tutorials("tutorials", "教程"),
+    Resources("resources", "资源"),
+}
+
+data class DiscoverRecommendedTimelineOptions(
+    val scope: DiscoverRecommendedTimelineScope = DiscoverRecommendedTimelineScope.Mixed,
+    val surface: DiscoverRecommendedTimelineSurface = DiscoverRecommendedTimelineSurface.Explore,
+    val category: DiscoverRecommendedTimelineCategory = DiscoverRecommendedTimelineCategory.ForYou,
+    val withFiles: Boolean = false,
+    val withRenotes: Boolean = true,
+    val withBots: Boolean = true,
+    val limit: Int = 20,
+    val offset: Int = 0,
+    val sinceId: String? = null,
+    val untilId: String? = null,
+    val sinceDate: Long? = null,
+    val untilDate: Long? = null,
+)
+
+enum class DiscoverRecommendationFeedbackEvent(val apiValue: String) {
+    Impression("impression"),
+    Click("click"),
+    Expand("expand"),
+    Dwell("dwell"),
+    React("react"),
+    Renote("renote"),
+    Reply("reply"),
+    Clip("clip"),
+}
+
 @Serializable
 private data class DiscoverSearchRequest(
     val i: String,
@@ -1075,6 +1293,9 @@ private data class DiscoverUserDto(
     val notesCount: Int = 0,
     val isFollowing: Boolean = false,
     val avatarUrl: String? = null,
+    val avatarDecorations: List<DiscoverAvatarDecorationDto> = emptyList(),
+    val bannerUrl: String? = null,
+    val onlineStatus: String = "unknown",
 ) {
     fun toDomainUser(): User {
         val displayName = name?.takeIf { it.isNotBlank() } ?: username
@@ -1090,12 +1311,123 @@ private data class DiscoverUserDto(
             notesCount = notesCount,
             isFollowing = isFollowing,
             avatarUrl = avatarUrl?.takeIf { it.isNotBlank() },
+            avatarDecorations = avatarDecorations.mapNotNull { it.toDomainDecoration() },
+            bannerUrl = bannerUrl?.takeIf { it.isNotBlank() },
+            onlineStatus = onlineStatus.ifBlank { "unknown" },
+        )
+    }
+}
+
+@Serializable
+private data class DiscoverAvatarDecorationDto(
+    val id: String? = null,
+    val url: String? = null,
+    val angle: Float = 0f,
+    val flipH: Boolean = false,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f,
+) {
+    fun toDomainDecoration(): AvatarDecoration? {
+        val cleanUrl = url?.takeIf { it.isNotBlank() } ?: return null
+        return AvatarDecoration(
+            id = id.orEmpty(),
+            url = cleanUrl,
+            angle = angle,
+            flipH = flipH,
+            offsetX = offsetX,
+            offsetY = offsetY,
         )
     }
 }
 
 @Serializable
 private class DiscoverEmptyRequest
+
+@Serializable
+private data class DiscoveryLimitRequest(
+    val limit: Int,
+)
+
+@Serializable
+private data class NoteSearchTrendsDto(
+    val popularSearches: List<String> = emptyList(),
+    val recentTerms: List<String> = emptyList(),
+    val hashtags: List<String> = emptyList(),
+) {
+    fun toDomainTrends(): NoteSearchTrends {
+        return NoteSearchTrends(
+            popularSearches = popularSearches.cleanedTerms(),
+            recentTerms = recentTerms.cleanedTerms(),
+            hashtags = hashtags
+                .map { it.trim().removePrefix("#") }
+                .cleanedTerms(),
+        )
+    }
+}
+
+@Serializable
+private data class DiscoverySectionsDto(
+    val trends: NoteSearchTrendsDto = NoteSearchTrendsDto(),
+    val coverNotes: List<SharkeyNoteDto> = emptyList(),
+    val hotNotes: List<SharkeyNoteDto> = emptyList(),
+    val tutorialNotes: List<SharkeyNoteDto> = emptyList(),
+    val channels: List<DiscoveryChannelDto> = emptyList(),
+    val users: List<DiscoverUserDto> = emptyList(),
+) {
+    fun toDomainSections(): DiscoverySections {
+        return DiscoverySections(
+            searchTrends = trends.toDomainTrends(),
+            coverNotes = coverNotes.map { it.toDomainNote() },
+            hotNotes = hotNotes.map { it.toDomainNote() },
+            tutorialNotes = tutorialNotes.map { it.toDomainNote() },
+            channels = channels.map { it.toDomainChannel() },
+            users = users.map { it.toDomainUser() },
+        )
+    }
+}
+
+@Serializable
+private data class RecommendedTimelineRequest(
+    val scope: String,
+    val surface: String,
+    val category: String,
+    val withFiles: Boolean? = null,
+    val withRenotes: Boolean? = null,
+    val withBots: Boolean? = null,
+    val limit: Int,
+    val offset: Int,
+    val sinceId: String? = null,
+    val untilId: String? = null,
+    val sinceDate: Long? = null,
+    val untilDate: Long? = null,
+) {
+    companion object {
+        fun fromOptions(options: DiscoverRecommendedTimelineOptions): RecommendedTimelineRequest {
+            return RecommendedTimelineRequest(
+                scope = options.scope.apiValue,
+                surface = options.surface.apiValue,
+                category = options.category.apiValue,
+                withFiles = options.withFiles.takeIf { it },
+                withRenotes = options.withRenotes.takeIf { !it },
+                withBots = options.withBots.takeIf { !it },
+                limit = options.limit.coerceIn(1, 100),
+                offset = options.offset.coerceAtLeast(0),
+                sinceId = options.sinceId?.takeIf { it.isNotBlank() },
+                untilId = options.untilId?.takeIf { it.isNotBlank() },
+                sinceDate = options.sinceDate,
+                untilDate = options.untilDate,
+            )
+        }
+    }
+}
+
+@Serializable
+private data class RecommendationFeedbackRequest(
+    val i: String,
+    val noteId: String,
+    val event: String,
+    val dwellMs: Int? = null,
+)
 
 @Serializable
 private data class HashtagSearchRequest(
@@ -1125,6 +1457,51 @@ private data class HashtagUsersRequest(
 )
 
 @Serializable
+private data class DiscoveryChannelDto(
+    val id: String,
+    val createdAt: String = "",
+    val lastNotedAt: String? = null,
+    val name: String = "",
+    val description: String? = null,
+    val userId: String? = null,
+    val bannerUrl: String? = null,
+    val pinnedNoteIds: List<String> = emptyList(),
+    val color: String = "",
+    val isArchived: Boolean = false,
+    val usersCount: Int = 0,
+    val notesCount: Int = 0,
+    val isSensitive: Boolean = false,
+    val allowRenoteToExternal: Boolean = false,
+    val isFollowing: Boolean = false,
+    val isFavorited: Boolean = false,
+    val hasUnreadNote: Boolean = false,
+    val pinnedNotes: List<SharkeyNoteDto> = emptyList(),
+) {
+    fun toDomainChannel(): Channel {
+        return Channel(
+            id = id,
+            name = name,
+            description = description.orEmpty(),
+            color = color.ifBlank { ChannelDefaultColorHex },
+            userId = userId,
+            bannerUrl = bannerUrl?.takeIf { it.isNotBlank() },
+            pinnedNoteIds = pinnedNoteIds,
+            pinnedNotes = pinnedNotes.map { it.toDomainNote() },
+            isArchived = isArchived,
+            isSensitive = isSensitive,
+            allowRenoteToExternal = allowRenoteToExternal,
+            isFollowing = isFollowing,
+            isFavorited = isFavorited,
+            hasUnreadNote = hasUnreadNote,
+            usersCount = usersCount,
+            notesCount = notesCount,
+            createdAtLabel = createdAt.toLocalCompactDateLabel(),
+            lastNotedAtLabel = lastNotedAt?.toLocalCompactDateLabel().orEmpty(),
+        )
+    }
+}
+
+@Serializable
 private data class TrendingHashtagDto(
     val tag: String,
     val chart: List<Int> = emptyList(),
@@ -1151,6 +1528,11 @@ private fun String.toDomainTrend(): TrendingHashtag {
         chart = emptyList(),
         usersCount = 0,
     )
+}
+
+private fun List<String>.cleanedTerms(): List<String> {
+    return mapNotNull { value -> value.trim().takeIf { it.isNotBlank() } }
+        .distinctBy { it.lowercase() }
 }
 
 @Serializable

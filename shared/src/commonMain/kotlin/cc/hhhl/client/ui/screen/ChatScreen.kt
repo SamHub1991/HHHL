@@ -50,12 +50,14 @@ import androidx.compose.material3.Text
 import cc.hhhl.client.ui.component.HhhlTextButton
 import cc.hhhl.client.ui.component.HhhlAlertDialog
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -108,12 +110,14 @@ import cc.hhhl.client.model.commonEmojiOptions
 import cc.hhhl.client.model.isServerChatMessageId
 import cc.hhhl.client.state.ChatAttentionKind
 import cc.hhhl.client.state.ChatUiState
+import cc.hhhl.client.state.FavoriteMessageConversationType
 import cc.hhhl.client.state.SpecialCareChatToast
 import cc.hhhl.client.state.primaryChatAttachmentFile
 import cc.hhhl.client.state.sendableChatAttachmentFileIds
 import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.theme.HhhlCustomTheme
 import cc.hhhl.client.theme.toColorOrNull
+import cc.hhhl.client.ui.component.AiResultCommonActionChips
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
@@ -209,6 +213,10 @@ private const val CHAT_MEMBER_ACTIVE_FALLBACK_USER_LIMIT = 8
 private const val CHAT_MESSAGE_UI_FILTER_MAX_MATCH_TEXT_LENGTH = 4_096
 private const val CHAT_SEARCH_AUTHOR_FILTER_MAX_USERS = 240
 private const val CHAT_SEARCH_AUTHOR_MENU_VISIBLE_USERS = 12
+private const val CHAT_ROOM_GROUP_MAX_LENGTH = 24
+private const val CHAT_ROOM_GROUP_UNGROUPED_TITLE = "未分组"
+
+private val ChatRoomGroupWhitespaceRegex = Regex("\\s+")
 
 private val ChatMessageTelegramTailWidth = 12.dp
 private val ChatMessageTelegramTailHeight = 10.dp
@@ -233,9 +241,12 @@ fun ChatScreen(
     onOpenRoom: (ChatRoom) -> Unit = {},
     onOpenUserConversation: (ChatUserConversation) -> Unit = {},
     onToggleRoomPinned: (String) -> Unit = {},
+    onSetRoomGroup: (String, String) -> Unit = { _, _ -> },
+    onDeleteRoomFromList: (String) -> Unit = {},
     onToggleUserConversationPinned: (String) -> Unit = {},
     onDeleteUserConversation: (String) -> Unit = {},
-    onCreateRoom: (String, String) -> Unit = { _, _ -> },
+    onOpenAiAssistant: () -> Unit = {},
+    onCreateRoom: (String, String, String) -> Unit = { _, _, _ -> },
     onRefreshRoomExtras: () -> Unit = {},
     onJoinRoomInvitation: (ChatRoomInvitation) -> Unit = {},
     onIgnoreRoomInvitation: (String) -> Unit = {},
@@ -247,7 +258,9 @@ fun ChatScreen(
     onShowMessages: () -> Unit = {},
     onShowMembers: () -> Unit = {},
     onLoadMoreMembers: () -> Unit = {},
-    onUpdateRoom: (String, String) -> Unit = { _, _ -> },
+    onUpdateRoom: (String, String, String) -> Unit = { _, _, _ -> },
+    onUpdateRoomManagement: (Int?) -> Unit = {},
+    onClearRoomMessages: () -> Unit = {},
     onInviteRoomMember: (String) -> Unit = {},
     onLeaveRoom: () -> Unit = {},
     onDeleteRoom: () -> Unit = {},
@@ -261,6 +274,7 @@ fun ChatScreen(
     onUnreactMessage: (String, String) -> Unit = { _, _ -> },
     onDeleteMessage: (String) -> Unit = {},
     onCopyMessage: (String) -> Unit = {},
+    onFavoriteMessage: (FavoriteMessageConversationType, String, String, ChatMessage) -> Unit = { _, _, _, _ -> },
     onReportMessage: (String) -> Unit = {},
     onAddMedia: () -> Unit = {},
     onAddFile: () -> Unit = onAddMedia,
@@ -273,6 +287,12 @@ fun ChatScreen(
     onOpenHashtag: (String) -> Unit = {},
     onOpenSpecialCareToast: () -> Unit = {},
     onDismissSpecialCareToast: () -> Unit = {},
+    onDismissErrorMessage: () -> Unit = {},
+    onDismissMessageErrorMessage: () -> Unit = {},
+    onDismissMessageSearchErrorMessage: () -> Unit = {},
+    onDismissMemberErrorMessage: () -> Unit = {},
+    onDismissRoomManagementMessage: () -> Unit = {},
+    onDismissStreamingErrorMessage: () -> Unit = {},
     onSpecialCareJumpHandled: () -> Unit = {},
     onUnreadJumpHandled: () -> Unit = {},
     customEmojis: List<CustomEmoji> = emptyList(),
@@ -284,7 +304,11 @@ fun ChatScreen(
     aiResultText: String? = null,
     aiResultLabel: String? = null,
     onAiAction: (AiTaskKind, ChatUiState, String) -> Unit = { _, _, _ -> },
+    onCopyAiResult: ((String) -> Unit)? = null,
+    onAddAiMutedWord: ((String) -> Unit)? = null,
+    onCreateAutomationFromAiResult: ((String) -> Unit)? = null,
     onDismissAiResult: () -> Unit = {},
+    onBackHandlerChanged: (((() -> Boolean)?) -> Unit)? = null,
 ) {
     val selectedRoom = state.selectedRoom
     val selectedUserConversation = state.selectedUserConversation
@@ -303,6 +327,8 @@ fun ChatScreen(
             onShowMembers = onShowMembers,
             onLoadMoreMembers = onLoadMoreMembers,
             onUpdateRoom = onUpdateRoom,
+            onUpdateRoomManagement = onUpdateRoomManagement,
+            onClearRoomMessages = onClearRoomMessages,
             onInviteRoomMember = onInviteRoomMember,
             onLeaveRoom = onLeaveRoom,
             onDeleteRoom = onDeleteRoom,
@@ -316,6 +342,7 @@ fun ChatScreen(
             onUnreactMessage = onUnreactMessage,
             onDeleteMessage = onDeleteMessage,
             onCopyMessage = onCopyMessage,
+            onFavoriteMessage = onFavoriteMessage,
             onReportMessage = onReportMessage,
             onAddMedia = onAddMedia,
             onAddFile = onAddFile,
@@ -328,6 +355,11 @@ fun ChatScreen(
             onOpenHashtag = onOpenHashtag,
             onOpenSpecialCareToast = onOpenSpecialCareToast,
             onDismissSpecialCareToast = onDismissSpecialCareToast,
+            onDismissMessageErrorMessage = onDismissMessageErrorMessage,
+            onDismissMessageSearchErrorMessage = onDismissMessageSearchErrorMessage,
+            onDismissMemberErrorMessage = onDismissMemberErrorMessage,
+            onDismissRoomManagementMessage = onDismissRoomManagementMessage,
+            onDismissStreamingErrorMessage = onDismissStreamingErrorMessage,
             onSpecialCareJumpHandled = onSpecialCareJumpHandled,
             onUnreadJumpHandled = onUnreadJumpHandled,
             customEmojis = customEmojis,
@@ -340,7 +372,11 @@ fun ChatScreen(
             aiResultText = aiResultText,
             aiResultLabel = aiResultLabel,
             onAiAction = onAiAction,
+            onCopyAiResult = onCopyAiResult,
+            onAddAiMutedWord = onAddAiMutedWord,
+            onCreateAutomationFromAiResult = onCreateAutomationFromAiResult,
             onDismissAiResult = onDismissAiResult,
+            onBackHandlerChanged = onBackHandlerChanged,
         )
         return
     }
@@ -348,8 +384,11 @@ fun ChatScreen(
     var homeTab by remember { mutableStateOf(ChatHomeTab.Rooms) }
     var roomSearchQuery by remember { mutableStateOf("") }
     var userSearchQuery by remember { mutableStateOf("") }
-    val visibleRooms = remember(state.rooms, roomSearchQuery) {
-        state.rooms.filterByChatRoomQuery(roomSearchQuery)
+    val visibleRooms = remember(state.rooms, state.roomGroups, roomSearchQuery) {
+        state.rooms.filterByChatRoomQuery(roomSearchQuery, state.roomGroups)
+    }
+    val visibleRoomGroups = remember(visibleRooms, state.roomGroups) {
+        visibleRooms.groupByChatRoomGroup(state.roomGroups)
     }
     val visibleUserConversations = remember(state.userConversations, blockedUserIds, userSearchQuery) {
         state.userConversations
@@ -381,6 +420,7 @@ fun ChatScreen(
             selectedTab = homeTab,
             onTabSelected = { homeTab = it },
             onRefresh = onRefresh,
+            onOpenAiAssistant = onOpenAiAssistant,
             onCreateRoom = onCreateRoom,
             onRefreshRoomExtras = onRefreshRoomExtras,
         )
@@ -388,6 +428,7 @@ fun ChatScreen(
             ChatStatusRow(
                 text = message,
                 loading = state.isManagingRoom,
+                onDismiss = onDismissRoomManagementMessage,
             )
         }
         HhhlDivider()
@@ -423,6 +464,7 @@ fun ChatScreen(
                         text = message,
                         actionText = if (state.chatAvailable) "重试" else null,
                         onAction = if (state.chatAvailable) onRefresh else null,
+                        onDismiss = onDismissErrorMessage,
                     )
                 }
             }
@@ -487,19 +529,39 @@ fun ChatScreen(
                         HhhlDivider()
                     }
                 }
-                itemsIndexed(
-                    items = visibleRooms,
-                    key = { index, room -> room.stableChatRoomListKey(index) },
-                    contentType = { _, _ -> ChatListContentType.Room },
-                ) { _, room ->
-                    ChatRoomRow(
-                        room = room,
-                        attentionKind = state.roomAttentionKinds[room.id],
-                        isPinned = room.id in state.pinnedRoomIds,
-                        onClick = { onOpenRoom(room) },
-                        onTogglePinned = { onToggleRoomPinned(room.id) },
-                    )
-                    HhhlDivider()
+                visibleRoomGroups.forEach { group ->
+                    if (group.title.isNotBlank()) {
+                        item(
+                            key = "chat-room-group-${group.title}",
+                            contentType = ChatListContentType.Status,
+                        ) {
+                            ChatRoomGroupHeader(group.title, group.rooms.size)
+                        }
+                    }
+                    itemsIndexed(
+                        items = group.rooms,
+                        key = { index, room -> room.stableChatRoomListKey(index) },
+                        contentType = { _, _ -> ChatListContentType.Room },
+                    ) { _, room ->
+                        ChatRoomRow(
+                            room = room,
+                            attentionKind = state.roomAttentionKinds[room.id],
+                            isPinned = room.id in state.pinnedRoomIds,
+                            groupName = state.roomGroups[room.id].orEmpty(),
+                            availableGroups = state.roomGroups.values.distinct().sorted(),
+                            canDelete = canManageChatRoom(
+                                room = room,
+                                ownedRooms = state.ownedRooms,
+                                currentUserId = currentUserId,
+                            ),
+                            isManagingRoom = state.isManagingRoom,
+                            onClick = { onOpenRoom(room) },
+                            onTogglePinned = { onToggleRoomPinned(room.id) },
+                            onSetGroup = { groupName -> onSetRoomGroup(room.id, groupName) },
+                            onDeleteRoom = { onDeleteRoomFromList(room.id) },
+                        )
+                        HhhlDivider()
+                    }
                 }
             } else {
                 itemsIndexed(
@@ -539,7 +601,8 @@ private fun ChatRoomSummaryRow(
     selectedTab: ChatHomeTab,
     onTabSelected: (ChatHomeTab) -> Unit,
     onRefresh: () -> Unit,
-    onCreateRoom: (String, String) -> Unit,
+    onOpenAiAssistant: () -> Unit,
+    onCreateRoom: (String, String, String) -> Unit,
     onRefreshRoomExtras: () -> Unit,
 ) {
     var createDialogOpen by remember { mutableStateOf(false) }
@@ -574,6 +637,13 @@ private fun ChatRoomSummaryRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                HhhlIconActionButton(
+                    icon = Icons.Filled.AutoAwesome,
+                    contentDescription = "AI 助手",
+                    emphasized = true,
+                    enabled = state.chatAvailable,
+                    onClick = onOpenAiAssistant,
+                )
                 HhhlIconActionButton(
                     icon = Icons.Filled.Add,
                     contentDescription = if (state.isManagingRoom) "处理中" else "新建聊天室",
@@ -618,10 +688,11 @@ private fun ChatRoomSummaryRow(
             confirmText = "创建",
             initialName = "",
             initialDescription = "",
+            initialJoinMode = "inviteOnly",
             isSaving = state.isManagingRoom,
             onDismiss = { createDialogOpen = false },
-            onSubmit = { name, description ->
-                onCreateRoom(name, description)
+            onSubmit = { name, description, joinMode ->
+                onCreateRoom(name, description, joinMode)
                 createDialogOpen = false
             },
         )
@@ -757,6 +828,43 @@ private fun ChatExtraSectionTitle(
         Text(
             text = count.toString(),
             color = colors.textSecondary,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun ChatRoomGroupHeader(
+    title: String,
+    count: Int,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Folder,
+            contentDescription = null,
+            tint = colors.textMuted,
+            modifier = Modifier.size(15.dp),
+        )
+        Text(
+            text = title,
+            color = colors.textSecondary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = count.toString(),
+            color = colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
         )
@@ -909,10 +1017,18 @@ private fun ChatRoomRow(
     room: ChatRoom,
     attentionKind: ChatAttentionKind?,
     isPinned: Boolean,
+    groupName: String,
+    availableGroups: List<String>,
+    canDelete: Boolean,
+    isManagingRoom: Boolean,
     onClick: () -> Unit,
     onTogglePinned: () -> Unit,
+    onSetGroup: (String) -> Unit,
+    onDeleteRoom: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    var groupDialogOpen by remember(room.id) { mutableStateOf(false) }
+    var deleteRoomDialogOpen by remember(room.id) { mutableStateOf(false) }
     val colors = LocalHhhlColors.current
     val interactionSource = rememberChatPresslessInteractionSource()
     val unreadCount = room.unreadCount.coerceAtLeast(0)
@@ -962,6 +1078,9 @@ private fun ChatRoomRow(
                     if (isPinned) {
                         ChatPinnedBadge()
                     }
+                    if (groupName.isNotBlank()) {
+                        ChatRoomGroupBadge(groupName)
+                    }
                     ChatRoomMuteGlyph(isMuted = room.isMuted)
                 }
                 if (room.description.isNotBlank()) {
@@ -1006,10 +1125,39 @@ private fun ChatRoomRow(
         ChatConversationContextMenu(
             expanded = menuExpanded,
             isPinned = isPinned,
-            includeDelete = false,
+            groupName = groupName,
+            includeGroupActions = true,
+            deleteLabel = "删除聊天室".takeIf { canDelete },
+            deleteEnabled = !isManagingRoom,
             onDismiss = { menuExpanded = false },
             onTogglePinned = onTogglePinned,
-            onDelete = {},
+            onOpenGroupEditor = { groupDialogOpen = true },
+            onClearGroup = { onSetGroup("") },
+            onDelete = { deleteRoomDialogOpen = true },
+        )
+    }
+    if (groupDialogOpen) {
+        ChatRoomGroupDialog(
+            roomName = room.name.ifBlank { "聊天室" },
+            initialGroupName = groupName,
+            availableGroups = availableGroups,
+            onDismiss = { groupDialogOpen = false },
+            onSubmit = { nextGroupName ->
+                onSetGroup(nextGroupName)
+                groupDialogOpen = false
+            },
+        )
+    }
+    if (deleteRoomDialogOpen && canDelete) {
+        ChatRoomConfirmDialog(
+            title = "删除聊天室",
+            text = "删除聊天室会移除房间和聊天记录。只有有权限的用户可以执行。",
+            confirmText = "删除",
+            onDismiss = { deleteRoomDialogOpen = false },
+            onConfirm = {
+                onDeleteRoom()
+                deleteRoomDialogOpen = false
+            },
         )
     }
 }
@@ -1134,7 +1282,8 @@ private fun ChatUserConversationRow(
         ChatConversationContextMenu(
             expanded = menuExpanded,
             isPinned = isPinned,
-            includeDelete = true,
+            includeGroupActions = false,
+            deleteLabel = "删除对话",
             onDismiss = { menuExpanded = false },
             onTogglePinned = onTogglePinned,
             onDelete = onDeleteConversation,
@@ -1194,9 +1343,14 @@ private fun ChatAttentionInlineBadge(
 private fun ChatConversationContextMenu(
     expanded: Boolean,
     isPinned: Boolean,
-    includeDelete: Boolean,
+    groupName: String = "",
+    includeGroupActions: Boolean,
+    deleteLabel: String? = null,
+    deleteEnabled: Boolean = true,
     onDismiss: () -> Unit,
     onTogglePinned: () -> Unit,
+    onOpenGroupEditor: () -> Unit = {},
+    onClearGroup: () -> Unit = {},
     onDelete: () -> Unit,
 ) {
     val colors = LocalHhhlColors.current
@@ -1218,16 +1372,37 @@ private fun ChatConversationContextMenu(
                 onTogglePinned()
             },
         )
-        if (includeDelete) {
+        deleteLabel?.let { label ->
             ChatConversationContextMenuItem(
-                label = "删除对话",
+                label = label,
                 icon = Icons.Filled.Delete,
+                enabled = deleteEnabled,
                 destructive = true,
                 onClick = {
                     onDismiss()
                     onDelete()
                 },
             )
+        }
+        if (includeGroupActions) {
+            ChatConversationContextMenuItem(
+                label = if (groupName.isBlank()) "设置分组" else "分组：$groupName",
+                icon = Icons.Filled.Folder,
+                onClick = {
+                    onDismiss()
+                    onOpenGroupEditor()
+                },
+            )
+            if (groupName.isNotBlank()) {
+                ChatConversationContextMenuItem(
+                    label = "移出分组",
+                    icon = Icons.Filled.Close,
+                    onClick = {
+                        onDismiss()
+                        onClearGroup()
+                    },
+                )
+            }
         }
     }
 }
@@ -1236,11 +1411,16 @@ private fun ChatConversationContextMenu(
 private fun ChatConversationContextMenuItem(
     label: String,
     icon: ImageVector,
+    enabled: Boolean = true,
     destructive: Boolean = false,
     onClick: () -> Unit,
 ) {
     val colors = LocalHhhlColors.current
-    val contentColor = if (destructive) colors.danger else colors.textPrimary
+    val contentColor = when {
+        !enabled -> colors.textMuted.copy(alpha = 0.52f)
+        destructive -> colors.danger
+        else -> colors.textPrimary
+    }
     HhhlDropdownMenuItem(
         text = {
             Row(
@@ -1263,6 +1443,7 @@ private fun ChatConversationContextMenuItem(
                 )
             }
         },
+        enabled = enabled,
         destructive = destructive,
         onClick = onClick,
         modifier = Modifier
@@ -1270,7 +1451,7 @@ private fun ChatConversationContextMenuItem(
             .clip(RoundedCornerShape(13.dp))
             .background(
                 if (destructive) {
-                    colors.danger.copy(alpha = 0.07f)
+                    colors.danger.copy(alpha = if (enabled) 0.07f else 0.03f)
                 } else {
                     Color.Transparent
                 },
@@ -1306,6 +1487,35 @@ private fun ChatPinnedBadge() {
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun ChatRoomGroupBadge(groupName: String) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(colors.chipBackground.copy(alpha = 0.72f))
+            .border(1.dp, colors.border.copy(alpha = 0.24f), RoundedCornerShape(999.dp))
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Folder,
+            contentDescription = null,
+            tint = colors.textMuted,
+            modifier = Modifier.size(11.dp),
+        )
+        Text(
+            text = groupName,
+            color = colors.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -1365,6 +1575,11 @@ private object ChatListContentType {
     const val MemberRow = "chat-member-row"
     const val Status = "chat-status"
 }
+
+internal data class ChatRoomListGroup(
+    val title: String,
+    val rooms: List<ChatRoom>,
+)
 
 private const val CHAT_ROOM_MEMBERS_PER_ROW = 4
 
@@ -1467,7 +1682,9 @@ private fun ChatDetailScreen(
     onShowMessages: () -> Unit,
     onShowMembers: () -> Unit,
     onLoadMoreMembers: () -> Unit,
-    onUpdateRoom: (String, String) -> Unit,
+    onUpdateRoom: (String, String, String) -> Unit,
+    onUpdateRoomManagement: (Int?) -> Unit,
+    onClearRoomMessages: () -> Unit,
     onInviteRoomMember: (String) -> Unit,
     onLeaveRoom: () -> Unit,
     onDeleteRoom: () -> Unit,
@@ -1481,6 +1698,7 @@ private fun ChatDetailScreen(
     onUnreactMessage: (String, String) -> Unit,
     onDeleteMessage: (String) -> Unit,
     onCopyMessage: (String) -> Unit,
+    onFavoriteMessage: (FavoriteMessageConversationType, String, String, ChatMessage) -> Unit,
     onReportMessage: (String) -> Unit,
     onAddMedia: () -> Unit,
     onAddFile: () -> Unit,
@@ -1493,6 +1711,11 @@ private fun ChatDetailScreen(
     onOpenHashtag: (String) -> Unit,
     onOpenSpecialCareToast: () -> Unit,
     onDismissSpecialCareToast: () -> Unit,
+    onDismissMessageErrorMessage: () -> Unit,
+    onDismissMessageSearchErrorMessage: () -> Unit,
+    onDismissMemberErrorMessage: () -> Unit,
+    onDismissRoomManagementMessage: () -> Unit,
+    onDismissStreamingErrorMessage: () -> Unit,
     onSpecialCareJumpHandled: () -> Unit,
     onUnreadJumpHandled: () -> Unit,
     customEmojis: List<CustomEmoji>,
@@ -1505,7 +1728,11 @@ private fun ChatDetailScreen(
     aiResultText: String?,
     aiResultLabel: String?,
     onAiAction: (AiTaskKind, ChatUiState, String) -> Unit,
+    onCopyAiResult: ((String) -> Unit)?,
+    onAddAiMutedWord: ((String) -> Unit)?,
+    onCreateAutomationFromAiResult: ((String) -> Unit)?,
     onDismissAiResult: () -> Unit,
+    onBackHandlerChanged: (((() -> Boolean)?) -> Unit)?,
 ) {
     val conversationKey = room?.id ?: userConversation?.user?.id ?: "chat"
     val title = room?.name?.ifBlank { "聊天室" }
@@ -1540,14 +1767,33 @@ private fun ChatDetailScreen(
     }
     var showingMessageSearch by remember(conversationKey) { mutableStateOf(false) }
     var showingMessageFilters by remember(conversationKey) { mutableStateOf(false) }
+    val latestChatBackHandler by rememberUpdatedState<() -> Boolean> {
+        when {
+            showingMessageSearch -> {
+                showingMessageSearch = false
+                true
+            }
+            showingMessageFilters -> {
+                showingMessageFilters = false
+                true
+            }
+            else -> false
+        }
+    }
+    DisposableEffect(onBackHandlerChanged) {
+        onBackHandlerChanged?.invoke { latestChatBackHandler() }
+        onDispose { onBackHandlerChanged?.invoke(null) }
+    }
     var messageUiFilter by remember(conversationKey) { mutableStateOf(ChatMessageUiFilterState()) }
     var memberSearchQuery by remember(conversationKey) { mutableStateOf("") }
     var pendingMessageJumpId by remember(conversationKey) { mutableStateOf<String?>(null) }
     var pendingQuoteJump by remember(conversationKey) { mutableStateOf<ChatRenderedQuote?>(null) }
     var editRoomDialogOpen by remember(conversationKey) { mutableStateOf(false) }
+    var roomManagementDialogOpen by remember(conversationKey) { mutableStateOf(false) }
     var inviteMemberDialogOpen by remember(conversationKey) { mutableStateOf(false) }
     var leaveRoomDialogOpen by remember(conversationKey) { mutableStateOf(false) }
     var deleteRoomDialogOpen by remember(conversationKey) { mutableStateOf(false) }
+    var clearRoomMessagesDialogOpen by remember(conversationKey) { mutableStateOf(false) }
     val activeMessageUiFilter = remember(
         messageUiFilter.hideMfmSyntaxMessages,
         messageUiFilter.hiddenUserIds,
@@ -1630,6 +1876,8 @@ private fun ChatDetailScreen(
             onLoadOlderMessages = onLoadOlderMessages,
             onSearch = onSearchMessages,
             onLoadMoreSearch = onLoadMoreMessageSearch,
+            onDismissMessageError = onDismissMessageErrorMessage,
+            onDismissSearchError = onDismissMessageSearchErrorMessage,
             onSelectMessage = { messageId ->
                 showingMessageSearch = false
                 if (messageUiFilter.shouldResetForLoadedHiddenMessage(messageId, loadedMessageIds, messageIndexById)) {
@@ -1688,9 +1936,17 @@ private fun ChatDetailScreen(
                         },
                         aiEnabled = aiEnabled,
                         isAiProcessing = isAiProcessing,
-                        onAiSummary = {
+                        onAiRecentSummary = {
                             closeComposerPanel()
-                            onAiAction(AiTaskKind.ChatSummary, state, title)
+                            onAiAction(AiTaskKind.ChatRecentSummary, state, title)
+                        },
+                        onAiTodaySummary = {
+                            closeComposerPanel()
+                            onAiAction(AiTaskKind.ChatTodaySummary, state, title)
+                        },
+                        onAiUnreadSummary = {
+                            closeComposerPanel()
+                            onAiAction(AiTaskKind.ChatUnreadSummary, state, title)
                         },
                         onAiReplyDraft = {
                             closeComposerPanel()
@@ -1711,6 +1967,14 @@ private fun ChatDetailScreen(
                         onEditRoom = {
                             closeComposerPanel()
                             editRoomDialogOpen = true
+                        },
+                        onOpenRoomManagement = {
+                            closeComposerPanel()
+                            roomManagementDialogOpen = true
+                        },
+                        onClearRoomMessages = {
+                            closeComposerPanel()
+                            clearRoomMessagesDialogOpen = true
                         },
                         onInviteMember = {
                             closeComposerPanel()
@@ -1740,6 +2004,13 @@ private fun ChatDetailScreen(
             ChatStatusRow(
                 text = message,
                 loading = state.isManagingRoom,
+                onDismiss = onDismissRoomManagementMessage,
+            )
+        }
+        state.streamingErrorMessage?.let { message ->
+            ChatStatusRow(
+                text = message,
+                onDismiss = onDismissStreamingErrorMessage,
             )
         }
         if (room != null) {
@@ -1775,6 +2046,7 @@ private fun ChatDetailScreen(
                 searchQuery = memberSearchQuery,
                 onRefresh = onShowMembers,
                 onLoadMoreMembers = onLoadMoreMembers,
+                onDismissMemberErrorMessage = onDismissMemberErrorMessage,
                 modifier = Modifier.weight(1f),
             )
         } else {
@@ -2023,6 +2295,7 @@ private fun ChatDetailScreen(
                                 text = message,
                                 actionText = "重试",
                                 onAction = onRefresh,
+                                onDismiss = onDismissMessageErrorMessage,
                             )
                         }
                     }
@@ -2077,6 +2350,14 @@ private fun ChatDetailScreen(
                             onUnreact = onUnreactMessage,
                             onDelete = onDeleteMessage,
                             onCopy = onCopyMessage,
+                            onFavorite = { favoriteMessage ->
+                                onFavoriteMessage(
+                                    if (room != null) FavoriteMessageConversationType.Room else FavoriteMessageConversationType.User,
+                                    room?.id ?: userConversation?.user?.id ?: favoriteMessage.roomId,
+                                    title,
+                                    favoriteMessage,
+                                )
+                            },
                             onReport = onReportMessage,
                             currentUserId = currentUserId,
                             onOpenUser = onOpenUser,
@@ -2122,6 +2403,9 @@ private fun ChatDetailScreen(
                     text = aiResultText,
                     onUseAsDraft = { onMessageDraftChanged(aiResultText) },
                     onAppendToDraft = { onMessageDraftChanged(state.messageDraft.withAppendedChatText(aiResultText)) },
+                    onCopyAiResult = onCopyAiResult,
+                    onAddAiMutedWord = onAddAiMutedWord,
+                    onCreateAutomationFromAiResult = onCreateAutomationFromAiResult,
                     onDismiss = onDismissAiResult,
                 )
                 HhhlDivider()
@@ -2249,11 +2533,23 @@ private fun ChatDetailScreen(
             confirmText = "保存",
             initialName = room.name,
             initialDescription = room.description,
+            initialJoinMode = room.joinMode.ifBlank { "inviteOnly" },
             isSaving = state.isManagingRoom,
             onDismiss = { editRoomDialogOpen = false },
-            onSubmit = { name, description ->
-                onUpdateRoom(name, description)
+            onSubmit = { name, description, joinMode ->
+                onUpdateRoom(name, description, joinMode)
                 editRoomDialogOpen = false
+            },
+        )
+    }
+    if (roomManagementDialogOpen && room != null) {
+        ChatRoomManagementDialog(
+            room = room,
+            isSaving = state.isManagingRoom,
+            onDismiss = { roomManagementDialogOpen = false },
+            onSubmitRetentionDays = { days ->
+                onUpdateRoomManagement(days)
+                roomManagementDialogOpen = false
             },
         )
     }
@@ -2288,6 +2584,18 @@ private fun ChatDetailScreen(
             onConfirm = {
                 onDeleteRoom()
                 deleteRoomDialogOpen = false
+            },
+        )
+    }
+    if (clearRoomMessagesDialogOpen && room != null) {
+        ChatRoomConfirmDialog(
+            title = "清空聊天室消息",
+            text = "这会删除该聊天室的全部聊天消息，并清空本机缓存。房间和成员不会删除。",
+            confirmText = "清空",
+            onDismiss = { clearRoomMessagesDialogOpen = false },
+            onConfirm = {
+                onClearRoomMessages()
+                clearRoomMessagesDialogOpen = false
             },
         )
     }
@@ -2329,12 +2637,14 @@ private fun ChatRoomEditDialog(
     confirmText: String,
     initialName: String,
     initialDescription: String,
+    initialJoinMode: String,
     isSaving: Boolean,
     onDismiss: () -> Unit,
-    onSubmit: (String, String) -> Unit,
+    onSubmit: (String, String, String) -> Unit,
 ) {
     var name by remember(initialName) { mutableStateOf(initialName) }
     var description by remember(initialDescription) { mutableStateOf(initialDescription) }
+    var joinMode by remember(initialJoinMode) { mutableStateOf(initialJoinMode.toEditableChatRoomJoinMode()) }
     HhhlAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -2352,12 +2662,16 @@ private fun ChatRoomEditDialog(
                     placeholder = "聊天室描述",
                     minHeight = 72.dp,
                 )
+                ChatRoomJoinModeControl(
+                    selected = joinMode,
+                    onSelected = { joinMode = it },
+                )
             }
         },
         confirmButton = {
             HhhlTextButton(
                 enabled = !isSaving && name.isNotBlank(),
-                onClick = { onSubmit(name, description) },
+                onClick = { onSubmit(name, description, joinMode) },
             ) {
                 Text(if (isSaving) "处理中" else confirmText)
             }
@@ -2405,6 +2719,172 @@ private fun ChatRoomInviteDialog(
 }
 
 @Composable
+private fun ChatRoomJoinModeControl(
+    selected: String,
+    onSelected: (String) -> Unit,
+) {
+    HhhlSegmentedControl(modifier = Modifier.fillMaxWidth()) {
+        ChatRoomJoinModeOption.entries.forEach { option ->
+            HhhlSegmentedItem(
+                label = option.label,
+                selected = selected == option.value,
+                onClick = { onSelected(option.value) },
+                modifier = Modifier.weight(1f),
+                selectedUsesPrimary = true,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatRoomManagementDialog(
+    room: ChatRoom,
+    isSaving: Boolean,
+    onDismiss: () -> Unit,
+    onSubmitRetentionDays: (Int?) -> Unit,
+) {
+    val initialRetentionMode = if (room.messageRetentionDays == null) ChatRoomRetentionMode.Unlimited else ChatRoomRetentionMode.Limited
+    var retentionMode by remember(room.id, room.messageRetentionDays) { mutableStateOf(initialRetentionMode) }
+    var retentionDays by remember(room.id, room.messageRetentionDays) {
+        mutableStateOf(room.messageRetentionDays?.toString().orEmpty())
+    }
+    val parsedDays = retentionDays.trim().toIntOrNull()
+    val validDays = retentionMode == ChatRoomRetentionMode.Unlimited || parsedDays?.let { it in 1..3650 } == true
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("聊天室管理") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "${room.memberCount} 人 · 上限 ${room.memberLimit.takeIf { it > 0 }?.toString() ?: "服务器默认"}",
+                    color = colors.textSecondary,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = room.joinMode.toDisplayJoinMode(),
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                HhhlSegmentedControl(modifier = Modifier.fillMaxWidth()) {
+                    HhhlSegmentedItem(
+                        label = "不限",
+                        selected = retentionMode == ChatRoomRetentionMode.Unlimited,
+                        onClick = { retentionMode = ChatRoomRetentionMode.Unlimited },
+                        modifier = Modifier.weight(1f),
+                        selectedUsesPrimary = true,
+                    )
+                    HhhlSegmentedItem(
+                        label = "保留天数",
+                        selected = retentionMode == ChatRoomRetentionMode.Limited,
+                        onClick = { retentionMode = ChatRoomRetentionMode.Limited },
+                        modifier = Modifier.weight(1f),
+                        selectedUsesPrimary = true,
+                    )
+                }
+                HhhlTextInput(
+                    value = retentionDays,
+                    onValueChange = { value -> retentionDays = value.filter { it.isDigit() }.take(4) },
+                    placeholder = "1-3650 天",
+                    enabled = retentionMode == ChatRoomRetentionMode.Limited,
+                    singleLine = true,
+                )
+                if (!validDays) {
+                    Text(
+                        text = "消息保留天数需要在 1 到 3650 之间",
+                        color = colors.danger,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                Text(
+                    text = "人数上限来自服务器字段；修改上限需要站点管理员接口权限。",
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        },
+        confirmButton = {
+            HhhlTextButton(
+                enabled = !isSaving && validDays,
+                onClick = {
+                    onSubmitRetentionDays(
+                        if (retentionMode == ChatRoomRetentionMode.Unlimited) null else parsedDays,
+                    )
+                },
+            ) {
+                Text(if (isSaving) "处理中" else "保存")
+            }
+        },
+        dismissButton = {
+            HhhlTextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun ChatRoomGroupDialog(
+    roomName: String,
+    initialGroupName: String,
+    availableGroups: List<String>,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit,
+) {
+    var groupName by remember(roomName, initialGroupName) { mutableStateOf(initialGroupName) }
+    val colors = LocalHhhlColors.current
+    HhhlAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("聊天室分组") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = roomName,
+                    color = colors.textSecondary,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                HhhlTextInput(
+                    value = groupName,
+                    onValueChange = { groupName = it.take(24) },
+                    placeholder = "例如：工作、朋友、机器人、关注",
+                    singleLine = true,
+                )
+                if (availableGroups.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        availableGroups.take(12).forEach { name ->
+                            HhhlActionChip(
+                                label = name,
+                                emphasized = groupName.trim().equals(name, ignoreCase = true),
+                                onClick = { groupName = name },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            HhhlTextButton(onClick = { onSubmit(groupName) }) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            HhhlTextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
 private fun ChatRoomConfirmDialog(
     title: String,
     text: String,
@@ -2426,7 +2906,7 @@ private fun ChatRoomConfirmDialog(
         confirmButton = {
             HhhlTextButton(
                 onClick = onConfirm,
-                destructive = confirmText.contains("删除") || confirmText.contains("移除"),
+                destructive = confirmText.contains("删除") || confirmText.contains("移除") || confirmText.contains("清空"),
             ) {
                 Text(confirmText)
             }
@@ -2457,7 +2937,8 @@ fun canManageChatRoom(
     currentUserId: String?,
 ): Boolean {
     val targetRoom = room ?: return false
-    return currentUserId?.takeIf { it.isNotBlank() } == targetRoom.owner.id ||
+    return targetRoom.canManage ||
+        currentUserId?.takeIf { it.isNotBlank() } == targetRoom.owner.id ||
         ownedRooms.any { ownedRoom -> ownedRoom.id == targetRoom.id }
 }
 
@@ -2474,12 +2955,16 @@ fun chatDetailSummaryActions(
     onSearchMessages: () -> Unit = {},
     aiEnabled: Boolean = false,
     isAiProcessing: Boolean = false,
-    onAiSummary: () -> Unit = {},
+    onAiRecentSummary: () -> Unit = {},
+    onAiTodaySummary: () -> Unit = {},
+    onAiUnreadSummary: () -> Unit = {},
     onAiReplyDraft: () -> Unit = {},
     onAiActionItems: () -> Unit = {},
     onAiDecisionSummary: () -> Unit = {},
     onOpenFilters: () -> Unit = {},
     onEditRoom: () -> Unit = {},
+    onOpenRoomManagement: () -> Unit = {},
+    onClearRoomMessages: () -> Unit = {},
     onInviteMember: () -> Unit = {},
     onLeaveRoom: () -> Unit = {},
     onDeleteRoom: () -> Unit = {},
@@ -2508,7 +2993,9 @@ fun chatDetailSummaryActions(
             icon = Icons.Filled.AutoAwesome,
             onClick = {},
             children = listOf(
-                HhhlOverflowMenuAction(label = "总结聊天", icon = Icons.Filled.AutoAwesome, onClick = onAiSummary),
+                HhhlOverflowMenuAction(label = "最近 50 条", icon = Icons.Filled.AutoAwesome, onClick = onAiRecentSummary),
+                HhhlOverflowMenuAction(label = "今日摘要", icon = Icons.Filled.AutoAwesome, onClick = onAiTodaySummary),
+                HhhlOverflowMenuAction(label = "未读摘要", icon = Icons.Filled.AutoAwesome, onClick = onAiUnreadSummary),
                 HhhlOverflowMenuAction(label = "回复草稿", icon = Icons.Filled.AutoAwesome, onClick = onAiReplyDraft),
                 HhhlOverflowMenuAction(label = "待办提取", icon = Icons.Filled.AutoAwesome, onClick = onAiActionItems),
                 HhhlOverflowMenuAction(label = "决策摘要", icon = Icons.Filled.AutoAwesome, onClick = onAiDecisionSummary),
@@ -2534,6 +3021,26 @@ fun chatDetailSummaryActions(
                 label = "邀请成员",
                 enabled = !isManagingRoom,
                 onClick = onInviteMember,
+            ),
+        )
+        add(
+            HhhlOverflowMenuAction(
+                label = "聊天室管理",
+                enabled = !isManagingRoom,
+                onClick = {},
+                children = listOf(
+                    HhhlOverflowMenuAction(
+                        label = "保留设置",
+                        enabled = !isManagingRoom,
+                        onClick = onOpenRoomManagement,
+                    ),
+                    HhhlOverflowMenuAction(
+                        label = "清空数据",
+                        enabled = !isManagingRoom,
+                        destructive = true,
+                        onClick = onClearRoomMessages,
+                    ),
+                ),
             ),
         )
     }
@@ -2684,6 +3191,9 @@ private fun ChatAiResultPanel(
     text: String,
     onUseAsDraft: () -> Unit,
     onAppendToDraft: () -> Unit,
+    onCopyAiResult: ((String) -> Unit)?,
+    onAddAiMutedWord: ((String) -> Unit)?,
+    onCreateAutomationFromAiResult: ((String) -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     AiResultPanel(
@@ -2696,6 +3206,12 @@ private fun ChatAiResultPanel(
         actions = {
             HhhlActionChip(label = "填入输入框", emphasized = true, onClick = onUseAsDraft)
             HhhlActionChip(label = "追加", onClick = onAppendToDraft)
+            AiResultCommonActionChips(
+                text = text,
+                onCopyChecklist = onCopyAiResult,
+                onAddMutedWord = onAddAiMutedWord,
+                onCreateAutomationRule = onCreateAutomationFromAiResult,
+            )
         },
     )
 }
@@ -3102,6 +3618,8 @@ private fun ChatMessageSearchScreen(
     onLoadOlderMessages: () -> Unit,
     onSearch: (String) -> Unit,
     onLoadMoreSearch: () -> Unit,
+    onDismissMessageError: () -> Unit,
+    onDismissSearchError: () -> Unit,
     onSelectMessage: (String) -> Unit,
     onOpenFilters: () -> Unit,
 ) {
@@ -3377,6 +3895,7 @@ private fun ChatMessageSearchScreen(
                         text = message,
                         actionText = "重试",
                         onAction = onRefresh,
+                        onDismiss = onDismissMessageError,
                     )
                 }
             }
@@ -3390,6 +3909,7 @@ private fun ChatMessageSearchScreen(
                         } else {
                             null
                         },
+                        onDismiss = onDismissSearchError,
                     )
                 }
             }
@@ -3766,6 +4286,7 @@ private fun ChatRoomMembersList(
     searchQuery: String,
     onRefresh: () -> Unit,
     onLoadMoreMembers: () -> Unit,
+    onDismissMemberErrorMessage: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val memberListState = rememberLazyListState()
@@ -3824,6 +4345,7 @@ private fun ChatRoomMembersList(
                     text = message,
                     actionText = "重试",
                     onAction = onRefresh,
+                    onDismiss = onDismissMemberErrorMessage,
                 )
             }
         }
@@ -4400,6 +4922,7 @@ private fun ChatMessageRow(
     onUnreact: (String, String) -> Unit,
     onDelete: (String) -> Unit,
     onCopy: (String) -> Unit,
+    onFavorite: (ChatMessage) -> Unit,
     onReport: (String) -> Unit,
     currentUserId: String?,
     onOpenUser: (String) -> Unit,
@@ -4431,6 +4954,7 @@ private fun ChatMessageRow(
         onReact,
         onDelete,
         onCopy,
+        onFavorite,
         onReport,
     ) {
         chatMessageOverflowActions(
@@ -4447,6 +4971,7 @@ private fun ChatMessageRow(
                 clipboardManager.setText(AnnotatedString(chatMessageCopyText(message)))
                 onCopy(messageId)
             },
+            onFavorite = { onFavorite(message) },
             onReport = onReport,
         )
     }
@@ -5729,6 +6254,7 @@ fun chatMessageOverflowActions(
     onOpenReactionPicker: (String) -> Unit = {},
     onDelete: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
+    onFavorite: (String) -> Unit = {},
     onReport: (String) -> Unit = {},
 ): List<HhhlOverflowMenuAction> = buildList {
     add(
@@ -5766,6 +6292,12 @@ fun chatMessageOverflowActions(
         HhhlOverflowMenuAction(
             label = "复制",
             onClick = { onCopy(messageId) },
+        ),
+    )
+    add(
+        HhhlOverflowMenuAction(
+            label = "收藏信息",
+            onClick = { onFavorite(messageId) },
         ),
     )
     if (isOutgoing && canDelete) {
@@ -6279,36 +6811,103 @@ private fun ChatStatusRow(
     loading: Boolean = false,
     actionText: String? = null,
     onAction: (() -> Unit)? = null,
+    onDismiss: (() -> Unit)? = null,
 ) {
     HhhlStatusRow(
         text = text,
         loading = loading,
         actionText = actionText,
         onAction = onAction,
+        onDismiss = onDismiss,
     )
 }
 
 private fun String.toDisplayJoinMode(): String {
     return when (this) {
         "open" -> "开放加入"
-        "invite" -> "邀请加入"
-        "approval" -> "审核加入"
+        "inviteOnly", "invite" -> "邀请加入"
+        "closed" -> "关闭加入"
         else -> ifBlank { "未知模式" }
     }
 }
 
-private fun List<ChatRoom>.filterByChatRoomQuery(query: String): List<ChatRoom> {
-    val cleanQuery = query.trim()
-    if (cleanQuery.isBlank()) return this
-    return filter { room -> room.matchesChatRoomQuery(cleanQuery) }
+private fun String.toEditableChatRoomJoinMode(): String {
+    return when (trim()) {
+        "open" -> "open"
+        "closed" -> "closed"
+        else -> "inviteOnly"
+    }
 }
 
-private fun ChatRoom.matchesChatRoomQuery(query: String): Boolean {
+private enum class ChatRoomJoinModeOption(
+    val value: String,
+    val label: String,
+) {
+    InviteOnly("inviteOnly", "邀请"),
+    Open("open", "开放"),
+    Closed("closed", "关闭"),
+}
+
+private enum class ChatRoomRetentionMode {
+    Unlimited,
+    Limited,
+}
+
+internal fun List<ChatRoom>.groupByChatRoomGroup(roomGroups: Map<String, String>): List<ChatRoomListGroup> {
+    if (isEmpty()) return emptyList()
+    val normalizedGroups = roomGroups.mapValues { (_, name) -> name.cleanChatRoomGroupName() }
+        .filterValues { it.isNotBlank() }
+    if (normalizedGroups.isEmpty()) {
+        return listOf(ChatRoomListGroup(title = "", rooms = this))
+    }
+
+    val groupedRooms = linkedMapOf<String, MutableList<ChatRoom>>()
+    val ungroupedRooms = mutableListOf<ChatRoom>()
+    for (room in this) {
+        val groupName = normalizedGroups[room.id]
+        if (groupName.isNullOrBlank()) {
+            ungroupedRooms += room
+        } else {
+            groupedRooms.getOrPut(groupName) { mutableListOf() } += room
+        }
+    }
+
+    return buildList {
+        groupedRooms.forEach { (title, rooms) ->
+            add(ChatRoomListGroup(title = title, rooms = rooms))
+        }
+        if (ungroupedRooms.isNotEmpty()) {
+            val title = if (groupedRooms.isEmpty()) "" else CHAT_ROOM_GROUP_UNGROUPED_TITLE
+            add(ChatRoomListGroup(title = title, rooms = ungroupedRooms))
+        }
+    }
+}
+
+internal fun String.cleanChatRoomGroupName(): String {
+    return trim()
+        .replace(ChatRoomGroupWhitespaceRegex, " ")
+        .take(CHAT_ROOM_GROUP_MAX_LENGTH)
+}
+
+internal fun List<ChatRoom>.filterByChatRoomQuery(
+    query: String,
+    roomGroups: Map<String, String>,
+): List<ChatRoom> {
+    val cleanQuery = query.trim()
+    if (cleanQuery.isBlank()) return this
+    return filter { room -> room.matchesChatRoomQuery(cleanQuery, roomGroups[room.id].orEmpty()) }
+}
+
+private fun ChatRoom.matchesChatRoomQuery(
+    query: String,
+    groupName: String,
+): Boolean {
     return name.contains(query, ignoreCase = true) ||
         description.contains(query, ignoreCase = true) ||
         owner.displayName.contains(query, ignoreCase = true) ||
         owner.username.contains(query, ignoreCase = true) ||
-        owner.host.orEmpty().contains(query, ignoreCase = true)
+        owner.host.orEmpty().contains(query, ignoreCase = true) ||
+        groupName.cleanChatRoomGroupName().contains(query, ignoreCase = true)
 }
 
 internal fun List<ChatMessage>.filterByChatMessageSearch(

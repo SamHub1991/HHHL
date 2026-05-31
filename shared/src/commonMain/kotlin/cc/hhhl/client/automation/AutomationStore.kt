@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 data class AutomationSnapshot(
     val rules: List<AutomationRule> = emptyList(),
     val logs: List<AutomationExecutionLog> = emptyList(),
+    val debugRecords: List<AutomationRuleDebugRecord> = emptyList(),
 )
 
 interface AutomationStore {
@@ -37,6 +38,7 @@ object AutomationStoreCodec {
             CachedAutomationEnvelope(
                 rules = snapshot.rules.take(MAX_RULES),
                 logs = snapshot.logs.take(MAX_LOGS),
+                debugRecords = snapshot.debugRecords.take(MAX_DEBUG_RECORDS),
             ),
         )
     }
@@ -48,17 +50,20 @@ object AutomationStoreCodec {
             AutomationSnapshot(
                 rules = envelope.rules.take(MAX_RULES),
                 logs = envelope.logs.take(MAX_LOGS),
+                debugRecords = envelope.debugRecords.take(MAX_DEBUG_RECORDS),
             )
         }.getOrDefault(AutomationSnapshot())
     }
 
     const val MAX_RULES = 80
     const val MAX_LOGS = 160
+    const val MAX_DEBUG_RECORDS = 240
 }
 
 @Serializable
 private data class CachedAutomationEnvelope(
-    val version: Int = 1,
+    val version: Int = 2,
     val rules: List<AutomationRule> = emptyList(),
     val logs: List<AutomationExecutionLog> = emptyList(),
+    val debugRecords: List<AutomationRuleDebugRecord> = emptyList(),
 )

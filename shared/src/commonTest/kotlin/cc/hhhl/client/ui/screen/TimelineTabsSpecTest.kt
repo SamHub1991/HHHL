@@ -87,10 +87,29 @@ class TimelineTabsSpecTest {
     fun timelineSummaryKeepsRefreshInOverflow() {
         val actions = timelineSummaryActions(
             isRefreshing = false,
+            onSearch = {},
             onRefresh = {},
         )
 
-        assertEquals(listOf("刷新"), actions.map { it.label })
-        assertEquals(listOf(true), actions.map { it.enabled })
+        assertEquals(listOf("搜索", "刷新"), actions.map { it.label })
+        assertEquals(listOf(true, true), actions.map { it.enabled })
+    }
+
+    @Test
+    fun timelineSummaryKeepsAiInSameOverflowWhenEnabled() {
+        val actions = timelineSummaryActions(
+            isRefreshing = true,
+            onSearch = {},
+            onRefresh = {},
+            aiEnabled = true,
+            aiActionEnabled = true,
+            onAiDigest = {},
+            onAiReplyOpportunities = {},
+            onAiFilterSuggestions = {},
+        )
+
+        assertEquals(listOf("搜索", "刷新中", "AI"), actions.map { it.label })
+        assertEquals(listOf(true, false, true), actions.map { it.enabled })
+        assertEquals(listOf("时间线速览", "互动建议", "过滤建议"), actions.last().children.map { it.label })
     }
 }

@@ -73,6 +73,7 @@ import cc.hhhl.client.model.UserSocialKind
 import cc.hhhl.client.state.UserProfileUiState
 import cc.hhhl.client.theme.HhhlThemePreset
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultCommonActionChips
 import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
@@ -134,6 +135,10 @@ fun ProfileScreen(
     aiResultLabel: String? = null,
     onAiProfileSummary: () -> Unit = {},
     onAiProfileSuggestions: () -> Unit = {},
+    onCopyAiResult: ((String) -> Unit)? = null,
+    onAddAiMutedWord: ((String) -> Unit)? = null,
+    onAddAiRelatedNoteToWatchLater: ((String, List<Note>) -> Unit)? = null,
+    onOpenAiRelatedNote: ((String, List<Note>) -> Unit)? = null,
     onDismissAiResult: () -> Unit = {},
     selectedTheme: HhhlThemePreset = HhhlThemePreset.System,
     selectedTimelineDensity: TimelineDensity = TimelineDensity.Comfortable,
@@ -260,16 +265,23 @@ fun ProfileScreen(
                             )
                         }
                         ProfileSocialStatsRow(user = user, onOpenSocial = onOpenSocial)
-                        ProfileAiActions(
-                            enabled = aiEnabled,
-                            isProcessing = isAiProcessing,
-                            onSummary = onAiProfileSummary,
-                            onSuggestions = onAiProfileSuggestions,
-                        )
+                        if (!isOwnProfile) {
+                            ProfileAiActions(
+                                enabled = aiEnabled,
+                                isProcessing = isAiProcessing,
+                                onSummary = onAiProfileSummary,
+                                onSuggestions = onAiProfileSuggestions,
+                            )
+                        }
                         if (!aiResultText.isNullOrBlank()) {
                             ProfileAiResultPanel(
                                 label = aiResultLabel ?: "AI 资料",
                                 text = aiResultText,
+                                notes = (user.pinnedNotes + state.notes).distinctBy { it.id },
+                                onCopyAiResult = onCopyAiResult,
+                                onAddAiMutedWord = onAddAiMutedWord,
+                                onAddAiRelatedNoteToWatchLater = onAddAiRelatedNoteToWatchLater,
+                                onOpenAiRelatedNote = onOpenAiRelatedNote,
                                 onDismiss = onDismissAiResult,
                             )
                         }
@@ -298,6 +310,10 @@ fun ProfileScreen(
                                 onOpenGallery = onOpenGallery,
                                 onThemeSelected = onThemeSelected,
                                 onTimelineDensitySelected = onTimelineDensitySelected,
+                                aiEnabled = aiEnabled,
+                                isAiProcessing = isAiProcessing,
+                                onAiProfileSummary = onAiProfileSummary,
+                                onAiProfileSuggestions = onAiProfileSuggestions,
                                 onLogout = onLogout,
                             )
                         }
@@ -935,6 +951,11 @@ private fun ProfileAiActions(
 private fun ProfileAiResultPanel(
     label: String,
     text: String,
+    notes: List<Note>,
+    onCopyAiResult: ((String) -> Unit)?,
+    onAddAiMutedWord: ((String) -> Unit)?,
+    onAddAiRelatedNoteToWatchLater: ((String, List<Note>) -> Unit)?,
+    onOpenAiRelatedNote: ((String, List<Note>) -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     AiResultPanel(
@@ -944,6 +965,15 @@ private fun ProfileAiResultPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
+        actions = {
+            AiResultCommonActionChips(
+                text = text,
+                onCopyChecklist = onCopyAiResult,
+                onAddMutedWord = onAddAiMutedWord,
+                onAddToWatchLater = onAddAiRelatedNoteToWatchLater?.let { add -> { add(text, notes) } },
+                onOpenRelatedNote = onOpenAiRelatedNote?.let { open -> { open(text, notes) } },
+            )
+        },
     )
 }
 
@@ -972,6 +1002,10 @@ private fun ProfileQuickActions(
     onOpenGallery: () -> Unit,
     onThemeSelected: (HhhlThemePreset) -> Unit,
     onTimelineDensitySelected: (TimelineDensity) -> Unit,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    onAiProfileSummary: () -> Unit,
+    onAiProfileSuggestions: () -> Unit,
     onLogout: () -> Unit,
 ) {
     var appearanceDialogOpen by remember { mutableStateOf(false) }
@@ -1005,6 +1039,10 @@ private fun ProfileQuickActions(
         onOpenFlash = onOpenFlash,
         onOpenAnnouncements = onOpenAnnouncements,
         onOpenAppearance = { appearanceDialogOpen = true },
+        aiEnabled = aiEnabled,
+        isAiProcessing = isAiProcessing,
+        onAiProfileSummary = onAiProfileSummary,
+        onAiProfileSuggestions = onAiProfileSuggestions,
         onLogout = { logoutDialogOpen = true },
     )
     Column(
@@ -1151,8 +1189,8 @@ private fun profileWorkspaceShortcuts(
 ): List<ProfileShortcut> = buildList {
     add(
         ProfileShortcut(
-            title = "稍后看",
-            supportingText = "收藏帖子",
+            title = "收藏",
+            supportingText = "帖子与信息",
             icon = Icons.Filled.Bookmark,
             onClick = onOpenFavoriteNotes,
         ),
@@ -1452,10 +1490,34 @@ private fun profileMoreMenuActions(
     onOpenFlash: () -> Unit,
     onOpenAnnouncements: () -> Unit,
     onOpenAppearance: () -> Unit,
+    aiEnabled: Boolean,
+    isAiProcessing: Boolean,
+    onAiProfileSummary: () -> Unit,
+    onAiProfileSuggestions: () -> Unit,
     onLogout: () -> Unit,
 ): List<HhhlOverflowMenuAction> {
     return listOf(
         HhhlOverflowMenuAction("刷新资料", onClick = onRefresh),
+        HhhlOverflowMenuAction(
+            label = "AI",
+            enabled = aiEnabled,
+            icon = Icons.Filled.AutoAwesome,
+            onClick = {},
+            children = listOf(
+                HhhlOverflowMenuAction(
+                    label = if (isAiProcessing) "AI 处理中" else "资料速览",
+                    enabled = aiEnabled && !isAiProcessing,
+                    icon = Icons.Filled.AutoAwesome,
+                    onClick = onAiProfileSummary,
+                ),
+                HhhlOverflowMenuAction(
+                    label = "互动建议",
+                    enabled = aiEnabled && !isAiProcessing,
+                    icon = Icons.Filled.AutoAwesome,
+                    onClick = onAiProfileSuggestions,
+                ),
+            ),
+        ),
         HhhlOverflowMenuAction("关注请求", onClick = onOpenFollowRequests),
         HhhlOverflowMenuAction("关系管理", onClick = onOpenRelationshipManagement),
         HhhlOverflowMenuAction(
@@ -1504,7 +1566,7 @@ private fun profilePrimaryActions(capabilities: InstanceCapabilities): List<Prof
 
 private fun profileAccountActions(): List<ProfileAction> {
     return buildList {
-        add(ProfileAction(ProfileActionKey.FavoriteNotes, "稍后看"))
+        add(ProfileAction(ProfileActionKey.FavoriteNotes, "收藏"))
         add(ProfileAction(ProfileActionKey.FollowRequests, "关注请求"))
         add(ProfileAction(ProfileActionKey.RelationshipManagement, "关系管理"))
     }

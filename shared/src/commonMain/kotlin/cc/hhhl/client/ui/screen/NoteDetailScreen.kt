@@ -37,6 +37,7 @@ import cc.hhhl.client.model.NoteReactionUser
 import cc.hhhl.client.model.NoteVersion
 import cc.hhhl.client.state.NoteDetailUiState
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultCommonActionChips
 import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.Avatar
@@ -70,6 +71,8 @@ fun NoteDetailScreen(
     aiResultLabel: String? = null,
     onAiThreadSummary: (NoteDetailUiState) -> Unit = {},
     onAiThreadReplyDraft: (NoteDetailUiState) -> Unit = {},
+    onCopyAiResult: ((String) -> Unit)? = null,
+    onAddAiRelatedNoteToWatchLater: ((Note) -> Unit)? = null,
     onDismissAiResult: () -> Unit = {},
     onToggleChildReplies: (String) -> Unit = {},
     onOpenNote: (String) -> Unit = {},
@@ -220,6 +223,10 @@ fun NoteDetailScreen(
                         NoteDetailAiResultPanel(
                             label = aiResultLabel ?: "AI 线程",
                             text = aiResultText,
+                            note = selected,
+                            onCopyAiResult = onCopyAiResult,
+                            onAddAiRelatedNoteToWatchLater = onAddAiRelatedNoteToWatchLater,
+                            onOpenRelatedNote = { onOpenNote(selected.id) },
                             onDismiss = onDismissAiResult,
                         )
                     }
@@ -482,6 +489,10 @@ private fun NoteDetailActionPanel(
 private fun NoteDetailAiResultPanel(
     label: String,
     text: String,
+    note: Note,
+    onCopyAiResult: ((String) -> Unit)?,
+    onAddAiRelatedNoteToWatchLater: ((Note) -> Unit)?,
+    onOpenRelatedNote: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AiResultPanel(
@@ -489,6 +500,14 @@ private fun NoteDetailAiResultPanel(
         text = text,
         onDismiss = onDismiss,
         modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        actions = {
+            AiResultCommonActionChips(
+                text = text,
+                onCopyChecklist = onCopyAiResult,
+                onAddToWatchLater = onAddAiRelatedNoteToWatchLater?.let { add -> { add(note) } },
+                onOpenRelatedNote = onOpenRelatedNote,
+            )
+        },
     )
 }
 

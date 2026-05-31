@@ -71,6 +71,10 @@ class AutomationStateHolderTest {
         assertEquals("Alice: hello world", holder.state.value.logs.single().message)
         assertTrue(holder.state.value.logs.single().success)
         assertEquals("Alice: hello world", store.lastSnapshot.logs.single().message)
+        assertEquals(1, holder.state.value.debugRecords.size)
+        assertTrue(holder.state.value.debugRecords.single().matched)
+        assertTrue(holder.state.value.debugRecords.single().reason.contains("全部"))
+        assertEquals("Log matches", store.lastSnapshot.debugRecords.single().ruleName)
     }
 
     @Test
@@ -112,6 +116,185 @@ class AutomationStateHolderTest {
         advanceUntilIdle()
 
         assertEquals(emptyList(), holder.state.value.logs)
+        assertEquals(1, holder.state.value.debugRecords.size)
+        assertEquals(false, holder.state.value.debugRecords.single().matched)
+        assertTrue(holder.state.value.debugRecords.single().reason.contains("忽略自己"))
+    }
+
+    @Test
+    fun emitIgnoresAiGeneratedEventToPreventLoops() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-ai-loop",
+                        name = "Ignore AI generated",
+                        trigger = AutomationTrigger.ChatMessage,
+                        ignoreOwnMessages = false,
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-1",
+                                type = AutomationActionType.AddLog,
+                                bodyTemplate = "{{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.emit(
+            AutomationEvent(
+                id = "event-ai-generated",
+                trigger = AutomationTrigger.ChatMessage,
+                messageText = "AI 自动回复内容",
+                isAiGenerated = true,
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), holder.state.value.logs)
+        assertEquals(1, holder.state.value.debugRecords.size)
+        assertEquals(false, holder.state.value.debugRecords.single().matched)
+        assertTrue(holder.state.value.debugRecords.single().reason.contains("AI 产生"))
+    }
+
+    @Test
+    fun emitRecordsConditionMismatchForDebugging() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-1",
+                        name = "Debug mismatch",
+                        trigger = AutomationTrigger.ChatMessage,
+                        conditions = listOf(
+                            AutomationCondition(
+                                id = "condition-room",
+                                type = AutomationConditionType.RoomNameContains,
+                                value = "总部",
+                            ),
+                            AutomationCondition(
+                                id = "condition-sender",
+                                type = AutomationConditionType.SenderUsername,
+                                value = "alice",
+                            ),
+                        ),
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-1",
+                                type = AutomationActionType.AddLog,
+                                bodyTemplate = "不应执行",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.emit(
+            AutomationEvent(
+                id = "event-mismatch",
+                trigger = AutomationTrigger.ChatMessage,
+                roomId = "room-1",
+                roomName = "研发聊天室",
+                senderUserId = "user-bob",
+                senderUsername = "bob",
+                senderName = "Bob",
+                messageText = "hello",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), holder.state.value.logs)
+        val record = holder.state.value.debugRecords.single()
+        assertEquals(false, record.matched)
+        assertTrue(record.reason.contains("聊天室名称"))
+        assertEquals("研发聊天室", record.conditionResults.single().actualValue)
+        assertTrue(record.resolvedEntities.any { it.contains("room-1") })
+    }
+
+    @Test
+    fun simulateHistoricalEventRecordsMatchWithoutExecutingActions() = runTest {
+        val executor = object : AutomationActionExecutor {
+            var calls = 0
+
+            override suspend fun execute(
+                action: AutomationAction,
+                event: AutomationEvent,
+                title: String,
+                body: String,
+            ): AutomationActionExecutionResult {
+                calls += 1
+                return AutomationActionExecutionResult(true, "sent")
+            }
+        }
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-simulate",
+                        name = "模拟转发",
+                        trigger = AutomationTrigger.ChatMessage,
+                        conditions = listOf(
+                            AutomationCondition(
+                                id = "condition-keyword",
+                                type = AutomationConditionType.MessageContains,
+                                value = "hello",
+                            ),
+                        ),
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-forward",
+                                type = AutomationActionType.ForwardToRoom,
+                                targetId = "room-target",
+                                bodyTemplate = "{{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            executor = executor,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.simulate(
+            AutomationEvent(
+                id = "history-message-1",
+                trigger = AutomationTrigger.ChatMessage,
+                roomId = "room-1",
+                roomName = "研发聊天室",
+                senderName = "Alice",
+                messageText = "hello from history",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(0, executor.calls)
+        assertEquals(emptyList(), holder.state.value.logs)
+        val record = holder.state.value.debugRecords.single()
+        assertTrue(record.matched)
+        assertTrue(record.reason.contains("模拟运行"))
+        assertTrue(record.reason.contains("未执行任何动作"))
+        assertTrue(record.eventId.startsWith("manual-simulate:"))
+        assertTrue(store.lastSnapshot.debugRecords.single().reason.contains("模拟运行"))
     }
 
     @Test
@@ -409,6 +592,176 @@ class AutomationStateHolderTest {
     }
 
     @Test
+    fun retryLogReplaysFailedActionSnapshot() = runTest {
+        val executor = object : AutomationActionExecutor {
+            var shouldFail = true
+            var calls = 0
+
+            override suspend fun execute(
+                action: AutomationAction,
+                event: AutomationEvent,
+                title: String,
+                body: String,
+            ): AutomationActionExecutionResult {
+                calls += 1
+                return if (shouldFail) {
+                    AutomationActionExecutionResult(false, "network failed")
+                } else {
+                    AutomationActionExecutionResult(true, "sent ${event.messageText}")
+                }
+            }
+        }
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-retry",
+                        name = "Retry forward",
+                        trigger = AutomationTrigger.ChatMessage,
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-forward",
+                                type = AutomationActionType.ForwardToRoom,
+                                targetId = "room-target",
+                                bodyTemplate = "{{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            executor = executor,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.emit(
+            AutomationEvent(
+                id = "event-retry",
+                trigger = AutomationTrigger.ChatMessage,
+                messageText = "hello retry",
+            ),
+        )
+        advanceUntilIdle()
+
+        val failedLog = holder.state.value.logs.single()
+        assertEquals(false, failedLog.success)
+        assertEquals("hello retry", failedLog.eventSnapshot?.messageText)
+        assertEquals(AutomationActionType.ForwardToRoom, failedLog.actionSnapshot?.type)
+
+        executor.shouldFail = false
+        holder.retryLog(failedLog.id)
+        advanceUntilIdle()
+
+        assertEquals(2, executor.calls)
+        val retryLog = holder.state.value.logs.first()
+        assertTrue(retryLog.success)
+        assertEquals(failedLog.id, retryLog.retryOfLogId)
+        assertTrue(retryLog.message.contains("hello retry"))
+    }
+
+    @Test
+    fun burstLimitBlocksRiskyRuleLoops() = runTest {
+        val executor = object : AutomationActionExecutor {
+            var calls = 0
+
+            override suspend fun execute(
+                action: AutomationAction,
+                event: AutomationEvent,
+                title: String,
+                body: String,
+            ): AutomationActionExecutionResult {
+                calls += 1
+                return AutomationActionExecutionResult(true, "sent")
+            }
+        }
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-loop",
+                        name = "Loop guard",
+                        trigger = AutomationTrigger.ChatMessage,
+                        cooldownSeconds = 0,
+                        maxExecutionsPer30Seconds = 2,
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-reply",
+                                type = AutomationActionType.ReplyToChat,
+                                bodyTemplate = "{{message.text}}",
+                                mentionSender = true,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            executor = executor,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        repeat(3) { index ->
+            holder.emit(
+                AutomationEvent(
+                    id = "event-loop-$index",
+                    trigger = AutomationTrigger.ChatMessage,
+                    roomId = "room-1",
+                    chatMessageId = "message-$index",
+                    senderUsername = "alice",
+                    messageText = "hello $index",
+                ),
+            )
+        }
+        advanceUntilIdle()
+
+        assertEquals(2, executor.calls)
+        assertEquals(3, holder.state.value.logs.size)
+        assertTrue(holder.state.value.logs.first().message.contains("上限"))
+        assertTrue(holder.state.value.debugRecords.first().reason.contains("风控"))
+    }
+
+    @Test
+    fun aiDraftPreviewRequiresApprovalBeforeRuleIsCreated() = runTest {
+        val store = MemoryAutomationStore()
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.previewRuleDraft(
+            sourceText = "有人问我就提醒",
+            rule = AutomationRule(
+                id = "rule-preview",
+                name = "提醒问题",
+                trigger = AutomationTrigger.ChatAttention,
+                conditions = listOf(AutomationCondition("condition-ai", AutomationConditionType.AiSemantic, "有人问我问题")),
+                actions = listOf(AutomationAction("action-notify", AutomationActionType.SystemNotification, bodyTemplate = "{{event.body}}")),
+            ),
+            messages = listOf("用户 Alice -> user-1"),
+        )
+
+        assertEquals(emptyList(), holder.state.value.rules)
+        assertEquals("提醒问题", holder.state.value.pendingDraftPreview?.rule?.name)
+        assertEquals("用户 Alice -> user-1", holder.state.value.pendingDraftPreview?.messages?.single())
+
+        holder.approveRuleDraft()
+
+        assertEquals(1, holder.state.value.rules.size)
+        assertEquals(null, holder.state.value.pendingDraftPreview)
+        assertEquals("提醒问题", holder.state.value.rules.single().name)
+        assertEquals(true, holder.state.value.editorOpen)
+    }
+
+    @Test
     fun aiReplyToChatSendsGeneratedReplyWithMentionAndReference() = runTest {
         val chatRepository = RecordingChatRepository()
         val executor = AppAutomationActionExecutor(
@@ -443,6 +796,100 @@ class AutomationStateHolderTest {
         assertEquals("room-1", chatRepository.lastRoomId)
         assertEquals("@alice 可以，晚点我整理给你", chatRepository.lastText)
         assertEquals("message-1", chatRepository.lastReplyId)
+    }
+
+    @Test
+    fun aiForwardToRoomSendsGeneratedRewrite() = runTest {
+        val chatRepository = RecordingChatRepository()
+        val executor = AppAutomationActionExecutor(
+            chatRepository = chatRepository,
+            notificationRepository = cc.hhhl.client.repository.NotificationRepository(tokenProvider = { "token" }),
+            aiBridge = FakeAiBridge("来自总部的摘要：需要处理更新失败"),
+        )
+
+        val result = executor.execute(
+            action = AutomationAction(
+                id = "action-ai-forward-room",
+                type = AutomationActionType.AiForwardToRoom,
+                targetId = "room-target",
+                bodyTemplate = "提取重点并按公告格式转发",
+            ),
+            event = AutomationEvent(
+                id = "event-1",
+                trigger = AutomationTrigger.ChatMessage,
+                roomName = "总部",
+                senderName = "Alice",
+                messageText = "更新失败，需要排查日志",
+            ),
+            title = "AI 转发",
+            body = "原始正文不应直接发送",
+        )
+
+        assertTrue(result.success)
+        assertEquals("room-target", chatRepository.lastRoomId)
+        assertEquals("来自总部的摘要：需要处理更新失败", chatRepository.lastText)
+    }
+
+    @Test
+    fun aiGeneratedChatMessageCanBeMarkedAndIgnoredByAutomation() = runTest {
+        val chatRepository = RecordingChatRepository()
+        var aiGeneratedMessage: ChatMessage? = null
+        val executor = AppAutomationActionExecutor(
+            chatRepository = chatRepository,
+            notificationRepository = cc.hhhl.client.repository.NotificationRepository(tokenProvider = { "token" }),
+            aiBridge = FakeAiBridge("AI 改写后的通知"),
+            aiGeneratedChatMessageReporter = { aiGeneratedMessage = it },
+        )
+
+        val result = executor.execute(
+            action = AutomationAction(
+                id = "action-ai-forward-room",
+                type = AutomationActionType.AiForwardToRoom,
+                targetId = "room-target",
+                bodyTemplate = "摘要后转发",
+            ),
+            event = AutomationEvent(
+                id = "event-1",
+                trigger = AutomationTrigger.ChatMessage,
+                messageText = "需要同步给目标聊天室",
+            ),
+            title = "AI 转发",
+            body = "原始正文",
+        )
+
+        assertTrue(result.success)
+        val generatedEvent = aiGeneratedMessage?.toAutomationChatEvent(
+            roomId = "room-target",
+            currentUser = User(id = "me", displayName = "Me", username = "me", avatarInitial = "M"),
+            isAiGenerated = true,
+        )
+        assertEquals(true, generatedEvent?.isAiGenerated)
+
+        val loopHolder = AutomationStateHolder(
+            store = MemoryAutomationStore(
+                AutomationSnapshot(
+                    rules = listOf(
+                        AutomationRule(
+                            id = "rule-loop",
+                            name = "避免 AI 循环",
+                            trigger = AutomationTrigger.ChatMessage,
+                            ignoreOwnMessages = false,
+                            conditions = listOf(AutomationCondition("condition-any", AutomationConditionType.MessageContains, "AI")),
+                            actions = listOf(AutomationAction("action-log", AutomationActionType.AddLog, bodyTemplate = "{{event.body}}")),
+                        ),
+                    ),
+                ),
+            ),
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        loopHolder.restore()
+
+        loopHolder.emit(generatedEvent!!)
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), loopHolder.state.value.logs)
+        assertTrue(loopHolder.state.value.debugRecords.single().reason.contains("AI 产生的消息"))
     }
 
     @Test

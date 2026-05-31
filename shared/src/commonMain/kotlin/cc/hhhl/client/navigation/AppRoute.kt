@@ -52,14 +52,18 @@ fun rootRouteFor(route: AppRoute): RootRoute {
         AppRoute.Flash,
         AppRoute.Announcements,
             -> RootRoute.Discover
-        AppRoute.Chat -> RootRoute.Chat
+        AppRoute.Chat,
+        AppRoute.AiAssistant,
+            -> RootRoute.Chat
         AppRoute.Notifications -> RootRoute.Notifications
         AppRoute.Profile,
         AppRoute.ProfileNotes,
         AppRoute.Settings,
+        AppRoute.AiSettings,
         AppRoute.ReleaseNotes,
         AppRoute.ThemeCustomization,
         AppRoute.Automation,
+        AppRoute.AutomationLogs,
         is AppRoute.SettingsManagement,
         AppRoute.AdminDashboard,
         AppRoute.Drive,
@@ -80,13 +84,16 @@ sealed interface AppRoute {
     data object Timeline : AppRoute
     data object Discover : AppRoute
     data object Chat : AppRoute
+    data object AiAssistant : AppRoute
     data object Notifications : AppRoute
     data object Profile : AppRoute
     data object ProfileNotes : AppRoute
     data object Settings : AppRoute
+    data object AiSettings : AppRoute
     data object ReleaseNotes : AppRoute
     data object ThemeCustomization : AppRoute
     data object Automation : AppRoute
+    data object AutomationLogs : AppRoute
     data class SettingsManagement(val key: SettingsManagementSectionKey) : AppRoute
     data object AdminDashboard : AppRoute
     data object Drive : AppRoute
@@ -113,5 +120,6 @@ sealed interface AppRoute {
         val replyToId: String? = null,
         val renoteId: String? = null,
         val channelId: String? = null,
+        val editId: String? = null,
     ) : AppRoute
 }

@@ -11,7 +11,12 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import cc.hhhl.client.automation.AutomationTrigger
+import cc.hhhl.client.automation.toMainStreamingOptions
+import cc.hhhl.client.api.ChatStreamingEvent
 import cc.hhhl.client.api.MainStreamingEvent
+import cc.hhhl.client.api.MainStreamingOptions
+import cc.hhhl.client.repository.ChatStreamingRepository
+import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.NotificationItem
 import cc.hhhl.client.model.NotificationType
 import cc.hhhl.client.repository.MainStreamingRepository
@@ -24,25 +29,37 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class RealtimeNotificationService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastTimelineSyncAt: Long = 0L
+    private var lastRealtimeChatSyncAt: Long = 0L
+    @Volatile
+    private var shouldScheduleRecovery: Boolean = true
 
     override fun onCreate() {
         super.onCreate()
         ensureChannels(applicationContext)
-        startRealtimeForeground()
+        if (!startRealtimeForegroundSafely()) {
+            BackgroundNotificationScheduler.syncSoon(applicationContext)
+            stopSelf()
+            return
+        }
         scope.launch {
             runRealtimeLoop()
         }
         scope.launch {
             runPollingSafetyLoop()
         }
+        scope.launch {
+            runRealtimeChatLoop()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!AndroidBackgroundNotificationStore(applicationContext).isBackgroundSyncEnabled()) {
+            shouldScheduleRecovery = false
             stopSelf()
             return START_NOT_STICKY
         }
@@ -53,7 +70,15 @@ class RealtimeNotificationService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        if (shouldScheduleRecovery && AndroidBackgroundNotificationStore(applicationContext).isBackgroundSyncEnabled()) {
+            BackgroundNotificationScheduler.syncSoon(applicationContext)
+        }
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        BackgroundNotificationScheduler.restoreIfEnabled(applicationContext)
     }
 
     private suspend fun runRealtimeLoop() {
@@ -62,7 +87,11 @@ class RealtimeNotificationService : Service() {
             val session = AndroidAuthTokenStore(applicationContext)
                 .readAccountSessions()
                 .firstOrNull { it.current }
-            val token = session?.token?.trim().orEmpty()
+            if (session == null) {
+                delay(RECONNECT_DELAY_MS)
+                continue
+            }
+            val token = session.token.trim()
             if (token.isBlank()) {
                 delay(RECONNECT_DELAY_MS)
                 continue
@@ -70,10 +99,23 @@ class RealtimeNotificationService : Service() {
 
             var unauthorized = false
             runCatching {
-                MainStreamingRepository(tokenProvider = { token }).streamMain().collect { event ->
+                MainStreamingRepository(tokenProvider = { token }).streamMain(mainStreamingOptions()).collect { event ->
                     when (event) {
                         MainStreamingEvent.UnreadNotification -> syncNotificationEvent()
                         is MainStreamingEvent.NotificationReceived -> syncNotificationEvent(event.notification)
+                        is MainStreamingEvent.ChatMessageReceived -> {
+                            val directUserId = if (event.message.roomId.isBlank()) {
+                                event.message.directPeerId(session.user?.id)
+                            } else {
+                                null
+                            }
+                            val handledRealtime = BackgroundNotificationSyncer(applicationContext).handleRealtimeChatMessage(
+                                session = session,
+                                message = event.message,
+                                directUserId = directUserId,
+                            )
+                            if (!handledRealtime) syncRealtimeChatEvent(debounce = true)
+                        }
                         MainStreamingEvent.NewChatMessage -> syncRealtimeChatEvent()
                         is MainStreamingEvent.TimelineNote -> syncTimelineEvent(event)
                         MainStreamingEvent.Unauthorized -> unauthorized = true
@@ -87,11 +129,13 @@ class RealtimeNotificationService : Service() {
                 }
             }
             if (unauthorized) {
+                shouldScheduleRecovery = false
                 stopSelf()
                 return
             }
             delay(RECONNECT_DELAY_MS)
         }
+        shouldScheduleRecovery = false
         stopSelf()
     }
 
@@ -99,13 +143,87 @@ class RealtimeNotificationService : Service() {
         val settings = AndroidBackgroundNotificationStore(applicationContext)
         val syncer = BackgroundNotificationSyncer(applicationContext)
         while (scope.isActive && settings.isBackgroundSyncEnabled()) {
-            delay(POLLING_SAFETY_INTERVAL_MS)
             syncer.sync(trigger = BackgroundNotificationSyncTrigger.PollingSafety)
+            delay(POLLING_SAFETY_INTERVAL_MS)
         }
     }
 
+    private suspend fun runRealtimeChatLoop() {
+        val settings = AndroidBackgroundNotificationStore(applicationContext)
+        while (scope.isActive && settings.isBackgroundSyncEnabled()) {
+            val session = AndroidAuthTokenStore(applicationContext)
+                .readAccountSessions()
+                .firstOrNull { it.current }
+            val token = session?.token?.trim().orEmpty()
+            if (session == null || token.isBlank()) {
+                delay(RECONNECT_DELAY_MS)
+                continue
+            }
+
+            val targets = BackgroundNotificationSyncer(applicationContext).loadRealtimeChatStreamTargets(session)
+            if (targets.isEmpty) {
+                delay(CHAT_TARGET_REFRESH_INTERVAL_MS)
+                continue
+            }
+
+            var unauthorized = false
+            runCatching {
+                withTimeoutOrNull(CHAT_TARGET_REFRESH_INTERVAL_MS) {
+                    ChatStreamingRepository(tokenProvider = { token }).streamMessages(
+                        roomIds = targets.roomIds,
+                        userIds = targets.userIds,
+                    ).collect { event ->
+                        when (event) {
+                            is ChatStreamingEvent.MessageReceived -> {
+                                val sourceRoomId = event.source.roomId?.takeIf { roomId -> roomId in targets.roomIdSet }
+                                val sourceUserId = event.source.userId?.takeIf { userId -> userId in targets.userIdSet }
+                                val fallbackUserId = if (sourceRoomId == null) {
+                                    targets.userIds.firstOrNull { userId ->
+                                        event.message.belongsToDirectChat(userId) && event.message.roomId !in targets.roomIdSet
+                                    }
+                                } else {
+                                    null
+                                }
+                                val messageDirectUserId = event.message
+                                    .directPeerId(session.user?.id)
+                                    .takeIf { event.message.roomId.isBlank() }
+                                val directUserId = sourceUserId ?: fallbackUserId ?: messageDirectUserId
+                                val messageRoomId = event.message.roomId.takeIf { it.isNotBlank() }
+                                val roomId = sourceRoomId ?: messageRoomId
+                                val handledRealtime = BackgroundNotificationSyncer(applicationContext).handleRealtimeChatMessage(
+                                    session = session,
+                                    message = event.message,
+                                    directUserId = directUserId,
+                                    roomName = roomId?.let { id -> targets.roomNamesById[id] }.orEmpty(),
+                                )
+                                if (!handledRealtime) syncRealtimeChatEvent(debounce = true)
+                            }
+                            ChatStreamingEvent.Unauthorized -> unauthorized = true
+                            ChatStreamingEvent.Connecting,
+                            ChatStreamingEvent.Connected,
+                            ChatStreamingEvent.Closed,
+                            is ChatStreamingEvent.Error,
+                            -> Unit
+                        }
+                    }
+                }
+            }
+            if (unauthorized) {
+                shouldScheduleRecovery = false
+                stopSelf()
+                return
+            }
+            delay(RECONNECT_DELAY_MS)
+        }
+        shouldScheduleRecovery = false
+        stopSelf()
+    }
+
     private suspend fun syncNotificationEvent(notification: NotificationItem? = null) {
-        notification?.let { publishStreamingNotification(it) }
+        notification?.let {
+            publishStreamingNotification(it)
+            emitStreamingNotificationAutomation(it)
+        }
         val syncer = BackgroundNotificationSyncer(applicationContext)
         syncer.sync(trigger = BackgroundNotificationSyncTrigger.RealtimeNotification)
         delay(NOTIFICATION_EVENT_RECHECK_DELAY_MS)
@@ -134,7 +252,28 @@ class RealtimeNotificationService : Service() {
             .any { rule -> rule.enabled && rule.trigger == AutomationTrigger.TimelineNote }
     }
 
-    private suspend fun syncRealtimeChatEvent() {
+    private suspend fun mainStreamingOptions(): MainStreamingOptions {
+        val session = AndroidAuthTokenStore(applicationContext)
+            .readAccountSessions()
+            .firstOrNull { it.current }
+            ?: return MainStreamingOptions()
+        return AndroidAutomationStore(applicationContext)
+            .read(session.id)
+            .rules
+            .toMainStreamingOptions(MAX_STREAMING_CHANNELS)
+    }
+
+    private suspend fun emitStreamingNotificationAutomation(notification: NotificationItem) {
+        if (notification.id.isBlank() || notification.isRead) return
+        BackgroundNotificationSyncer(applicationContext).emitNotificationAutomation(notification)
+    }
+
+    private suspend fun syncRealtimeChatEvent(debounce: Boolean = false) {
+        if (debounce) {
+            val now = System.currentTimeMillis()
+            if (now - lastRealtimeChatSyncAt < CHAT_SYNC_DEBOUNCE_MS) return
+            lastRealtimeChatSyncAt = now
+        }
         val syncer = BackgroundNotificationSyncer(applicationContext)
         syncer.sync(trigger = BackgroundNotificationSyncTrigger.RealtimeChat)
         delay(CHAT_EVENT_RECHECK_DELAY_MS)
@@ -149,12 +288,11 @@ class RealtimeNotificationService : Service() {
             ?: return
         val settings = AndroidBackgroundNotificationStore(applicationContext)
         val eventId = notification.notificationEventId()
-        val seenIds = settings.loadSeenIds()
-        if (eventId in seenIds) return
 
         val specialCareUserIds = AndroidSpecialCareStore(applicationContext).loadSpecialCareUserIds(session.id)
         val isSpecialCare = notification.actor.id in specialCareUserIds
         if (isSpecialCare && !settings.isSpecialCareEnabled()) return
+        if (eventId !in settings.claimSeenIds(listOf(eventId), MAX_REALTIME_SEEN_IDS)) return
         val createdAtEpochMillis = notification.createdAtEpochMillis.takeIf { it > 0L }
             ?: System.currentTimeMillis()
         BackgroundNotificationPublisher(applicationContext).publish(
@@ -190,7 +328,6 @@ class RealtimeNotificationService : Service() {
                 notifications = listOf(notification.copy(isSpecialCare = true, createdAtEpochMillis = createdAtEpochMillis)),
             )
         }
-        settings.saveSeenIds((listOf(eventId) + seenIds).take(MAX_REALTIME_SEEN_IDS).toSet())
     }
 
     private suspend fun publishSpecialCareTimelineNote(event: MainStreamingEvent.TimelineNote): Boolean {
@@ -206,8 +343,7 @@ class RealtimeNotificationService : Service() {
         if (note.author.id !in specialCareUserIds) return true
 
         val eventId = "special-note:${note.id}"
-        val seenIds = settings.loadSeenIds()
-        if (eventId in seenIds) return true
+        if (eventId !in settings.claimSeenIds(listOf(eventId), MAX_REALTIME_SEEN_IDS)) return true
 
         val createdAtEpochMillis = note.createdAt.toEpochMillisOrNull()
             ?: System.currentTimeMillis()
@@ -242,7 +378,6 @@ class RealtimeNotificationService : Service() {
             accountId = session.id,
             notifications = listOf(notification),
         )
-        settings.saveSeenIds((listOf(eventId) + seenIds).take(MAX_REALTIME_SEEN_IDS).toSet())
         return true
     }
 
@@ -250,17 +385,19 @@ class RealtimeNotificationService : Service() {
         return runCatching { Instant.parse(this).toEpochMilli() }.getOrNull()
     }
 
-    private fun startRealtimeForeground() {
+    private fun startRealtimeForegroundSafely(): Boolean {
         val notification = realtimeNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                SERVICE_NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-            )
-        } else {
-            startForeground(SERVICE_NOTIFICATION_ID, notification)
-        }
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    SERVICE_NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+            } else {
+                startForeground(SERVICE_NOTIFICATION_ID, notification)
+            }
+        }.isSuccess
     }
 
     private fun realtimeNotification(): Notification {
@@ -276,19 +413,42 @@ class RealtimeNotificationService : Service() {
             .build()
     }
 
+    private fun ChatMessage.directPeerId(currentUserId: String?): String? {
+        val cleanCurrentUserId = currentUserId?.trim().orEmpty()
+        return when {
+            cleanCurrentUserId.isNotBlank() && fromUser.id != cleanCurrentUserId -> fromUser.id
+            cleanCurrentUserId.isBlank() && fromUser.id.isNotBlank() -> fromUser.id
+            !toUserId.isNullOrBlank() -> toUserId
+            !toUser?.id.isNullOrBlank() -> toUser?.id
+            else -> null
+        }?.takeIf { it.isNotBlank() }
+    }
+
     companion object {
         private const val SERVICE_NOTIFICATION_ID = 1001
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val TIMELINE_SYNC_DEBOUNCE_MS = 2_000L
+        private const val CHAT_SYNC_DEBOUNCE_MS = 3_000L
         private const val CHAT_EVENT_RECHECK_DELAY_MS = 1_500L
+        private const val CHAT_TARGET_REFRESH_INTERVAL_MS = 60_000L
         private const val NOTIFICATION_EVENT_RECHECK_DELAY_MS = 1_500L
         private const val NOTIFICATION_EVENT_LATE_RECHECK_DELAY_MS = 4_000L
         private const val POLLING_SAFETY_INTERVAL_MS = 30_000L
-        private const val MAX_REALTIME_SEEN_IDS = 200
+        private const val MAX_REALTIME_SEEN_IDS = 1_000
+        private const val MAX_STREAMING_CHANNELS = 4
 
-        fun start(context: Context) {
+        fun start(context: Context): Boolean {
+            return tryStart(context)
+        }
+
+        fun tryStart(context: Context): Boolean {
+            val appContext = context.applicationContext
             val intent = Intent(context.applicationContext, RealtimeNotificationService::class.java)
-            ContextCompat.startForegroundService(context.applicationContext, intent)
+            return runCatching {
+                ensureChannels(appContext)
+                ContextCompat.startForegroundService(appContext, intent)
+                true
+            }.getOrDefault(false)
         }
 
         fun stop(context: Context) {

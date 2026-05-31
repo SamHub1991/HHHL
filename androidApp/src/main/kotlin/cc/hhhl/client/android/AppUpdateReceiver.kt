@@ -71,6 +71,15 @@ class AppUpdateInstalledReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             AndroidAppUpdateManager(context.applicationContext).reopenAfterInstallIfRequested()
+            BackgroundNotificationScheduler.restoreIfEnabled(context.applicationContext)
+        }
+    }
+}
+
+class BackgroundNotificationBootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+            BackgroundNotificationScheduler.restoreIfEnabled(context.applicationContext)
         }
     }
 }

@@ -16,6 +16,9 @@ class AiStoreCodecTest {
                 chatModel = "deepseek-chat",
                 backgroundAllowed = true,
                 wifiOnlyBackground = true,
+                assistantLowRiskAutoApproval = true,
+                assistantHighRiskAutoApproval = true,
+                floatingAssistantEnabled = false,
             ),
             tasks = listOf(
                 AiTask(
@@ -45,6 +48,9 @@ class AiStoreCodecTest {
         assertEquals(snapshot.settings.provider, decoded.settings.provider)
         assertEquals("deepseek-chat", decoded.settings.chatModel)
         assertTrue(decoded.settings.wifiOnlyBackground)
+        assertTrue(decoded.settings.assistantLowRiskAutoApproval)
+        assertTrue(decoded.settings.assistantHighRiskAutoApproval)
+        assertEquals(false, decoded.settings.floatingAssistantEnabled)
         assertEquals(AiTaskKind.TimelineDigest, decoded.tasks.single().kind)
         assertEquals("版本更新摘要", decoded.tasks.single().resultText)
         assertEquals("Alice", decoded.tasks.single().input.timelineNotes.single().author)

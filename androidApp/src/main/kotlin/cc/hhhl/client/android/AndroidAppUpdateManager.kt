@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.pm.Signature
+import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -208,7 +209,9 @@ class AndroidAppUpdateManager(
         if (!store.shouldReopenAfterInstall(BuildConfig.VERSION_NAME)) return false
         store.clearPendingDownload()
         store.clearInstallRequest()
-        return launchMainActivity() || notifyUpdateInstalled()
+        val launched = launchMainActivity()
+        notifyUpdateInstalled()
+        return launched
     }
 
     fun isPendingUpdateDownload(downloadId: Long): Boolean {
@@ -261,10 +264,13 @@ class AndroidAppUpdateManager(
             "${BuildConfig.APPLICATION_ID}.fileprovider",
             apk,
         )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
+        val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
             setDataAndType(uri, APK_MIME_TYPE)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+            putExtra(PackageInstaller.EXTRA_PACKAGE_NAME, context.packageName)
         }
         return runCatching {
             context.startActivity(intent)

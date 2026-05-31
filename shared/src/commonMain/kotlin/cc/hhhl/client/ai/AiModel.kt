@@ -15,11 +15,11 @@ data class AiSettings(
     val provider: AiProviderPreset = AiProviderPreset.OpenAiCompatible,
     val baseUrl: String = AiProviderPreset.OpenAiCompatible.defaultBaseUrl,
     val apiKey: String = "",
-    val chatModel: String = "gpt-4o-mini",
-    val fastModel: String = "gpt-4o-mini",
-    val longContextModel: String = "gpt-4o-mini",
-    val visionModel: String = "gpt-4o-mini",
-    val embeddingModel: String = "text-embedding-3-small",
+    val chatModel: String = AiProviderPreset.OpenAiCompatible.defaultChatModel,
+    val fastModel: String = AiProviderPreset.OpenAiCompatible.defaultFastModel,
+    val longContextModel: String = AiProviderPreset.OpenAiCompatible.defaultLongContextModel,
+    val visionModel: String = AiProviderPreset.OpenAiCompatible.defaultVisionModel,
+    val embeddingModel: String = AiProviderPreset.OpenAiCompatible.defaultEmbeddingModel,
     val readTimelineAllowed: Boolean = true,
     val readNotificationsAllowed: Boolean = true,
     val readChatAllowed: Boolean = true,
@@ -36,6 +36,10 @@ data class AiSettings(
     val dailyRequestLimit: Int = 120,
     val tonePreference: String = "自然、简洁、贴近当前语气",
     val systemPrompt: String = DEFAULT_AI_SYSTEM_PROMPT,
+    val assistantMemoryNotes: List<String> = emptyList(),
+    val assistantLowRiskAutoApproval: Boolean = true,
+    val assistantHighRiskAutoApproval: Boolean = false,
+    val floatingAssistantEnabled: Boolean = true,
 ) {
     val cleanBaseUrl: String
         get() = baseUrl.trim().trimEnd('/')
@@ -55,15 +59,42 @@ enum class AiProviderPreset(
     val label: String,
     val defaultBaseUrl: String,
     val defaultChatModel: String,
+    defaultFastModelValue: String? = null,
+    defaultLongContextModelValue: String? = null,
+    defaultVisionModelValue: String? = null,
+    defaultEmbeddingModelValue: String? = null,
 ) {
-    OpenAiCompatible("OpenAI 兼容", "https://api.openai.com/v1", "gpt-4o-mini"),
-    OpenAI("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
+    OpenAiCompatible(
+        "OpenAI 兼容",
+        "https://api.openai.com/v1",
+        "gpt-5.5",
+        defaultEmbeddingModelValue = "text-embedding-3-large",
+    ),
+    OpenAI(
+        "OpenAI",
+        "https://api.openai.com/v1",
+        "gpt-5.5",
+        defaultEmbeddingModelValue = "text-embedding-3-large",
+    ),
+    Claude(
+        "Claude",
+        "https://api.anthropic.com/v1",
+        "claude4.7",
+    ),
     DeepSeek("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
     Qwen("通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+    Xiaomi("小米", "https://api.xiaomi.com/v1", "mimo-7b"),
     SiliconFlow("SiliconFlow", "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
     Ollama("Ollama", "http://127.0.0.1:11434/v1", "qwen2.5:7b"),
     LmStudio("LM Studio", "http://127.0.0.1:1234/v1", "local-model"),
     Custom("自定义", "", ""),
+
+    ;
+
+    val defaultFastModel: String = defaultFastModelValue ?: defaultChatModel
+    val defaultLongContextModel: String = defaultLongContextModelValue ?: defaultChatModel
+    val defaultVisionModel: String = defaultVisionModelValue ?: defaultChatModel
+    val defaultEmbeddingModel: String = defaultEmbeddingModelValue ?: defaultChatModel
 }
 
 @Serializable
@@ -84,9 +115,13 @@ enum class AiTaskKind(val label: String) {
     TimelineReplyOpportunities("互动建议"),
     TimelineFilterSuggestions("过滤建议"),
     ChatSummary("聊天总结"),
+    ChatRecentSummary("最近 50 条摘要"),
+    ChatTodaySummary("今日聊天摘要"),
+    ChatUnreadSummary("未读聊天摘要"),
     ChatReplyDraft("聊天回复草稿"),
     ChatActionItems("聊天待办提取"),
     ChatDecisionSummary("聊天决策摘要"),
+    ChatImportanceCheck("聊天重要性判断"),
     NotificationSummary("通知总结"),
     NotificationFollowUp("通知待处理"),
     NotificationPriority("通知优先级"),
@@ -97,6 +132,7 @@ enum class AiTaskKind(val label: String) {
     AutomationExplain("自动化解释"),
     AutomationRuleSuggestions("自动化规则建议"),
     AutomationRuleDraft("自动创建规则"),
+    AssistantChat("AI 助手"),
     WorkspaceActionPlan("全局行动计划"),
     ConnectionTest("连接测试"),
 }
@@ -230,11 +266,15 @@ data class AiNotificationContext(
     val text: String,
     val notePreviewText: String = "",
     val createdAtLabel: String = "",
+    val id: String = "",
+    val noteId: String = "",
 ) {
     fun compact(maxChars: Int): AiNotificationContext = copy(
+        id = id.take(128),
         type = type.take(80),
         actor = actor.take(120),
         text = text.take(maxChars),
+        noteId = noteId.take(128),
         notePreviewText = notePreviewText.take(maxChars),
         createdAtLabel = createdAtLabel.take(80),
     )
@@ -369,9 +409,11 @@ fun List<ChatMessage>.toAiChatMessageContexts(): List<AiChatMessageContext> {
 fun List<NotificationItem>.toAiNotificationContexts(): List<AiNotificationContext> {
     return map { item ->
         AiNotificationContext(
+            id = item.id,
             type = item.type.name,
             actor = item.actor.displayName.ifBlank { item.actor.username },
             text = item.text,
+            noteId = item.noteId.orEmpty(),
             notePreviewText = item.notePreviewText.orEmpty(),
             createdAtLabel = item.createdAtLabel,
         )

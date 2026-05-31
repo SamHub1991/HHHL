@@ -11,6 +11,10 @@ import cc.hhhl.client.api.ComposeScheduledNotesResult
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.DriveFile
+import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NoteMedia
+import cc.hhhl.client.model.NotePoll
+import cc.hhhl.client.model.NotePollChoice
 import cc.hhhl.client.model.NoteVisibility
 import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.DriveFileRepositoryResult
@@ -133,6 +137,13 @@ class ComposeStateHolderTest {
             "account-2|channel:channel-1",
             composeDraftStorageKey("account-2", ComposeDraft(channelId = "channel-1")),
         )
+        assertEquals(
+            "account-2|edit:note-1",
+            composeDraftStorageKey(
+                "account-2",
+                ComposeDraft(editId = "note-1", replyId = "reply-1", channelId = "channel-1"),
+            ),
+        )
     }
 
     @Test
@@ -193,6 +204,110 @@ class ComposeStateHolderTest {
     }
 
     @Test
+    fun startEditNoteSeedsDraftFromPublishedNote() {
+        val store = memoryDraftStore()
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-1")),
+            draftStore = store,
+            draftKeyProvider = { "account-1" },
+            scope = TestScope(),
+        )
+        val note = Note(
+            id = "note-1",
+            author = FakeData.me,
+            text = "published text",
+            createdAtLabel = "刚刚",
+            visibility = NoteVisibility.Home,
+            cw = "spoiler",
+            media = listOf(
+                NoteMedia(
+                    id = "file-1",
+                    description = "alt text",
+                    type = "image/png",
+                    url = "https://dc.hhhl.cc/files/photo.png",
+                    isSensitive = true,
+                ),
+            ),
+            poll = NotePoll(
+                multiple = true,
+                expiresAt = "2026-05-30T12:00:00Z",
+                choices = listOf(
+                    NotePollChoice("A", votes = 1, isVoted = false),
+                    NotePollChoice("B", votes = 2, isVoted = true),
+                ),
+            ),
+            replyId = "reply-1",
+            renoteId = "renote-1",
+            channelId = "channel-1",
+            localOnly = true,
+            reactionAcceptance = "likeOnly",
+        )
+
+        holder.startEditNote(note)
+
+        val draft = holder.state.value.draft
+        assertEquals("note-1", draft.editId)
+        assertEquals("published text", draft.text)
+        assertEquals("spoiler", draft.cw)
+        assertEquals(NoteVisibility.Home, draft.visibility)
+        assertEquals("reply-1", draft.replyId)
+        assertEquals("renote-1", draft.renoteId)
+        assertEquals("channel-1", draft.channelId)
+        assertEquals(listOf("file-1"), draft.fileIds)
+        assertEquals(listOf("A", "B"), draft.poll?.choices)
+        assertEquals(true, draft.poll?.multiple)
+        assertEquals("2026-05-30T12:00:00Z", draft.poll?.expiresAt)
+        assertEquals(true, draft.localOnly)
+        assertEquals(ComposeReactionAcceptance.LikeOnly, draft.reactionAcceptance)
+        assertEquals("alt text", holder.state.value.attachedFiles.single().comment)
+        assertEquals(true, holder.state.value.attachedFiles.single().isSensitive)
+        assertEquals(null, store.savedDrafts["account-1|edit:note-1"])
+    }
+
+    @Test
+    fun resetDraftInEditModeRestoresPublishedNoteContext() {
+        val store = memoryDraftStore().apply {
+            savedDrafts["account-1|edit:note-1"] = ComposeDraft(editId = "note-1", text = "saved edit")
+        }
+        val holder = ComposeStateHolder(
+            repository = fakeRepository(ComposeRepositoryResult.Success("note-1")),
+            draftStore = store,
+            draftKeyProvider = { "account-1" },
+            scope = TestScope(),
+        )
+        val note = Note(
+            id = "note-1",
+            author = FakeData.me,
+            text = "original text",
+            createdAtLabel = "刚刚",
+            visibility = NoteVisibility.Home,
+            media = listOf(
+                NoteMedia(
+                    id = "file-1",
+                    description = "original alt",
+                    type = "image/png",
+                    url = "https://dc.hhhl.cc/files/photo.png",
+                ),
+            ),
+            replyId = "reply-1",
+        )
+
+        holder.startEditNote(note)
+        holder.updateText("changed text")
+        holder.addFileIds(listOf("file-2"))
+        holder.resetDraft()
+
+        val draft = holder.state.value.draft
+        assertEquals("note-1", draft.editId)
+        assertEquals("original text", draft.text)
+        assertEquals("reply-1", draft.replyId)
+        assertEquals(listOf("file-1"), draft.fileIds)
+        assertEquals("original alt", holder.state.value.attachedFiles.single().comment)
+        assertEquals(false, holder.state.value.restoredDraft)
+        assertEquals(null, store.savedDrafts["account-1|edit:note-1"])
+    }
+
+    @Test
     fun editingRestoredDraftClearsRestoredIndicator() {
         val store = memoryDraftStore(ComposeDraft(text = "saved draft"))
         val holder = ComposeStateHolder(
@@ -240,6 +355,7 @@ class ComposeStateHolderTest {
         assertFalse(holder.state.value.isSending)
         assertEquals("", holder.state.value.draft.text)
         assertEquals("note-created", holder.state.value.createdNoteId)
+        assertEquals("hello", holder.state.value.completedDraft?.text)
         assertEquals(null as String?, holder.state.value.errorMessage)
     }
 
@@ -1081,6 +1197,7 @@ class ComposeStateHolderTest {
         holder.consumeCreatedNote()
 
         assertEquals(null, holder.state.value.createdNoteId)
+        assertEquals(null, holder.state.value.completedDraft)
     }
 
     private fun fakeRepository(

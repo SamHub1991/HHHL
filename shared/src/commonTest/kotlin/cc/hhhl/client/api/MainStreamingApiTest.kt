@@ -3,6 +3,7 @@ package cc.hhhl.client.api
 import cc.hhhl.client.model.NotificationType
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 
 class MainStreamingApiTest {
@@ -117,6 +118,127 @@ class MainStreamingApiTest {
     }
 
     @Test
+    fun parsesMainChatMessageBodyWhenProvided() {
+        val event = parseSharkeyMainStreamingEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "main",
+                "type": "chatMessage",
+                "body": {
+                  "id": "chat-message-1",
+                  "createdAt": "2026-05-25T01:23:45.000Z",
+                  "toRoomId": "room-1",
+                  "text": "@me 主流里的聊天室消息",
+                  "fromUser": {
+                    "id": "user-1",
+                    "username": "alice",
+                    "name": "Alice"
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val messageEvent = assertIs<MainStreamingEvent.ChatMessageReceived>(event)
+        assertEquals("chat-message-1", messageEvent.message.id)
+        assertEquals("room-1", messageEvent.message.roomId)
+        assertEquals("@me 主流里的聊天室消息", messageEvent.message.text)
+        assertEquals("Alice", messageEvent.message.fromUser.displayName)
+    }
+
+    @Test
+    fun parsesMainWrappedChatMessageBodyWhenProvided() {
+        val event = parseSharkeyMainStreamingEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "main",
+                "type": "newChatMessage",
+                "body": {
+                  "chatMessage": {
+                    "id": "main-chat-message-wrapped",
+                    "createdAt": "2026-05-25T01:23:45.000Z",
+                    "roomId": "room-1",
+                    "text": "@me 主流包裹消息",
+                    "fromUser": {
+                      "id": "user-1",
+                      "username": "alice",
+                      "name": "Alice"
+                    }
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val messageEvent = assertIs<MainStreamingEvent.ChatMessageReceived>(event)
+        assertEquals("main-chat-message-wrapped", messageEvent.message.id)
+        assertEquals("room-1", messageEvent.message.roomId)
+        assertEquals("@me 主流包裹消息", messageEvent.message.text)
+    }
+
+    @Test
+    fun parsesMainUnreadChatMessagesBatchBodyWhenProvided() {
+        val events = parseSharkeyMainStreamingEvents(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "main",
+                "type": "unreadChatMessages",
+                "body": [
+                  {
+                    "id": "main-chat-message-1",
+                    "createdAt": "2026-05-25T01:23:45.000Z",
+                    "toRoomId": "room-1",
+                    "text": "@me 主流批量第一条",
+                    "fromUser": {
+                      "id": "user-1",
+                      "username": "alice",
+                      "name": "Alice"
+                    }
+                  },
+                  {
+                    "id": "main-chat-message-2",
+                    "createdAt": "2026-05-25T01:24:45.000Z",
+                    "toRoomId": "room-1",
+                    "text": "主流批量第二条",
+                    "fromUser": {
+                      "id": "user-2",
+                      "username": "bob",
+                      "name": "Bob"
+                    },
+                    "reply": {
+                      "id": "reply-message",
+                      "fromUser": {
+                        "id": "me",
+                        "username": "me",
+                        "name": "Me"
+                      },
+                      "text": "原消息"
+                    }
+                  }
+                ]
+              }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(2, events.size)
+        val first = assertIs<MainStreamingEvent.ChatMessageReceived>(events[0])
+        val second = assertIs<MainStreamingEvent.ChatMessageReceived>(events[1])
+        assertEquals("main-chat-message-1", first.message.id)
+        assertEquals("@me 主流批量第一条", first.message.text)
+        assertEquals("main-chat-message-2", second.message.id)
+        assertEquals("reply-message", second.message.reply?.id)
+    }
+
+    @Test
     fun parsesTimelineNoteEvent() {
         val event = parseSharkeyMainStreamingEvent(
             """
@@ -134,6 +256,37 @@ class MainStreamingApiTest {
         )
 
         assertEquals(MainStreamingEvent.TimelineNote(TimelineKind.Local), event)
+    }
+
+    @Test
+    fun parsesChannelTimelineNoteBody() {
+        val event = parseSharkeyMainStreamingEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "channel:channel-1",
+                "type": "note",
+                "body": {
+                  "id": "note-1",
+                  "createdAt": "2026-05-27T10:00:00.000Z",
+                  "text": "channel post",
+                  "user": {
+                    "id": "user-1",
+                    "username": "alice",
+                    "name": "Alice"
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val timelineEvent = event as MainStreamingEvent.TimelineNote
+        assertEquals(TimelineKind.Home, timelineEvent.kind)
+        assertEquals("Channel", timelineEvent.timelineSource)
+        assertEquals("note-1", timelineEvent.note?.id)
+        assertEquals("channel-1", timelineEvent.note?.channelId)
     }
 
     @Test

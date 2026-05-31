@@ -21,15 +21,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,10 +48,10 @@ import cc.hhhl.client.model.NotificationType
 import cc.hhhl.client.state.AnnouncementUiState
 import cc.hhhl.client.state.NotificationUiState
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultCommonActionChips
 import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.Avatar
-import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlFilterPill
 import cc.hhhl.client.ui.component.HhhlIconActionButton
@@ -97,9 +98,14 @@ fun NotificationsScreen(
     aiResultText: String? = null,
     aiResultLabel: String? = null,
     onAiAction: (AiTaskKind, List<NotificationItem>, NotificationFilter) -> Unit = { _, _, _ -> },
+    onCopyAiResult: ((String) -> Unit)? = null,
+    onAddAiMutedWord: ((String) -> Unit)? = null,
+    onAddAiRelatedNoteToWatchLater: ((String, List<NotificationItem>) -> Unit)? = null,
+    onOpenAiRelatedNote: ((String, List<NotificationItem>) -> Unit)? = null,
     onDismissAiResult: () -> Unit = {},
     notificationListState: LazyListState = rememberLazyListState(),
     announcementListState: LazyListState = rememberLazyListState(),
+    onBackHandlerChanged: (((() -> Boolean)?) -> Unit)? = null,
 ) {
     val notifications = state?.notifications.orEmpty()
     val selectedFilter = state?.selectedFilter ?: NotificationFilter.All
@@ -127,6 +133,18 @@ fun NotificationsScreen(
         announcementState?.selectedAnnouncement
     } else {
         null
+    }
+    val latestNotificationsBackHandler by rememberUpdatedState<() -> Boolean> {
+        if (selectedAnnouncement != null) {
+            onCloseAnnouncement()
+            true
+        } else {
+            false
+        }
+    }
+    DisposableEffect(onBackHandlerChanged) {
+        onBackHandlerChanged?.invoke { latestNotificationsBackHandler() }
+        onDispose { onBackHandlerChanged?.invoke(null) }
     }
     if (selectedAnnouncement != null && announcementState != null) {
         AnnouncementDetailView(
@@ -179,6 +197,10 @@ fun NotificationsScreen(
                 aiResultText = aiResultText,
                 aiResultLabel = aiResultLabel,
                 onAiAction = onAiAction,
+                onCopyAiResult = onCopyAiResult,
+                onAddAiMutedWord = onAddAiMutedWord,
+                onAddAiRelatedNoteToWatchLater = onAddAiRelatedNoteToWatchLater,
+                onOpenAiRelatedNote = onOpenAiRelatedNote,
                 onDismissAiResult = onDismissAiResult,
                 listState = notificationListState,
             )
@@ -256,6 +278,10 @@ private fun NotificationListContent(
     aiResultText: String?,
     aiResultLabel: String?,
     onAiAction: (AiTaskKind, List<NotificationItem>, NotificationFilter) -> Unit,
+    onCopyAiResult: ((String) -> Unit)?,
+    onAddAiMutedWord: ((String) -> Unit)?,
+    onAddAiRelatedNoteToWatchLater: ((String, List<NotificationItem>) -> Unit)?,
+    onOpenAiRelatedNote: ((String, List<NotificationItem>) -> Unit)?,
     onDismissAiResult: () -> Unit,
     listState: LazyListState,
 ) {
@@ -288,6 +314,11 @@ private fun NotificationListContent(
         NotificationAiResultPanel(
             label = aiResultLabel ?: "AI 结果",
             text = aiResultText,
+            notifications = notifications,
+            onCopyAiResult = onCopyAiResult,
+            onAddAiMutedWord = onAddAiMutedWord,
+            onAddAiRelatedNoteToWatchLater = onAddAiRelatedNoteToWatchLater,
+            onOpenAiRelatedNote = onOpenAiRelatedNote,
             onDismiss = onDismissAiResult,
         )
         HhhlDivider()
@@ -617,22 +648,13 @@ private fun NotificationSummaryRow(
                 enabled = !isLoading,
                 onClick = onRefresh,
             )
-            HhhlActionChip(
-                label = if (isMarkingAllRead) "处理中" else "全部已读",
-                enabled = notificationMarkAllReadEnabled(
-                    isLoading = isLoading,
-                    isMarkingAllRead = isMarkingAllRead,
-                ),
-                onClick = onMarkAllAsRead,
-            )
-            HhhlActionChip(
-                label = "清空",
-                enabled = !isMarkingAllRead && notificationCount > 0,
-                onClick = onFlush,
-            )
             HhhlOverflowMenu(
                 actions = notificationSummaryActions(
+                    isLoading = isLoading,
                     isMarkingAllRead = isMarkingAllRead,
+                    notificationCount = notificationCount,
+                    onMarkAllAsRead = onMarkAllAsRead,
+                    onFlush = onFlush,
                     onSendTestNotification = onSendTestNotification,
                     onSendReminderNotification = onSendReminderNotification,
                     aiEnabled = aiEnabled,
@@ -654,7 +676,11 @@ internal fun notificationMarkAllReadEnabled(
 ): Boolean = !isLoading && !isMarkingAllRead
 
 fun notificationSummaryActions(
+    isLoading: Boolean = false,
     isMarkingAllRead: Boolean,
+    notificationCount: Int = 0,
+    onMarkAllAsRead: () -> Unit = {},
+    onFlush: () -> Unit = {},
     onSendTestNotification: () -> Unit,
     onSendReminderNotification: () -> Unit,
     aiEnabled: Boolean = false,
@@ -663,6 +689,20 @@ fun notificationSummaryActions(
     onAiFollowUp: () -> Unit = {},
     onAiPriority: () -> Unit = {},
 ): List<HhhlOverflowMenuAction> = listOf(
+    HhhlOverflowMenuAction(
+        label = if (isMarkingAllRead) "处理中" else "全部已读",
+        enabled = notificationMarkAllReadEnabled(
+            isLoading = isLoading,
+            isMarkingAllRead = isMarkingAllRead,
+        ),
+        onClick = onMarkAllAsRead,
+    ),
+    HhhlOverflowMenuAction(
+        label = "清空",
+        enabled = !isMarkingAllRead && notificationCount > 0,
+        destructive = true,
+        onClick = onFlush,
+    ),
     HhhlOverflowMenuAction(
         label = if (isAiProcessing) "AI 处理中" else "AI",
         enabled = aiEnabled && !isAiProcessing && !isMarkingAllRead,
@@ -741,6 +781,11 @@ fun notificationEmptyText(selectedFilter: NotificationFilter): String {
 private fun NotificationAiResultPanel(
     label: String,
     text: String,
+    notifications: List<NotificationItem>,
+    onCopyAiResult: ((String) -> Unit)?,
+    onAddAiMutedWord: ((String) -> Unit)?,
+    onAddAiRelatedNoteToWatchLater: ((String, List<NotificationItem>) -> Unit)?,
+    onOpenAiRelatedNote: ((String, List<NotificationItem>) -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     AiResultPanel(
@@ -750,6 +795,15 @@ private fun NotificationAiResultPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 8.dp),
+        actions = {
+            AiResultCommonActionChips(
+                text = text,
+                onCopyChecklist = onCopyAiResult,
+                onAddMutedWord = onAddAiMutedWord,
+                onAddToWatchLater = onAddAiRelatedNoteToWatchLater?.let { add -> { add(text, notifications) } },
+                onOpenRelatedNote = onOpenAiRelatedNote?.let { open -> { open(text, notifications) } },
+            )
+        },
     )
 }
 

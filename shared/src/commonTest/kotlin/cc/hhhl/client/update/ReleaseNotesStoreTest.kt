@@ -9,15 +9,15 @@ class ReleaseNotesStoreTest {
     fun timelineListsKnownVersionsLatestFirst() {
         val timeline = releaseNotesTimeline()
 
-        assertEquals(listOf("0.4.2", "0.4.1", "0.4.0"), timeline.map { it.versionName })
+        assertEquals(listOf("0.5.0", "0.4.2", "0.4.1", "0.4.0"), timeline.map { it.versionName })
     }
 
     @Test
     fun currentReleaseNotesIncludeUpdateTimelineChanges() {
-        val notes = releaseNotesFor("v0.4.2")
+        val notes = releaseNotesFor("v0.5.0")
 
-        assertEquals("0.4.2", notes.versionName)
-        assertTrue(notes.highlights.any { it.contains("更新日志时间线") })
-        assertTrue(notes.highlights.any { it.contains("首次打开") })
+        assertEquals("0.5.0", notes.versionName)
+        assertTrue(notes.highlights.any { it.contains("AI 小光球") })
+        assertTrue(notes.highlights.any { it.contains("不打开聊天室") })
     }
 }

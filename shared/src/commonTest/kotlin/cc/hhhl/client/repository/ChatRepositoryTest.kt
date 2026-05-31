@@ -18,6 +18,7 @@ import cc.hhhl.client.cache.ChatMessageCacheKey
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX
 import cc.hhhl.client.model.ChatMessageReaction
+import cc.hhhl.client.model.ChatMessageReference
 import cc.hhhl.client.model.ChatRoomInvitation
 import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.ChatRoom
@@ -314,6 +315,76 @@ class ChatRepositoryTest {
         assertIs<ChatMessageRepositoryResult.Success>(cached)
         assertEquals(listOf(UserMessageCall("token-123", "user-2", null)), calls)
         assertEquals(listOf(message), cached.messages)
+    }
+
+    @Test
+    fun resolveRealtimeMessageRefreshesRoomMessagesWhenStreamingReferenceIsMissing() = runTest {
+        val currentUser = User("account-user", "Me", "me", "M")
+        val incoming = sampleMessage(
+            id = "message-stream-room",
+            roomId = "room-77",
+            createdAt = "2026-05-25T03:00:00.000Z",
+        ).copy(replyUnavailable = true)
+        val resolved = incoming.copy(
+            replyUnavailable = false,
+            reply = ChatMessageReference(
+                id = "message-prev",
+                fromUser = currentUser,
+                text = "previous",
+            ),
+        )
+        val calls = mutableListOf<MessageCall>()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                messageCalls = calls,
+                messageResult = ChatMessageLoadResult.Success(listOf(resolved)),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.resolveRealtimeMessage(incoming)
+
+        assertEquals(listOf(MessageCall("token-123", "room-77", null)), calls)
+        assertEquals(resolved, result)
+    }
+
+    @Test
+    fun resolveRealtimeMessageRefreshesUserMessagesWhenStreamingReferenceIsMissing() = runTest {
+        val currentUser = User("account-user", "Me", "me", "M")
+        val peer = User("user-2", "Bob", "bob", "B")
+        val incoming = sampleMessage(
+            id = "message-stream-user",
+            roomId = "",
+            createdAt = "2026-05-25T03:00:00.000Z",
+        ).copy(
+            fromUser = peer,
+            toUserId = currentUser.id,
+            toUser = currentUser,
+            quoteUnavailable = true,
+        )
+        val resolved = incoming.copy(
+            quoteUnavailable = false,
+            quote = ChatMessageReference(
+                id = "message-prev",
+                fromUser = currentUser,
+                text = "previous",
+            ),
+        )
+        val calls = mutableListOf<UserMessageCall>()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                userMessageCalls = calls,
+                userMessageResult = ChatMessageLoadResult.Success(listOf(resolved)),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.resolveRealtimeMessage(incoming, directUserId = peer.id)
+
+        assertEquals(listOf(UserMessageCall("token-123", "user-2", null)), calls)
+        assertEquals(resolved, result)
     }
 
     @Test
@@ -898,7 +969,7 @@ class ChatRepositoryTest {
                     ChatMessageLoadResult.Success(emptyList())
                 override suspend fun searchMessages(token: String, query: String, limit: Int, untilId: String?, roomId: String?, userId: String?) =
                     ChatMessageLoadResult.Success(emptyList())
-                override suspend fun createRoom(token: String, name: String, description: String) =
+                override suspend fun createRoom(token: String, name: String, description: String, joinMode: String) =
                     ChatRoomMutationResult.Success(sampleRoom("room-created", "membership-created"))
                 override suspend fun createRoomMessage(token: String, roomId: String, text: String, fileId: String?, fileIds: List<String>, replyId: String?, quoteId: String?) =
                     ChatMessageCreateResult.Success(sampleMessage("created"))
@@ -910,13 +981,16 @@ class ChatRepositoryTest {
                     ChatMessageReactionResult.Success
                 override suspend fun deleteMessage(token: String, messageId: String) =
                     ChatMessageDeleteResult.Success
-                override suspend fun updateRoom(token: String, roomId: String, name: String, description: String) =
+                override suspend fun updateRoom(token: String, roomId: String, name: String?, description: String?, joinMode: String?) =
                     ChatRoomMutationResult.Success(sampleRoom(roomId, roomId))
+                override suspend fun updateRoomManagement(token: String, roomId: String, messageRetentionDays: Int?) =
+                    ChatRoomMutationResult.Success(sampleRoom(roomId, roomId).copy(messageRetentionDays = messageRetentionDays))
                 override suspend fun inviteRoomMember(token: String, roomId: String, userId: String) =
                     ChatRoomActionResult.Success
                 override suspend fun joinRoom(token: String, roomId: String) = ChatRoomActionResult.Success
                 override suspend fun leaveRoom(token: String, roomId: String) = ChatRoomActionResult.Success
                 override suspend fun deleteRoom(token: String, roomId: String) = ChatRoomActionResult.Success
+                override suspend fun deleteAllRoomMessages(token: String, roomId: String) = ChatRoomActionResult.Success
                 override suspend fun muteRoom(token: String, roomId: String, muted: Boolean) = ChatRoomActionResult.Success
                 override suspend fun ignoreRoomInvitation(token: String, roomId: String) = ChatRoomActionResult.Success
             },
@@ -1058,6 +1132,7 @@ class ChatRepositoryTest {
                 token: String,
                 name: String,
                 description: String,
+                joinMode: String,
             ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom("room-created", "membership-created"))
 
             override suspend fun showRoom(
@@ -1086,9 +1161,18 @@ class ChatRepositoryTest {
             override suspend fun updateRoom(
                 token: String,
                 roomId: String,
-                name: String,
-                description: String,
+                name: String?,
+                description: String?,
+                joinMode: String?,
             ): ChatRoomMutationResult = ChatRoomMutationResult.Success(sampleRoom("room-updated", "membership-updated"))
+
+            override suspend fun updateRoomManagement(
+                token: String,
+                roomId: String,
+                messageRetentionDays: Int?,
+            ): ChatRoomMutationResult = ChatRoomMutationResult.Success(
+                sampleRoom(roomId, roomId).copy(messageRetentionDays = messageRetentionDays),
+            )
 
             override suspend fun inviteRoomMember(
                 token: String,
@@ -1107,6 +1191,11 @@ class ChatRepositoryTest {
             ): ChatRoomActionResult = ChatRoomActionResult.Success
 
             override suspend fun deleteRoom(
+                token: String,
+                roomId: String,
+            ): ChatRoomActionResult = ChatRoomActionResult.Success
+
+            override suspend fun deleteAllRoomMessages(
                 token: String,
                 roomId: String,
             ): ChatRoomActionResult = ChatRoomActionResult.Success

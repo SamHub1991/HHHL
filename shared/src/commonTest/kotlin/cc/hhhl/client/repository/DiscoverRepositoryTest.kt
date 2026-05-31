@@ -1,20 +1,27 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.DiscoverApi
+import cc.hhhl.client.api.DiscoverDiscoverySectionsResult
 import cc.hhhl.client.api.DiscoverFederationActionResult
 import cc.hhhl.client.api.DiscoverFederationFollowResult
 import cc.hhhl.client.api.DiscoverFederationInstanceResult
 import cc.hhhl.client.api.DiscoverFederationResult
 import cc.hhhl.client.api.DiscoverFederationStatsResult
 import cc.hhhl.client.api.DiscoverNoteSearchOptions
+import cc.hhhl.client.api.DiscoverRecommendationFeedbackEvent
+import cc.hhhl.client.api.DiscoverRecommendationFeedbackResult
+import cc.hhhl.client.api.DiscoverRecommendedTimelineOptions
 import cc.hhhl.client.api.DiscoverSearchResult
+import cc.hhhl.client.api.DiscoverSearchTrendsResult
 import cc.hhhl.client.api.DiscoverTrendResult
 import cc.hhhl.client.api.DiscoverUserSearchResult
+import cc.hhhl.client.model.DiscoverySections
 import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.FederationFollow
 import cc.hhhl.client.model.FederationInstance
 import cc.hhhl.client.model.FederationStats
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NoteSearchTrends
 import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.model.User
 import cc.hhhl.client.state.DiscoverAdvancedFilters
@@ -366,6 +373,76 @@ class DiscoverRepositoryTest {
     }
 
     @Test
+    fun discoverySectionsAndSearchTrendsDoNotRequireToken() = runTest {
+        val sections = DiscoverySections(coverNotes = listOf(FakeData.timeline[0]))
+        val trends = NoteSearchTrends(popularSearches = listOf("key"))
+        val calls = mutableListOf<ApiCall>()
+        val repository = DiscoverRepository(
+            tokenProvider = { null },
+            api = fakeApi(
+                calls = calls,
+                discoverySectionsResult = DiscoverDiscoverySectionsResult.Success(sections),
+                searchTrendsResult = DiscoverSearchTrendsResult.Success(trends),
+            ),
+        )
+
+        assertEquals(DiscoverRepositoryResult.DiscoverySectionsSuccess(sections), repository.loadDiscoverySections())
+        assertEquals(DiscoverRepositoryResult.SearchTrendsSuccess(trends), repository.loadSearchTrends())
+        assertEquals(
+            listOf(
+                ApiCall("discovery-sections", null, "", "6", null, null),
+                ApiCall("search-trends", null, "", "10", null, null),
+            ),
+            calls,
+        )
+    }
+
+    @Test
+    fun recommendedTimelineAppendsAndUsesOffsetOptions() = runTest {
+        val first = FakeData.timeline[0]
+        val second = FakeData.timeline[1]
+        val calls = mutableListOf<ApiCall>()
+        val options = mutableListOf<DiscoverRecommendedTimelineOptions>()
+        val repository = DiscoverRepository(
+            tokenProvider = { null },
+            api = fakeApi(
+                calls = calls,
+                recommendedOptions = options,
+                result = DiscoverSearchResult.Success(listOf(second)),
+            ),
+        )
+
+        val result = repository.loadRecommendedTimeline(
+            currentNotes = listOf(first),
+            options = DiscoverRecommendedTimelineOptions(offset = 20),
+        )
+
+        assertEquals(DiscoverRepositoryResult.RecommendedTimelineSuccess(listOf(first, second)), result)
+        assertEquals(listOf(ApiCall("recommended", null, "", "20", null, null)), calls)
+        assertEquals(20, options.single().offset)
+    }
+
+    @Test
+    fun recommendationFeedbackRequiresTokenAndCallsApi() = runTest {
+        val calls = mutableListOf<ApiCall>()
+        val repository = DiscoverRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                calls = calls,
+                feedbackResult = DiscoverRecommendationFeedbackResult.Success,
+            ),
+        )
+
+        val result = repository.sendRecommendationFeedback(
+            noteId = "note-1",
+            event = DiscoverRecommendationFeedbackEvent.Click,
+        )
+
+        assertEquals(DiscoverRepositoryResult.RecommendationFeedbackSuccess, result)
+        assertEquals(listOf(ApiCall("feedback:click", "token-123", "note-1", null, null, null)), calls)
+    }
+
+    @Test
     fun hashtagDiscoveryDoesNotRequireToken() = runTest {
         val trend = TrendingHashtag(tag = "AI", chart = emptyList(), usersCount = 0)
         val calls = mutableListOf<ApiCall>()
@@ -493,7 +570,11 @@ class DiscoverRepositoryTest {
         federationFollowResult: DiscoverFederationFollowResult = DiscoverFederationFollowResult.Success(emptyList()),
         federationStatsResult: DiscoverFederationStatsResult = DiscoverFederationStatsResult.Success(sampleFederationStats()),
         federationActionResult: DiscoverFederationActionResult = DiscoverFederationActionResult.Unavailable,
+        discoverySectionsResult: DiscoverDiscoverySectionsResult = DiscoverDiscoverySectionsResult.Success(DiscoverySections()),
+        searchTrendsResult: DiscoverSearchTrendsResult = DiscoverSearchTrendsResult.Success(NoteSearchTrends()),
+        feedbackResult: DiscoverRecommendationFeedbackResult = DiscoverRecommendationFeedbackResult.Success,
         noteOptions: MutableList<DiscoverNoteSearchOptions> = mutableListOf(),
+        recommendedOptions: MutableList<DiscoverRecommendedTimelineOptions> = mutableListOf(),
         onCall: () -> Unit = {},
     ): DiscoverApi {
         return object : DiscoverApi {
@@ -538,6 +619,38 @@ class DiscoverRepositoryTest {
                 onCall()
                 calls.add(ApiCall("trends", null, "", null, null, null))
                 return trendResult
+            }
+
+            override suspend fun loadDiscoverySections(limit: Int): DiscoverDiscoverySectionsResult {
+                onCall()
+                calls.add(ApiCall("discovery-sections", null, "", limit.toString(), null, null))
+                return discoverySectionsResult
+            }
+
+            override suspend fun loadSearchTrends(limit: Int): DiscoverSearchTrendsResult {
+                onCall()
+                calls.add(ApiCall("search-trends", null, "", limit.toString(), null, null))
+                return searchTrendsResult
+            }
+
+            override suspend fun loadRecommendedTimeline(
+                options: DiscoverRecommendedTimelineOptions,
+            ): DiscoverSearchResult {
+                onCall()
+                recommendedOptions.add(options)
+                calls.add(ApiCall("recommended", null, "", options.offset.toString(), null, null))
+                return result
+            }
+
+            override suspend fun sendRecommendationFeedback(
+                token: String,
+                noteId: String,
+                event: DiscoverRecommendationFeedbackEvent,
+                dwellMs: Int?,
+            ): DiscoverRecommendationFeedbackResult {
+                onCall()
+                calls.add(ApiCall("feedback:${event.apiValue}", token, noteId, null, null, null))
+                return feedbackResult
             }
 
             override suspend fun searchHashtags(

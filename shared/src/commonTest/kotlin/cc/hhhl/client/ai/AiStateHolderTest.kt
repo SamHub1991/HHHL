@@ -191,6 +191,88 @@ class AiStateHolderTest {
         assertEquals("https://api.example.com/v1/", holder.state.value.settings.baseUrl)
         assertEquals("https://api.example.com/v1", holder.state.value.settings.cleanBaseUrl)
     }
+
+    @Test
+    fun updateSettingsPersistsNormalizedAssistantMemory() = runTest {
+        val store = MemoryAiStore()
+        val holder = AiStateHolder(
+            store = store,
+            accountId = "account-1",
+            repository = FakeAiRepository(AiRepositoryResult.Success("OK")),
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.updateSettings(
+            AiSettings(
+                enabled = true,
+                apiKey = "key",
+                assistantMemoryNotes = listOf("  喜欢短回复  ", "", "喜欢短回复", "自动化要确认"),
+            ),
+        )
+
+        assertEquals(listOf("喜欢短回复", "自动化要确认"), holder.state.value.settings.assistantMemoryNotes)
+        assertEquals(listOf("喜欢短回复", "自动化要确认"), store.lastSnapshot.settings.assistantMemoryNotes)
+    }
+
+    @Test
+    fun updateSettingsPersistsAssistantAutoApprovalFlags() = runTest {
+        val store = MemoryAiStore()
+        val holder = AiStateHolder(
+            store = store,
+            accountId = "account-1",
+            repository = FakeAiRepository(AiRepositoryResult.Success("OK")),
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.updateSettings(
+            AiSettings(
+                enabled = true,
+                apiKey = "key",
+                assistantLowRiskAutoApproval = true,
+                assistantHighRiskAutoApproval = true,
+            ),
+        )
+
+        assertTrue(holder.state.value.settings.assistantLowRiskAutoApproval)
+        assertTrue(holder.state.value.settings.assistantHighRiskAutoApproval)
+        assertTrue(store.lastSnapshot.settings.assistantLowRiskAutoApproval)
+        assertTrue(store.lastSnapshot.settings.assistantHighRiskAutoApproval)
+
+        val restored = AiStateHolder(
+            store = store,
+            accountId = "account-1",
+            repository = FakeAiRepository(AiRepositoryResult.Success("OK")),
+            scope = TestScope(testScheduler),
+        )
+        restored.restore()
+
+        assertTrue(restored.state.value.settings.assistantHighRiskAutoApproval)
+    }
+
+    @Test
+    fun highRiskAutoApprovalCanStayEnabledWhenLowRiskAutoApprovalIsDisabled() = runTest {
+        val holder = AiStateHolder(
+            store = MemoryAiStore(),
+            accountId = "account-1",
+            repository = FakeAiRepository(AiRepositoryResult.Success("OK")),
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.updateSettings(
+            AiSettings(
+                enabled = true,
+                apiKey = "key",
+                assistantLowRiskAutoApproval = false,
+                assistantHighRiskAutoApproval = true,
+            ),
+        )
+
+        assertEquals(false, holder.state.value.settings.assistantLowRiskAutoApproval)
+        assertEquals(true, holder.state.value.settings.assistantHighRiskAutoApproval)
+    }
 }
 
 private class FakeAiRepository(

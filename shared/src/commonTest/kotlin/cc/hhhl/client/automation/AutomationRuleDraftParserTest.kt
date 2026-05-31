@@ -39,6 +39,30 @@ class AutomationRuleDraftParserTest {
         assertEquals(AutomationConditionType.AiSemantic, rule.conditions.single().type)
         assertEquals(AutomationActionType.SystemNotification, rule.actions.single().type)
         assertEquals(120, rule.cooldownSeconds)
+        assertEquals(12, rule.maxExecutionsPer30Seconds)
+    }
+
+    @Test
+    fun riskyAiDraftGetsDefaultLoopProtection() {
+        val result = parseAutomationRuleDraft(
+            """
+            {
+              "name": "转发聊天室消息",
+              "trigger": "ChatMessage",
+              "conditions": [
+                { "roomName": "总部" }
+              ],
+              "actions": [
+                { "type": "ForwardToRoom", "targetId": "目标聊天室", "bodyTemplate": "{{event.body}}" }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val rule = assertNotNull(result.rule)
+        assertEquals(300, rule.cooldownSeconds)
+        assertEquals(2, rule.maxExecutionsPer30Seconds)
+        assertEquals(true, rule.ignoreOwnMessages)
     }
 
     @Test

@@ -7,6 +7,8 @@ import cc.hhhl.client.api.ComposeScheduleDraft
 import cc.hhhl.client.api.ComposeScheduledNote
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.model.DriveFile
+import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NoteMedia
 import cc.hhhl.client.model.NoteVisibility
 import cc.hhhl.client.repository.ComposeRepository
 import cc.hhhl.client.repository.ComposeRepositoryResult
@@ -40,6 +42,7 @@ data class ComposeUiState(
     val updatingFileIds: Set<String> = emptySet(),
     val errorMessage: String? = null,
     val createdNoteId: String? = null,
+    val completedDraft: ComposeDraft? = null,
     val requiresRelogin: Boolean = false,
     val restoredDraft: Boolean = false,
     val failedSendQueue: List<ComposeFailedSend> = emptyList(),
@@ -59,15 +62,19 @@ class ComposeStateHolder(
     private var draftSessionId = 0
     private var visibleUserResolveRequestId = 0
     private var scheduledNotesRequestId = 0
+    private var editDraftBaseline: ComposeDraft? = null
+    private var editAttachedFilesBaseline: List<DriveFile> = emptyList()
 
     fun restoreStoredDraft() {
         val storedDraft = runCatching { draftStore.loadDraft(currentDraftKey()) }.getOrNull() ?: return
         draftSessionId += 1
+        clearEditBaseline()
         updateDraftState(clearRestoredDraft = false) { current ->
             current.copy(
                 draft = storedDraft.sanitizedForCapabilities(current.canPublicNote, current.canScheduleNotes),
                 errorMessage = null,
                 createdNoteId = null,
+                completedDraft = null,
                 requiresRelogin = false,
                 restoredDraft = storedDraft.hasUserDraftContent(),
             )
@@ -106,6 +113,36 @@ class ComposeStateHolder(
         }
     }
 
+    fun startEditNote(note: Note) {
+        val cleanNoteId = note.id.trim()
+        if (cleanNoteId.isEmpty()) return
+
+        invalidateDraftSession()
+        val baseDraft = note.toEditDraft(state.value.canPublicNote)
+        val baseAttachedFiles = note.media.map { media -> media.toAttachedDriveFile() }
+        editDraftBaseline = baseDraft
+        editAttachedFilesBaseline = baseAttachedFiles
+        val storedDraft = runCatching { draftStore.loadDraft(currentDraftKey(baseDraft)) }.getOrNull()
+        updateDraftState(
+            clearRestoredDraft = false,
+            persistToStore = storedDraft != null,
+        ) { current ->
+            val nextDraft = (storedDraft ?: baseDraft)
+                .withContextFrom(baseDraft)
+                .sanitizedForCapabilities(current.canPublicNote, current.canScheduleNotes)
+            current.copy(
+                draft = nextDraft,
+                attachedFiles = baseAttachedFiles,
+                updatingFileIds = emptySet(),
+                errorMessage = null,
+                createdNoteId = null,
+                completedDraft = null,
+                requiresRelogin = false,
+                restoredDraft = storedDraft != null && nextDraft.hasUserDraftContent(),
+            )
+        }
+    }
+
     fun startNewNote() {
         startDraftContext { canPublicNote -> newDraft(canPublicNote) }
     }
@@ -116,6 +153,7 @@ class ComposeStateHolder(
                 draft = it.draft.copy(text = text),
                 errorMessage = null,
                 createdNoteId = null,
+                completedDraft = null,
                 requiresRelogin = false,
                 restoredDraft = false,
             )
@@ -199,13 +237,29 @@ class ComposeStateHolder(
 
     fun resetDraft() {
         invalidateDraftSession()
-        updateDraftState {
+        val currentEditId = state.value.draft.editId?.takeIf { it.isNotBlank() }
+        if (currentEditId == null || editDraftBaseline?.editId != currentEditId) {
+            clearEditBaseline()
+        }
+        if (currentEditId != null) {
+            clearStoredDraft(ComposeDraft(editId = currentEditId))
+        }
+        updateDraftState(persistToStore = currentEditId == null) {
+            val baselineDraft = editDraftBaseline
+                ?.takeIf { baseline -> baseline.editId == currentEditId }
+                ?.sanitizedForCapabilities(it.canPublicNote, it.canScheduleNotes)
+            val nextDraft = baselineDraft ?: if (currentEditId != null) {
+                newDraft(it.canPublicNote).withContextFrom(it.draft)
+            } else {
+                newDraft(it.canPublicNote)
+            }
             it.copy(
-                draft = newDraft(it.canPublicNote),
-                attachedFiles = emptyList(),
+                draft = nextDraft,
+                attachedFiles = if (baselineDraft != null) editAttachedFilesBaseline else emptyList(),
                 updatingFileIds = emptySet(),
                 errorMessage = null,
                 createdNoteId = null,
+                completedDraft = null,
                 requiresRelogin = false,
                 restoredDraft = false,
             )
@@ -735,6 +789,7 @@ class ComposeStateHolder(
                             updatingFileIds = emptySet(),
                             errorMessage = null,
                             createdNoteId = null,
+                            completedDraft = null,
                             requiresRelogin = false,
                         )
                     }
@@ -777,6 +832,7 @@ class ComposeStateHolder(
                     isSending = false,
                     errorMessage = validationError,
                     createdNoteId = null,
+                    completedDraft = null,
                     requiresRelogin = false,
                 )
             }
@@ -788,6 +844,7 @@ class ComposeStateHolder(
                 isSending = true,
                 errorMessage = null,
                 createdNoteId = null,
+                completedDraft = null,
                 requiresRelogin = false,
             )
         }
@@ -803,6 +860,7 @@ class ComposeStateHolder(
                                 isSending = false,
                                 errorMessage = null,
                                 createdNoteId = result.createdNoteId,
+                                completedDraft = draft,
                                 requiresRelogin = false,
                             )
                         } else {
@@ -815,6 +873,7 @@ class ComposeStateHolder(
                                 isSending = false,
                                 errorMessage = null,
                                 createdNoteId = result.createdNoteId,
+                                completedDraft = draft,
                                 requiresRelogin = false,
                             )
                         }
@@ -859,6 +918,7 @@ class ComposeStateHolder(
                         it.copy(
                             errorMessage = null,
                             createdNoteId = result.createdNoteId,
+                            completedDraft = queued.draft,
                             requiresRelogin = false,
                         )
                     }
@@ -902,6 +962,7 @@ class ComposeStateHolder(
                 draft = queued.draft.sanitizedForCapabilities(current.canPublicNote, current.canScheduleNotes),
                 errorMessage = null,
                 createdNoteId = null,
+                completedDraft = null,
                 requiresRelogin = false,
                 restoredDraft = true,
             )
@@ -914,7 +975,7 @@ class ComposeStateHolder(
     }
 
     fun consumeCreatedNote() {
-        mutableState.update { it.copy(createdNoteId = null, requiresRelogin = false) }
+        mutableState.update { it.copy(createdNoteId = null, completedDraft = null, requiresRelogin = false) }
     }
 
     fun loadScheduledNotes() {
@@ -1026,6 +1087,7 @@ class ComposeStateHolder(
 
     private fun startDraftContext(baseDraftFactory: (Boolean) -> ComposeDraft) {
         invalidateDraftSession()
+        clearEditBaseline()
         val baseDraft = baseDraftFactory(state.value.canPublicNote)
         val storedDraft = runCatching { draftStore.loadDraft(currentDraftKey(baseDraft)) }.getOrNull()
         updateDraftState(clearRestoredDraft = false) { current ->
@@ -1037,6 +1099,7 @@ class ComposeStateHolder(
                 attachedFiles = emptyList(),
                 errorMessage = null,
                 createdNoteId = null,
+                completedDraft = null,
                 requiresRelogin = false,
                 restoredDraft = storedDraft != null && nextDraft.hasUserDraftContent(),
             )
@@ -1049,6 +1112,7 @@ class ComposeStateHolder(
 
     private fun updateDraftState(
         clearRestoredDraft: Boolean = true,
+        persistToStore: Boolean = true,
         transform: (ComposeUiState) -> ComposeUiState,
     ) {
         var nextDraft: ComposeDraft? = null
@@ -1061,11 +1125,17 @@ class ComposeStateHolder(
             }
             next.also { nextDraft = it.draft }
         }
-        nextDraft?.let(::persistDraft)
+        if (persistToStore) {
+            nextDraft?.let(::persistDraft)
+        }
     }
 
     private fun persistDraft(draft: ComposeDraft) {
         runCatching { draftStore.saveDraft(currentDraftKey(draft), draft) }
+    }
+
+    private fun clearStoredDraft(draft: ComposeDraft) {
+        runCatching { draftStore.clearDraft(currentDraftKey(draft)) }
     }
 
     private fun enqueueFailedSend(
@@ -1142,6 +1212,11 @@ class ComposeStateHolder(
         pendingMediaUploads.clear()
     }
 
+    private fun clearEditBaseline() {
+        editDraftBaseline = null
+        editAttachedFilesBaseline = emptyList()
+    }
+
     private fun ComposeDraft.sanitizedForCapabilities(
         canPublicNote: Boolean,
         canScheduleNotes: Boolean,
@@ -1169,6 +1244,7 @@ class ComposeStateHolder(
 
     private fun ComposeDraft.hasUserDraftContent(): Boolean {
         return text.isNotBlank() ||
+            !editId.isNullOrBlank() ||
             !cw.isNullOrBlank() ||
             fileIds.isNotEmpty() ||
             poll != null ||
@@ -1200,6 +1276,58 @@ class ComposeStateHolder(
         )
     }
 
+    private fun Note.toEditDraft(canPublicNote: Boolean): ComposeDraft {
+        val cleanVisibility = if (!canPublicNote && visibility == NoteVisibility.Public) {
+            defaultVisibility(canPublicNote = false)
+        } else {
+            visibility
+        }
+        return ComposeDraft(
+            text = text,
+            editId = id.trim().takeIf { it.isNotEmpty() },
+            visibility = cleanVisibility,
+            visibleUserIds = if (cleanVisibility == NoteVisibility.Specified) visibleUserIds else emptyList(),
+            cw = cw,
+            replyId = replyId?.takeIf { it.isNotBlank() },
+            renoteId = renoteId?.takeIf { it.isNotBlank() },
+            channelId = channelId.takeIf { it.isNotBlank() },
+            fileIds = media.map { it.id.trim() }.filter { it.isNotEmpty() }.distinct().take(MAX_FILE_COUNT),
+            poll = poll?.let { notePoll ->
+                ComposePollDraft(
+                    choices = notePoll.choices.map { it.text },
+                    multiple = notePoll.multiple,
+                    expiresAt = notePoll.expiresAt.takeIf { it.isNotBlank() },
+                )
+            },
+            localOnly = localOnly,
+            reactionAcceptance = reactionAcceptance.toComposeReactionAcceptance(),
+        )
+    }
+
+    private fun NoteMedia.toAttachedDriveFile(): DriveFile {
+        return DriveFile(
+            id = id,
+            name = description.ifBlank { id },
+            type = type,
+            url = url,
+            thumbnailUrl = thumbnailUrl,
+            comment = description.takeIf { it.isNotBlank() },
+            size = 0L,
+            isSensitive = isSensitive,
+        )
+    }
+
+    private fun String.toComposeReactionAcceptance(): ComposeReactionAcceptance {
+        return when (trim()) {
+            "likeOnly" -> ComposeReactionAcceptance.LikeOnly
+            "likeOnlyForRemote" -> ComposeReactionAcceptance.LikeOnlyForRemote
+            "nonSensitiveOnlyForLocalLikeOnlyForRemote" -> {
+                ComposeReactionAcceptance.NonSensitiveOnlyForLocalLikeOnlyForRemote
+            }
+            else -> ComposeReactionAcceptance.NonSensitiveOnly
+        }
+    }
+
     private companion object {
         const val DEFAULT_MAX_TEXT_LENGTH = 3000
         const val DEFAULT_MAX_CW_LENGTH = 500
@@ -1217,10 +1345,10 @@ fun composeDraftStorageKey(
 ): String {
     val cleanAccountKey = accountKey.trim().takeIf { it.isNotEmpty() } ?: "default"
     val contextKey = when {
+        !draft.editId.isNullOrBlank() -> "edit:${draft.editId}"
         !draft.replyId.isNullOrBlank() -> "reply:${draft.replyId}"
         !draft.renoteId.isNullOrBlank() -> "quote:${draft.renoteId}"
         !draft.channelId.isNullOrBlank() -> "channel:${draft.channelId}"
-        !draft.editId.isNullOrBlank() -> "edit:${draft.editId}"
         else -> "new"
     }
     return "$cleanAccountKey|$contextKey"

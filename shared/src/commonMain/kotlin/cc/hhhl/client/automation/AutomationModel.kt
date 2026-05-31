@@ -23,6 +23,7 @@ data class AutomationRule(
     val actions: List<AutomationAction> = emptyList(),
     val ignoreOwnMessages: Boolean = true,
     val cooldownSeconds: Int = 0,
+    val maxExecutionsPer30Seconds: Int = 0,
     val updatedAtEpochMillis: Long = 0L,
 )
 
@@ -108,6 +109,7 @@ enum class AutomationActionType(
     AddLog("写入日志", "只记录到本地自动化日志", "", "日志内容"),
     SystemNotification("系统通知", "在系统通知栏显示一条提醒", "", "通知正文"),
     ForwardToRoom("转发到聊天室", "把事件内容转发到指定聊天室", "聊天室 ID", "转发内容"),
+    AiForwardToRoom("AI 改写转发到聊天室", "让 AI 摘要、翻译、提取重点或按模板改写后转发", "聊天室 ID", "AI 改写要求"),
     ForwardToUser("转发给用户", "把事件内容转发给指定用户", "用户 ID", "转发内容"),
     ReplyToChat("回复聊天", "在触发消息所在会话自动发送回复", "目标会话（空为原会话，room:ID 或 user:ID）", "回复内容"),
     AiReplyToChat("AI 回复聊天", "让 AI 判断上下文并在触发会话自动回复", "目标会话（空为原会话，room:ID 或 user:ID）", "AI 回复要求"),
@@ -142,6 +144,104 @@ data class AutomationExecutionLog(
     val message: String,
     val success: Boolean,
     val createdAtEpochMillis: Long,
+    val eventSnapshot: AutomationEventSnapshot? = null,
+    val actionSnapshot: AutomationAction? = null,
+    val retryOfLogId: String = "",
+)
+
+@Serializable
+data class AutomationEventSnapshot(
+    val id: String,
+    val trigger: AutomationTrigger,
+    val chatMessageId: String = "",
+    val sourceKind: String = "",
+    val senderUserId: String = "",
+    val senderUsername: String = "",
+    val senderHost: String = "",
+    val senderName: String = "",
+    val roomId: String = "",
+    val roomName: String = "",
+    val directUserId: String = "",
+    val messageText: String = "",
+    val messageType: String = "",
+    val attentionKind: String = "",
+    val notificationType: String = "",
+    val notificationText: String = "",
+    val noteId: String = "",
+    val channelId: String = "",
+    val channelName: String = "",
+    val timelineKind: String = "",
+    val noteVisibility: String = "",
+    val createdAtLabel: String = "",
+    val createdAtEpochMillis: Long = 0L,
+    val isFromCurrentUser: Boolean = false,
+    val isAiGenerated: Boolean = false,
+) {
+    fun toEvent(): AutomationEvent {
+        return AutomationEvent(
+            id = id,
+            trigger = trigger,
+            chatMessageId = chatMessageId,
+            sourceKind = sourceKind,
+            senderUserId = senderUserId,
+            senderUsername = senderUsername,
+            senderHost = senderHost,
+            senderName = senderName,
+            roomId = roomId,
+            roomName = roomName,
+            directUserId = directUserId,
+            messageText = messageText,
+            messageType = messageType,
+            attentionKind = attentionKind,
+            notificationType = notificationType,
+            notificationText = notificationText,
+            noteId = noteId,
+            channelId = channelId,
+            channelName = channelName,
+            timelineKind = timelineKind,
+            noteVisibility = noteVisibility,
+            createdAtLabel = createdAtLabel,
+            createdAtEpochMillis = createdAtEpochMillis,
+            isFromCurrentUser = isFromCurrentUser,
+            isAiGenerated = isAiGenerated,
+        )
+    }
+}
+
+@Immutable
+@Serializable
+data class AutomationConditionDebugResult(
+    val conditionId: String,
+    val conditionLabel: String,
+    val expectedValue: String,
+    val actualValue: String,
+    val matched: Boolean,
+    val message: String,
+)
+
+@Immutable
+@Serializable
+data class AutomationRuleDebugRecord(
+    val id: String,
+    val ruleId: String,
+    val ruleName: String,
+    val eventId: String,
+    val eventLabel: String,
+    val eventSummary: String,
+    val matched: Boolean,
+    val reason: String,
+    val conditionResults: List<AutomationConditionDebugResult> = emptyList(),
+    val resolvedEntities: List<String> = emptyList(),
+    val createdAtEpochMillis: Long,
+)
+
+@Immutable
+data class AutomationRuleDraftPreview(
+    val id: String,
+    val sourceText: String,
+    val rule: AutomationRule,
+    val messages: List<String> = emptyList(),
+    val createdAtEpochMillis: Long,
 )
 
 @Immutable
@@ -170,6 +270,7 @@ data class AutomationEvent(
     val createdAtLabel: String = "",
     val createdAtEpochMillis: Long = 0L,
     val isFromCurrentUser: Boolean = false,
+    val isAiGenerated: Boolean = false,
 ) {
     val displayLabel: String
         get() = when (trigger) {
@@ -242,6 +343,36 @@ data class AutomationEvent(
             if (messageText.isNotBlank()) appendLine("正文：$messageText")
         }.trim()
     }
+
+    fun snapshot(): AutomationEventSnapshot {
+        return AutomationEventSnapshot(
+            id = id,
+            trigger = trigger,
+            chatMessageId = chatMessageId,
+            sourceKind = sourceKind,
+            senderUserId = senderUserId,
+            senderUsername = senderUsername,
+            senderHost = senderHost,
+            senderName = senderName,
+            roomId = roomId,
+            roomName = roomName,
+            directUserId = directUserId,
+            messageText = messageText,
+            messageType = messageType,
+            attentionKind = attentionKind,
+            notificationType = notificationType,
+            notificationText = notificationText,
+            noteId = noteId,
+            channelId = channelId,
+            channelName = channelName,
+            timelineKind = timelineKind,
+            noteVisibility = noteVisibility,
+            createdAtLabel = createdAtLabel,
+            createdAtEpochMillis = createdAtEpochMillis,
+            isFromCurrentUser = isFromCurrentUser,
+            isAiGenerated = isAiGenerated,
+        )
+    }
 }
 
 fun ChatMessage.toAutomationChatEvent(
@@ -250,6 +381,7 @@ fun ChatMessage.toAutomationChatEvent(
     directUserId: String? = null,
     attentionKind: String = "",
     currentUser: User? = null,
+    isAiGenerated: Boolean = false,
 ): AutomationEvent {
     val currentUserId = currentUser?.id?.trim().orEmpty()
     val cleanDirectUserId = directUserId?.trim().orEmpty()
@@ -270,6 +402,7 @@ fun ChatMessage.toAutomationChatEvent(
         attentionKind = attentionKind,
         createdAtLabel = createdAtLabel,
         isFromCurrentUser = currentUserId.isNotBlank() && fromUser.id == currentUserId,
+        isAiGenerated = isAiGenerated,
     )
 }
 
@@ -313,6 +446,7 @@ fun Note.toAutomationTimelineEvent(
     channelName: String = "",
     timelineSource: String = kind.name,
     currentUser: User? = null,
+    isAiGenerated: Boolean = false,
 ): AutomationEvent {
     val currentUserId = currentUser?.id?.trim().orEmpty()
     return AutomationEvent(
@@ -331,6 +465,7 @@ fun Note.toAutomationTimelineEvent(
         noteVisibility = visibility.name,
         createdAtLabel = createdAtLabel,
         isFromCurrentUser = currentUserId.isNotBlank() && author.id == currentUserId,
+        isAiGenerated = isAiGenerated,
     )
 }
 

@@ -1,23 +1,30 @@
 package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.DiscoverApi
+import cc.hhhl.client.api.DiscoverDiscoverySectionsResult
 import cc.hhhl.client.api.DiscoverFederationActionResult
 import cc.hhhl.client.api.DiscoverFederationFollowResult
 import cc.hhhl.client.api.DiscoverFederationInstanceResult
 import cc.hhhl.client.api.DiscoverFederationResult
 import cc.hhhl.client.api.DiscoverFederationStatsResult
+import cc.hhhl.client.api.DiscoverRecommendationFeedbackEvent
+import cc.hhhl.client.api.DiscoverRecommendationFeedbackResult
 import cc.hhhl.client.api.DiscoverHashtagResult
 import cc.hhhl.client.api.DiscoverNoteSearchOptions
+import cc.hhhl.client.api.DiscoverRecommendedTimelineOptions
 import cc.hhhl.client.api.DiscoverRoleDetailResult
 import cc.hhhl.client.api.DiscoverRoleResult
 import cc.hhhl.client.api.DiscoverSearchResult
+import cc.hhhl.client.api.DiscoverSearchTrendsResult
 import cc.hhhl.client.api.DiscoverTrendResult
 import cc.hhhl.client.api.DiscoverUserSearchResult
 import cc.hhhl.client.api.SharkeyDiscoverApi
+import cc.hhhl.client.model.DiscoverySections
 import cc.hhhl.client.model.FederationFollow
 import cc.hhhl.client.model.FederationInstance
 import cc.hhhl.client.model.FederationStats
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NoteSearchTrends
 import cc.hhhl.client.model.RoleSummary
 import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.model.User
@@ -144,6 +151,55 @@ open class DiscoverRepository(
                 DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
             }
             is DiscoverTrendResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadDiscoverySections(limit: Int = DEFAULT_DISCOVERY_SECTION_LIMIT): DiscoverRepositoryResult {
+        return when (val result = api.loadDiscoverySections(limit)) {
+            is DiscoverDiscoverySectionsResult.Success -> DiscoverRepositoryResult.DiscoverySectionsSuccess(result.sections)
+            is DiscoverDiscoverySectionsResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverDiscoverySectionsResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadSearchTrends(limit: Int = DEFAULT_SEARCH_TRENDS_LIMIT): DiscoverRepositoryResult {
+        return when (val result = api.loadSearchTrends(limit)) {
+            is DiscoverSearchTrendsResult.Success -> DiscoverRepositoryResult.SearchTrendsSuccess(result.trends)
+            is DiscoverSearchTrendsResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverSearchTrendsResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun loadRecommendedTimeline(
+        currentNotes: List<Note> = emptyList(),
+        options: DiscoverRecommendedTimelineOptions = DiscoverRecommendedTimelineOptions(),
+    ): DiscoverRepositoryResult {
+        return when (val result = api.loadRecommendedTimeline(options)) {
+            is DiscoverSearchResult.Success -> DiscoverRepositoryResult.RecommendedTimelineSuccess(
+                notes = currentNotes.appendDistinctBy(result.notes) { it.id },
+                endReached = result.notes.isEmpty(),
+            )
+            DiscoverSearchResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            is DiscoverSearchResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverSearchResult.ServerError -> DiscoverRepositoryResult.Error(result.message.toFriendlySearchError())
+        }
+    }
+
+    open suspend fun sendRecommendationFeedback(
+        noteId: String,
+        event: DiscoverRecommendationFeedbackEvent,
+        dwellMs: Int? = null,
+    ): DiscoverRepositoryResult {
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Unauthorized
+        val cleanNoteId = noteId.trim().takeIf { it.isNotBlank() }
+            ?: return DiscoverRepositoryResult.Error("帖子 ID 不能为空")
+
+        return when (val result = api.sendRecommendationFeedback(token, cleanNoteId, event, dwellMs)) {
+            DiscoverRecommendationFeedbackResult.Success -> DiscoverRepositoryResult.RecommendationFeedbackSuccess
+            DiscoverRecommendationFeedbackResult.Unauthorized -> DiscoverRepositoryResult.Unauthorized
+            is DiscoverRecommendationFeedbackResult.NetworkError -> DiscoverRepositoryResult.Error("无法连接服务器：${result.message}")
+            is DiscoverRecommendationFeedbackResult.ServerError -> DiscoverRepositoryResult.Error(result.message)
         }
     }
 
@@ -434,6 +490,8 @@ open class DiscoverRepository(
 
     private companion object {
         const val DEFAULT_PAGE_SIZE = 20
+        const val DEFAULT_DISCOVERY_SECTION_LIMIT = 6
+        const val DEFAULT_SEARCH_TRENDS_LIMIT = 10
         const val DEFAULT_FEDERATION_PAGE_SIZE = 30
         const val DEFAULT_FEDERATION_STATS_LIMIT = 10
     }
@@ -569,6 +627,17 @@ sealed interface DiscoverRepositoryResult {
     data class UserSuccess(val users: List<User>) : DiscoverRepositoryResult
 
     data class PinnedUsersSuccess(val users: List<User>) : DiscoverRepositoryResult
+
+    data class DiscoverySectionsSuccess(val sections: DiscoverySections) : DiscoverRepositoryResult
+
+    data class SearchTrendsSuccess(val trends: NoteSearchTrends) : DiscoverRepositoryResult
+
+    data class RecommendedTimelineSuccess(
+        val notes: List<Note>,
+        val endReached: Boolean = false,
+    ) : DiscoverRepositoryResult
+
+    data object RecommendationFeedbackSuccess : DiscoverRepositoryResult
 
     data class RoleSuccess(val roles: List<RoleSummary>) : DiscoverRepositoryResult
 

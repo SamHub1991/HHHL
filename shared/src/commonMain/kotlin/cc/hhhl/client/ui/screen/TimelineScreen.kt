@@ -22,8 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,6 +45,7 @@ import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.state.TimelineTabState
 import cc.hhhl.client.state.TimelineUiState
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultCommonActionChips
 import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
@@ -106,6 +105,10 @@ fun TimelineScreen(
     aiResultText: String? = null,
     aiResultLabel: String? = null,
     onAiAction: (AiTaskKind, TimelineKind, List<Note>) -> Unit = { _, _, _ -> },
+    onCopyAiResult: ((String) -> Unit)? = null,
+    onAddAiMutedWord: ((String) -> Unit)? = null,
+    onAddAiRelatedNoteToWatchLater: ((String, List<Note>) -> Unit)? = null,
+    onOpenAiRelatedNote: ((String, List<Note>) -> Unit)? = null,
     onDismissAiResult: () -> Unit = {},
 ) {
     val availableKinds = availableTimelineKinds(capabilities)
@@ -210,6 +213,11 @@ fun TimelineScreen(
             TimelineAiResultPanel(
                 label = aiResultLabel ?: "AI 速览",
                 text = aiResultText,
+                notes = visibleNotes,
+                onCopyAiResult = onCopyAiResult,
+                onAddAiMutedWord = onAddAiMutedWord,
+                onAddAiRelatedNoteToWatchLater = onAddAiRelatedNoteToWatchLater,
+                onOpenAiRelatedNote = onOpenAiRelatedNote,
                 onDismiss = onDismissAiResult,
             )
             HhhlDivider()
@@ -413,11 +421,6 @@ private fun TimelineSummaryRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            HhhlIconActionButton(
-                icon = Icons.Filled.Search,
-                contentDescription = "搜索",
-                onClick = onSearch,
-            )
             if (onJumpToNewNotes != null && selectedTabState.newNoteCount > 0) {
                 HhhlActionChip(
                     label = "新 ${selectedTabState.newNoteCount}",
@@ -425,30 +428,25 @@ private fun TimelineSummaryRow(
                     onClick = onJumpToNewNotes,
                 )
             }
-            HhhlOverflowMenu(
-                actions = timelineAiActions(
-                    enabled = aiEnabled && !isAiProcessing && selectedTabState.notes.isNotEmpty(),
-                    isProcessing = isAiProcessing,
-                    onAiDigest = onAiDigest,
-                    onAiReplyOpportunities = onAiReplyOpportunities,
-                    onAiFilterSuggestions = onAiFilterSuggestions,
-                ),
-                enabled = aiEnabled && selectedTabState.notes.isNotEmpty(),
-                label = "AI 时间线",
-                buttonContainerColor = colors.buttonBackground,
-                iconTint = colors.textSecondary,
-            )
             HhhlIconActionButton(
                 icon = Icons.Filled.Edit,
                 contentDescription = "写帖",
                 emphasized = true,
                 onClick = onCompose,
             )
-            HhhlIconActionButton(
-                icon = Icons.Filled.Refresh,
-                contentDescription = if (selectedTabState.isLoading || selectedTabState.isLoadingMore) "刷新中" else "刷新",
-                enabled = !selectedTabState.isLoading && !selectedTabState.isLoadingMore,
-                onClick = onRefresh,
+            HhhlOverflowMenu(
+                actions = timelineSummaryActions(
+                    isRefreshing = selectedTabState.isLoading || selectedTabState.isLoadingMore,
+                    onSearch = onSearch,
+                    onRefresh = onRefresh,
+                    aiEnabled = aiEnabled,
+                    aiActionEnabled = aiEnabled && !isAiProcessing && selectedTabState.notes.isNotEmpty(),
+                    isAiProcessing = isAiProcessing,
+                    onAiDigest = onAiDigest,
+                    onAiReplyOpportunities = onAiReplyOpportunities,
+                    onAiFilterSuggestions = onAiFilterSuggestions,
+                ),
+                label = "时间线操作",
             )
         }
     }
@@ -458,6 +456,11 @@ private fun TimelineSummaryRow(
 private fun TimelineAiResultPanel(
     label: String,
     text: String,
+    notes: List<Note>,
+    onCopyAiResult: ((String) -> Unit)?,
+    onAddAiMutedWord: ((String) -> Unit)?,
+    onAddAiRelatedNoteToWatchLater: ((String, List<Note>) -> Unit)?,
+    onOpenAiRelatedNote: ((String, List<Note>) -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     AiResultPanel(
@@ -467,6 +470,15 @@ private fun TimelineAiResultPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 8.dp),
+        actions = {
+            AiResultCommonActionChips(
+                text = text,
+                onCopyChecklist = onCopyAiResult,
+                onAddMutedWord = onAddAiMutedWord,
+                onAddToWatchLater = onAddAiRelatedNoteToWatchLater?.let { add -> { add(text, notes) } },
+                onOpenRelatedNote = onOpenAiRelatedNote?.let { open -> { open(text, notes) } },
+            )
+        },
     )
 }
 
@@ -535,21 +547,18 @@ private fun TimelineTrendSummaryRow(
                 overflow = TextOverflow.Ellipsis,
             )
             HhhlIconActionButton(
-                icon = Icons.Filled.Search,
-                contentDescription = "搜索",
-                onClick = onSearch,
-            )
-            HhhlIconActionButton(
                 icon = Icons.Filled.Edit,
                 contentDescription = "写帖",
                 emphasized = true,
                 onClick = onCompose,
             )
-            HhhlIconActionButton(
-                icon = Icons.Filled.Refresh,
-                contentDescription = if (isRefreshing) "刷新中" else "刷新",
-                enabled = !isRefreshing,
-                onClick = onRefresh,
+            HhhlOverflowMenu(
+                actions = timelineSummaryActions(
+                    isRefreshing = isRefreshing,
+                    onSearch = onSearch,
+                    onRefresh = onRefresh,
+                ),
+                label = "趋势操作",
             )
         }
     }
@@ -601,14 +610,40 @@ private fun TimelineTrendRow(
 
 fun timelineSummaryActions(
     isRefreshing: Boolean,
+    onSearch: () -> Unit,
     onRefresh: () -> Unit,
-): List<HhhlOverflowMenuAction> = listOf(
-    HhhlOverflowMenuAction(
-        label = if (isRefreshing) "刷新中" else "刷新",
-        enabled = !isRefreshing,
-        onClick = onRefresh,
-    ),
-)
+    aiEnabled: Boolean = false,
+    aiActionEnabled: Boolean = false,
+    isAiProcessing: Boolean = false,
+    onAiDigest: () -> Unit = {},
+    onAiReplyOpportunities: () -> Unit = {},
+    onAiFilterSuggestions: () -> Unit = {},
+): List<HhhlOverflowMenuAction> = buildList {
+    add(
+        HhhlOverflowMenuAction(
+            label = "搜索",
+            onClick = onSearch,
+        ),
+    )
+    add(
+        HhhlOverflowMenuAction(
+            label = if (isRefreshing) "刷新中" else "刷新",
+            enabled = !isRefreshing,
+            onClick = onRefresh,
+        ),
+    )
+    if (aiEnabled) {
+        addAll(
+            timelineAiActions(
+                enabled = aiActionEnabled,
+                isProcessing = isAiProcessing,
+                onAiDigest = onAiDigest,
+                onAiReplyOpportunities = onAiReplyOpportunities,
+                onAiFilterSuggestions = onAiFilterSuggestions,
+            ),
+        )
+    }
+}
 
 fun availableTimelineKinds(capabilities: InstanceCapabilities): List<TimelineKind> {
     return buildList {

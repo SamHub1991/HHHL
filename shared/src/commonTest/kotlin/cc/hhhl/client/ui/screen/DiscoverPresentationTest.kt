@@ -2,6 +2,8 @@ package cc.hhhl.client.ui.screen
 
 import cc.hhhl.client.model.FederationInstance
 import cc.hhhl.client.model.TrendingHashtag
+import cc.hhhl.client.api.DiscoverRecommendedTimelineCategory
+import cc.hhhl.client.api.DiscoverRecommendedTimelineScope
 import cc.hhhl.client.state.DiscoverSearchMode
 import cc.hhhl.client.state.DiscoverAdvancedFilters
 import cc.hhhl.client.state.DiscoverSearchOperator
@@ -156,6 +158,18 @@ class DiscoverPresentationTest {
                 ),
                 selectedMode = DiscoverSearchMode.Users,
             ),
+        )
+    }
+
+    @Test
+    fun recommendationFilterLabelsMatchApiOptions() {
+        assertEquals(
+            listOf("混合", "本地", "社交", "全局"),
+            DiscoverRecommendedTimelineScope.entries.map { it.label },
+        )
+        assertEquals(
+            listOf("为你", "热门", "消息", "运动", "娱乐", "教程", "资源"),
+            DiscoverRecommendedTimelineCategory.entries.map { it.label },
         )
     }
 

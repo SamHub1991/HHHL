@@ -29,6 +29,8 @@ import cc.hhhl.client.repository.ChatStreamingRepository
 import cc.hhhl.client.repository.ChatUserConversationRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.DriveFileRepositoryResult
+import cc.hhhl.client.repository.requiresRealtimeAttentionResolution
+import cc.hhhl.client.repository.resolveRealtimeMessage
 import cc.hhhl.client.repository.UserRelationshipRepository
 import cc.hhhl.client.repository.UserRelationshipRepositoryResult
 import kotlinx.coroutines.CancellationException
@@ -98,6 +100,7 @@ data class ChatUiState(
     val requiresRelogin: Boolean = false,
     val pinnedRoomIds: Set<String> = emptySet(),
     val pinnedUserConversationIds: Set<String> = emptySet(),
+    val roomGroups: Map<String, String> = emptyMap(),
 )
 
 enum class ChatComposerAttachmentKind {
@@ -174,6 +177,43 @@ class ChatStateHolder(
         currentAccountId()?.let { accountId -> unreadStore.clearUser(accountId, userId) }
     }
 
+    private fun saveObservedLocalRoomUnread(roomId: String, unreadCount: Int) {
+        val cleanRoomId = roomId.trim()
+        val cleanUnreadCount = unreadCount.coerceAtLeast(0)
+        if (cleanRoomId.isEmpty() || cleanUnreadCount <= 0) return
+        val current = localUnreadSnapshot()
+        if ((current.roomCounts[cleanRoomId] ?: 0) >= cleanUnreadCount) return
+        saveLocalUnreadSnapshot(
+            current.copy(roomCounts = current.roomCounts + (cleanRoomId to cleanUnreadCount)),
+        )
+    }
+
+    private fun saveObservedLocalUserUnread(userId: String, unreadCount: Int) {
+        val cleanUserId = userId.trim()
+        val cleanUnreadCount = unreadCount.coerceAtLeast(0)
+        if (cleanUserId.isEmpty() || cleanUnreadCount <= 0) return
+        val current = localUnreadSnapshot()
+        if ((current.userCounts[cleanUserId] ?: 0) >= cleanUnreadCount) return
+        saveLocalUnreadSnapshot(
+            current.copy(userCounts = current.userCounts + (cleanUserId to cleanUnreadCount)),
+        )
+    }
+
+    private fun saveLocalChatPreferences(
+        pinnedRoomIds: Set<String> = state.value.pinnedRoomIds,
+        pinnedUserIds: Set<String> = state.value.pinnedUserConversationIds,
+        roomGroups: Map<String, String> = state.value.roomGroups,
+    ) {
+        val current = localUnreadSnapshot()
+        saveLocalUnreadSnapshot(
+            current.copy(
+                pinnedRoomIds = pinnedRoomIds,
+                pinnedUserIds = pinnedUserIds,
+                roomGroups = roomGroups,
+            ),
+        )
+    }
+
     fun updateSpecialCareUsers(userIds: Set<String>) {
         val cleanUserIds = userIds.mapNotNull { it.trim().takeIf(String::isNotEmpty) }.toSet()
         val current = state.value
@@ -199,6 +239,36 @@ class ChatStateHolder(
     fun dismissSpecialCareToast() {
         if (state.value.specialCareToast == null) return
         mutableState.update { it.copy(specialCareToast = null) }
+    }
+
+    fun dismissErrorMessage() {
+        if (state.value.errorMessage == null) return
+        mutableState.update { it.copy(errorMessage = null) }
+    }
+
+    fun dismissMessageErrorMessage() {
+        if (state.value.messageErrorMessage == null) return
+        mutableState.update { it.copy(messageErrorMessage = null) }
+    }
+
+    fun dismissMessageSearchErrorMessage() {
+        if (state.value.messageSearchErrorMessage == null) return
+        mutableState.update { it.copy(messageSearchErrorMessage = null) }
+    }
+
+    fun dismissMemberErrorMessage() {
+        if (state.value.memberErrorMessage == null) return
+        mutableState.update { it.copy(memberErrorMessage = null) }
+    }
+
+    fun dismissRoomManagementMessage() {
+        if (state.value.roomManagementMessage == null) return
+        mutableState.update { it.copy(roomManagementMessage = null) }
+    }
+
+    fun dismissStreamingErrorMessage() {
+        if (state.value.streamingErrorMessage == null) return
+        mutableState.update { it.copy(streamingErrorMessage = null) }
     }
 
     fun openSpecialCareToast() {
@@ -279,6 +349,7 @@ class ChatStateHolder(
     }
 
     fun updateAvailability(chatAvailable: Boolean) {
+        val localPreferences = if (chatAvailable) localUnreadSnapshot() else ChatUnreadSnapshot()
         if (!chatAvailable) {
             stopMessageStreaming()
             isRefreshingUserConversationsQuietly = false
@@ -293,6 +364,9 @@ class ChatStateHolder(
             } else {
                 it.copy(
                     chatAvailable = true,
+                    pinnedRoomIds = localPreferences.pinnedRoomIds,
+                    pinnedUserConversationIds = localPreferences.pinnedUserIds,
+                    roomGroups = localPreferences.roomGroups,
                     errorMessage = null,
                     messageErrorMessage = null,
                     memberErrorMessage = null,
@@ -327,7 +401,7 @@ class ChatStateHolder(
             if (roomResult is ChatRepositoryResult.Success) {
                 refreshRoomExtras()
                 applyUserConversationResult(
-                    result = repository.refreshUserConversations(),
+                    result = resolveUserConversationAttentionReferences(repository.refreshUserConversations()),
                     markSelectedUserRead = state.value.selectedUserConversation != null,
                 )
             }
@@ -355,7 +429,7 @@ class ChatStateHolder(
         scope.launch {
             try {
                 applyUserConversationResult(
-                    result = repository.refreshUserConversations(),
+                    result = resolveUserConversationAttentionReferences(repository.refreshUserConversations()),
                     markSelectedUserRead = markSelectedUserRead,
                 )
             } finally {
@@ -453,6 +527,7 @@ class ChatStateHolder(
         if (cleanRoomId.isEmpty()) return
         mutableState.update {
             val nextPinnedRoomIds = it.pinnedRoomIds.toggleMembership(cleanRoomId)
+            saveLocalChatPreferences(pinnedRoomIds = nextPinnedRoomIds)
             it.copy(
                 pinnedRoomIds = nextPinnedRoomIds,
                 rooms = it.rooms.sortedByPinnedIds(nextPinnedRoomIds) { room -> room.id },
@@ -466,11 +541,30 @@ class ChatStateHolder(
         if (cleanUserId.isEmpty()) return
         mutableState.update {
             val nextPinnedUserConversationIds = it.pinnedUserConversationIds.toggleMembership(cleanUserId)
+            saveLocalChatPreferences(pinnedUserIds = nextPinnedUserConversationIds)
             it.copy(
                 pinnedUserConversationIds = nextPinnedUserConversationIds,
                 userConversations = it.userConversations.sortedByPinnedIds(nextPinnedUserConversationIds) { conversation ->
                     conversation.user.id
                 },
+                requiresRelogin = false,
+            )
+        }
+    }
+
+    fun setRoomGroup(roomId: String, groupName: String) {
+        val cleanRoomId = roomId.trim()
+        val cleanGroupName = groupName.cleanChatRoomGroupName()
+        if (cleanRoomId.isEmpty()) return
+        mutableState.update {
+            val nextGroups = if (cleanGroupName.isBlank()) {
+                it.roomGroups - cleanRoomId
+            } else {
+                it.roomGroups + (cleanRoomId to cleanGroupName)
+            }
+            saveLocalChatPreferences(roomGroups = nextGroups)
+            it.copy(
+                roomGroups = nextGroups,
                 requiresRelogin = false,
             )
         }
@@ -618,6 +712,10 @@ class ChatStateHolder(
         scope.launch {
             val shownRoom = when (val showResult = repository.showRoom(cleanRoomId)) {
                 is ChatRoomMutationRepositoryResult.RoomSaved -> showResult.room
+                is ChatRoomMutationRepositoryResult.RoomMessagesCleared,
+                is ChatRoomMutationRepositoryResult.RoomRemoved,
+                is ChatRoomMutationRepositoryResult.RoomMuted,
+                is ChatRoomMutationRepositoryResult.ActionCompleted -> placeholderRoom(cleanRoomId)
                 ChatRoomMutationRepositoryResult.Unauthorized -> {
                     completeOpenRoomByIdWithError("登录已失效，请重新登录", requiresRelogin = true)
                     return@launch
@@ -630,12 +728,14 @@ class ChatStateHolder(
                     completeOpenRoomByIdWithError(showResult.message)
                     return@launch
                 }
-                else -> placeholderRoom(cleanRoomId)
             }
 
             val canOpen = when (val joinResult = repository.joinRoom(cleanRoomId)) {
                 is ChatRoomMutationRepositoryResult.ActionCompleted,
                 is ChatRoomMutationRepositoryResult.RoomSaved -> true
+                is ChatRoomMutationRepositoryResult.RoomMessagesCleared,
+                is ChatRoomMutationRepositoryResult.RoomRemoved,
+                is ChatRoomMutationRepositoryResult.RoomMuted -> true
                 ChatRoomMutationRepositoryResult.Unauthorized -> {
                     completeOpenRoomByIdWithError("登录已失效，请重新登录", requiresRelogin = true)
                     false
@@ -652,7 +752,6 @@ class ChatStateHolder(
                         false
                     }
                 }
-                else -> true
             }
             if (!canOpen) return@launch
 
@@ -842,7 +941,7 @@ class ChatStateHolder(
         isRefreshingSpecialCareMessagesQuietly = true
         scope.launch {
             try {
-                when (val result = repository.refresh()) {
+                when (val result = loadRoomsForSpecialCareScan()) {
                     is ChatRepositoryResult.Success -> {
                         val currentRoomsById = current.rooms.associateBy { room -> room.id }
                         var nextSeenMessageIds = specialCareRoomLatestMessageIds
@@ -867,7 +966,13 @@ class ChatStateHolder(
                             )
                             nextSeenMessageIds = nextSeenMessageIds + (room.id to latestMessageId)
                             val shouldNotifyFirstDetectedMessage = previousMessageId == null &&
-                                room.hasNewUnreadAttentionComparedWith(currentRoomsById[room.id])
+                                (
+                                    currentRoomsById.isNotEmpty() &&
+                                        (
+                                            currentRoomsById[room.id] == null ||
+                                        room.hasNewUnreadAttentionComparedWith(currentRoomsById[room.id])
+                                        )
+                                )
                             if (
                                 (!shouldNotifyFirstDetectedMessage && previousMessageId == null) ||
                                 toast == null ||
@@ -899,6 +1004,132 @@ class ChatStateHolder(
                 isRefreshingSpecialCareMessagesQuietly = false
             }
         }
+    }
+
+    fun recordRealtimeMessage(
+        message: ChatMessage,
+        directUserId: String? = null,
+    ) {
+        val cleanDirectUserId = directUserId?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanRoomId = message.roomId.trim().takeIf { it.isNotEmpty() }
+        if (cleanDirectUserId == null && cleanRoomId == null) return
+        scope.launch {
+            if (cleanDirectUserId != null) {
+                repository.cacheUserMessage(cleanDirectUserId, message)
+            } else if (cleanRoomId != null) {
+                repository.cacheRoomMessage(cleanRoomId, message)
+            }
+        }
+        mutableState.update { current ->
+            val currentUser = currentUserProvider()
+            val isFromCurrentUser = currentUser?.id?.trim()?.takeIf { it.isNotEmpty() } == message.fromUser.id
+            val toast = message.toChatAttentionToastIfNeeded(
+                specialCareUserIds = current.specialCareUserIds,
+                currentUser = currentUser,
+                chatUserId = cleanDirectUserId,
+            )
+            if (cleanDirectUserId != null) {
+                val isSelected = current.selectedUserConversation?.user?.id == cleanDirectUserId
+                val shouldIncrementUnread = !isSelected && !isFromCurrentUser
+                val nextMessages = if (isSelected) {
+                    current.messages.withChronologicalMessage(message)
+                } else {
+                    current.messages
+                }
+                val nextConversation = current.userConversations
+                    .withRealtimeUserConversationMessage(
+                        userId = cleanDirectUserId,
+                        message = message,
+                        incrementUnread = shouldIncrementUnread,
+                    )
+                if (shouldIncrementUnread) {
+                    nextConversation
+                        .firstOrNull { conversation -> conversation.user.id == cleanDirectUserId }
+                        ?.unreadCount
+                        ?.let { unreadCount -> saveObservedLocalUserUnread(cleanDirectUserId, unreadCount) }
+                }
+                current.copy(
+                    userConversations = nextConversation
+                        .sortedByPinnedIds(current.pinnedUserConversationIds) { conversation -> conversation.user.id },
+                    selectedUserConversation = current.selectedUserConversation?.let { selected ->
+                        if (selected.user.id == cleanDirectUserId) {
+                            selected.copy(latestMessage = message, unreadCount = 0)
+                        } else {
+                            selected
+                        }
+                    },
+                    messages = nextMessages,
+                    specialCareToast = current.specialCareToast.withStableSpecialCareToast(toast),
+                    userConversationAttentionKinds = current.userConversationAttentionKinds.withAttentionToast(toast),
+                )
+            } else {
+                val roomId = cleanRoomId ?: return@update current
+                val isSelected = current.selectedRoom?.id == roomId
+                val shouldIncrementUnread = !isSelected && !isFromCurrentUser
+                val nextMessages = if (isSelected) {
+                    current.messages.withChronologicalMessage(message)
+                } else {
+                    current.messages
+                }
+                val nextRooms = current.rooms
+                    .withRealtimeRoomMessage(
+                        roomId = roomId,
+                        message = message,
+                        incrementUnread = shouldIncrementUnread,
+                    )
+                if (shouldIncrementUnread) {
+                    nextRooms
+                        .firstOrNull { room -> room.id == roomId }
+                        ?.unreadCount
+                        ?.let { unreadCount -> saveObservedLocalRoomUnread(roomId, unreadCount) }
+                }
+                current.copy(
+                    rooms = nextRooms
+                        .sortedByPinnedIds(current.pinnedRoomIds) { room -> room.id },
+                    selectedRoom = current.selectedRoom?.let { selected ->
+                        if (selected.id == roomId) selected.withLatestMessageAt(message) else selected
+                    },
+                    messages = nextMessages,
+                    specialCareToast = current.specialCareToast.withStableSpecialCareToast(toast),
+                    roomAttentionKinds = current.roomAttentionKinds.withAttentionToast(toast?.takeIf { incoming ->
+                        incoming.chatUserId == null
+                    }),
+                )
+            }
+        }
+    }
+
+    private suspend fun loadRoomsForSpecialCareScan(): ChatRepositoryResult {
+        val initial = when (val result = repository.refresh()) {
+            is ChatRepositoryResult.Success -> result
+            ChatRepositoryResult.Unauthorized,
+            is ChatRepositoryResult.Error,
+                -> return result
+        }
+        var rooms = initial.rooms
+        var endReached = initial.endReached
+        while (!endReached && rooms.size < SPECIAL_CARE_ROOM_SCAN_LIMIT) {
+            val next = when (val result = repository.loadMore(rooms)) {
+                is ChatRepositoryResult.Success -> result
+                ChatRepositoryResult.Unauthorized,
+                is ChatRepositoryResult.Error,
+                    -> return result
+            }
+            if (next.rooms.size <= rooms.size) {
+                endReached = true
+                continue
+            }
+            rooms = next.rooms
+            endReached = next.endReached
+        }
+        val ownedRooms = when (val result = repository.refreshOwnedRooms()) {
+            is ChatRepositoryResult.Success -> result.rooms
+            ChatRepositoryResult.Unauthorized,
+            is ChatRepositoryResult.Error,
+                -> emptyList()
+        }
+        rooms = rooms.mergeOwnedChatRooms(ownedRooms)
+        return ChatRepositoryResult.Success(rooms = rooms, endReached = endReached)
     }
 
     fun refreshMessages() {
@@ -1166,6 +1397,7 @@ class ChatStateHolder(
     fun createRoom(
         name: String,
         description: String,
+        joinMode: String = "inviteOnly",
     ) {
         if (!state.value.chatAvailable || state.value.isManagingRoom) return
         mutableState.update {
@@ -1179,9 +1411,9 @@ class ChatStateHolder(
 
         scope.launch {
             applyRoomMutationResult(
-                result = repository.createRoom(name, description),
+                result = repository.createRoom(name, description, joinMode),
                 selectSavedRoom = false,
-                successMessage = "聊天室已创建",
+                successMessage = "",
             )
         }
     }
@@ -1217,6 +1449,7 @@ class ChatStateHolder(
     fun updateSelectedRoom(
         name: String,
         description: String,
+        joinMode: String,
     ) {
         val room = state.value.selectedRoom ?: return
         if (state.value.isManagingRoom) return
@@ -1232,9 +1465,31 @@ class ChatStateHolder(
 
         scope.launch {
             applyRoomMutationResult(
-                result = repository.updateRoom(room.id, name, description),
+                result = repository.updateRoom(room.id, name, description, joinMode),
                 selectSavedRoom = true,
                 successMessage = "聊天室已更新",
+            )
+        }
+    }
+
+    fun updateSelectedRoomManagement(messageRetentionDays: Int?) {
+        val room = state.value.selectedRoom ?: return
+        if (state.value.isManagingRoom) return
+        mutableState.update {
+            it.copy(
+                isManagingRoom = true,
+                roomManagementMessage = null,
+                memberErrorMessage = null,
+                messageErrorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+
+        scope.launch {
+            applyRoomMutationResult(
+                result = repository.updateRoomManagement(room.id, messageRetentionDays),
+                selectSavedRoom = true,
+                successMessage = "管理设置已更新",
             )
         }
     }
@@ -1261,6 +1516,12 @@ class ChatStateHolder(
 
     fun leaveSelectedRoom() {
         val room = state.value.selectedRoom ?: return
+        leaveRoom(room.id)
+    }
+
+    fun leaveRoom(roomId: String) {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isEmpty()) return
         if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
@@ -1268,7 +1529,7 @@ class ChatStateHolder(
 
         scope.launch {
             applyRoomMutationResult(
-                result = repository.leaveRoom(room.id),
+                result = repository.leaveRoom(cleanRoomId),
                 successMessage = "已退出聊天室",
             )
         }
@@ -1276,6 +1537,33 @@ class ChatStateHolder(
 
     fun deleteSelectedRoom() {
         val room = state.value.selectedRoom ?: return
+        deleteRoom(room.id)
+    }
+
+    fun clearSelectedRoomMessages() {
+        val room = state.value.selectedRoom ?: return
+        clearRoomMessages(room.id)
+    }
+
+    fun clearRoomMessages(roomId: String) {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isEmpty()) return
+        if (state.value.isManagingRoom) return
+        mutableState.update {
+            it.copy(isManagingRoom = true, roomManagementMessage = null, messageErrorMessage = null, requiresRelogin = false)
+        }
+
+        scope.launch {
+            applyRoomMutationResult(
+                result = repository.deleteAllRoomMessages(cleanRoomId),
+                successMessage = "聊天室消息已清空",
+            )
+        }
+    }
+
+    fun deleteRoom(roomId: String) {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isEmpty()) return
         if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
@@ -1283,7 +1571,7 @@ class ChatStateHolder(
 
         scope.launch {
             applyRoomMutationResult(
-                result = repository.deleteRoom(room.id),
+                result = repository.deleteRoom(cleanRoomId),
                 successMessage = "聊天室已删除",
             )
         }
@@ -1291,6 +1579,12 @@ class ChatStateHolder(
 
     fun muteSelectedRoom(muted: Boolean) {
         val room = state.value.selectedRoom ?: return
+        muteRoom(room.id, muted)
+    }
+
+    fun muteRoom(roomId: String, muted: Boolean) {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isEmpty()) return
         if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
@@ -1298,7 +1592,7 @@ class ChatStateHolder(
 
         scope.launch {
             applyRoomMutationResult(
-                result = repository.muteRoom(room.id, muted),
+                result = repository.muteRoom(cleanRoomId, muted),
                 successMessage = if (muted) "聊天室已静音" else "已取消静音",
             )
         }
@@ -1717,7 +2011,23 @@ class ChatStateHolder(
                         previous = current.rooms,
                         selectedRoomId = current.selectedRoom?.id,
                         localUnreadCounts = localUnread.roomCounts,
-                        persistUnread = null,
+                        persistUnread = { counts ->
+                            saveLocalUnreadSnapshot(
+                                ChatUnreadSnapshot(
+                                    roomCounts = counts,
+                                    userCounts = localUnread.userCounts,
+                                    pinnedRoomIds = current.pinnedRoomIds,
+                                    pinnedUserIds = current.pinnedUserConversationIds,
+                                    roomGroups = current.roomGroups,
+                                ),
+                            )
+                        },
+                    )
+                    .mergeLocallyActiveRooms(
+                        previous = current.rooms,
+                        localUnreadCounts = localUnread.roomCounts,
+                        roomAttentionKinds = current.roomAttentionKinds,
+                        selectedRoomId = current.selectedRoom?.id,
                     )
                     .sortedByPinnedIds(current.pinnedRoomIds) { room -> room.id }
                 current.copy(
@@ -1824,6 +2134,9 @@ class ChatStateHolder(
                             ChatUnreadSnapshot(
                                 roomCounts = counts,
                                 userCounts = localUnread.userCounts,
+                                pinnedRoomIds = current.pinnedRoomIds,
+                                pinnedUserIds = current.pinnedUserConversationIds,
+                                roomGroups = current.roomGroups,
                             ),
                         )
                     },
@@ -1899,10 +2212,13 @@ class ChatStateHolder(
                             persistUnread = { counts ->
                                 saveLocalUnreadSnapshot(
                                     ChatUnreadSnapshot(
-                                        roomCounts = localUnread.roomCounts,
-                                        userCounts = counts,
-                                    ),
-                                )
+                                    roomCounts = localUnread.roomCounts,
+                                    userCounts = counts,
+                                    pinnedRoomIds = current.pinnedRoomIds,
+                                    pinnedUserIds = current.pinnedUserConversationIds,
+                                    roomGroups = current.roomGroups,
+                                ),
+                            )
                             },
                         )
                         .mergeChatUserConversations(current.userConversations)
@@ -1954,6 +2270,23 @@ class ChatStateHolder(
                 )
             }
         }
+    }
+
+    private suspend fun resolveUserConversationAttentionReferences(
+        result: ChatUserConversationRepositoryResult,
+    ): ChatUserConversationRepositoryResult {
+        if (result !is ChatUserConversationRepositoryResult.Success) return result
+        val resolvedConversations = result.conversations.map { conversation ->
+            val latestMessage = conversation.latestMessage ?: return@map conversation
+            if (!latestMessage.requiresRealtimeAttentionResolution()) return@map conversation
+            conversation.copy(
+                latestMessage = repository.resolveRealtimeMessage(
+                    message = latestMessage,
+                    directUserId = conversation.user.id,
+                ),
+            )
+        }
+        return result.copy(conversations = resolvedConversations)
     }
 
     private fun applyRoomMessageResult(
@@ -2402,7 +2735,7 @@ class ChatStateHolder(
                         .sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
                     selectedRoom = if (selectSavedRoom) savedRoom else it.selectedRoom,
                     isManagingRoom = false,
-                    roomManagementMessage = successMessage,
+                    roomManagementMessage = successMessage.takeIf { message -> message.isNotBlank() },
                     errorMessage = null,
                     memberErrorMessage = null,
                     messageErrorMessage = null,
@@ -2410,8 +2743,17 @@ class ChatStateHolder(
                 )
             }
             is ChatRoomMutationRepositoryResult.RoomRemoved -> {
-                stopMessageStreaming()
+                if (state.value.selectedRoom?.id == result.roomId) {
+                    stopMessageStreaming()
+                }
+                clearLocalRoomUnread(result.roomId)
                 mutableState.update {
+                    val removedSelectedRoom = it.selectedRoom?.id == result.roomId
+                    val nextGroups = it.roomGroups - result.roomId
+                    saveLocalChatPreferences(
+                        pinnedRoomIds = it.pinnedRoomIds - result.roomId,
+                        roomGroups = nextGroups,
+                    )
                     it.copy(
                         rooms = it.rooms.filterNot { room -> room.id == result.roomId },
                         ownedRooms = it.ownedRooms.filterNot { room -> room.id == result.roomId },
@@ -2419,14 +2761,52 @@ class ChatStateHolder(
                             invitation.room.id == result.roomId
                         },
                         pinnedRoomIds = it.pinnedRoomIds - result.roomId,
-                        selectedRoom = null,
-                        messages = emptyList(),
-                        members = emptyList(),
+                        roomGroups = nextGroups,
+                        selectedRoom = if (removedSelectedRoom) null else it.selectedRoom,
+                        messages = if (removedSelectedRoom) emptyList() else it.messages,
+                        members = if (removedSelectedRoom) emptyList() else it.members,
                         isManagingRoom = false,
-                        showingMembers = false,
+                        showingMembers = if (removedSelectedRoom) false else it.showingMembers,
                         roomManagementMessage = successMessage,
-                        selectedRoomUnreadCount = 0,
-                        unreadJumpMessageId = null,
+                        selectedRoomUnreadCount = if (removedSelectedRoom) 0 else it.selectedRoomUnreadCount,
+                        unreadJumpMessageId = if (removedSelectedRoom) null else it.unreadJumpMessageId,
+                        requiresRelogin = false,
+                    )
+                }
+            }
+            is ChatRoomMutationRepositoryResult.RoomMessagesCleared -> {
+                clearLocalRoomUnread(result.roomId)
+                mutableState.update {
+                    it.copy(
+                        messages = if (it.selectedRoom?.id == result.roomId) emptyList() else it.messages,
+                        messageSearchResults = if (it.selectedRoom?.id == result.roomId) emptyList() else it.messageSearchResults,
+                        selectedRoomUnreadCount = if (it.selectedRoom?.id == result.roomId) 0 else it.selectedRoomUnreadCount,
+                        unreadJumpMessageId = if (it.selectedRoom?.id == result.roomId) null else it.unreadJumpMessageId,
+                        rooms = it.rooms.map { room ->
+                            if (room.id == result.roomId) {
+                                room.copy(unreadCount = 0, latestMessageAtLabel = "", latestMessageMarker = "")
+                            } else {
+                                room
+                            }
+                        }.sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
+                        ownedRooms = it.ownedRooms.map { room ->
+                            if (room.id == result.roomId) {
+                                room.copy(unreadCount = 0, latestMessageAtLabel = "", latestMessageMarker = "")
+                            } else {
+                                room
+                            }
+                        }.sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
+                        selectedRoom = it.selectedRoom?.let { room ->
+                            if (room.id == result.roomId) {
+                                room.copy(unreadCount = 0, latestMessageAtLabel = "", latestMessageMarker = "")
+                            } else {
+                                room
+                            }
+                        },
+                        isManagingRoom = false,
+                        roomManagementMessage = successMessage,
+                        memberErrorMessage = null,
+                        messageErrorMessage = null,
                         requiresRelogin = false,
                     )
                 }
@@ -2434,6 +2814,9 @@ class ChatStateHolder(
             is ChatRoomMutationRepositoryResult.RoomMuted -> mutableState.update {
                 it.copy(
                     rooms = it.rooms.map { room ->
+                        if (room.id == result.roomId) room.copy(isMuted = result.muted) else room
+                    }.sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
+                    ownedRooms = it.ownedRooms.map { room ->
                         if (room.id == result.roomId) room.copy(isMuted = result.muted) else room
                     }.sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
                     selectedRoom = it.selectedRoom?.let { room ->
@@ -2779,6 +3162,31 @@ private fun List<ChatRoom>.mergeRoomUnreadCounts(
     return merged
 }
 
+private fun List<ChatRoom>.mergeLocallyActiveRooms(
+    previous: List<ChatRoom>,
+    localUnreadCounts: Map<String, Int>,
+    roomAttentionKinds: Map<String, ChatAttentionKind>,
+    selectedRoomId: String?,
+): List<ChatRoom> {
+    if (previous.isEmpty()) return this
+    val remoteIds = mapTo(HashSet()) { room -> room.id }
+    val localUnreadIds = localUnreadCounts
+        .filterValues { count -> count > 0 }
+        .keys
+    val retainedRooms = previous.mapNotNull { room ->
+        if (room.id.isBlank() || room.id in remoteIds) return@mapNotNull null
+        val localUnreadCount = localUnreadCounts[room.id].coercePositive()
+        val hasLocalActivity = room.id == selectedRoomId ||
+            room.id in localUnreadIds ||
+            room.id in roomAttentionKinds ||
+            (room.unreadCount.coerceAtLeast(0) > 0 && room.unreadMarker().isNotBlank())
+        if (!hasLocalActivity) return@mapNotNull null
+        room.copy(unreadCount = maxOf(room.unreadCount.coerceAtLeast(0), localUnreadCount))
+    }
+    if (retainedRooms.isEmpty()) return this
+    return this + retainedRooms
+}
+
 private fun List<ChatRoom>.bumpChatRoomForReceivedMessage(
     roomId: String,
     message: ChatMessage,
@@ -2800,6 +3208,29 @@ private fun List<ChatRoom>.withChatRoomLatestMessage(
     val next = toMutableList()
     next[index] = this[index].withLatestMessageAt(message)
     return next
+}
+
+private fun List<ChatRoom>.withRealtimeRoomMessage(
+    roomId: String,
+    message: ChatMessage,
+    incrementUnread: Boolean,
+): List<ChatRoom> {
+    if (roomId.isBlank()) return this
+    val index = indexOfFirst { room -> room.id == roomId }
+    val sourceRoom = if (index >= 0) this[index] else placeholderRoom(roomId)
+    val latestChanged = message.unreadMarker()
+        .takeIf { marker -> marker.isNotBlank() }
+        ?.let { marker -> marker != sourceRoom.unreadMarker() }
+        ?: false
+    val room = sourceRoom.withLatestMessageAt(message)
+        .let { current ->
+            if (incrementUnread && latestChanged) {
+                current.copy(unreadCount = current.unreadCount.coerceAtLeast(0) + 1)
+            } else {
+                current
+            }
+        }
+    return listOf(room) + filterIndexed { currentIndex, _ -> currentIndex != index }
 }
 
 private fun List<ChatRoom>.mergeOwnedChatRooms(ownedRooms: List<ChatRoom>): List<ChatRoom> {
@@ -2926,6 +3357,50 @@ private fun List<ChatUserConversation>.withUserConversationLatest(
     return listOf(updated) + filterIndexed { currentIndex, _ -> currentIndex != index }
 }
 
+private fun List<ChatUserConversation>.withRealtimeUserConversationMessage(
+    userId: String,
+    message: ChatMessage,
+    incrementUnread: Boolean,
+): List<ChatUserConversation> {
+    if (userId.isBlank()) return this
+    val index = indexOfFirst { conversation -> conversation.user.id == userId }
+    val conversation = if (index >= 0) {
+        this[index]
+    } else {
+        ChatUserConversation(
+            user = message.userForDirectConversation(userId),
+            latestMessage = null,
+            unreadCount = 0,
+        )
+    }
+    val latestChanged = message.unreadMarker()
+        .takeIf { marker -> marker.isNotBlank() }
+        ?.let { marker -> marker != conversation.latestMessage?.unreadMarker().orEmpty() }
+        ?: false
+    val updated = conversation.copy(
+        latestMessage = message,
+        unreadCount = when {
+            incrementUnread && latestChanged -> conversation.unreadCount.coerceAtLeast(0) + 1
+            incrementUnread -> conversation.unreadCount.coerceAtLeast(0)
+            else -> 0
+        },
+    )
+    return listOf(updated) + filterIndexed { currentIndex, _ -> currentIndex != index }
+}
+
+private fun ChatMessage.userForDirectConversation(userId: String): User {
+    return when {
+        fromUser.id == userId -> fromUser
+        toUser?.id == userId -> toUser
+        else -> User(
+            id = userId,
+            displayName = userId,
+            username = userId,
+            avatarInitial = userId.trim().firstOrNull()?.toString()?.uppercase() ?: "?",
+        )
+    }
+}
+
 private fun List<ChatUserConversation>.mergeChatUserConversations(
     existing: List<ChatUserConversation>,
 ): List<ChatUserConversation> {
@@ -2946,6 +3421,12 @@ private fun ChatUserConversation.stableChatUserConversationKey(): String {
 
 private fun Set<String>.toggleMembership(id: String): Set<String> {
     return if (id in this) this - id else this + id
+}
+
+private fun String.cleanChatRoomGroupName(): String {
+    return trim()
+        .replace(Regex("\\s+"), " ")
+        .take(24)
 }
 
 private inline fun <T> List<T>.sortedByPinnedIds(
@@ -3014,7 +3495,7 @@ private fun List<ChatMessage>.firstChatAttentionToastAfter(
     return null
 }
 
-private const val SPECIAL_CARE_ROOM_SCAN_LIMIT = 8
+private const val SPECIAL_CARE_ROOM_SCAN_LIMIT = 256
 
 private fun ChatMessage.belongsToUserConversation(userId: String): Boolean {
     return fromUser.id == userId || toUserId == userId || toUser?.id == userId

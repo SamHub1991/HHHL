@@ -1,5 +1,7 @@
 package cc.hhhl.client.state
 
+import cc.hhhl.client.api.DiscoverRecommendedTimelineCategory
+import cc.hhhl.client.api.DiscoverRecommendationFeedbackEvent
 import cc.hhhl.client.api.DiscoverApi
 import cc.hhhl.client.api.DiscoverFederationActionResult
 import cc.hhhl.client.api.DiscoverFederationFollowResult
@@ -11,9 +13,11 @@ import cc.hhhl.client.api.DiscoverSearchResult
 import cc.hhhl.client.api.DiscoverTrendResult
 import cc.hhhl.client.api.DiscoverUserSearchResult
 import cc.hhhl.client.fake.FakeData
+import cc.hhhl.client.model.DiscoverySections
 import cc.hhhl.client.model.FederationInstance
 import cc.hhhl.client.model.FederationStats
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NoteSearchTrends
 import cc.hhhl.client.model.TrendingHashtag
 import cc.hhhl.client.model.User
 import cc.hhhl.client.repository.DiscoverRepository
@@ -407,6 +411,68 @@ class DiscoverStateHolderTest {
     }
 
     @Test
+    fun refreshHomeLoadsDiscoverySearchTrendsAndRecommendations() = runTest {
+        val note = FakeData.timeline[0]
+        val sections = DiscoverySections(coverNotes = listOf(note))
+        val trends = NoteSearchTrends(popularSearches = listOf("key"))
+        val holder = DiscoverStateHolder(
+            repository = fakeRepository(
+                searchResult = DiscoverRepositoryResult.Success(emptyList()),
+                discoverySectionsResult = DiscoverRepositoryResult.DiscoverySectionsSuccess(sections),
+                searchTrendsResult = DiscoverRepositoryResult.SearchTrendsSuccess(trends),
+                recommendedResult = DiscoverRepositoryResult.RecommendedTimelineSuccess(listOf(note)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshHomeQuietly(force = true)
+        advanceUntilIdle()
+
+        assertEquals(sections, holder.state.value.discoverySections)
+        assertEquals(trends, holder.state.value.searchTrends)
+        assertEquals(listOf(note), holder.state.value.recommendedNotes)
+    }
+
+    @Test
+    fun changingRecommendationCategoryRefreshesRecommendations() = runTest {
+        val calls = mutableListOf<String>()
+        val holder = DiscoverStateHolder(
+            repository = fakeRepository(
+                searchResult = DiscoverRepositoryResult.Success(emptyList()),
+                recommendedResult = DiscoverRepositoryResult.RecommendedTimelineSuccess(listOf(FakeData.timeline[0])),
+                onRecommendedLoad = { calls.add(it.category.apiValue) },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateRecommendedCategory(DiscoverRecommendedTimelineCategory.Resources)
+        advanceUntilIdle()
+
+        assertEquals(DiscoverRecommendedTimelineCategory.Resources, holder.state.value.recommendedCategory)
+        assertEquals(listOf("resources"), calls)
+        assertEquals(listOf(FakeData.timeline[0]), holder.state.value.recommendedNotes)
+    }
+
+    @Test
+    fun recommendationImpressionFeedbackIsDeduplicated() = runTest {
+        val calls = mutableListOf<String>()
+        val holder = DiscoverStateHolder(
+            repository = fakeRepository(
+                searchResult = DiscoverRepositoryResult.Success(emptyList()),
+                onFeedback = { noteId, event -> calls.add("${event.apiValue}:$noteId") },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.sendRecommendationFeedback("note-1", DiscoverRecommendationFeedbackEvent.Impression)
+        holder.sendRecommendationFeedback("note-1", DiscoverRecommendationFeedbackEvent.Impression)
+        holder.sendRecommendationFeedback("note-1", DiscoverRecommendationFeedbackEvent.Click)
+        advanceUntilIdle()
+
+        assertEquals(listOf("impression:note-1", "click:note-1"), calls)
+    }
+
+    @Test
     fun cannotSelectTrendsModeWhenTrendsAreDisabled() {
         val holder = DiscoverStateHolder(
             repository = fakeRepository(DiscoverRepositoryResult.Success(emptyList())),
@@ -594,7 +660,12 @@ class DiscoverStateHolderTest {
     private fun fakeRepository(
         searchResult: DiscoverRepositoryResult,
         loadMoreResult: DiscoverRepositoryResult = searchResult,
+        discoverySectionsResult: DiscoverRepositoryResult = DiscoverRepositoryResult.DiscoverySectionsSuccess(DiscoverySections()),
+        searchTrendsResult: DiscoverRepositoryResult = DiscoverRepositoryResult.SearchTrendsSuccess(NoteSearchTrends()),
+        recommendedResult: DiscoverRepositoryResult = DiscoverRepositoryResult.RecommendedTimelineSuccess(emptyList()),
         onLoadMore: (String?) -> Unit = {},
+        onRecommendedLoad: (cc.hhhl.client.api.DiscoverRecommendedTimelineOptions) -> Unit = {},
+        onFeedback: (String, DiscoverRecommendationFeedbackEvent) -> Unit = { _, _ -> },
         onSearchNotes: (String) -> Unit = {},
         onSearchUsers: (String) -> Unit = {},
         onShowHashtag: (String) -> Unit = {},
@@ -605,7 +676,12 @@ class DiscoverStateHolderTest {
     ): DiscoverRepository = fakeRepository(
         searchProvider = { searchResult },
         loadMoreProvider = { loadMoreResult },
+        discoverySectionsProvider = { discoverySectionsResult },
+        searchTrendsProvider = { searchTrendsResult },
+        recommendedProvider = { recommendedResult },
         onLoadMore = onLoadMore,
+        onRecommendedLoad = onRecommendedLoad,
+        onFeedback = onFeedback,
         onSearchNotes = onSearchNotes,
         onSearchUsers = onSearchUsers,
         onShowHashtag = onShowHashtag,
@@ -618,7 +694,12 @@ class DiscoverStateHolderTest {
     private fun fakeRepository(
         searchProvider: suspend () -> DiscoverRepositoryResult,
         loadMoreProvider: suspend () -> DiscoverRepositoryResult = searchProvider,
+        discoverySectionsProvider: suspend () -> DiscoverRepositoryResult = { DiscoverRepositoryResult.DiscoverySectionsSuccess(DiscoverySections()) },
+        searchTrendsProvider: suspend () -> DiscoverRepositoryResult = { DiscoverRepositoryResult.SearchTrendsSuccess(NoteSearchTrends()) },
+        recommendedProvider: suspend () -> DiscoverRepositoryResult = { DiscoverRepositoryResult.RecommendedTimelineSuccess(emptyList()) },
         onLoadMore: (String?) -> Unit = {},
+        onRecommendedLoad: (cc.hhhl.client.api.DiscoverRecommendedTimelineOptions) -> Unit = {},
+        onFeedback: (String, DiscoverRecommendationFeedbackEvent) -> Unit = { _, _ -> },
         onSearchNotes: (String) -> Unit = {},
         onSearchUsers: (String) -> Unit = {},
         onShowHashtag: (String) -> Unit = {},
@@ -748,6 +829,31 @@ class DiscoverStateHolderTest {
 
             override suspend fun loadTrends(): DiscoverRepositoryResult {
                 return searchProvider()
+            }
+
+            override suspend fun loadDiscoverySections(limit: Int): DiscoverRepositoryResult {
+                return discoverySectionsProvider()
+            }
+
+            override suspend fun loadSearchTrends(limit: Int): DiscoverRepositoryResult {
+                return searchTrendsProvider()
+            }
+
+            override suspend fun loadRecommendedTimeline(
+                currentNotes: List<Note>,
+                options: cc.hhhl.client.api.DiscoverRecommendedTimelineOptions,
+            ): DiscoverRepositoryResult {
+                onRecommendedLoad(options)
+                return recommendedProvider()
+            }
+
+            override suspend fun sendRecommendationFeedback(
+                noteId: String,
+                event: DiscoverRecommendationFeedbackEvent,
+                dwellMs: Int?,
+            ): DiscoverRepositoryResult {
+                onFeedback(noteId, event)
+                return DiscoverRepositoryResult.RecommendationFeedbackSuccess
             }
 
             override suspend fun loadFederation(

@@ -51,6 +51,7 @@ class ChatPresentationTest {
                 "过滤设置",
                 "编辑聊天室",
                 "邀请成员",
+                "聊天室管理",
                 "静音聊天室",
                 "退出聊天室",
                 "删除聊天室",
@@ -59,12 +60,16 @@ class ChatPresentationTest {
             actions.map { it.label },
         )
         assertEquals(
-            listOf(true, true, false, true, true, true, true, true, true, true),
+            listOf(true, true, false, true, true, true, true, true, true, true, true),
             actions.map { it.enabled },
         )
         assertEquals(
-            listOf("总结聊天", "回复草稿", "待办提取", "决策摘要"),
+            listOf("最近 50 条", "今日摘要", "未读摘要", "回复草稿", "待办提取", "决策摘要"),
             actions[2].children.map { it.label },
+        )
+        assertEquals(
+            listOf("保留设置", "清空数据"),
+            actions[6].children.map { it.label },
         )
     }
 
@@ -103,6 +108,54 @@ class ChatPresentationTest {
     fun chatDetailModeLabelShowsCountOnlyWhenUseful() {
         assertEquals("消息", chatDetailModeLabel("消息", 0))
         assertEquals("成员 3", chatDetailModeLabel("成员", 3))
+    }
+
+    @Test
+    fun chatRoomGroupsKeepListOrderAndAppendUngroupedRooms() {
+        val rooms = listOf(
+            chatRoom("room-work"),
+            chatRoom("room-friends"),
+            chatRoom("room-open"),
+            chatRoom("room-work-2"),
+        )
+
+        val groups = rooms.groupByChatRoomGroup(
+            mapOf(
+                "room-work" to " 工作 频道 ",
+                "room-friends" to "朋友",
+                "room-work-2" to "工作 频道",
+            ),
+        )
+
+        assertEquals(listOf("工作 频道", "朋友", "未分组"), groups.map { it.title })
+        assertEquals(listOf("room-work", "room-work-2"), groups[0].rooms.map { it.id })
+        assertEquals(listOf("room-friends"), groups[1].rooms.map { it.id })
+        assertEquals(listOf("room-open"), groups[2].rooms.map { it.id })
+    }
+
+    @Test
+    fun chatRoomGroupingDoesNotShowHeadersWhenNoVisibleRoomHasGroup() {
+        val rooms = listOf(chatRoom("room-a"), chatRoom("room-b"))
+
+        val groups = rooms.groupByChatRoomGroup(mapOf("hidden-room" to "隐藏"))
+
+        assertEquals(1, groups.size)
+        assertEquals("", groups.single().title)
+        assertEquals(listOf("room-a", "room-b"), groups.single().rooms.map { it.id })
+    }
+
+    @Test
+    fun chatRoomSearchMatchesGroupNames() {
+        val work = chatRoom("room-work")
+        val friends = chatRoom("room-friends")
+
+        val filtered = listOf(work, friends).filterByChatRoomQuery(
+            query = "工作",
+            roomGroups = mapOf("room-work" to "工作 频道"),
+        )
+
+        assertEquals(listOf("room-work"), filtered.map { it.id })
+        assertEquals("机器人 群组", " 机器人\n群组 ".cleanChatRoomGroupName())
     }
 
     @Test
@@ -186,12 +239,12 @@ class ChatPresentationTest {
         )
 
         assertEquals(
-            listOf("回复", "引用", "回应", "复制", "举报"),
+            listOf("回复", "引用", "回应", "复制", "收藏信息", "举报"),
             actions.map { it.label },
         )
-        assertEquals(List(5) { true }, actions.map { it.enabled })
-        assertEquals(listOf("回复", "引用", "回应处理中", "复制", "删除"), pendingActions.map { it.label })
-        assertEquals(listOf(true, true, false, true, true), pendingActions.map { it.enabled })
+        assertEquals(List(6) { true }, actions.map { it.enabled })
+        assertEquals(listOf("回复", "引用", "回应处理中", "复制", "收藏信息", "删除"), pendingActions.map { it.label })
+        assertEquals(listOf(true, true, false, true, true, true), pendingActions.map { it.enabled })
     }
 
     @Test
@@ -205,7 +258,7 @@ class ChatPresentationTest {
             onQuote = {},
         )
 
-        assertEquals(listOf("回复", "引用", "回应", "复制"), actions.map { it.label })
+        assertEquals(listOf("回复", "引用", "回应", "复制", "收藏信息"), actions.map { it.label })
     }
 
     @Test

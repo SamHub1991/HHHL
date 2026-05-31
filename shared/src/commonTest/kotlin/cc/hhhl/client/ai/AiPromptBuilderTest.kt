@@ -117,6 +117,33 @@ class AiPromptBuilderTest {
     }
 
     @Test
+    fun chatSummaryPromptsNameConcreteRanges() {
+        val recent = AiPromptBuilder.build(
+            settings = AiSettings(enabled = true, apiKey = "key"),
+            kind = AiTaskKind.ChatRecentSummary,
+            input = AiTaskInput(
+                chatTitle = "项目群",
+                prompt = "范围：最近 50 条消息。",
+                chatMessages = listOf(AiChatMessageContext("Alice", "发布了新版本")),
+            ),
+        )
+        val unread = AiPromptBuilder.build(
+            settings = AiSettings(enabled = true, apiKey = "key"),
+            kind = AiTaskKind.ChatUnreadSummary,
+            input = AiTaskInput(
+                chatTitle = "项目群",
+                prompt = "范围：未读期间的 3 条消息。",
+                chatMessages = listOf(AiChatMessageContext("Bob", "需要确认发布")),
+            ),
+        )
+
+        assertTrue(recent.user.contains("最近 50 条"))
+        assertTrue(recent.user.contains("范围：最近 50 条消息"))
+        assertTrue(unread.user.contains("未读期间发生了什么"))
+        assertTrue(unread.user.contains("范围：未读期间的 3 条消息"))
+    }
+
+    @Test
     fun sensitivePostContextIsRedactedUnlessAllowed() {
         val note = Note(
             id = "sensitive-note",
@@ -172,5 +199,27 @@ class AiPromptBuilderTest {
         assertTrue(prompt.user.contains("需要用户确认"))
         assertTrue(prompt.user.contains("不要声称已经执行"))
         assertTrue(prompt.user.contains("Bob 需要我回复"))
+    }
+
+    @Test
+    fun assistantChatPromptStaysLocalAndConfirmationGated() {
+        val prompt = AiPromptBuilder.build(
+            settings = AiSettings(enabled = true, apiKey = "key"),
+            kind = AiTaskKind.AssistantChat,
+            input = AiTaskInput(
+                prompt = "帮我创建一条自动转发规则",
+                text = "我: 之前问过聊天室转发",
+                automationEventText = "自动化：3 条规则，启用 2 条",
+            ),
+        )
+
+        assertTrue(prompt.user.contains("本地 AI 助手"))
+        assertTrue(prompt.user.contains("不是远程 Misskey 机器人账号"))
+        assertTrue(prompt.user.contains("不能声称你自己已经执行"))
+        assertTrue(prompt.user.contains("高风险自动批准已开启"))
+        assertTrue(prompt.user.contains("需确认"))
+        assertTrue(prompt.user.contains("动作按钮"))
+        assertTrue(prompt.user.contains("不要输出伪 JSON 工具调用"))
+        assertTrue(prompt.user.contains("帮我创建一条自动转发规则"))
     }
 }

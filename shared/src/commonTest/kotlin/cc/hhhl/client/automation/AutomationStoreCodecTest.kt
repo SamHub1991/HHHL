@@ -42,6 +42,40 @@ class AutomationStoreCodecTest {
                     message = "message $index",
                     success = true,
                     createdAtEpochMillis = index.toLong(),
+                    eventSnapshot = AutomationEvent(
+                        id = "event-$index",
+                        trigger = AutomationTrigger.ChatMessage,
+                        messageText = "hello $index",
+                    ).snapshot(),
+                    actionSnapshot = AutomationAction(
+                        id = "action-$index",
+                        type = AutomationActionType.AddLog,
+                        bodyTemplate = "hello $index",
+                    ),
+                )
+            },
+            debugRecords = (0 until 260).map { index ->
+                AutomationRuleDebugRecord(
+                    id = "debug-$index",
+                    ruleId = "rule-$index",
+                    ruleName = "Rule $index",
+                    eventId = "event-$index",
+                    eventLabel = "聊天消息",
+                    eventSummary = "message $index",
+                    matched = index % 2 == 0,
+                    reason = "reason $index",
+                    conditionResults = listOf(
+                        AutomationConditionDebugResult(
+                            conditionId = "condition-$index",
+                            conditionLabel = "消息包含",
+                            expectedValue = "hello",
+                            actualValue = "hello world",
+                            matched = true,
+                            message = "已命中",
+                        ),
+                    ),
+                    resolvedEntities = listOf("聊天室 Room -> room-$index"),
+                    createdAtEpochMillis = index.toLong(),
                 )
             },
         )
@@ -54,6 +88,11 @@ class AutomationStoreCodecTest {
         assertEquals(AutomationStoreCodec.MAX_LOGS, decoded.logs.size)
         assertEquals("log-0", decoded.logs.first().id)
         assertEquals("log-159", decoded.logs.last().id)
+        assertEquals("hello 0", decoded.logs.first().eventSnapshot?.messageText)
+        assertEquals(AutomationActionType.AddLog, decoded.logs.first().actionSnapshot?.type)
+        assertEquals(AutomationStoreCodec.MAX_DEBUG_RECORDS, decoded.debugRecords.size)
+        assertEquals("debug-0", decoded.debugRecords.first().id)
+        assertEquals("debug-239", decoded.debugRecords.last().id)
     }
 
     @Test

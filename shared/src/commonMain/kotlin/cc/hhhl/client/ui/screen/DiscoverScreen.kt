@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
@@ -33,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,7 +49,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import cc.hhhl.client.api.DiscoverRecommendationFeedbackEvent
+import cc.hhhl.client.api.DiscoverRecommendedTimelineCategory
+import cc.hhhl.client.api.DiscoverRecommendedTimelineScope
+import cc.hhhl.client.model.Channel
 import cc.hhhl.client.model.FederationInstance
+import cc.hhhl.client.model.NoteSearchTrends
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.RoleSummary
 import cc.hhhl.client.model.TrendingHashtag
@@ -85,6 +92,11 @@ fun DiscoverScreen(
     onFiltersChanged: (DiscoverAdvancedFilters) -> Unit = {},
     onClearFilters: () -> Unit = {},
     onLoadMore: () -> Unit = {},
+    onLoadMoreRecommended: () -> Unit = {},
+    onRecommendedScopeSelected: (DiscoverRecommendedTimelineScope) -> Unit = {},
+    onRecommendedCategorySelected: (DiscoverRecommendedTimelineCategory) -> Unit = {},
+    onToggleRecommendedWithFiles: () -> Unit = {},
+    onRecommendationFeedback: (String, DiscoverRecommendationFeedbackEvent) -> Unit = { _, _ -> },
     onOpenNote: (String) -> Unit = {},
     onOpenUser: (String) -> Unit = {},
     onReply: (String) -> Unit = {},
@@ -105,6 +117,7 @@ fun DiscoverScreen(
     onOpenGallery: () -> Unit = {},
     onOpenFlash: () -> Unit = {},
     onOpenAnnouncements: () -> Unit = {},
+    onOpenChannel: (Channel) -> Unit = {},
     onOpenFederationInstance: (FederationInstance) -> Unit = {},
     onCloseFederationInstanceDetails: () -> Unit = {},
     onToggleFederationSilence: (String) -> Unit = {},
@@ -146,12 +159,29 @@ fun DiscoverScreen(
         DiscoverSearchMode.Federation -> state.federationInstances.size
         else -> 0
     }
+    val canLoadMoreRecommended = state != null &&
+        state.selectedMode == DiscoverSearchMode.Notes &&
+        state.query.isBlank() &&
+        !state.hasSearched &&
+        state.recommendedNotes.isNotEmpty() &&
+        !state.recommendedEndReached
+    val recommendationItemCount = if (state?.selectedMode == DiscoverSearchMode.Notes && state.query.isBlank()) {
+        state.recommendedNotes.size
+    } else {
+        0
+    }
 
     AutoLoadMoreEffect(
         listState = listState,
         itemCount = autoLoadItemCount,
         isLoadingMore = state?.isLoadingMore == true || !canLoadMore,
         onLoadMore = onLoadMore,
+    )
+    AutoLoadMoreEffect(
+        listState = listState,
+        itemCount = recommendationItemCount,
+        isLoadingMore = state?.isLoadingMoreRecommendedNotes == true || !canLoadMoreRecommended,
+        onLoadMore = onLoadMoreRecommended,
     )
 
     Column(
@@ -182,6 +212,17 @@ fun DiscoverScreen(
                 onFiltersChanged = onFiltersChanged,
                 onClearFilters = onClearFilters,
                 onApply = onSearch,
+            )
+            HhhlDivider()
+        }
+        if (selectedMode == DiscoverSearchMode.Notes && query.isBlank() && state?.hasSearched != true) {
+            DiscoverRecommendationControls(
+                scope = state?.recommendedScope ?: DiscoverRecommendedTimelineScope.Mixed,
+                category = state?.recommendedCategory ?: DiscoverRecommendedTimelineCategory.ForYou,
+                withFiles = state?.recommendedWithFiles == true,
+                onScopeSelected = onRecommendedScopeSelected,
+                onCategorySelected = onRecommendedCategorySelected,
+                onToggleWithFiles = onToggleRecommendedWithFiles,
             )
             HhhlDivider()
         }
@@ -220,6 +261,121 @@ fun DiscoverScreen(
                             actionText = "重试",
                             onAction = onSearch,
                         )
+                    }
+                }
+                if (state.selectedMode == DiscoverSearchMode.Notes && state.query.isBlank() && !state.hasSearched) {
+                    item(key = "discover-search-trends", contentType = "discover-search-trends") {
+                        SearchTrendsPanel(
+                            trends = state.searchTrends,
+                            isLoading = state.isLoadingSearchTrends,
+                            message = state.searchTrendsMessage,
+                            onSearchTerm = { term ->
+                                onQueryChanged(term)
+                                onSearch()
+                            },
+                            onOpenHashtag = onOpenHashtag,
+                        )
+                    }
+                    if (
+                        state.discoverySections.coverNotes.isNotEmpty() ||
+                        state.discoverySections.hotNotes.isNotEmpty() ||
+                        state.discoverySections.tutorialNotes.isNotEmpty() ||
+                        state.isLoadingDiscoverySections ||
+                        state.discoveryMessage != null
+                    ) {
+                        item(key = "discover-sections-notes", contentType = "discover-sections-notes") {
+                            DiscoverySectionsPanel(
+                                state = state,
+                                onOpenNote = onOpenNote,
+                                onRecommendationFeedback = onRecommendationFeedback,
+                            )
+                        }
+                    }
+                    if (state.discoverySections.channels.isNotEmpty()) {
+                        item(key = "discover-section-channels", contentType = "discover-section-channels") {
+                            DiscoveryChannelsPanel(
+                                channels = state.discoverySections.channels,
+                                onOpenChannel = onOpenChannel,
+                            )
+                        }
+                    }
+                    if (state.discoverySections.users.isNotEmpty()) {
+                        item(key = "discover-section-users", contentType = "discover-section-users") {
+                            PinnedUsersPanel(
+                                users = state.discoverySections.users,
+                                isLoading = false,
+                                message = "发现页推荐用户",
+                                onOpenUser = onOpenUser,
+                                title = "发现用户",
+                            )
+                        }
+                    }
+                    if (state.recommendedNotes.isNotEmpty() || state.isLoadingRecommendedNotes || state.recommendedMessage != null) {
+                        item(key = "discover-recommended-header", contentType = "discover-recommended-header") {
+                            RecommendedTimelineHeader(
+                                noteCount = state.recommendedNotes.size,
+                                isLoading = state.isLoadingRecommendedNotes,
+                                message = state.recommendedMessage,
+                            )
+                        }
+                    }
+                    items(
+                        items = state.recommendedNotes,
+                        key = { "discover-recommended-${it.id}" },
+                        contentType = { "discover-recommended-note" },
+                    ) { note ->
+                        LaunchedEffect(note.id) {
+                            onRecommendationFeedback(note.id, DiscoverRecommendationFeedbackEvent.Impression)
+                        }
+                        NoteRow(
+                            note = note,
+                            onClick = { noteId ->
+                                onRecommendationFeedback(noteId, DiscoverRecommendationFeedbackEvent.Click)
+                                onOpenNote(noteId)
+                            },
+                            onOpenUser = onOpenUser,
+                            onReply = { noteId ->
+                                onRecommendationFeedback(noteId, DiscoverRecommendationFeedbackEvent.Reply)
+                                onReply(noteId)
+                            },
+                            onRenote = { noteId ->
+                                onRecommendationFeedback(noteId, DiscoverRecommendationFeedbackEvent.Renote)
+                                onRenote(noteId)
+                            },
+                            onQuote = onQuote,
+                            onReact = { noteId, reaction ->
+                                onRecommendationFeedback(noteId, DiscoverRecommendationFeedbackEvent.React)
+                                onReact(noteId, reaction)
+                            },
+                            onDeleteReaction = onDeleteReaction,
+                            onFavorite = onFavorite,
+                            onAddToClip = onAddToClip?.let { addToClip ->
+                                { target ->
+                                    onRecommendationFeedback(target.id, DiscoverRecommendationFeedbackEvent.Clip)
+                                    addToClip(target)
+                                }
+                            },
+                            onDelete = onDelete,
+                            onOpenMedia = onOpenMedia,
+                            onOpenMediaPreview = onOpenMediaPreview,
+                            onOpenMention = onOpenMention,
+                            onOpenHashtag = onOpenHashtag,
+                            onVotePoll = onVotePoll,
+                            reactionOptions = reactionOptions,
+                            recentReactions = recentReactions,
+                            isActionPending = isActionPending(note.id),
+                            canDelete = canDeleteAuthor(note.author.id),
+                            density = noteRowDensity,
+                        )
+                    }
+                    if (state.isLoadingMoreRecommendedNotes) {
+                        item(key = "discover-recommended-loading-more", contentType = "discover-status") {
+                            DiscoverStatusRow(text = "正在加载更多推荐...", loading = true)
+                        }
+                    } else if (state.recommendedEndReached && state.recommendedNotes.isNotEmpty()) {
+                        item(key = "discover-recommended-end", contentType = "discover-status") {
+                            DiscoverStatusRow(text = "已显示全部 ${state.recommendedNotes.size} 条推荐")
+                        }
                     }
                 }
                 if (state.pinnedUsers.isNotEmpty() || state.isLoadingPinnedUsers || state.pinnedUsersMessage != null) {
@@ -592,6 +748,53 @@ private fun DiscoverQuickActionOverflow(
 }
 
 private val DiscoverQuickActionWidth = 54.dp
+
+@Composable
+private fun DiscoverRecommendationControls(
+    scope: DiscoverRecommendedTimelineScope,
+    category: DiscoverRecommendedTimelineCategory,
+    withFiles: Boolean,
+    onScopeSelected: (DiscoverRecommendedTimelineScope) -> Unit,
+    onCategorySelected: (DiscoverRecommendedTimelineCategory) -> Unit,
+    onToggleWithFiles: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        HhhlSegmentedControl(modifier = Modifier.fillMaxWidth()) {
+            DiscoverRecommendedTimelineScope.entries.forEach { item ->
+                HhhlSegmentedItem(
+                    label = item.label,
+                    selected = item == scope,
+                    onClick = { onScopeSelected(item) },
+                    modifier = Modifier.weight(1f),
+                    selectedUsesPrimary = true,
+                )
+            }
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DiscoverRecommendedTimelineCategory.entries.forEach { item ->
+                HhhlActionChip(
+                    label = item.label,
+                    emphasized = item == category,
+                    enabled = item != category,
+                    onClick = { onCategorySelected(item) },
+                )
+            }
+            HhhlActionChip(
+                label = "带附件",
+                emphasized = withFiles,
+                onClick = onToggleWithFiles,
+            )
+        }
+    }
+}
 
 @Composable
 private fun DiscoverPassiveSearchPanel(
@@ -1564,6 +1767,7 @@ private fun PinnedUsersPanel(
     isLoading: Boolean,
     message: String?,
     onOpenUser: (String) -> Unit,
+    title: String = "推荐用户",
 ) {
     val colors = LocalHhhlColors.current
     DiscoverInfoPanel(
@@ -1580,7 +1784,7 @@ private fun PinnedUsersPanel(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = "推荐用户",
+                    text = title,
                     color = colors.textPrimary,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
@@ -1735,6 +1939,326 @@ private fun HashtagDetailPanel(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SearchTrendsPanel(
+    trends: NoteSearchTrends,
+    isLoading: Boolean,
+    message: String?,
+    onSearchTerm: (String) -> Unit,
+    onOpenHashtag: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    DiscoverInfoPanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Search,
+                contentDescription = null,
+                tint = colors.accent,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = "搜索趋势",
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            if (isLoading) {
+                Text(
+                    text = "同步中",
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+        message?.takeIf { it.isNotBlank() }?.let { text ->
+            Text(
+                text = text,
+                color = colors.textMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        SearchTrendGroup("热门搜索", trends.popularSearches, onClick = onSearchTerm)
+        SearchTrendGroup("最近搜索", trends.recentTerms, onClick = onSearchTerm)
+        SearchTrendGroup("话题", trends.hashtags, prefix = "#", onClick = onOpenHashtag)
+    }
+}
+
+@Composable
+private fun SearchTrendGroup(
+    title: String,
+    terms: List<String>,
+    prefix: String = "",
+    onClick: (String) -> Unit,
+) {
+    if (terms.isEmpty()) return
+    val colors = LocalHhhlColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(
+            text = title,
+            color = colors.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            terms.take(10).forEach { term ->
+                HhhlActionChip(
+                    label = "$prefix$term",
+                    onClick = { onClick(term) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverySectionsPanel(
+    state: DiscoverUiState,
+    onOpenNote: (String) -> Unit,
+    onRecommendationFeedback: (String, DiscoverRecommendationFeedbackEvent) -> Unit,
+) {
+    DiscoverInfoPanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        DiscoveryPanelHeader(
+            title = "发现内容",
+            meta = when {
+                state.isLoadingDiscoverySections -> "同步中"
+                state.discoveryMessage != null -> state.discoveryMessage
+                else -> "封面、热门和教程"
+            },
+            icon = Icons.Filled.AutoAwesome,
+        )
+        DiscoveryNoteGroup(
+            title = "封面",
+            notes = state.discoverySections.coverNotes,
+            onOpenNote = onOpenNote,
+            onRecommendationFeedback = onRecommendationFeedback,
+        )
+        DiscoveryNoteGroup(
+            title = "热门",
+            notes = state.discoverySections.hotNotes,
+            onOpenNote = onOpenNote,
+            onRecommendationFeedback = onRecommendationFeedback,
+        )
+        DiscoveryNoteGroup(
+            title = "教程",
+            notes = state.discoverySections.tutorialNotes,
+            onOpenNote = onOpenNote,
+            onRecommendationFeedback = onRecommendationFeedback,
+        )
+    }
+}
+
+@Composable
+private fun DiscoveryNoteGroup(
+    title: String,
+    notes: List<Note>,
+    onOpenNote: (String) -> Unit,
+    onRecommendationFeedback: (String, DiscoverRecommendationFeedbackEvent) -> Unit,
+) {
+    if (notes.isEmpty()) return
+    val colors = LocalHhhlColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = title,
+            color = colors.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        notes.take(4).forEach { note ->
+            DiscoveryCompactNoteRow(
+                note = note,
+                onOpen = {
+                    onRecommendationFeedback(note.id, DiscoverRecommendationFeedbackEvent.Click)
+                    onOpenNote(note.id)
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun DiscoveryCompactNoteRow(
+    note: Note,
+    onOpen: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(discoverInfoPillColor())
+            .border(1.dp, discoverInfoPillBorderColor(), RoundedCornerShape(12.dp))
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 9.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Avatar(
+            initial = note.author.avatarInitial,
+            avatarUrl = note.author.avatarUrl,
+            avatarDecorations = note.author.avatarDecorations,
+            size = 28.dp,
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = note.author.displayName.ifBlank { "@${note.author.username}" },
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = notePreviewText(note).ifBlank { "无正文" },
+                color = colors.textSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            text = note.reactionCount.toString(),
+            color = colors.accent,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun DiscoveryChannelsPanel(
+    channels: List<Channel>,
+    onOpenChannel: (Channel) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    DiscoverInfoPanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        DiscoveryPanelHeader(
+            title = "发现频道",
+            meta = "${channels.size} 个频道",
+            icon = Icons.Filled.Forum,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            channels.take(8).forEach { channel ->
+                Column(
+                    modifier = Modifier
+                        .widthIn(min = 132.dp, max = 190.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(discoverInfoPillColor())
+                        .border(1.dp, discoverInfoPillBorderColor(), RoundedCornerShape(14.dp))
+                        .clickable { onOpenChannel(channel) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = channel.name.ifBlank { "未命名频道" },
+                        color = colors.textPrimary,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "${channel.usersCount} 人 · ${channel.notesCount} 条",
+                        color = colors.textMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (channel.description.isNotBlank()) {
+                        Text(
+                            text = channel.description,
+                            color = colors.textSecondary,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecommendedTimelineHeader(
+    noteCount: Int,
+    isLoading: Boolean,
+    message: String?,
+) {
+    DiscoverInfoPanel(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        DiscoveryPanelHeader(
+            title = "推荐帖子",
+            meta = when {
+                isLoading -> "同步中"
+                message != null -> message
+                else -> "$noteCount 条"
+            },
+            icon = Icons.Filled.AutoAwesome,
+        )
+    }
+}
+
+@Composable
+private fun DiscoveryPanelHeader(
+    title: String,
+    meta: String?,
+    icon: ImageVector,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = colors.accent,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = title,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        meta?.takeIf { it.isNotBlank() }?.let { text ->
+            Text(
+                text = text,
+                color = colors.textMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

@@ -22,6 +22,10 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import cc.hhhl.client.ai.AiStateHolder
+import cc.hhhl.client.ai.AiRepositoryResult
+import cc.hhhl.client.ai.AiTaskInput
+import cc.hhhl.client.ai.AiTaskKind
+import cc.hhhl.client.ai.toAiChatMessageContexts
 import cc.hhhl.client.automation.AppAutomationActionExecutor
 import cc.hhhl.client.automation.AutomationConditionType
 import cc.hhhl.client.automation.AutomationEvent
@@ -34,6 +38,8 @@ import cc.hhhl.client.automation.toAutomationTimelineEvent
 import cc.hhhl.client.api.NotificationLoadResult
 import cc.hhhl.client.api.SharkeyNotificationApi
 import cc.hhhl.client.api.TimelineKind
+import cc.hhhl.client.auth.AccountSession
+import cc.hhhl.client.cache.ChatMessageCacheConversationType
 import cc.hhhl.client.cache.ChatUnreadSnapshot
 import cc.hhhl.client.cache.NotificationCacheSnapshot
 import cc.hhhl.client.model.ChatMessage
@@ -42,20 +48,28 @@ import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NotificationItem
 import cc.hhhl.client.model.NotificationType
 import cc.hhhl.client.model.User
+import cc.hhhl.client.presentation.chatMessageBodyText
+import cc.hhhl.client.notification.ChatNoiseReductionCandidate
+import cc.hhhl.client.notification.ChatNoiseReductionDecision
+import cc.hhhl.client.notification.ChatNoiseReductionSettings
+import cc.hhhl.client.notification.aiChatImportanceDecision
 import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRepositoryResult
+import cc.hhhl.client.repository.ChatRoomMutationRepositoryResult
 import cc.hhhl.client.repository.ChatUserConversationRepositoryResult
 import cc.hhhl.client.repository.ChannelRepository
 import cc.hhhl.client.repository.ChannelTimelineRepositoryResult
 import cc.hhhl.client.repository.ComposeRepository
 import cc.hhhl.client.repository.NoteActionRepository
 import cc.hhhl.client.repository.NotificationRepository
+import cc.hhhl.client.repository.requiresRealtimeAttentionResolution
 import cc.hhhl.client.state.ChatAttentionKind
 import cc.hhhl.client.repository.TimelineRepository
 import cc.hhhl.client.repository.TimelineRepositoryResult
 import cc.hhhl.client.repository.UserNotesRepository
 import cc.hhhl.client.repository.UserNotesRepositoryResult
+import cc.hhhl.client.repository.resolveRealtimeMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -81,6 +95,247 @@ enum class BackgroundNotificationSyncTrigger {
 class BackgroundNotificationSyncer(
     private val context: Context,
 ) {
+    suspend fun loadRealtimeChatStreamTargets(session: AccountSession): RealtimeChatStreamTargets {
+        val token = session.token.trim()
+        if (token.isEmpty()) return RealtimeChatStreamTargets()
+        val specialCareUserIds = AndroidSpecialCareStore(context).loadSpecialCareUserIds(session.id)
+        val chatRepository = ChatRepository(
+            tokenProvider = { token },
+            currentUserIdProvider = { session.user?.id },
+        )
+        val chatUnreadStore = AndroidChatUnreadStore(context)
+        val localChatSnapshot = chatUnreadStore.load(session.id)
+        val cachedChatTargets = AndroidChatMessageCache(context)
+            .readAccount(session.id)
+            .keys
+        val rules = AndroidAutomationStore(context).read(session.id).rules
+        val rooms = chatRepository.loadAllRoomsForRealtimeTargets()
+        val conversations = when (val result = chatRepository.refreshUserConversations()) {
+            is ChatUserConversationRepositoryResult.Success -> result.conversations
+            ChatUserConversationRepositoryResult.Unauthorized,
+            is ChatUserConversationRepositoryResult.Error,
+                -> emptyList()
+        }
+        return realtimeChatStreamTargets(
+            rooms = rooms,
+            conversations = conversations,
+            rememberedRoomIds = localChatSnapshot.pinnedRoomIds +
+                localChatSnapshot.roomCounts.keys +
+                chatUnreadStore.loadRoomMarkers(session.id).keys +
+                cachedChatTargets
+                    .filter { key -> key.type == ChatMessageCacheConversationType.Room }
+                    .map { key -> key.conversationId },
+            rememberedUserIds = localChatSnapshot.pinnedUserIds +
+                localChatSnapshot.userCounts.keys +
+                chatUnreadStore.loadUserMarkers(session.id).keys +
+                cachedChatTargets
+                    .filter { key -> key.type == ChatMessageCacheConversationType.User }
+                    .map { key -> key.conversationId },
+            specialCareUserIds = specialCareUserIds,
+            automationRules = rules,
+        )
+    }
+
+    suspend fun cacheRealtimeChatMessage(
+        session: AccountSession,
+        message: ChatMessage,
+        directUserId: String?,
+    ) {
+        val token = session.token.trim()
+        if (token.isEmpty()) return
+        val repository = ChatRepository(
+            tokenProvider = { token },
+            currentUserIdProvider = { session.user?.id },
+            cacheAccountIdProvider = { session.id },
+            messageCache = AndroidChatMessageCache(context),
+        )
+        val cleanDirectUserId = directUserId?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanDirectUserId != null) {
+            repository.cacheUserMessage(cleanDirectUserId, message)
+        } else if (message.roomId.isNotBlank()) {
+            repository.cacheRoomMessage(message.roomId, message)
+        }
+    }
+
+    suspend fun handleRealtimeChatMessage(
+        session: AccountSession,
+        message: ChatMessage,
+        directUserId: String?,
+        roomName: String = "",
+    ): Boolean {
+        val token = session.token.trim()
+        if (token.isEmpty()) return false
+        val settings = AndroidBackgroundNotificationStore(context)
+        if (!settings.isBackgroundSyncEnabled()) return false
+        val seenIds = settings.loadSeenIds()
+        val specialCareUserIds = AndroidSpecialCareStore(context).loadSpecialCareUserIds(session.id)
+        val currentUser = session.user?.let { user ->
+            User(
+                id = user.id,
+                displayName = user.displayName,
+                username = user.username,
+                avatarInitial = user.displayName.trim().firstOrNull()?.toString()?.uppercase() ?: "我",
+                avatarUrl = user.avatarUrl,
+                host = session.host,
+            )
+        }
+        val chatRepository = ChatRepository(
+            tokenProvider = { token },
+            currentUserIdProvider = { session.user?.id },
+            cacheAccountIdProvider = { session.id },
+            messageCache = AndroidChatMessageCache(context),
+        )
+        val resolvedMessage = chatRepository.resolveRealtimeMessage(message, directUserId)
+        val resolvedRoomName = if (directUserId.isNullOrBlank()) {
+            roomName.ifBlank {
+                chatRepository.resolveRealtimeRoomName(resolvedMessage.roomId)
+            }
+        } else {
+            ""
+        }
+        val attentionKind = resolvedMessage.chatAttentionKind(
+            specialCareUserIds = if (settings.isSpecialCareEnabled()) specialCareUserIds else emptySet(),
+            currentUser = currentUser,
+        )
+        val chatEvent = resolvedMessage.toAutomationChatEvent(
+            roomId = resolvedMessage.roomId,
+            roomName = resolvedRoomName,
+            directUserId = directUserId.orEmpty(),
+            currentUser = currentUser,
+        )
+        val attentionEvent = attentionKind?.let { kind ->
+            resolvedMessage.toAutomationChatEvent(
+                roomId = resolvedMessage.roomId,
+                roomName = resolvedRoomName,
+                directUserId = directUserId.orEmpty(),
+                attentionKind = kind.name,
+                currentUser = currentUser,
+            ).asBackgroundChatAttentionEvent(kind)
+        }
+        val chatSeenId = chatEvent.id.automationSeenId()
+        val attentionSeenId = attentionEvent?.id?.automationSeenId()
+        val isNewChatEvent = chatSeenId !in seenIds
+
+        cacheRealtimeChatMessage(session, resolvedMessage, directUserId)
+        if (isNewChatEvent) {
+            recordRealtimeUnread(
+                session = session,
+                message = resolvedMessage,
+                directUserId = directUserId,
+                currentUser = currentUser,
+            )
+        }
+        if (chatSeenId in seenIds && (attentionSeenId == null || attentionSeenId in seenIds)) return true
+
+        val automationHolder = backgroundAutomationHolder(
+            accountId = session.id,
+            token = token,
+            chatRepository = chatRepository,
+        )
+        automationHolder.restore()
+        val automationEvents = buildList {
+            if (chatSeenId !in seenIds) {
+                add(chatEvent)
+            }
+            if (attentionEvent != null && attentionSeenId != null && attentionSeenId !in seenIds) {
+                add(attentionEvent)
+            }
+        }
+        automationEvents.distinctBy { it.id }.forEach { event -> automationHolder.emitNow(event) }
+
+        val notification = attentionKind?.let { kind ->
+            resolvedMessage.toRealtimeChatAttentionEvent(
+                kind = kind,
+                directUserId = directUserId,
+                roomName = resolvedRoomName,
+            )
+        }
+        val fallbackNotificationSeenId = notification?.let {
+            resolvedMessage.realtimeFallbackNotificationEventId(directUserId)
+        }
+        val claimedNotificationIds = notification
+            ?.let { event -> settings.claimSeenIds(listOf(event.id), MAX_STORED_SEEN_IDS) }
+            .orEmpty()
+        notification?.let { event ->
+            if (event.id in claimedNotificationIds && (!event.gatedBySpecialCareSetting || settings.isSpecialCareEnabled())) {
+                BackgroundNotificationPublisher(context).publish(listOf(event))
+                context.cacheBackgroundNotificationEvents(session.id, listOf(event))
+            }
+        }
+        val handledIds = buildList {
+            if (chatSeenId !in seenIds) add(chatSeenId)
+            attentionSeenId?.takeIf { it !in seenIds }?.let { add(it) }
+            notification?.id?.takeIf { it !in seenIds }?.let { add(it) }
+            fallbackNotificationSeenId?.takeIf { it !in seenIds }?.let { add(it) }
+        }
+        if (handledIds.isNotEmpty()) {
+            settings.mergeSeenIds(handledIds, MAX_STORED_SEEN_IDS)
+        }
+        if (automationEvents.isNotEmpty()) AiBackgroundScheduler.syncNow(context)
+        // Even when realtime attention has already been handled, trigger a debounced sync so
+        // room/user lists and unread snapshots catch up for sources that were not loaded yet.
+        return false
+    }
+
+    private fun recordRealtimeUnread(
+        session: AccountSession,
+        message: ChatMessage,
+        directUserId: String?,
+        currentUser: User?,
+    ) {
+        val currentUserId = currentUser?.id?.trim().orEmpty()
+        if (currentUserId.isNotBlank() && message.fromUser.id == currentUserId) return
+        val marker = message.unreadMarker().takeIf { it.isNotBlank() } ?: return
+        val store = AndroidChatUnreadStore(context)
+        val cleanDirectUserId = directUserId?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanDirectUserId != null) {
+            store.merge(
+                session.id,
+                ChatUnreadSnapshot(userCounts = mapOf(cleanDirectUserId to 1)),
+                userLatestMarkers = mapOf(cleanDirectUserId to marker),
+            )
+        } else {
+            val roomId = message.roomId.trim().takeIf { it.isNotEmpty() } ?: return
+            store.merge(
+                session.id,
+                ChatUnreadSnapshot(roomCounts = mapOf(roomId to 1)),
+                roomLatestMarkers = mapOf(roomId to marker),
+            )
+        }
+    }
+
+    suspend fun emitNotificationAutomation(notification: NotificationItem): Boolean {
+        if (notification.id.isBlank() || notification.isRead) return false
+        val settings = AndroidBackgroundNotificationStore(context)
+        if (!settings.isBackgroundSyncEnabled()) return false
+        val session = AndroidAuthTokenStore(context)
+            .readAccountSessions()
+            .firstOrNull { it.current }
+            ?: return false
+        val token = session.token.trim()
+        if (token.isEmpty()) return false
+        val seenId = notification.automationEventId().automationSeenId()
+        if (seenId !in settings.claimSeenIds(listOf(seenId), MAX_STORED_SEEN_IDS)) return false
+        val specialCareUserIds = AndroidSpecialCareStore(context).loadSpecialCareUserIds(session.id)
+        val chatRepository = ChatRepository(
+            tokenProvider = { token },
+            currentUserIdProvider = { session.user?.id },
+        )
+        val automationHolder = backgroundAutomationHolder(
+            accountId = session.id,
+            token = token,
+            chatRepository = chatRepository,
+        )
+        automationHolder.restore()
+        automationHolder.emitNow(
+            notification
+                .copy(isSpecialCare = notification.isSpecialCare || notification.actor.id in specialCareUserIds)
+                .toAutomationNotificationEvent(),
+        )
+        AiBackgroundScheduler.syncNow(context)
+        return true
+    }
+
     suspend fun sync(
         trigger: BackgroundNotificationSyncTrigger = BackgroundNotificationSyncTrigger.Scheduled,
     ): BackgroundNotificationSyncResult {
@@ -96,6 +351,7 @@ class BackgroundNotificationSyncer(
 
         val specialCareUserIds = AndroidSpecialCareStore(context).loadSpecialCareUserIds(session.id)
         val specialCareEnabled = settings.isSpecialCareEnabled()
+        val chatNoiseSettings = settings.loadChatNoiseReductionSettings()
         val seenIds = settings.loadSeenIds()
         val chatUnreadStore = AndroidChatUnreadStore(context)
         val currentUser = session.user?.let { user ->
@@ -121,17 +377,19 @@ class BackgroundNotificationSyncer(
                     chatRepository = chatRepository,
                 )
                 automationHolder.restore()
+                val aiStateHolder = backgroundAiStateHolder(session.id)
                 val automationRules = automationHolder.state.value.rules
                 val timelinePlan = automationRules.backgroundTimelineAutomationPlan()
                 val timelineRepository = TimelineRepository(tokenProvider = { token })
                 val channelRepository = ChannelRepository(tokenProvider = { token })
                 val automationEvents = mutableListOf<AutomationEvent>()
                 val timelineSeenIds = mutableListOf<String>()
+                var shouldRetry = false
                 val notificationsDeferred = async {
                     SharkeyNotificationApi().loadNotifications(token, limit = 20)
                 }
                 val chatDeferred = async {
-                    chatRepository.refresh()
+                    chatRepository.loadAllRoomsForRealtimeTargets()
                 }
                 val userChatDeferred = async {
                     chatRepository.refreshUserConversations()
@@ -200,19 +458,30 @@ class BackgroundNotificationSyncer(
                             }
                     }
                     NotificationLoadResult.Unauthorized -> return@coroutineScope BackgroundNotificationSyncResult.Success
-                    is NotificationLoadResult.NetworkError -> return@coroutineScope BackgroundNotificationSyncResult.Retry
+                    is NotificationLoadResult.NetworkError -> {
+                        shouldRetry = true
+                    }
                     is NotificationLoadResult.ServerError -> Unit
                 }
 
-                when (val result = chatDeferred.await()) {
-                    is ChatRepositoryResult.Success -> {
-                        val roomLatestMarkers = result.rooms.associate { room ->
+                run {
+                    val rooms = chatDeferred.await()
+                    val previousRoomLatestMarkers = chatUnreadStore.loadRoomMarkers(session.id)
+                    val roomLatestMarkers = rooms.associate { room ->
                             room.id to room.unreadMarker()
                         }
+                    val markerChangedRoomIds = roomLatestMarkers.mapNotNull { (roomId, marker) ->
+                        val previousMarker = previousRoomLatestMarkers[roomId].orEmpty()
+                        roomId.takeIf {
+                            marker.isNotBlank() &&
+                                previousMarker.isNotBlank() &&
+                                marker != previousMarker
+                        }
+                    }.toSet()
                         val mergedUnread = chatUnreadStore.merge(
                             session.id,
                             ChatUnreadSnapshot(
-                                roomCounts = result.rooms
+                                roomCounts = rooms
                                     .filter { it.unreadCount > 0 }
                                     .associate { it.id to it.unreadCount },
                             ),
@@ -223,13 +492,15 @@ class BackgroundNotificationSyncer(
                         val shouldScanRealtimeAttentionRooms =
                             trigger == BackgroundNotificationSyncTrigger.RealtimeChat &&
                                 (shouldScanSpecialCareRooms || shouldScanAttentionRooms)
-                        val unreadRooms = result.rooms.filter { room -> room.unreadCount > 0 }
+                        val unreadRooms = rooms.filter { room -> room.unreadCount > 0 }
                         val roomsToCheck = if (shouldScanRealtimeAttentionRooms) {
-                            (result.rooms.take(SPECIAL_CARE_ROOM_SCAN_LIMIT) + unreadRooms).distinctBy { it.id }
+                            (rooms.take(SPECIAL_CARE_ROOM_SCAN_LIMIT) + unreadRooms + rooms.filter { it.id in markerChangedRoomIds }).distinctBy { it.id }
                         } else {
-                            unreadRooms
+                            (unreadRooms + rooms.filter { it.id in markerChangedRoomIds }).distinctBy { it.id }
                         }
                         for (room in roomsToCheck) {
+                            val markerChanged = room.id in markerChangedRoomIds
+                            val effectiveUnreadCount = maxOf(room.unreadCount, if (markerChanged) 1 else 0)
                             val roomMessages = when (val messagesResult = chatRepository.refreshMessages(room.id)) {
                                 is ChatMessageRepositoryResult.Success -> messagesResult.messages
                                 is ChatMessageRepositoryResult.Created,
@@ -240,7 +511,7 @@ class BackgroundNotificationSyncer(
                                     -> emptyList()
                             }
                             val unreadAutomationMessages = roomMessages.recentUnreadAutomationMessages(
-                                unreadCount = room.unreadCount,
+                                unreadCount = effectiveUnreadCount,
                                 seenIds = seenIds,
                                 limit = MAX_AUTOMATION_ROOM_MESSAGES_PER_SYNC,
                             )
@@ -251,8 +522,12 @@ class BackgroundNotificationSyncer(
                                     currentUser = currentUser,
                                 )
                             }
-                            val latestAttention = if (shouldScanAttentionRooms || shouldScanSpecialCareRooms) {
+                            val latestAttention = if (
+                                (shouldScanAttentionRooms || shouldScanSpecialCareRooms || markerChanged) &&
+                                effectiveUnreadCount > 0
+                            ) {
                                 roomMessages.latestAttentionMessage(
+                                    unreadCount = effectiveUnreadCount,
                                     specialCareUserIds = if (specialCareEnabled) specialCareUserIds else emptySet(),
                                     currentUser = currentUser,
                                 )
@@ -270,7 +545,7 @@ class BackgroundNotificationSyncer(
                                     automationEvents += attentionEvent
                                 }
                             }
-                            if (room.unreadCount <= 0 && latestAttention == null) continue
+                            if (effectiveUnreadCount <= 0 && latestAttention == null) continue
                             val attentionMessage = latestAttention?.message
                             val attentionKind = latestAttention?.kind
                             val actor = attentionMessage?.fromUser ?: room.owner
@@ -283,23 +558,38 @@ class BackgroundNotificationSyncer(
                             val latestCreatedAtLabel = attentionMessage?.createdAtLabel
                                 ?.takeIf { it.isNotBlank() }
                                 ?: room.latestMessageAtLabel.ifBlank { "刚刚" }
-                            val unreadCount = mergedUnread.roomCounts[room.id] ?: room.unreadCount
+                            val unreadCount = maxOf(mergedUnread.roomCounts[room.id] ?: room.unreadCount, effectiveUnreadCount)
                             val eventId = roomEventId(
                                 roomId = room.id,
                                 marker = latestMarker,
-                                unreadCount = room.unreadCount,
+                                unreadCount = effectiveUnreadCount,
                             )
                             if (eventId in seenIds) continue
+                            val roomNoise = chatNoiseSettings.chatNoiseDecision(
+                                message = attentionMessage,
+                                fallbackUser = actor,
+                                attentionKind = attentionKind,
+                                roomName = room.name,
+                                chatTitle = room.name,
+                                unreadMessages = roomMessages.recentUnreadMessagesForNoise(effectiveUnreadCount),
+                                aiStateHolder = aiStateHolder,
+                            )
+                            if (!roomNoise.shouldNotify) continue
                             val createdAtEpochMillis = attentionMessage?.createdAt.toEpochMillisOrNow()
                             val titlePrefix = attentionKind?.label
+                            val burstSummary = chatNoiseSettings.burstSummary(
+                                unreadCount = unreadCount,
+                                messages = roomMessages.recentUnreadMessagesForNoise(effectiveUnreadCount),
+                            )
                             events += BackgroundNotificationEvent(
                                 id = eventId,
                                 title = when {
                                     titlePrefix != null -> "$titlePrefix · ${actor.displayName}"
                                     isSpecialCare -> "特别关心 · ${actor.displayName}"
+                                    burstSummary != null -> "${room.name} · 合并提醒"
                                     else -> room.name
                                 },
-                                text = latestPreview ?: "${unreadCount.coerceAtLeast(0)} 条未读消息",
+                                text = burstSummary ?: latestPreview ?: "${unreadCount.coerceAtLeast(0)} 条未读消息",
                                 specialCare = isAttention || isSpecialCare,
                                 gatedBySpecialCareSetting = gatedBySpecialCareSetting,
                                 avatarMode = if (isAttention || isSpecialCare) {
@@ -326,16 +616,22 @@ class BackgroundNotificationSyncer(
                                 },
                             )
                         }
-                    }
-                    ChatRepositoryResult.Unauthorized -> return@coroutineScope BackgroundNotificationSyncResult.Success
-                    is ChatRepositoryResult.Error -> Unit
                 }
 
                 when (val result = userChatDeferred.await()) {
                     is ChatUserConversationRepositoryResult.Success -> {
+                        val previousUserLatestMarkers = chatUnreadStore.loadUserMarkers(session.id)
                         val userLatestMarkers = result.conversations.associate { conversation ->
                             conversation.user.id to conversation.latestMessage.unreadMarker()
                         }
+                        val markerChangedUserIds = userLatestMarkers.mapNotNull { (userId, marker) ->
+                            val previousMarker = previousUserLatestMarkers[userId].orEmpty()
+                            userId.takeIf {
+                                marker.isNotBlank() &&
+                                    previousMarker.isNotBlank() &&
+                                    marker != previousMarker
+                            }
+                        }.toSet()
                         val mergedUnread = chatUnreadStore.merge(
                             session.id,
                             ChatUnreadSnapshot(
@@ -345,35 +641,28 @@ class BackgroundNotificationSyncer(
                             ),
                             userLatestMarkers = userLatestMarkers,
                         )
-                        val shouldScanSpecialCareUserChats =
-                            trigger == BackgroundNotificationSyncTrigger.RealtimeChat &&
-                                specialCareEnabled &&
-                                specialCareUserIds.isNotEmpty()
                         events += result.conversations
                             .filter { conversation ->
                                 conversation.unreadCount > 0 ||
-                                    (
-                                        shouldScanSpecialCareUserChats &&
-                                            conversation.user.id in specialCareUserIds &&
-                                            conversation.latestMessage?.fromUser?.id in specialCareUserIds
-                                        )
+                                    conversation.user.id in markerChangedUserIds
                             }
-                            .filter { conversation ->
-                                userEventId(
+                            .mapNotNull { conversation ->
+                                val markerChanged = conversation.user.id in markerChangedUserIds
+                                val effectiveUnreadCount = maxOf(conversation.unreadCount, if (markerChanged) 1 else 0)
+                                val notificationEventId = userEventId(
                                     userId = conversation.user.id,
                                     marker = userLatestMarkers[conversation.user.id].orEmpty(),
-                                    unreadCount = conversation.unreadCount,
-                                ) !in seenIds
-                            }
-                            .map { conversation ->
-                                val latestMessage = conversation.latestMessage
-                                val unreadUserMessages = if (conversation.unreadCount > 1) {
+                                    unreadCount = effectiveUnreadCount,
+                                )
+                                val rawLatestMessage = conversation.latestMessage
+                                val latestMessage = if (rawLatestMessage?.requiresRealtimeAttentionResolution() == true) {
+                                    chatRepository.resolveRealtimeMessage(rawLatestMessage, conversation.user.id)
+                                } else {
+                                    rawLatestMessage
+                                }
+                                val refreshedUserMessages = if (effectiveUnreadCount > 1) {
                                     when (val messagesResult = chatRepository.refreshUserMessages(conversation.user.id)) {
-                                        is ChatMessageRepositoryResult.Success -> messagesResult.messages.recentUnreadAutomationMessages(
-                                            unreadCount = conversation.unreadCount,
-                                            seenIds = seenIds,
-                                            limit = MAX_AUTOMATION_USER_MESSAGES_PER_SYNC,
-                                        )
+                                        is ChatMessageRepositoryResult.Success -> messagesResult.messages
                                         is ChatMessageRepositoryResult.Created,
                                         is ChatMessageRepositoryResult.Deleted,
                                         is ChatMessageRepositoryResult.Error,
@@ -384,6 +673,11 @@ class BackgroundNotificationSyncer(
                                 } else {
                                     emptyList()
                                 }
+                                val unreadUserMessages = refreshedUserMessages.recentUnreadAutomationMessages(
+                                    unreadCount = effectiveUnreadCount,
+                                    seenIds = seenIds,
+                                    limit = MAX_AUTOMATION_USER_MESSAGES_PER_SYNC,
+                                )
                                 unreadUserMessages.forEach { message ->
                                     automationEvents += message.toAutomationChatEvent(
                                         roomId = message.roomId,
@@ -391,15 +685,14 @@ class BackgroundNotificationSyncer(
                                         currentUser = currentUser,
                                     )
                                 }
-                                val attentionKind = latestMessage.chatAttentionKind(
-                                    specialCareUserIds = if (specialCareEnabled) specialCareUserIds else emptySet(),
-                                    currentUser = currentUser,
-                                )
-                                val isSpecialCare = conversation.user.id in specialCareUserIds
-                                val gatedBySpecialCareSetting = attentionKind == ChatAttentionKind.SpecialCare ||
-                                    (attentionKind == null && isSpecialCare)
-                                val unreadCount = mergedUnread.userCounts[conversation.user.id] ?: conversation.unreadCount
-                                val createdAtEpochMillis = latestMessage?.createdAt.toEpochMillisOrNow()
+                                val latestAttention = (refreshedUserMessages.ifEmpty { listOfNotNull(latestMessage) })
+                                    .latestAttentionMessage(
+                                        unreadCount = effectiveUnreadCount,
+                                        specialCareUserIds = if (specialCareEnabled) specialCareUserIds else emptySet(),
+                                        currentUser = currentUser,
+                                    )
+                                val attentionMessage = latestAttention?.message
+                                val attentionKind = latestAttention?.kind
                                 latestMessage?.let { message ->
                                     val latestEvent = message.toAutomationChatEvent(
                                         roomId = message.roomId,
@@ -409,31 +702,54 @@ class BackgroundNotificationSyncer(
                                     if (latestEvent.id.automationSeenId() !in seenIds) {
                                         automationEvents += latestEvent
                                     }
-                                    attentionKind?.let { kind ->
-                                        val attentionEvent = message.toAutomationChatEvent(
-                                            roomId = message.roomId,
-                                            directUserId = conversation.user.id,
-                                            attentionKind = kind.name,
-                                            currentUser = currentUser,
-                                        ).asBackgroundChatAttentionEvent(kind)
-                                        if (attentionEvent.id.automationSeenId() !in seenIds) {
-                                            automationEvents += attentionEvent
-                                        }
+                                }
+                                latestAttention?.let { attention ->
+                                    val attentionEvent = attention.message.toAutomationChatEvent(
+                                        roomId = attention.message.roomId,
+                                        directUserId = conversation.user.id,
+                                        attentionKind = attention.kind.name,
+                                        currentUser = currentUser,
+                                    ).asBackgroundChatAttentionEvent(attention.kind)
+                                    if (attentionEvent.id.automationSeenId() !in seenIds) {
+                                        automationEvents += attentionEvent
                                     }
                                 }
+                                val isSpecialCare = conversation.user.id in specialCareUserIds
+                                val gatedBySpecialCareSetting = attentionKind == ChatAttentionKind.SpecialCare ||
+                                    (attentionKind == null && isSpecialCare)
+                                val unreadCount = maxOf(
+                                    mergedUnread.userCounts[conversation.user.id] ?: conversation.unreadCount,
+                                    effectiveUnreadCount,
+                                )
+                                val displayMessage = attentionMessage ?: latestMessage
+                                if (notificationEventId in seenIds) return@mapNotNull null
+                                val createdAtEpochMillis = displayMessage?.createdAt.toEpochMillisOrNow()
+                                val userNoise = chatNoiseSettings.chatNoiseDecision(
+                                    message = displayMessage,
+                                    fallbackUser = conversation.user,
+                                    attentionKind = attentionKind ?: ChatAttentionKind.SpecialCare.takeIf { isSpecialCare },
+                                    roomName = "",
+                                    chatTitle = conversation.user.displayName,
+                                    unreadMessages = unreadUserMessages.ifEmpty { listOfNotNull(displayMessage) },
+                                    aiStateHolder = aiStateHolder,
+                                )
+                                if (!userNoise.shouldNotify) return@mapNotNull null
+                                val burstSummary = chatNoiseSettings.burstSummary(
+                                    unreadCount = unreadCount,
+                                    messages = unreadUserMessages.ifEmpty { listOfNotNull(displayMessage) },
+                                )
                                 BackgroundNotificationEvent(
-                                    id = userEventId(
-                                        userId = conversation.user.id,
-                                        marker = userLatestMarkers[conversation.user.id].orEmpty(),
-                                        unreadCount = conversation.unreadCount,
-                                    ),
+                                    id = notificationEventId,
                                     title = attentionKind?.let { "${it.label} · ${conversation.user.displayName}" }
                                         ?: if (isSpecialCare) {
                                             "特别关心 · ${conversation.user.displayName}"
-                                        } else {
-                                            conversation.user.displayName
-                                        },
-                                    text = conversation.latestMessage?.text?.takeIf { it.isNotBlank() }
+                                        } else if (burstSummary != null) {
+                                            "${conversation.user.displayName} · 合并提醒"
+                                    } else {
+                                        conversation.user.displayName
+                                    },
+                                    text = burstSummary
+                                        ?: displayMessage?.text?.takeIf { it.isNotBlank() }
                                         ?: "${unreadCount.coerceAtLeast(0)} 条未读私聊",
                                     specialCare = attentionKind != null || isSpecialCare,
                                     gatedBySpecialCareSetting = gatedBySpecialCareSetting,
@@ -445,17 +761,17 @@ class BackgroundNotificationSyncer(
                                     createdAtEpochMillis = createdAtEpochMillis,
                                     cacheNotification = if (attentionKind != null || isSpecialCare) {
                                         NotificationItem(
-                                            id = "chat-attention-user-${conversation.user.id}-${latestMessage.unreadMarker().ifBlank { unreadCount.toString() }}",
+                                            id = "chat-attention-user-${conversation.user.id}-${displayMessage.unreadMarker().ifBlank { unreadCount.toString() }}",
                                             type = NotificationType.App,
                                             actor = conversation.user,
                                             text = "${attentionKind?.label ?: "特别关心"} · 在聊天中发来了新消息",
-                                            createdAtLabel = latestMessage?.createdAtLabel?.ifBlank { "刚刚" } ?: "刚刚",
+                                            createdAtLabel = displayMessage?.createdAtLabel?.ifBlank { "刚刚" } ?: "刚刚",
                                             createdAtEpochMillis = createdAtEpochMillis,
-                                            notePreviewText = latestMessage?.text?.takeIf { it.isNotBlank() }
+                                            notePreviewText = displayMessage?.text?.takeIf { it.isNotBlank() }
                                                 ?: "${unreadCount.coerceAtLeast(0)} 条未读私聊",
                                             isSpecialCare = true,
                                             chatUserId = conversation.user.id,
-                                            chatMessageId = latestMessage?.id?.takeIf { it.isNotBlank() },
+                                            chatMessageId = displayMessage?.id?.takeIf { it.isNotBlank() },
                                         )
                                     } else {
                                         null
@@ -587,7 +903,7 @@ class BackgroundNotificationSyncer(
                     }
                 }
 
-                val visibleEvents = events
+                val visibleEventCandidates = events
                     .filter { !it.gatedBySpecialCareSetting || specialCareEnabled }
                     .distinctBy { it.id }
                     .sortedWith(
@@ -595,7 +911,19 @@ class BackgroundNotificationSyncer(
                             .thenByDescending { it.createdAtEpochMillis },
                     )
                     .take(maxNotificationsPerSync(trigger))
-                val automationEventIds = automationEvents.map { it.id }
+                val claimedVisibleEventIds = settings.claimSeenIds(
+                    ids = visibleEventCandidates.map { it.id },
+                    limit = MAX_STORED_SEEN_IDS,
+                )
+                val visibleEvents = visibleEventCandidates.filter { it.id in claimedVisibleEventIds }
+                val automationEventCandidates = automationEvents.distinctBy { it.id }
+                val claimedAutomationSeenIds = settings.claimSeenIds(
+                    ids = automationEventCandidates.map { it.id.automationSeenId() },
+                    limit = MAX_STORED_SEEN_IDS,
+                )
+                val distinctAutomationEvents = automationEventCandidates.filter { event ->
+                    event.id.automationSeenId() in claimedAutomationSeenIds
+                }
                 if (visibleEvents.isNotEmpty()) {
                     BackgroundNotificationPublisher(context).publish(visibleEvents)
                     context.cacheBackgroundNotificationEvents(
@@ -603,15 +931,14 @@ class BackgroundNotificationSyncer(
                         events = visibleEvents,
                     )
                 }
-                val handledEventIds = (visibleEvents.map { it.id } + automationEventIds.map { it.automationSeenId() } + timelineSeenIds)
-                    .distinct()
-                    .take(MAX_SEEN_IDS_PER_SYNC)
-                if (handledEventIds.isNotEmpty()) {
-                    settings.saveSeenIds(handledEventIds.mergeBackgroundSeenIds(seenIds, MAX_STORED_SEEN_IDS))
+                if (timelineSeenIds.isNotEmpty()) {
+                    settings.mergeSeenIds(timelineSeenIds.distinct().take(MAX_SEEN_IDS_PER_SYNC), MAX_STORED_SEEN_IDS)
                 }
-                automationEvents.distinctBy { it.id }.forEach { event -> automationHolder.emitNow(event) }
-                AiBackgroundScheduler.syncNow(context)
-                BackgroundNotificationSyncResult.Success
+                distinctAutomationEvents.forEach { event -> automationHolder.emitNow(event) }
+                if (distinctAutomationEvents.isNotEmpty()) {
+                    AiBackgroundScheduler.syncNow(context)
+                }
+                if (shouldRetry) BackgroundNotificationSyncResult.Retry else BackgroundNotificationSyncResult.Success
             }
         }.getOrElse {
             BackgroundNotificationSyncResult.Retry
@@ -668,10 +995,10 @@ class BackgroundNotificationSyncer(
         const val MAX_NOTIFICATIONS_PER_SYNC = 8
         const val MAX_REALTIME_NOTIFICATIONS_PER_SYNC = 16
         const val MAX_SEEN_IDS_PER_SYNC = 40
-        const val MAX_STORED_SEEN_IDS = 200
-        const val SPECIAL_CARE_ROOM_SCAN_LIMIT = 8
-        const val MAX_AUTOMATION_ROOM_MESSAGES_PER_SYNC = 20
-        const val MAX_AUTOMATION_USER_MESSAGES_PER_SYNC = 20
+        const val MAX_STORED_SEEN_IDS = 1_000
+        const val SPECIAL_CARE_ROOM_SCAN_LIMIT = 256
+        const val MAX_AUTOMATION_ROOM_MESSAGES_PER_SYNC = 40
+        const val MAX_AUTOMATION_USER_MESSAGES_PER_SYNC = 40
         const val MAX_AUTOMATION_TIMELINE_SOURCES_PER_SYNC = 4
         const val MAX_AUTOMATION_CHANNEL_TIMELINES_PER_SYNC = 4
         const val MAX_AUTOMATION_USER_TIMELINES_PER_SYNC = 4
@@ -692,12 +1019,7 @@ class BackgroundNotificationSyncer(
         token: String,
         chatRepository: ChatRepository,
     ): AutomationStateHolder {
-        val aiStateHolder = AiStateHolder(
-            store = AndroidAiStore(context),
-            accountId = accountId,
-            onQueueChanged = { AiBackgroundScheduler.syncNow(context) },
-            scope = CoroutineScope(Dispatchers.Default),
-        ).also { it.restore() }
+        val aiStateHolder = backgroundAiStateHolder(accountId)
         return AutomationStateHolder(
             store = AndroidAutomationStore(context),
             accountId = accountId,
@@ -732,9 +1054,38 @@ class BackgroundNotificationSyncer(
             scope = CoroutineScope(Dispatchers.Default),
         )
     }
+
+    private fun backgroundAiStateHolder(accountId: String): AiStateHolder {
+        return AiStateHolder(
+            store = AndroidAiStore(context),
+            accountId = accountId,
+            onQueueChanged = { AiBackgroundScheduler.syncNow(context) },
+            scope = CoroutineScope(Dispatchers.Default),
+        ).also { it.restore() }
+    }
+
+    private suspend fun ChatRepository.resolveRealtimeRoomName(roomId: String): String {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isBlank()) return ""
+        return when (val result = showRoom(cleanRoomId)) {
+            is ChatRoomMutationRepositoryResult.RoomSaved -> result.room.name
+            is ChatRoomMutationRepositoryResult.ActionCompleted,
+            is ChatRoomMutationRepositoryResult.Error,
+            is ChatRoomMutationRepositoryResult.RoomMessagesCleared,
+            is ChatRoomMutationRepositoryResult.RoomMuted,
+            is ChatRoomMutationRepositoryResult.RoomRemoved,
+            ChatRoomMutationRepositoryResult.Unauthorized,
+            is ChatRoomMutationRepositoryResult.ValidationError,
+                -> ""
+        }
+    }
 }
 
 private const val MAX_BACKGROUND_AUTOMATION_TIMELINE_NOTES_PER_SOURCE = 8
+private const val MAX_CHAT_NOISE_MESSAGES_FOR_AI = 12
+private const val MAX_CHAT_NOISE_SUMMARY_MESSAGES = 5
+private const val MAX_REALTIME_CHAT_STREAM_ROOMS = 256
+private const val MAX_REALTIME_CHAT_STREAM_USERS = 256
 
 private fun Context.writeAutomationClipboardText(text: String) {
     val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
@@ -922,6 +1273,90 @@ private data class ChatAttentionMessage(
     val kind: ChatAttentionKind,
 )
 
+private suspend fun ChatNoiseReductionSettings.chatNoiseDecision(
+    message: ChatMessage?,
+    fallbackUser: User,
+    attentionKind: ChatAttentionKind?,
+    roomName: String,
+    chatTitle: String,
+    unreadMessages: List<ChatMessage>,
+    aiStateHolder: AiStateHolder,
+): ChatNoiseReductionDecision {
+    val candidate = message.toChatNoiseCandidate(
+        fallbackUser = fallbackUser,
+        attentionKind = attentionKind,
+        roomName = roomName,
+    )
+    val initial = evaluate(candidate)
+    if (!initial.requiresAi) return initial
+    val aiImportant = runCatching {
+        when (val result = aiStateHolder.runBlockingTask(
+            AiTaskKind.ChatImportanceCheck,
+            AiTaskInput(
+                chatTitle = chatTitle.ifBlank { roomName.ifBlank { fallbackUser.displayName } },
+                prompt = "后台通知降噪：只判断是否需要立刻弹系统通知。",
+                chatMessages = unreadMessages.ifEmpty { listOfNotNull(message) }
+                    .map { it.copy(text = it.text.take(800)) }
+                    .toAiChatMessageContexts(),
+            ),
+        )) {
+            is AiRepositoryResult.Success -> result.text.aiChatImportanceDecision()
+            AiRepositoryResult.Unauthorized,
+            is AiRepositoryResult.Error,
+                -> null
+        }
+    }.getOrNull()
+    return evaluate(candidate, aiImportant = aiImportant)
+}
+
+private fun ChatMessage?.toChatNoiseCandidate(
+    fallbackUser: User,
+    attentionKind: ChatAttentionKind?,
+    roomName: String,
+): ChatNoiseReductionCandidate {
+    val user = this?.fromUser ?: fallbackUser
+    val message = this
+    val body = buildString {
+        append(message?.text.orEmpty())
+        message?.file?.name?.takeIf { it.isNotBlank() }?.let { append(' ').append(it) }
+        if (roomName.isNotBlank()) append(' ').append(roomName)
+    }
+    return ChatNoiseReductionCandidate(
+        senderUserId = user.id,
+        senderUsername = user.username,
+        senderDisplayName = user.displayName,
+        senderHost = user.host.orEmpty(),
+        text = body,
+        attentionKindName = attentionKind?.label.orEmpty(),
+    )
+}
+
+private fun List<ChatMessage>.recentUnreadMessagesForNoise(unreadCount: Int): List<ChatMessage> {
+    if (unreadCount <= 0 || isEmpty()) return emptyList()
+    return takeLast(unreadCount.coerceAtMost(MAX_CHAT_NOISE_MESSAGES_FOR_AI))
+}
+
+private fun ChatNoiseReductionSettings.burstSummary(
+    unreadCount: Int,
+    messages: List<ChatMessage>,
+): String? {
+    val settings = normalized
+    if (!settings.aggregateBurstNotifications || unreadCount < settings.burstMessageThreshold) return null
+    val recentMessages = messages.takeLast(settings.burstMessageThreshold.coerceAtMost(MAX_CHAT_NOISE_SUMMARY_MESSAGES))
+    val actorSummary = recentMessages
+        .map { it.fromUser.displayName.ifBlank { it.fromUser.username } }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .take(3)
+        .joinToString("、")
+    val latestText = recentMessages.lastOrNull()?.text?.trim().orEmpty().take(80)
+    return buildString {
+        append("${unreadCount.coerceAtLeast(0)} 条新消息")
+        if (actorSummary.isNotBlank()) append(" · ").append(actorSummary)
+        if (latestText.isNotBlank()) append("：").append(latestText)
+    }
+}
+
 private fun List<ChatMessage>.recentUnreadAutomationMessages(
     unreadCount: Int,
     seenIds: Set<String>,
@@ -988,6 +1423,115 @@ private data class BackgroundTimelineAutomationPlan(
     val userIds: List<String> = emptyList(),
 )
 
+data class RealtimeChatStreamTargets(
+    val roomIds: List<String> = emptyList(),
+    val userIds: List<String> = emptyList(),
+    val roomNamesById: Map<String, String> = emptyMap(),
+) {
+    val roomIdSet: Set<String> = roomIds.toSet()
+    val userIdSet: Set<String> = userIds.toSet()
+    val isEmpty: Boolean = roomIds.isEmpty() && userIds.isEmpty()
+}
+
+private fun realtimeChatStreamTargets(
+    rooms: List<ChatRoom>,
+    conversations: List<cc.hhhl.client.model.ChatUserConversation>,
+    rememberedRoomIds: Collection<String> = emptyList(),
+    rememberedUserIds: Collection<String> = emptyList(),
+    specialCareUserIds: Set<String>,
+    automationRules: List<AutomationRule>,
+): RealtimeChatStreamTargets {
+    val chatRules = automationRules.filter { rule ->
+        rule.enabled && (rule.trigger == AutomationTrigger.ChatMessage || rule.trigger == AutomationTrigger.ChatAttention || rule.trigger == AutomationTrigger.SpecialCare)
+    }
+    val explicitRoomIds = chatRules.flatMap { rule ->
+        rule.conditions
+            .filter { condition -> condition.enabled && condition.type == AutomationConditionType.RoomId }
+            .flatMap { condition -> condition.value.splitAutomationValues() }
+    }
+    val explicitUserIds = chatRules.flatMap { rule ->
+        rule.conditions
+            .filter { condition ->
+                condition.enabled &&
+                    (condition.type == AutomationConditionType.DirectUserId || condition.type == AutomationConditionType.SenderUserId || condition.type == AutomationConditionType.SenderUserIds)
+            }
+            .flatMap { condition -> condition.value.splitAutomationValues() }
+    }
+    val roomIds = buildList {
+        addAll(explicitRoomIds)
+        rooms.filter { room -> room.unreadCount > 0 }.forEach { add(it.id) }
+        addAll(rememberedRoomIds)
+        rooms.forEach { add(it.id) }
+    }.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+        .distinct()
+        .take(MAX_REALTIME_CHAT_STREAM_ROOMS)
+
+    val userIds = buildList {
+        addAll(explicitUserIds)
+        conversations.filter { conversation -> conversation.unreadCount > 0 }.forEach { add(it.user.id) }
+        addAll(specialCareUserIds)
+        addAll(rememberedUserIds)
+        conversations.filter { conversation -> conversation.user.id in specialCareUserIds }.forEach { add(it.user.id) }
+        conversations.forEach { add(it.user.id) }
+    }.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+        .distinct()
+        .take(MAX_REALTIME_CHAT_STREAM_USERS)
+
+    return RealtimeChatStreamTargets(
+        roomIds = roomIds,
+        userIds = userIds,
+        roomNamesById = rooms
+            .filter { room -> room.id.isNotBlank() && room.name.isNotBlank() }
+            .associate { room -> room.id to room.name },
+    )
+}
+
+    private suspend fun ChatRepository.loadAllRoomsForRealtimeTargets(): List<ChatRoom> {
+        val initial = when (val result = refresh()) {
+            is ChatRepositoryResult.Success -> result
+            ChatRepositoryResult.Unauthorized,
+            is ChatRepositoryResult.Error,
+                -> return emptyList()
+        }
+        var rooms = initial.rooms
+        var endReached = initial.endReached
+        while (!endReached && rooms.size < MAX_REALTIME_CHAT_STREAM_ROOMS) {
+            val next = when (val result = loadMore(rooms)) {
+                is ChatRepositoryResult.Success -> result
+                ChatRepositoryResult.Unauthorized,
+                is ChatRepositoryResult.Error,
+                    -> break
+            }
+            if (next.rooms.size <= rooms.size) {
+                endReached = true
+                continue
+            }
+            rooms = next.rooms
+            endReached = next.endReached
+        }
+        val ownedRooms = when (val result = refreshOwnedRooms()) {
+            is ChatRepositoryResult.Success -> result.rooms
+            ChatRepositoryResult.Unauthorized,
+            is ChatRepositoryResult.Error,
+                -> emptyList()
+        }
+        return rooms.mergeRealtimeOwnedRooms(ownedRooms)
+    }
+
+fun ChatMessage.belongsToDirectChat(userId: String): Boolean {
+    val cleanUserId = userId.trim()
+    return cleanUserId.isNotEmpty() &&
+        (fromUser.id == cleanUserId || toUserId == cleanUserId || toUser?.id == cleanUserId)
+}
+
+private fun List<ChatRoom>.mergeRealtimeOwnedRooms(ownedRooms: List<ChatRoom>): List<ChatRoom> {
+    if (ownedRooms.isEmpty()) return this
+    val ownedById = ownedRooms.associateBy { room -> room.id }
+    val existingIds = map { room -> room.id }.toSet()
+    return map { room -> ownedById[room.id] ?: room } +
+        ownedRooms.filterNot { room -> room.id in existingIds }
+}
+
 private fun String.timelineBaselineSeenId(noteId: String): String = "automation-baseline:$this:$noteId"
 
 private fun String.timelineBaselineNoteId(sourceId: String): String? {
@@ -999,20 +1543,6 @@ private fun String.splitAutomationValues(): List<String> {
     return split(',', '，', '\n', ';', '；', '|', '/', '、')
         .map { it.trim().trim('@') }
         .filter { it.isNotEmpty() }
-}
-
-private fun String.timelineBaselineSourceId(): String? {
-    val prefix = "automation-baseline:"
-    if (!startsWith(prefix)) return null
-    return removePrefix(prefix).substringBeforeLast(':').takeIf { it.isNotBlank() }
-}
-
-private fun List<String>.mergeBackgroundSeenIds(previous: Set<String>, limit: Int): Set<String> {
-    val updatedBaselineSources = mapNotNull { it.timelineBaselineSourceId() }.toSet()
-    val retainedPrevious = previous.filterNot { seenId ->
-        seenId.timelineBaselineSourceId()?.let { it in updatedBaselineSources } == true
-    }
-    return (this + retainedPrevious).take(limit).toSet()
 }
 
 private fun Note.timelineAutomationSeenId(sourceId: String): String = "timeline-note:$sourceId:$id".automationSeenId()
@@ -1032,10 +1562,12 @@ private fun String.toTimelineKindOrNull(): TimelineKind? {
 }
 
 private fun List<ChatMessage>.latestAttentionMessage(
+    unreadCount: Int,
     specialCareUserIds: Set<String>,
     currentUser: User?,
 ): ChatAttentionMessage? {
-    return asReversed().firstNotNullOfOrNull { message ->
+    if (unreadCount <= 0 || isEmpty()) return null
+    return takeLast(unreadCount.coerceAtMost(size)).asReversed().firstNotNullOfOrNull { message ->
         message.chatAttentionKind(
             specialCareUserIds = specialCareUserIds,
             currentUser = currentUser,
@@ -1045,6 +1577,67 @@ private fun List<ChatMessage>.latestAttentionMessage(
 
 private fun AutomationEvent.asBackgroundChatAttentionEvent(kind: ChatAttentionKind): AutomationEvent {
     return copy(id = "chat-attention:${kind.name}:${chatMessageId.ifBlank { id }}")
+}
+
+private fun ChatMessage.toRealtimeChatAttentionEvent(
+    kind: ChatAttentionKind,
+    directUserId: String?,
+    roomName: String = "",
+): BackgroundNotificationEvent {
+    val sourceId = directUserId?.takeIf { it.isNotBlank() } ?: roomId
+    val messageKey = unreadMarker()
+    val preview = chatMessageBodyText(this).takeIf { it.isNotBlank() }
+        ?: file?.name?.takeIf { it.isNotBlank() }
+        ?: "发来了新消息"
+    val location = if (directUserId.isNullOrBlank()) {
+        roomName.takeIf { it.isNotBlank() }?.let { "在聊天室 $it" } ?: "在聊天室"
+    } else {
+        "在聊天中"
+    }
+    val createdAtEpochMillis = createdAt.toEpochMillisOrNow()
+    return BackgroundNotificationEvent(
+        id = "chat-attention-alert:${kind.name}:$sourceId:$messageKey",
+        title = "${kind.label} · ${fromUser.displayName.ifBlank { fromUser.username }}",
+        text = preview,
+        specialCare = true,
+        gatedBySpecialCareSetting = kind == ChatAttentionKind.SpecialCare,
+        avatarMode = NotificationAvatarMode.UserAvatar(fromUser.avatarUrl, fromUser.avatarInitial),
+        createdAtEpochMillis = createdAtEpochMillis,
+        cacheNotification = NotificationItem(
+            id = "chat-attention-${kind.name.lowercase()}-$sourceId-$messageKey",
+            type = kind.toNotificationType(),
+            actor = fromUser,
+            text = "${kind.label} · $location 发来了新消息",
+            createdAtLabel = createdAtLabel.ifBlank { "刚刚" },
+            createdAtEpochMillis = createdAtEpochMillis,
+            notePreviewText = preview,
+            isSpecialCare = kind == ChatAttentionKind.SpecialCare,
+            chatRoomId = roomId.takeIf { it.isNotBlank() },
+            chatUserId = directUserId?.takeIf { it.isNotBlank() },
+            chatMessageId = id.takeIf { it.isNotBlank() },
+        ),
+    )
+}
+
+private fun ChatMessage.realtimeFallbackNotificationEventId(directUserId: String?): String? {
+    val marker = unreadMarker().takeIf { it.isNotBlank() } ?: return null
+    val cleanDirectUserId = directUserId?.trim()?.takeIf { it.isNotEmpty() }
+    return if (cleanDirectUserId != null) {
+        userEventId(userId = cleanDirectUserId, marker = marker, unreadCount = 1)
+    } else {
+        roomId.takeIf { it.isNotBlank() }?.let { roomId ->
+            roomEventId(roomId = roomId, marker = marker, unreadCount = 1)
+        }
+    }
+}
+
+private fun ChatAttentionKind.toNotificationType(): NotificationType {
+    return when (this) {
+        ChatAttentionKind.SpecialCare -> NotificationType.App
+        ChatAttentionKind.Mention -> NotificationType.Mention
+        ChatAttentionKind.Reply -> NotificationType.Reply
+        ChatAttentionKind.Quote -> NotificationType.Quote
+    }
 }
 
 private suspend fun ChatRepository.latestAttentionRoomMessage(

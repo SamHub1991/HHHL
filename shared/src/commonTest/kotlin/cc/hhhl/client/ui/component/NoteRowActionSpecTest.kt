@@ -25,6 +25,7 @@ class NoteRowActionSpecTest {
                 NoteOverflowAction.AiReplyDraft,
                 NoteOverflowAction.Favorite,
                 NoteOverflowAction.AddToClip,
+                NoteOverflowAction.Edit,
                 NoteOverflowAction.HideFromList,
                 NoteOverflowAction.MuteNote,
                 NoteOverflowAction.UnmuteNote,
@@ -34,7 +35,7 @@ class NoteRowActionSpecTest {
                 NoteOverflowAction.Report,
                 NoteOverflowAction.Delete,
             ),
-            noteOverflowActions(canAddToClip = true, canDelete = true),
+            noteOverflowActions(canAddToClip = true, canDelete = true, canEdit = true),
         )
         assertEquals(
             listOf(
@@ -46,6 +47,7 @@ class NoteRowActionSpecTest {
                 NoteOverflowAction.AiSummary,
                 NoteOverflowAction.AiReplyDraft,
                 NoteOverflowAction.Favorite,
+                NoteOverflowAction.Edit,
                 NoteOverflowAction.HideFromList,
                 NoteOverflowAction.MuteNote,
                 NoteOverflowAction.UnmuteNote,
@@ -55,7 +57,7 @@ class NoteRowActionSpecTest {
                 NoteOverflowAction.Report,
                 NoteOverflowAction.Delete,
             ),
-            noteOverflowActions(canAddToClip = false, canDelete = true),
+            noteOverflowActions(canAddToClip = false, canDelete = true, canEdit = true),
         )
         assertEquals(
             listOf(

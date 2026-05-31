@@ -77,6 +77,8 @@ import cc.hhhl.client.display.TimelineDensity
 import cc.hhhl.client.auth.AccountSession
 import cc.hhhl.client.model.SettingsManagementSectionKey
 import cc.hhhl.client.model.InstanceMeta
+import cc.hhhl.client.notification.ChatNoiseReductionSettings
+import cc.hhhl.client.repository.SettingsRepository
 import cc.hhhl.client.state.SettingsGroup
 import cc.hhhl.client.state.SettingsItem
 import cc.hhhl.client.state.SettingsItemKey
@@ -122,6 +124,13 @@ fun SettingsScreen(
     onNotificationBadgeModeSelected: (NotificationBadgeMode) -> Unit,
     onBackgroundNotificationsChanged: (Boolean) -> Unit = {},
     onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit = {},
+    onChatNoiseSettingsChanged: (ChatNoiseReductionSettings) -> Unit = {},
+    onChatNoiseKeywordDraftChanged: (String) -> Unit = {},
+    onAddChatNoiseKeyword: () -> Unit = {},
+    onRemoveChatNoiseKeyword: (String) -> Unit = {},
+    onChatNoiseUserDraftChanged: (String) -> Unit = {},
+    onAddChatNoiseUser: () -> Unit = {},
+    onRemoveChatNoiseUser: (String) -> Unit = {},
     onCheckForUpdates: (((String) -> Unit) -> Unit) = { report -> report("当前平台暂不支持应用内更新") },
     appVersionName: String = "",
     onOpenReleaseNotes: () -> Unit = {},
@@ -147,6 +156,7 @@ fun SettingsScreen(
     onOpenAdminDashboard: () -> Unit = {},
     onOpenWebSettings: (SettingsItemKey) -> Unit = {},
     onOpenManagement: (SettingsManagementSectionKey) -> Unit = {},
+    onOpenAiSettings: () -> Unit = {},
     onAiSettingsChanged: (AiSettings) -> Unit = {},
     onAiProviderSelected: (AiProviderPreset) -> Unit = {},
     onTestAiConnection: () -> Unit = {},
@@ -231,6 +241,13 @@ fun SettingsScreen(
                         onNotificationBadgeModeSelected = onNotificationBadgeModeSelected,
                         onBackgroundNotificationsChanged = onBackgroundNotificationsChanged,
                         onSpecialCareBackgroundNotificationsChanged = onSpecialCareBackgroundNotificationsChanged,
+                        onChatNoiseSettingsChanged = onChatNoiseSettingsChanged,
+                        onChatNoiseKeywordDraftChanged = onChatNoiseKeywordDraftChanged,
+                        onAddChatNoiseKeyword = onAddChatNoiseKeyword,
+                        onRemoveChatNoiseKeyword = onRemoveChatNoiseKeyword,
+                        onChatNoiseUserDraftChanged = onChatNoiseUserDraftChanged,
+                        onAddChatNoiseUser = onAddChatNoiseUser,
+                        onRemoveChatNoiseUser = onRemoveChatNoiseUser,
                         onClearChatMessageCache = onClearChatMessageCache,
                         onOpenThemeCustomization = onOpenThemeCustomization,
                         onPrivacyToggle = onPrivacyToggle,
@@ -247,6 +264,7 @@ fun SettingsScreen(
                         onOpenAdminDashboard = onOpenAdminDashboard,
                         onOpenWebSettings = onOpenWebSettings,
                         onOpenManagement = onOpenManagement,
+                        onOpenAiSettings = onOpenAiSettings,
                         onAiSettingsChanged = onAiSettingsChanged,
                         onAiProviderSelected = onAiProviderSelected,
                         onTestAiConnection = onTestAiConnection,
@@ -273,6 +291,55 @@ fun SettingsScreen(
                     },
                     onOpenReleaseNotes = onOpenReleaseNotes,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun AiSettingsScreen(
+    state: SettingsUiState,
+    onBack: () -> Unit,
+    onAiSettingsChanged: (AiSettings) -> Unit = {},
+    onAiProviderSelected: (AiProviderPreset) -> Unit = {},
+    onTestAiConnection: () -> Unit = {},
+    onAiWorkspacePlan: () -> Unit = {},
+    aiConnectionMessage: String? = null,
+    isTestingAiConnection: Boolean = false,
+) {
+    val aiGroup = remember(state.aiSettings, state.aiTasks, state.aiUsage) {
+        SettingsRepository().aiSettingsGroup(
+            aiSettings = state.aiSettings,
+            aiTasks = state.aiTasks,
+            aiUsage = state.aiUsage,
+        )
+    }
+    Column(modifier = Modifier.fillMaxSize()) {
+        HhhlTopBar(
+            title = "AI 设置",
+            navigation = { HhhlBackButton(onClick = onBack) },
+        )
+        HhhlDivider()
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            item(key = "ai-settings-header", contentType = "settings-group-header") {
+                SettingsGroupHeader(label = aiGroup.label)
+            }
+            items(
+                items = aiGroup.items,
+                key = { item -> "ai-settings-item-${item.key}" },
+                contentType = { "settings-row" },
+            ) { item ->
+                SettingsRow(
+                    item = item,
+                    state = state,
+                    onAiSettingsChanged = onAiSettingsChanged,
+                    onAiProviderSelected = onAiProviderSelected,
+                    onTestAiConnection = onTestAiConnection,
+                    onAiWorkspacePlan = onAiWorkspacePlan,
+                    aiConnectionMessage = aiConnectionMessage,
+                    isTestingAiConnection = isTestingAiConnection,
+                )
+                HhhlDivider()
             }
         }
     }
@@ -597,42 +664,50 @@ private fun SettingsGroupHeader(label: String) {
 private fun SettingsRow(
     item: SettingsItem,
     state: SettingsUiState,
-    onThemeSelected: (HhhlThemePreset) -> Unit,
-    customTheme: HhhlCustomTheme,
-    onCustomThemeChanged: (HhhlCustomTheme) -> Unit,
-    onResetCustomTheme: () -> Unit,
-    onPickGlobalBackgroundImage: () -> Unit,
-    onClearGlobalBackgroundImage: () -> Unit,
-    onPickChatBackgroundImage: () -> Unit,
-    onClearChatBackgroundImage: () -> Unit,
-    onTimelineDensitySelected: (TimelineDensity) -> Unit,
-    onListGesturesEnabledChanged: (Boolean) -> Unit,
-    onDefaultNoteVisibilitySelected: (DefaultNoteVisibility) -> Unit,
-    onNotificationBadgeModeSelected: (NotificationBadgeMode) -> Unit,
-    onBackgroundNotificationsChanged: (Boolean) -> Unit,
-    onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit,
-    onClearChatMessageCache: () -> Unit,
-    onOpenThemeCustomization: () -> Unit,
-    onPrivacyToggle: (SettingsItemKey, Boolean) -> Unit,
-    onNotificationTypeToggle: (String, Boolean) -> Unit,
-    onMutedWordDraftChanged: (String) -> Unit,
-    onAddMutedWord: () -> Unit,
-    onRemoveMutedWord: (String) -> Unit,
-    onHardMutedWordDraftChanged: (String) -> Unit,
-    onAddHardMutedWord: () -> Unit,
-    onRemoveHardMutedWord: (String) -> Unit,
-    onMutedInstanceDraftChanged: (String) -> Unit,
-    onAddMutedInstance: () -> Unit,
-    onRemoveMutedInstance: (String) -> Unit,
-    onOpenAdminDashboard: () -> Unit,
-    onOpenWebSettings: (SettingsItemKey) -> Unit,
-    onOpenManagement: (SettingsManagementSectionKey) -> Unit,
-    onAiSettingsChanged: (AiSettings) -> Unit,
-    onAiProviderSelected: (AiProviderPreset) -> Unit,
-    onTestAiConnection: () -> Unit,
-    onAiWorkspacePlan: () -> Unit,
-    aiConnectionMessage: String?,
-    isTestingAiConnection: Boolean,
+    onThemeSelected: (HhhlThemePreset) -> Unit = {},
+    customTheme: HhhlCustomTheme = HhhlCustomTheme(),
+    onCustomThemeChanged: (HhhlCustomTheme) -> Unit = {},
+    onResetCustomTheme: () -> Unit = {},
+    onPickGlobalBackgroundImage: () -> Unit = {},
+    onClearGlobalBackgroundImage: () -> Unit = {},
+    onPickChatBackgroundImage: () -> Unit = {},
+    onClearChatBackgroundImage: () -> Unit = {},
+    onTimelineDensitySelected: (TimelineDensity) -> Unit = {},
+    onListGesturesEnabledChanged: (Boolean) -> Unit = {},
+    onDefaultNoteVisibilitySelected: (DefaultNoteVisibility) -> Unit = {},
+    onNotificationBadgeModeSelected: (NotificationBadgeMode) -> Unit = {},
+    onBackgroundNotificationsChanged: (Boolean) -> Unit = {},
+    onSpecialCareBackgroundNotificationsChanged: (Boolean) -> Unit = {},
+    onChatNoiseSettingsChanged: (ChatNoiseReductionSettings) -> Unit = {},
+    onChatNoiseKeywordDraftChanged: (String) -> Unit = {},
+    onAddChatNoiseKeyword: () -> Unit = {},
+    onRemoveChatNoiseKeyword: (String) -> Unit = {},
+    onChatNoiseUserDraftChanged: (String) -> Unit = {},
+    onAddChatNoiseUser: () -> Unit = {},
+    onRemoveChatNoiseUser: (String) -> Unit = {},
+    onClearChatMessageCache: () -> Unit = {},
+    onOpenThemeCustomization: () -> Unit = {},
+    onPrivacyToggle: (SettingsItemKey, Boolean) -> Unit = { _, _ -> },
+    onNotificationTypeToggle: (String, Boolean) -> Unit = { _, _ -> },
+    onMutedWordDraftChanged: (String) -> Unit = {},
+    onAddMutedWord: () -> Unit = {},
+    onRemoveMutedWord: (String) -> Unit = {},
+    onHardMutedWordDraftChanged: (String) -> Unit = {},
+    onAddHardMutedWord: () -> Unit = {},
+    onRemoveHardMutedWord: (String) -> Unit = {},
+    onMutedInstanceDraftChanged: (String) -> Unit = {},
+    onAddMutedInstance: () -> Unit = {},
+    onRemoveMutedInstance: (String) -> Unit = {},
+    onOpenAdminDashboard: () -> Unit = {},
+    onOpenWebSettings: (SettingsItemKey) -> Unit = {},
+    onOpenManagement: (SettingsManagementSectionKey) -> Unit = {},
+    onOpenAiSettings: () -> Unit = {},
+    onAiSettingsChanged: (AiSettings) -> Unit = {},
+    onAiProviderSelected: (AiProviderPreset) -> Unit = {},
+    onTestAiConnection: () -> Unit = {},
+    onAiWorkspacePlan: () -> Unit = {},
+    aiConnectionMessage: String? = null,
+    isTestingAiConnection: Boolean = false,
 ) {
     val colors = LocalHhhlColors.current
     val webManagementPath = settingsWebManagementPath(item.key)
@@ -650,6 +725,9 @@ private fun SettingsRow(
                     }
                     item.key == SettingsItemKey.AdvancedTheme -> {
                         Modifier.clickable(enabled = item.enabled, onClick = onOpenThemeCustomization)
+                    }
+                    item.key == SettingsItemKey.AiSettingsEntry -> {
+                        Modifier.clickable(enabled = item.enabled, onClick = onOpenAiSettings)
                     }
                     webManagementPath != null -> {
                         Modifier.clickable(enabled = item.enabled) { onOpenWebSettings(item.key) }
@@ -726,6 +804,41 @@ private fun SettingsRow(
                     onCheckedChange = onSpecialCareBackgroundNotificationsChanged,
                     supportingText = "只控制特别关心提醒展示，不影响普通聊天自动化扫描。",
                 )
+                SettingsItemKey.ChatNoiseAggregate -> SettingsChatNoiseAggregateLine(
+                    settings = state.chatNoiseReductionSettings,
+                    enabled = item.enabled,
+                    onChanged = onChatNoiseSettingsChanged,
+                )
+                SettingsItemKey.ChatNoiseImportantOnly -> SettingsSwitchLine(
+                    checked = state.chatNoiseReductionSettings.importantOnly,
+                    enabled = item.enabled,
+                    onCheckedChange = { onChatNoiseSettingsChanged(state.chatNoiseReductionSettings.copy(importantOnly = it)) },
+                    supportingText = "开启后普通聊天室只弹出 @ 我、回复/引用我、特别关心、关键词或指定用户消息。",
+                )
+                SettingsItemKey.ChatNoiseAiImportance -> SettingsSwitchLine(
+                    checked = state.chatNoiseReductionSettings.aiImportanceEnabled,
+                    enabled = item.enabled,
+                    onCheckedChange = { onChatNoiseSettingsChanged(state.chatNoiseReductionSettings.copy(aiImportanceEnabled = it)) },
+                    supportingText = "后台会用已配置 AI 判断未命中规则的聊天是否值得提醒；不可用时回退为静默。",
+                )
+                SettingsItemKey.ChatNoiseKeywords -> SettingsListEditor(
+                    values = state.chatNoiseReductionSettings.keywordRules,
+                    draft = state.chatNoiseKeywordDraft,
+                    placeholder = "关键词或短语",
+                    enabled = item.enabled,
+                    onDraftChanged = onChatNoiseKeywordDraftChanged,
+                    onAdd = onAddChatNoiseKeyword,
+                    onRemove = onRemoveChatNoiseKeyword,
+                )
+                SettingsItemKey.ChatNoiseUsers -> SettingsListEditor(
+                    values = state.chatNoiseReductionSettings.userRules,
+                    draft = state.chatNoiseUserDraft,
+                    placeholder = "用户 ID、@用户名、@用户名@实例或昵称",
+                    enabled = item.enabled,
+                    onDraftChanged = onChatNoiseUserDraftChanged,
+                    onAdd = onAddChatNoiseUser,
+                    onRemove = onRemoveChatNoiseUser,
+                )
                 SettingsItemKey.ChatMessageCache -> SettingsCacheLine(
                     text = item.value.orEmpty(),
                     onClear = onClearChatMessageCache,
@@ -776,6 +889,18 @@ private fun SettingsRow(
                     onAdd = onAddMutedInstance,
                     onRemove = onRemoveMutedInstance,
                 )
+                SettingsItemKey.AiSettingsEntry -> SettingsNavigationLine(
+                    text = item.value.orEmpty(),
+                    label = "配置",
+                    enabled = item.enabled,
+                    onOpen = onOpenAiSettings,
+                )
+                SettingsItemKey.AiFloatingAssistant -> SettingsSwitchLine(
+                    checked = state.aiSettings.floatingAssistantEnabled,
+                    enabled = true,
+                    onCheckedChange = { onAiSettingsChanged(state.aiSettings.copy(floatingAssistantEnabled = it)) },
+                    supportingText = "在任意页面显示可拖动的小助手光球；隐藏后可在这里重新打开。",
+                )
                 SettingsItemKey.AiEnabled -> SettingsSwitchLine(
                     checked = state.aiSettings.enabled,
                     enabled = true,
@@ -812,7 +937,7 @@ private fun SettingsRow(
                 )
                 SettingsItemKey.AiChatModel -> SettingsTextSettingLine(
                     value = state.aiSettings.chatModel,
-                    placeholder = "gpt-4o-mini",
+                    placeholder = state.aiSettings.provider.defaultChatModel.ifBlank { "对话模型" },
                     enabled = item.enabled,
                     onValueChange = { onAiSettingsChanged(state.aiSettings.copy(chatModel = it)) },
                 )
@@ -849,6 +974,28 @@ private fun SettingsRow(
                     checked = state.aiSettings.automationAllowed,
                     enabled = item.enabled,
                     onCheckedChange = { onAiSettingsChanged(state.aiSettings.copy(automationAllowed = it)) },
+                )
+                SettingsItemKey.AiAssistantLowRiskAutoApproval -> SettingsSwitchLine(
+                    checked = state.aiSettings.assistantLowRiskAutoApproval,
+                    enabled = item.enabled,
+                    onCheckedChange = { checked ->
+                        onAiSettingsChanged(
+                            state.aiSettings.copy(
+                                assistantLowRiskAutoApproval = checked,
+                            ),
+                        )
+                    },
+                )
+                SettingsItemKey.AiAssistantHighRiskAutoApproval -> SettingsSwitchLine(
+                    checked = state.aiSettings.assistantHighRiskAutoApproval,
+                    enabled = item.enabled,
+                    onCheckedChange = { checked ->
+                        onAiSettingsChanged(
+                            state.aiSettings.copy(
+                                assistantHighRiskAutoApproval = checked,
+                            ),
+                        )
+                    },
                 )
                 SettingsItemKey.AiBackground -> SettingsAiBackgroundLine(
                     settings = state.aiSettings,
@@ -995,11 +1142,13 @@ private fun SettingsTextSettingLine(
     placeholder: String,
     enabled: Boolean,
     onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    inputLabel: String? = null,
     trailing: (@Composable () -> Unit)? = null,
     helper: String? = null,
 ) {
     val colors = LocalHhhlColors.current
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1009,6 +1158,7 @@ private fun SettingsTextSettingLine(
                 value = value,
                 onValueChange = onValueChange,
                 placeholder = placeholder,
+                label = inputLabel,
                 enabled = enabled,
                 singleLine = true,
                 modifier = Modifier.weight(1f),
@@ -1190,20 +1340,26 @@ private fun SettingsAiLimitsLine(
         SettingsTextSettingLine(
             value = settings.maxInputChars.toString(),
             placeholder = "最大输入字数",
+            inputLabel = "最大输入字数",
             enabled = enabled,
             onValueChange = { onChanged(settings.copy(maxInputChars = it.toIntOrNull() ?: settings.maxInputChars)) },
+            helper = "一次发给模型的上下文字数上限，超出的帖子、聊天或资料内容会被截断。",
         )
         SettingsTextSettingLine(
             value = settings.maxOutputTokens.toString(),
             placeholder = "最大输出 token",
+            inputLabel = "最大输出 token",
             enabled = enabled,
             onValueChange = { onChanged(settings.copy(maxOutputTokens = it.toIntOrNull() ?: settings.maxOutputTokens)) },
+            helper = "限制模型单次回复长度；调大可以写得更长，也会更容易消耗模型额度。",
         )
         SettingsTextSettingLine(
             value = settings.dailyRequestLimit.toString(),
             placeholder = "每日请求上限",
+            inputLabel = "每日请求上限",
             enabled = enabled,
             onValueChange = { onChanged(settings.copy(dailyRequestLimit = it.toIntOrNull() ?: settings.dailyRequestLimit)) },
+            helper = "当前账号每天最多调用 AI 的次数，达到后当天不再执行新的 AI 请求。",
         )
     }
 }
@@ -1221,6 +1377,48 @@ private fun SettingsAiToggleChip(
         enabled = enabled,
         onClick = { onCheckedChange(!checked) },
     )
+}
+
+@Composable
+private fun SettingsChatNoiseAggregateLine(
+    settings: ChatNoiseReductionSettings,
+    enabled: Boolean,
+    onChanged: (ChatNoiseReductionSettings) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SettingsSwitchLine(
+            checked = settings.aggregateBurstNotifications,
+            enabled = enabled,
+            onCheckedChange = { onChanged(settings.copy(aggregateBurstNotifications = it)) },
+            supportingText = "同一聊天室短时间多条未读会合并成一条摘要通知。",
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SettingsTextSettingLine(
+                value = settings.burstWindowMinutes.toString(),
+                placeholder = "分钟",
+                enabled = enabled && settings.aggregateBurstNotifications,
+                onValueChange = { value ->
+                    onChanged(settings.copy(burstWindowMinutes = value.toIntOrNull() ?: settings.burstWindowMinutes))
+                },
+                modifier = Modifier.weight(1f),
+                helper = "窗口",
+            )
+            SettingsTextSettingLine(
+                value = settings.burstMessageThreshold.toString(),
+                placeholder = "条数",
+                enabled = enabled && settings.aggregateBurstNotifications,
+                onValueChange = { value ->
+                    onChanged(settings.copy(burstMessageThreshold = value.toIntOrNull() ?: settings.burstMessageThreshold))
+                },
+                modifier = Modifier.weight(1f),
+                helper = "阈值",
+            )
+        }
+    }
 }
 
 @Composable
@@ -1257,14 +1455,29 @@ private fun SettingsWebManagementLine(
     onOpen: () -> Unit,
     label: String = "网页版管理",
 ) {
+    SettingsNavigationLine(
+        text = text.ifBlank { "需要在网页版继续管理" },
+        enabled = enabled,
+        onOpen = onOpen,
+        label = label,
+    )
+}
+
+@Composable
+private fun SettingsNavigationLine(
+    text: String,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+    label: String,
+) {
     val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = text.ifBlank { "需要在网页版继续管理" },
+        ) {
+            Text(
+            text = text,
             color = colors.textMuted,
             style = MaterialTheme.typography.labelMedium,
             maxLines = 2,
@@ -1470,12 +1683,19 @@ private fun settingsItemIcon(key: SettingsItemKey): ImageVector {
         SettingsItemKey.NotificationBadges -> Icons.Filled.Notifications
         SettingsItemKey.BackgroundNotifications -> Icons.Filled.Sync
         SettingsItemKey.SpecialCareBackgroundNotifications -> Icons.Outlined.FavoriteBorder
+        SettingsItemKey.ChatNoiseAggregate -> Icons.Filled.Notifications
+        SettingsItemKey.ChatNoiseImportantOnly -> Icons.Filled.Tune
+        SettingsItemKey.ChatNoiseAiImportance -> Icons.Filled.AutoAwesome
+        SettingsItemKey.ChatNoiseKeywords -> Icons.Outlined.FilterList
+        SettingsItemKey.ChatNoiseUsers -> Icons.Filled.Person
         SettingsItemKey.ChatMessageCache -> Icons.Filled.Storage
         SettingsItemKey.MuteReactions -> Icons.AutoMirrored.Outlined.VolumeOff
         SettingsItemKey.MuteFollows -> Icons.Outlined.PersonRemove
         SettingsItemKey.MutedWords -> Icons.Outlined.Block
         SettingsItemKey.HardMutedWords -> Icons.Outlined.FilterList
         SettingsItemKey.MutedInstances -> Icons.Filled.Language
+        SettingsItemKey.AiFloatingAssistant -> Icons.Filled.AutoAwesome
+        SettingsItemKey.AiSettingsEntry -> Icons.Filled.AutoAwesome
         SettingsItemKey.AiEnabled -> Icons.Filled.AutoAwesome
         SettingsItemKey.AiProvider -> Icons.Outlined.Api
         SettingsItemKey.AiBaseUrl -> Icons.Outlined.Link
@@ -1487,6 +1707,8 @@ private fun settingsItemIcon(key: SettingsItemKey): ImageVector {
         SettingsItemKey.AiEmbeddingModel -> Icons.Outlined.ModelTraining
         SettingsItemKey.AiReadPermissions -> Icons.Filled.Visibility
         SettingsItemKey.AiAutomation -> Icons.Filled.AutoAwesome
+        SettingsItemKey.AiAssistantLowRiskAutoApproval -> Icons.Filled.AutoAwesome
+        SettingsItemKey.AiAssistantHighRiskAutoApproval -> Icons.Filled.Security
         SettingsItemKey.AiBackground -> Icons.Filled.CloudQueue
         SettingsItemKey.AiQueue -> Icons.Filled.CloudQueue
         SettingsItemKey.AiLimits -> Icons.Filled.Tune

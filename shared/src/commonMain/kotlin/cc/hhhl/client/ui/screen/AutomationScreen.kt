@@ -42,12 +42,18 @@ import cc.hhhl.client.automation.AutomationActionType
 import cc.hhhl.client.automation.AutomationCondition
 import cc.hhhl.client.automation.AutomationConditionMode
 import cc.hhhl.client.automation.AutomationConditionType
+import cc.hhhl.client.automation.AutomationEventSnapshot
+import cc.hhhl.client.automation.AutomationExecutionLog
 import cc.hhhl.client.automation.AutomationFailurePolicy
+import cc.hhhl.client.automation.AutomationRuleDraftPreview
+import cc.hhhl.client.automation.AutomationRuleDebugRecord
 import cc.hhhl.client.automation.AutomationRule
 import cc.hhhl.client.automation.AutomationTrigger
 import cc.hhhl.client.automation.AutomationUiState
 import cc.hhhl.client.ai.AiTaskKind
+import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.AiResultCommonActionChips
 import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlAlertDialog
@@ -58,6 +64,9 @@ import cc.hhhl.client.ui.component.HhhlSwitch
 import cc.hhhl.client.ui.component.HhhlTextButton
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
+import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 @Composable
 fun AutomationScreen(
@@ -75,6 +84,7 @@ fun AutomationScreen(
     onUpdateActionMode: (String, AutomationActionMode) -> Unit,
     onUpdateIgnoreOwnMessages: (String, Boolean) -> Unit,
     onUpdateCooldown: (String, Int) -> Unit,
+    onUpdateBurstLimit: (String, Int) -> Unit,
     onAddCondition: (String, AutomationConditionType) -> Unit,
     onUpdateCondition: (String, AutomationCondition) -> Unit,
     onRemoveCondition: (String, String) -> Unit,
@@ -82,6 +92,12 @@ fun AutomationScreen(
     onUpdateAction: (String, AutomationAction) -> Unit,
     onRemoveAction: (String, String) -> Unit,
     onClearLogs: () -> Unit,
+    onClearDebugRecords: () -> Unit,
+    recentChatMessages: List<ChatMessage> = emptyList(),
+    onSimulateChatMessage: (ChatMessage) -> Unit = {},
+    onOpenLogs: () -> Unit,
+    onApproveRuleDraft: () -> Unit,
+    onRejectRuleDraft: () -> Unit,
     aiEnabled: Boolean = false,
     isAiProcessing: Boolean = false,
     aiResultText: String? = null,
@@ -89,10 +105,15 @@ fun AutomationScreen(
     onAiExplainRule: (AutomationRule?) -> Unit = {},
     onAiSuggestRules: (AutomationUiState) -> Unit = {},
     onAiCreateRule: (String, AutomationUiState) -> Unit = { _, _ -> },
+    onCopyAiResult: ((String) -> Unit)? = null,
     onDismissAiResult: () -> Unit = {},
 ) {
     val colors = LocalHhhlColors.current
     var createMenuOpen by remember { mutableStateOf(false) }
+    var debugDialogOpen by remember { mutableStateOf(false) }
+    val latestDebugRecordsByRuleId = remember(state.debugRecords) {
+        state.debugRecords.latestAutomationDebugRecordByRuleId()
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -103,11 +124,18 @@ fun AutomationScreen(
             supportingText = "${state.enabledRuleCount}/${state.rules.size} 条规则启用",
             navigation = { HhhlBackButton(onClick = onBack) },
             action = {
-                HhhlIconActionButton(
-                    icon = Icons.Filled.Add,
-                    contentDescription = "新建规则",
-                    onClick = { createMenuOpen = true },
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.Tune,
+                        contentDescription = "规则调试台",
+                        onClick = { debugDialogOpen = true },
+                    )
+                    HhhlIconActionButton(
+                        icon = Icons.Filled.Add,
+                        contentDescription = "新建规则",
+                        onClick = { createMenuOpen = true },
+                    )
+                }
             },
         )
         HhhlDivider()
@@ -122,6 +150,8 @@ fun AutomationScreen(
                     aiEnabled = aiEnabled,
                     isAiProcessing = isAiProcessing,
                     onCreate = { createMenuOpen = true },
+                    onOpenDebug = { debugDialogOpen = true },
+                    onOpenLogs = onOpenLogs,
                     onAiExplain = { onAiExplainRule(state.selectedRule ?: state.rules.firstOrNull()) },
                     onAiSuggestRules = { onAiSuggestRules(state) },
                     onAiCreateRule = { description -> onAiCreateRule(description, state) },
@@ -132,7 +162,18 @@ fun AutomationScreen(
                     AutomationAiResultCard(
                         label = aiResultLabel ?: AiTaskKind.AutomationExplain.label,
                         text = aiResultText,
+                        onCopyAiResult = onCopyAiResult,
+                        onCreateAutomationRule = { description -> onAiCreateRule(description, state) },
                         onDismiss = onDismissAiResult,
+                    )
+                }
+            }
+            state.pendingDraftPreview?.let { preview ->
+                item(key = "automation-draft-preview-${preview.id}") {
+                    AutomationRuleDraftPreviewCard(
+                        preview = preview,
+                        onApprove = onApproveRuleDraft,
+                        onReject = onRejectRuleDraft,
                     )
                 }
             }
@@ -154,6 +195,7 @@ fun AutomationScreen(
             ) { rule ->
                 AutomationRuleCard(
                     rule = rule,
+                    latestDebugRecord = latestDebugRecordsByRuleId[rule.id],
                     onOpen = { onOpenRule(rule.id) },
                     onToggle = { onToggleRule(rule.id) },
                     onDuplicate = { onDuplicateRule(rule.id) },
@@ -162,6 +204,35 @@ fun AutomationScreen(
                     isAiProcessing = isAiProcessing,
                     onAiExplain = { onAiExplainRule(rule) },
                 )
+            }
+            item(key = "automation-debug-header") {
+                AutomationSectionHeader(
+                    title = "规则调试台",
+                    trailing = {
+                        HhhlActionChip(
+                            label = "清空",
+                            enabled = state.debugRecords.isNotEmpty(),
+                            onClick = onClearDebugRecords,
+                        )
+                    },
+                )
+            }
+            item(key = "automation-debug-simulator") {
+                AutomationHistorySimulationCard(
+                    messages = recentChatMessages,
+                    onSimulate = onSimulateChatMessage,
+                )
+            }
+            if (state.debugRecords.isEmpty()) {
+                item(key = "automation-debug-empty") { AutomationStatusCard("暂无规则匹配记录", success = true) }
+            } else {
+                items(
+                    items = state.debugRecords.take(20),
+                    key = { it.id },
+                    contentType = { "automation-debug-record" },
+                ) { record ->
+                    AutomationDebugRecordCard(record = record)
+                }
             }
             item(key = "automation-log-header") {
                 AutomationSectionHeader(
@@ -200,6 +271,16 @@ fun AutomationScreen(
         )
     }
 
+    if (debugDialogOpen) {
+        AutomationDebugDialog(
+            debugRecords = state.debugRecords,
+            recentChatMessages = recentChatMessages,
+            onSimulateChatMessage = onSimulateChatMessage,
+            onClearDebugRecords = onClearDebugRecords,
+            onDismiss = { debugDialogOpen = false },
+        )
+    }
+
     val selectedRule = state.selectedRule
     if (state.editorOpen && selectedRule != null) {
         AutomationRuleEditorDialog(
@@ -211,6 +292,7 @@ fun AutomationScreen(
             onUpdateActionMode = { onUpdateActionMode(selectedRule.id, it) },
             onUpdateIgnoreOwnMessages = { onUpdateIgnoreOwnMessages(selectedRule.id, it) },
             onUpdateCooldown = { onUpdateCooldown(selectedRule.id, it) },
+            onUpdateBurstLimit = { onUpdateBurstLimit(selectedRule.id, it) },
             onAddCondition = { onAddCondition(selectedRule.id, it) },
             onUpdateCondition = { onUpdateCondition(selectedRule.id, it) },
             onRemoveCondition = { onRemoveCondition(selectedRule.id, it) },
@@ -225,6 +307,8 @@ fun AutomationScreen(
 private fun AutomationOverviewCard(
     state: AutomationUiState,
     onCreate: () -> Unit,
+    onOpenDebug: () -> Unit,
+    onOpenLogs: () -> Unit,
     aiEnabled: Boolean,
     isAiProcessing: Boolean,
     onAiExplain: () -> Unit,
@@ -247,7 +331,10 @@ private fun AutomationOverviewCard(
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             AutomationMetricChip("规则 ${state.rules.size}")
             AutomationMetricChip("启用 ${state.enabledRuleCount}")
+            AutomationMetricChip("调试 ${state.debugRecords.size}")
             AutomationMetricChip("日志 ${state.logs.size}")
+            HhhlActionChip(label = "调试台", emphasized = state.debugRecords.isNotEmpty(), onClick = onOpenDebug)
+            HhhlActionChip(label = "执行日志", enabled = state.logs.isNotEmpty(), onClick = onOpenLogs)
             HhhlActionChip(
                 label = if (isAiProcessing) "AI 处理中" else "AI 解释规则",
                 enabled = aiEnabled && !isAiProcessing && state.rules.isNotEmpty(),
@@ -289,6 +376,7 @@ private fun AutomationEmptyCard(onCreate: () -> Unit) {
 @Composable
 private fun AutomationRuleCard(
     rule: AutomationRule,
+    latestDebugRecord: AutomationRuleDebugRecord?,
     onOpen: () -> Unit,
     onToggle: () -> Unit,
     onDuplicate: () -> Unit,
@@ -315,12 +403,102 @@ private fun AutomationRuleCard(
             AutomationMetricChip(rule.conditionMode.label)
             AutomationMetricChip(rule.actionMode.label)
             if (rule.cooldownSeconds > 0) AutomationMetricChip("冷却 ${rule.cooldownSeconds}s")
+            if (rule.maxExecutionsPer30Seconds > 0) AutomationMetricChip("30 秒 ${rule.maxExecutionsPer30Seconds} 次")
+        }
+        latestDebugRecord?.let { record ->
+            HhhlDivider()
+            AutomationLatestDebugSummary(record)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HhhlActionChip(label = "配置", emphasized = true, onClick = onOpen)
             HhhlActionChip(label = "AI 解释", enabled = aiEnabled && !isAiProcessing, onClick = onAiExplain)
             HhhlActionChip(label = "复制", onClick = onDuplicate)
             HhhlActionChip(label = "删除", onClick = onDelete)
+        }
+    }
+}
+
+@Composable
+private fun AutomationLatestDebugSummary(record: AutomationRuleDebugRecord) {
+    val colors = LocalHhhlColors.current
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = if (record.matched) Icons.Filled.PlayArrow else Icons.Filled.Tune,
+            contentDescription = null,
+            tint = if (record.matched) colors.success else colors.warning,
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            AutomationTitle("最近匹配：${record.eventLabel} · ${if (record.matched) "已命中" else "未触发"}")
+            if (record.eventSummary.isNotBlank()) {
+                AutomationMutedText("收到：${record.eventSummary}")
+            }
+            AutomationMutedText("原因：${record.reason}")
+        }
+    }
+    val conditionSummary = record.conditionResults.take(3).joinToString(" · ") { condition ->
+        "${condition.conditionLabel}${if (condition.matched) "命中" else "未命中"}"
+    }
+    if (conditionSummary.isNotBlank()) {
+        AutomationMutedText("条件：$conditionSummary")
+    }
+    if (record.resolvedEntities.isNotEmpty()) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            record.resolvedEntities.take(3).forEach { entity -> AutomationMetricChip(entity) }
+        }
+    }
+}
+
+@Composable
+private fun AutomationRuleDraftPreviewCard(
+    preview: AutomationRuleDraftPreview,
+    onApprove: () -> Unit,
+    onReject: () -> Unit,
+) {
+    val rule = preview.rule
+    AutomationPanel {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Filled.AutoAwesome,
+                contentDescription = null,
+                tint = LocalHhhlColors.current.accent,
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                AutomationTitle("AI 规则草稿")
+                AutomationMutedText(rule.name)
+            }
+        }
+        if (preview.sourceText.isNotBlank()) AutomationMutedText("需求：${preview.sourceText}")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AutomationMetricChip("触发 ${rule.trigger.label}")
+            AutomationMetricChip(rule.conditionMode.label)
+            AutomationMetricChip(rule.actionMode.label)
+            AutomationMetricChip(if (rule.enabled) "创建后启用" else "创建后停用")
+            if (rule.ignoreOwnMessages) AutomationMetricChip("忽略自己")
+            if (rule.cooldownSeconds > 0) AutomationMetricChip("冷却 ${rule.cooldownSeconds}s")
+            if (rule.maxExecutionsPer30Seconds > 0) AutomationMetricChip("30 秒 ${rule.maxExecutionsPer30Seconds} 次")
+        }
+        AutomationPanel(compact = true) {
+            AutomationTitle("条件")
+            rule.conditions.take(6).forEachIndexed { index, condition ->
+                AutomationMutedText("${index + 1}. ${condition.type.label} = ${condition.value.ifBlank { "全部" }}${if (condition.enabled) "" else "（停用）"}")
+            }
+        }
+        AutomationPanel(compact = true) {
+            AutomationTitle("动作")
+            rule.actions.take(6).forEachIndexed { index, action ->
+                val target = action.targetId.ifBlank { "默认目标" }
+                AutomationMutedText("${index + 1}. ${action.type.label} -> $target${if (action.enabled) "" else "（停用）"}")
+            }
+        }
+        if (preview.messages.isNotEmpty()) {
+            AutomationPanel(compact = true) {
+                AutomationTitle("解析结果")
+                preview.messages.take(8).forEach { message -> AutomationMutedText(message) }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            HhhlActionChip(label = "批准创建", emphasized = true, onClick = onApprove)
+            HhhlActionChip(label = "拒绝", onClick = onReject)
         }
     }
 }
@@ -335,6 +513,7 @@ private fun AutomationRuleEditorDialog(
     onUpdateActionMode: (AutomationActionMode) -> Unit,
     onUpdateIgnoreOwnMessages: (Boolean) -> Unit,
     onUpdateCooldown: (Int) -> Unit,
+    onUpdateBurstLimit: (Int) -> Unit,
     onAddCondition: (AutomationConditionType) -> Unit,
     onUpdateCondition: (AutomationCondition) -> Unit,
     onRemoveCondition: (String) -> Unit,
@@ -386,6 +565,13 @@ private fun AutomationRuleEditorDialog(
                             onValueChange = { onUpdateCooldown(it.toIntOrNull() ?: 0) },
                             placeholder = "0",
                             label = "冷却秒数",
+                            singleLine = true,
+                        )
+                        HhhlTextInput(
+                            value = rule.maxExecutionsPer30Seconds.takeIf { it > 0 }?.toString().orEmpty(),
+                            onValueChange = { onUpdateBurstLimit(it.toIntOrNull() ?: 0) },
+                            placeholder = "2",
+                            label = "30 秒最多执行次数",
                             singleLine = true,
                         )
                     }
@@ -581,6 +767,7 @@ private fun AutomationActionType.isAiGeneratedAction(): Boolean {
     return this == AutomationActionType.AiGenerateLog ||
         this == AutomationActionType.AiGenerateNotification ||
         this == AutomationActionType.AiGenerateWebhook ||
+        this == AutomationActionType.AiForwardToRoom ||
         this == AutomationActionType.AiReplyToChat ||
         this == AutomationActionType.AiReplyToNote ||
         this == AutomationActionType.AiQuoteNote
@@ -736,6 +923,260 @@ private fun AutomationLogCard(
 }
 
 @Composable
+fun AutomationExecutionLogScreen(
+    logs: List<AutomationExecutionLog>,
+    onBack: () -> Unit,
+    onOpenRule: (String) -> Unit,
+    onRetryLog: (String) -> Unit,
+    onCopyLog: (String) -> Unit,
+    onClearLogs: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colors.pageBackground),
+    ) {
+        HhhlTopBar(
+            title = "自动化执行日志",
+            supportingText = "${logs.count { it.success }} 成功 · ${logs.count { !it.success }} 失败",
+            navigation = { HhhlBackButton(onClick = onBack) },
+            action = {
+                HhhlActionChip(label = "清空", enabled = logs.isNotEmpty(), onClick = onClearLogs)
+            },
+        )
+        HhhlDivider()
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        ) {
+            if (logs.isEmpty()) {
+                item(key = "automation-log-page-empty") { AutomationStatusCard("暂无执行记录", success = true) }
+            } else {
+                items(
+                    items = logs,
+                    key = { it.id },
+                    contentType = { "automation-log-page-item" },
+                ) { log ->
+                    AutomationExecutionLogPageCard(
+                        log = log,
+                        onOpenRule = { onOpenRule(log.ruleId) },
+                        onRetry = { onRetryLog(log.id) },
+                        onCopy = { onCopyLog(log.toClipboardText()) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AutomationExecutionLogPageCard(
+    log: AutomationExecutionLog,
+    onOpenRule: () -> Unit,
+    onRetry: () -> Unit,
+    onCopy: () -> Unit,
+) {
+    val canRetry = !log.success && log.actionSnapshot != null && log.eventSnapshot != null
+    AutomationPanel(compact = false) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = if (log.success) Icons.Filled.PlayArrow else Icons.Filled.Tune,
+                contentDescription = null,
+                tint = if (log.success) LocalHhhlColors.current.success else LocalHhhlColors.current.warning,
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                AutomationTitle(log.ruleName)
+                AutomationMutedText(
+                    listOf(
+                        log.createdAtLabel(),
+                        log.eventLabel,
+                        log.actionLabel,
+                        if (log.success) "成功" else "失败",
+                    ).filter { it.isNotBlank() }.joinToString(" · "),
+                )
+            }
+        }
+        AutomationMutedText("${if (log.success) "结果" else "失败原因"}：${log.message}")
+        if (log.retryOfLogId.isNotBlank()) {
+            AutomationMetricChip("重试自 ${log.retryOfLogId}")
+        }
+        log.eventSnapshot?.let { event ->
+            AutomationPanel(compact = true) {
+                AutomationTitle("事件快照")
+                AutomationMutedText("来源：${event.sourceLabel()}")
+                AutomationMutedText(
+                    listOf(
+                        event.id,
+                        event.roomName.ifBlank { event.roomId },
+                        event.senderName.ifBlank { event.senderUsername },
+                        event.messageText.ifBlank { event.notificationText },
+                    ).filter { it.isNotBlank() }.joinToString(" · "),
+                )
+            }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            HhhlActionChip(label = "打开规则", onClick = onOpenRule)
+            HhhlActionChip(label = "重试", enabled = canRetry, onClick = onRetry)
+            HhhlActionChip(label = "复制错误", enabled = log.message.isNotBlank(), onClick = onCopy)
+        }
+    }
+}
+
+private fun AutomationExecutionLog.toClipboardText(): String {
+    return buildString {
+        appendLine("规则：$ruleName ($ruleId)")
+        createdAtLabel().takeIf { it.isNotBlank() }?.let { appendLine("触发时间：$it") }
+        appendLine("事件：$eventLabel ($eventId)")
+        appendLine("动作：$actionLabel")
+        appendLine("结果：${if (success) "成功" else "失败"}")
+        if (retryOfLogId.isNotBlank()) appendLine("重试自：$retryOfLogId")
+        appendLine("${if (success) "消息" else "失败原因"}：$message")
+        eventSnapshot?.let { event ->
+            appendLine("事件快照：")
+            appendLine("- id: ${event.id}")
+            appendLine("- source: ${event.sourceLabel()}")
+            if (event.roomId.isNotBlank() || event.roomName.isNotBlank()) appendLine("- room: ${event.roomName} (${event.roomId})")
+            if (event.senderUserId.isNotBlank() || event.senderUsername.isNotBlank()) appendLine("- sender: ${event.senderName} @${event.senderUsername} (${event.senderUserId})")
+            if (event.messageText.isNotBlank()) appendLine("- message: ${event.messageText}")
+            if (event.notificationText.isNotBlank()) appendLine("- notification: ${event.notificationText}")
+        }
+    }.trim()
+}
+
+private fun AutomationEventSnapshot.sourceLabel(): String {
+    return listOf(trigger.label, sourceKind, attentionKind, notificationType, timelineKind)
+        .filter { it.isNotBlank() }
+        .joinToString(" · ")
+}
+
+internal fun AutomationExecutionLog.createdAtLabel(): String {
+    if (createdAtEpochMillis <= 0L) return ""
+    return runCatching {
+        val local = Instant.fromEpochMilliseconds(createdAtEpochMillis).toLocalDateTime(TimeZone.currentSystemDefault())
+        "${local.year}-${local.monthNumber.twoDigits()}-${local.dayOfMonth.twoDigits()} ${local.hour.twoDigits()}:${local.minute.twoDigits()}"
+    }.getOrDefault("")
+}
+
+@Composable
+private fun AutomationDebugRecordCard(record: AutomationRuleDebugRecord) {
+    val colors = LocalHhhlColors.current
+    AutomationPanel(compact = true) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = if (record.matched) Icons.Filled.PlayArrow else Icons.Filled.Tune,
+                contentDescription = null,
+                tint = if (record.matched) colors.success else colors.warning,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                AutomationTitle(record.ruleName)
+                AutomationMutedText("${record.eventLabel} · ${if (record.matched) "已命中" else "未触发"}")
+            }
+        }
+        AutomationMutedText(record.reason)
+        if (record.eventSummary.isNotBlank()) {
+            AutomationMutedText(record.eventSummary)
+        }
+        if (record.resolvedEntities.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                record.resolvedEntities.forEach { entity -> AutomationMetricChip(entity) }
+            }
+        }
+        record.conditionResults.take(4).forEach { condition ->
+            AutomationPanel(compact = true) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    AutomationTitle(condition.conditionLabel)
+                    AutomationMetricChip(if (condition.matched) "命中" else "未命中")
+                }
+                AutomationMutedText(condition.message)
+                if (condition.expectedValue.isNotBlank() || condition.actualValue.isNotBlank()) {
+                    AutomationMutedText("期望：${condition.expectedValue.ifBlank { "空" }} · 实际：${condition.actualValue.ifBlank { "无" }}")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AutomationDebugDialog(
+    debugRecords: List<AutomationRuleDebugRecord>,
+    recentChatMessages: List<ChatMessage>,
+    onSimulateChatMessage: (ChatMessage) -> Unit,
+    onClearDebugRecords: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    HhhlAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("规则调试台") },
+        text = {
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 560.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item(key = "dialog-debug-simulator") {
+                    AutomationHistorySimulationCard(
+                        messages = recentChatMessages,
+                        onSimulate = onSimulateChatMessage,
+                    )
+                }
+                if (debugRecords.isEmpty()) {
+                    item(key = "dialog-debug-empty") {
+                        AutomationStatusCard("暂无规则匹配记录", success = true)
+                    }
+                } else {
+                    items(
+                        items = debugRecords.take(20),
+                        key = { it.id },
+                        contentType = { "dialog-debug-record" },
+                    ) { record ->
+                        AutomationDebugRecordCard(record = record)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            HhhlTextButton(onClick = onDismiss) { Text("关闭") }
+        },
+        dismissButton = {
+            HhhlTextButton(
+                enabled = debugRecords.isNotEmpty(),
+                onClick = onClearDebugRecords,
+            ) { Text("清空记录") }
+        },
+    )
+}
+
+@Composable
+private fun AutomationHistorySimulationCard(
+    messages: List<ChatMessage>,
+    onSimulate: (ChatMessage) -> Unit,
+) {
+    AutomationPanel(compact = true) {
+        AutomationTitle("用历史消息模拟")
+        AutomationMutedText("只生成匹配记录和条件结果，不会执行回复、转发或 Webhook。")
+        if (messages.isEmpty()) {
+            AutomationMutedText("先打开一个聊天室或私聊，最近消息会显示在这里。")
+        } else {
+            messages.take(5).forEach { message ->
+                AutomationPanel(compact = true) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            AutomationTitle(message.fromUser.displayName.ifBlank { message.fromUser.username })
+                            AutomationMutedText(message.text.ifBlank { message.file?.name ?: "附件消息" })
+                        }
+                        HhhlActionChip(label = "模拟", onClick = { onSimulate(message) })
+                    }
+                    if (message.createdAtLabel.isNotBlank()) {
+                        AutomationMutedText(message.createdAtLabel)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun AutomationStatusCard(message: String, success: Boolean) {
     AutomationPanel(compact = true) {
         Text(
@@ -750,6 +1191,8 @@ private fun AutomationStatusCard(message: String, success: Boolean) {
 private fun AutomationAiResultCard(
     label: String,
     text: String,
+    onCopyAiResult: ((String) -> Unit)?,
+    onCreateAutomationRule: ((String) -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     AiResultPanel(
@@ -758,6 +1201,13 @@ private fun AutomationAiResultCard(
         onDismiss = onDismiss,
         supportingText = "AI 只解释和建议，不会自动修改规则",
         emphasized = false,
+        actions = {
+            AiResultCommonActionChips(
+                text = text,
+                onCopyChecklist = onCopyAiResult,
+                onCreateAutomationRule = onCreateAutomationRule,
+            )
+        },
     )
 }
 
@@ -827,3 +1277,11 @@ private fun AutomationMutedText(text: String) {
         overflow = TextOverflow.Ellipsis,
     )
 }
+
+internal fun List<AutomationRuleDebugRecord>.latestAutomationDebugRecordByRuleId(): Map<String, AutomationRuleDebugRecord> {
+    return groupBy { it.ruleId }.mapValues { (_, records) ->
+        records.maxBy { it.createdAtEpochMillis }
+    }
+}
+
+private fun Int.twoDigits(): String = if (this < 10) "0$this" else toString()

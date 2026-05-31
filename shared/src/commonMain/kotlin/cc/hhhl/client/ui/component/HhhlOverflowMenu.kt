@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
@@ -431,7 +432,7 @@ private fun defaultOverflowMenuIcon(label: String): ImageVector {
         "嵌入" -> Icons.Outlined.Code
         "分享" -> Icons.Outlined.Share
         "AI 总结", "AI 回复草稿", "总结通知", "待处理", "优先级" -> Icons.Filled.AutoAwesome
-        "收藏", "收藏/取消收藏" -> Icons.Outlined.StarBorder
+        "收藏", "收藏/取消收藏", "收藏信息" -> Icons.Outlined.StarBorder
         "设为特别关心", "取消特别关心" -> Icons.Outlined.FavoriteBorder
         "回应", "回应处理中" -> Icons.Outlined.AddReaction
         "关注", "关注用户" -> Icons.Outlined.PersonAdd
@@ -443,12 +444,13 @@ private fun defaultOverflowMenuIcon(label: String): ImageVector {
         "Mute note", "静音", "取消静音", "静音聊天室" -> Icons.AutoMirrored.Outlined.VolumeOff
         "用户" -> Icons.Outlined.Person
         "屏蔽", "取消屏蔽", "拉黑", "取消拉黑", "退出登录", "退出聊天室", "登出共享访问" -> Icons.Outlined.Block
-        "删除", "确认删除", "删除中", "删除作品", "删除聊天室", "删除选项", "移除附件", "移除投票" -> Icons.Outlined.Delete
+        "清空", "删除", "确认删除", "删除中", "删除作品", "删除聊天室", "删除选项", "移除附件", "移除投票" -> Icons.Outlined.Delete
         "删除 Webhook" -> Icons.Outlined.Delete
         "举报", "举报用户" -> Icons.Outlined.Report
         "刷新", "刷新中", "刷新列表", "刷新动态", "刷新资料", "刷新消息", "刷新成员", "刷新全部关注",
         "刷新关注", "同步中", "同步列表中", "同步动态中", "同步天线中", "同步剪辑中", "同步趋势中", "同步实例中",
         "处理中", "上传中" -> Icons.Filled.Refresh
+        "全部已读" -> Icons.Filled.DoneAll
         "编辑", "编辑作品", "编辑聊天室", "编辑 Webhook", "改名", "名称 A-Z", "名称 Z-A" -> Icons.Filled.Edit
         "搜索", "搜索消息" -> Icons.Filled.Search
         "过滤设置", "排序", "类型", "全部词", "任一词", "精确短语" -> Icons.Outlined.FilterList

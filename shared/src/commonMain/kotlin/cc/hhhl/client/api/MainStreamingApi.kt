@@ -2,6 +2,7 @@ package cc.hhhl.client.api
 
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NotificationItem
+import cc.hhhl.client.model.ChatMessage
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
@@ -19,6 +20,8 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -29,7 +32,14 @@ import kotlinx.serialization.json.put
 
 interface MainStreamingApi {
     fun streamMain(token: String): Flow<MainStreamingEvent>
+
+    fun streamMain(token: String, options: MainStreamingOptions): Flow<MainStreamingEvent> = streamMain(token)
 }
+
+data class MainStreamingOptions(
+    val timelineKinds: List<TimelineKind> = defaultMainStreamingTimelineKinds,
+    val channelIds: List<String> = emptyList(),
+)
 
 sealed interface MainStreamingEvent {
     data object Connecting : MainStreamingEvent
@@ -48,9 +58,14 @@ sealed interface MainStreamingEvent {
 
     data object NewChatMessage : MainStreamingEvent
 
+    data class ChatMessageReceived(
+        val message: ChatMessage,
+    ) : MainStreamingEvent
+
     data class TimelineNote(
         val kind: TimelineKind,
         val note: Note? = null,
+        val timelineSource: String = kind.name,
     ) : MainStreamingEvent
 
     data class Error(val message: String) : MainStreamingEvent
@@ -63,7 +78,12 @@ class SharkeyMainStreamingApi(
     private val client: HttpClient = defaultMainStreamingClient(),
     private val json: Json = defaultMainStreamingJson,
 ) : MainStreamingApi {
-    override fun streamMain(token: String): Flow<MainStreamingEvent> = flow {
+    override fun streamMain(token: String): Flow<MainStreamingEvent> = streamMain(
+        token = token,
+        options = MainStreamingOptions(),
+    )
+
+    override fun streamMain(token: String, options: MainStreamingOptions): Flow<MainStreamingEvent> = flow {
         val cleanToken = token.trim()
         if (cleanToken.isEmpty()) {
             emit(MainStreamingEvent.Unauthorized)
@@ -87,12 +107,12 @@ class SharkeyMainStreamingApi(
 
         try {
             emit(MainStreamingEvent.Connected)
-            streamingConnectPayloads().forEach { payload ->
+            streamingConnectPayloads(options).forEach { payload ->
                 session.send(Frame.Text(payload))
             }
             for (frame in session.incoming) {
                 if (frame is Frame.Text) {
-                    parseSharkeyMainStreamingEvent(frame.readText(), json)?.let { emit(it) }
+                    parseSharkeyMainStreamingEvents(frame.readText(), json).forEach { emit(it) }
                 }
             }
             emit(MainStreamingEvent.Closed)
@@ -119,17 +139,38 @@ class SharkeyMainStreamingApi(
         return builder.buildString()
     }
 
-    private fun streamingConnectPayloads(): List<String> {
-        return listOf(
-            connectPayload(channel = "main", id = MAIN_STREAM_ID),
-            connectPayload(channel = "homeTimeline", id = TimelineKind.Home.streamingStreamId),
-            connectPayload(channel = "hybridTimeline", id = TimelineKind.Social.streamingStreamId),
-            connectPayload(channel = "localTimeline", id = TimelineKind.Local.streamingStreamId),
-            connectPayload(channel = "globalTimeline", id = TimelineKind.Global.streamingStreamId),
-        )
+    private fun streamingConnectPayloads(options: MainStreamingOptions): List<String> {
+        return buildList {
+            add(connectPayload(channel = "main", id = MAIN_STREAM_ID))
+            options.timelineKinds
+                .distinct()
+                .forEach { kind ->
+                    kind.streamingChannelName?.let { channel ->
+                        add(connectPayload(channel = channel, id = kind.streamingStreamId))
+                    }
+                }
+            options.channelIds
+                .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+                .distinct()
+                .forEach { channelId ->
+                    add(
+                        connectPayload(
+                            channel = "channel",
+                            id = channelId.channelStreamingStreamId(),
+                            params = buildJsonObject {
+                                put("channelId", channelId)
+                            },
+                        ),
+                    )
+                }
+        }
     }
 
-    private fun connectPayload(channel: String, id: String): String {
+    private fun connectPayload(
+        channel: String,
+        id: String,
+        params: JsonObject? = null,
+    ): String {
         return json.encodeToString(
             JsonObject.serializer(),
             buildJsonObject {
@@ -140,6 +181,7 @@ class SharkeyMainStreamingApi(
                         put("channel", channel)
                         put("id", id)
                         put("pong", true)
+                        params?.let { put("params", it) }
                     },
                 )
             },
@@ -151,36 +193,105 @@ internal fun parseSharkeyMainStreamingEvent(
     raw: String,
     json: Json = defaultMainStreamingJson,
 ): MainStreamingEvent? {
-    val root = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
-    val rootType = root.string("type") ?: return null
-    if (rootType == "connected") return MainStreamingEvent.Connected
-    if (rootType != "channel") return null
+    return parseSharkeyMainStreamingEvents(raw, json).firstOrNull()
+}
 
-    val body = root.obj("body") ?: return null
+internal fun parseSharkeyMainStreamingEvents(
+    raw: String,
+    json: Json = defaultMainStreamingJson,
+): List<MainStreamingEvent> {
+    val root = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return emptyList()
+    val rootType = root.string("type") ?: return emptyList()
+    if (rootType == "connected") return listOf(MainStreamingEvent.Connected)
+    if (rootType != "channel") return emptyList()
+
+    val body = root.obj("body") ?: return emptyList()
     val channelId = body.string("id").orEmpty()
     val eventType = body.string("type")
     channelId.toTimelineKindOrNull()?.let { kind ->
-        return if (eventType == "note") {
-            MainStreamingEvent.TimelineNote(
-                kind = kind,
-                note = body.obj("body")?.toStreamingNoteOrNull(json),
-            )
-        } else {
-            null
-        }
+        return listOfNotNull(
+            if (eventType == "note") {
+                MainStreamingEvent.TimelineNote(
+                    kind = kind,
+                    note = body.obj("body")?.toStreamingNoteOrNull(json),
+                    timelineSource = kind.name,
+                )
+            } else {
+                null
+            },
+        )
     }
-    if (channelId.isNotBlank() && channelId != MAIN_STREAM_ID) return null
+    channelId.toStreamingChannelIdOrNull()?.let { streamChannelId ->
+        return listOfNotNull(
+            if (eventType == "note") {
+                MainStreamingEvent.TimelineNote(
+                    kind = TimelineKind.Home,
+                    note = body.obj("body")
+                        ?.toStreamingNoteOrNull(json)
+                        ?.let { note -> note.copy(channelId = note.channelId.ifBlank { streamChannelId }) },
+                    timelineSource = "Channel",
+                )
+            } else {
+                null
+            },
+        )
+    }
+    if (channelId.isNotBlank() && channelId != MAIN_STREAM_ID) return emptyList()
     val notification = body.obj("body")?.toStreamingNotificationOrNull(json)
     return when (eventType) {
-        "notification" -> notification?.let { MainStreamingEvent.NotificationReceived(it) }
-            ?: MainStreamingEvent.UnreadNotification
-        "unreadNotification" -> notification?.let { MainStreamingEvent.NotificationReceived(it) }
-            ?: MainStreamingEvent.UnreadNotification
-        "readAllNotifications" -> MainStreamingEvent.ReadAllNotifications
-        "readAllUnreadNotifications" -> MainStreamingEvent.ReadAllNotifications
-        "newChatMessage" -> MainStreamingEvent.NewChatMessage
-        "chatMessage" -> MainStreamingEvent.NewChatMessage
-        else -> null
+        "notification" -> listOf(
+            notification?.let { MainStreamingEvent.NotificationReceived(it) }
+                ?: MainStreamingEvent.UnreadNotification,
+        )
+        "unreadNotification" -> listOf(
+            notification?.let { MainStreamingEvent.NotificationReceived(it) }
+                ?: MainStreamingEvent.UnreadNotification,
+        )
+        "unreadMention",
+        "unreadSpecifiedNote",
+        "unreadAntenna",
+            -> listOf(MainStreamingEvent.UnreadNotification)
+        "readAllNotifications" -> listOf(MainStreamingEvent.ReadAllNotifications)
+        "readAllUnreadNotifications" -> listOf(MainStreamingEvent.ReadAllNotifications)
+        "newChatMessage",
+        "chatMessage",
+        "unreadChatMessage",
+        "unreadChatMessages",
+        "messagingMessage",
+        "unreadMessagingMessage",
+        "readAllChatMessages",
+        "readAllMessagingMessages",
+            -> {
+            val messageElement = body["body"] ?: return listOf(MainStreamingEvent.NewChatMessage)
+            val messages = messageElement.mainStreamingChatMessageElements()
+                .mapNotNull { element -> parseSharkeyStreamingChatMessage(element, json = json) }
+            if (messages.isEmpty()) {
+                listOf(MainStreamingEvent.NewChatMessage)
+            } else {
+                messages.map { message -> MainStreamingEvent.ChatMessageReceived(message) }
+            }
+        }
+        else -> emptyList()
+    }
+}
+
+private fun JsonElement.mainStreamingChatMessageElements(): List<JsonElement> {
+    return when (this) {
+        is JsonArray -> this.toList()
+        is JsonObject -> {
+            val wrappedMessages = listOfNotNull(
+                this["message"],
+                this["chatMessage"],
+                this["messagingMessage"],
+                this["messages"],
+                this["chatMessages"],
+                this["messagingMessages"],
+                this["unreadChatMessages"],
+                this["unreadMessagingMessages"],
+            ).flatMap { element -> element.mainStreamingChatMessageElements() }
+            wrappedMessages.ifEmpty { listOf(this) }
+        }
+        else -> listOf(this)
     }
 }
 
@@ -214,6 +325,25 @@ private fun defaultMainStreamingClient(): HttpClient {
 
 private const val MAIN_STREAM_ID = "main"
 
+val defaultMainStreamingTimelineKinds: List<TimelineKind> = listOf(
+    TimelineKind.Home,
+    TimelineKind.Social,
+    TimelineKind.Local,
+    TimelineKind.Global,
+)
+
+private val TimelineKind.streamingChannelName: String?
+    get() = when (this) {
+        TimelineKind.Home -> "homeTimeline"
+        TimelineKind.Social -> "hybridTimeline"
+        TimelineKind.Local -> "localTimeline"
+        TimelineKind.Global -> "globalTimeline"
+        TimelineKind.Bubble,
+        TimelineKind.Featured,
+        TimelineKind.Mentions,
+        -> null
+    }
+
 private val TimelineKind.streamingStreamId: String
     get() = when (this) {
         TimelineKind.Home -> "timeline-home"
@@ -227,6 +357,12 @@ private val TimelineKind.streamingStreamId: String
 
 private fun String.toTimelineKindOrNull(): TimelineKind? {
     return TimelineKind.entries.firstOrNull { kind -> this == kind.streamingStreamId }
+}
+
+private fun String.channelStreamingStreamId(): String = "channel:$this"
+
+private fun String.toStreamingChannelIdOrNull(): String? {
+    return removePrefix("channel:").takeIf { it != this && it.isNotBlank() }
 }
 
 private val defaultMainStreamingJson = Json {

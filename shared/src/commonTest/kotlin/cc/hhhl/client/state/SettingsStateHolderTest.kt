@@ -99,6 +99,23 @@ class SettingsStateHolderTest {
     }
 
     @Test
+    fun aiFloatingAssistantIsEnabledByDefaultAndListedBeforeAiSettingsEntry() {
+        assertTrue(AiSettings().floatingAssistantEnabled)
+
+        val aiGroup = SettingsRepository.defaultGroups().first { it.key == SettingsGroupKey.Ai }
+        val keys = aiGroup.items.map { it.key }
+        val floatingIndex = keys.indexOf(SettingsItemKey.AiFloatingAssistant)
+        val settingsIndex = keys.indexOf(SettingsItemKey.AiSettingsEntry)
+        val floatingItem = aiGroup.items.first { it.key == SettingsItemKey.AiFloatingAssistant }
+
+        assertTrue(floatingIndex >= 0)
+        assertTrue(settingsIndex >= 0)
+        assertTrue(floatingIndex < settingsIndex)
+        assertEquals("AI 小光球", floatingItem.label)
+        assertEquals("开启", floatingItem.value)
+    }
+
+    @Test
     fun aiQueueItemSummarizesPendingCompletedAndFailedTasks() {
         val holder = SettingsStateHolder(repository = SettingsRepository())
 
@@ -138,11 +155,41 @@ class SettingsStateHolderTest {
             accountUser = null,
         )
 
-        val queueItem = holder.state.value.groups
+        val aiEntry = holder.state.value.groups
             .flatMap { it.items }
-            .first { it.key == SettingsItemKey.AiQueue }
+            .first { it.key == SettingsItemKey.AiSettingsEntry }
+        val queueItem = SettingsRepository().aiSettingsGroup(
+            aiSettings = holder.state.value.aiSettings,
+            aiTasks = holder.state.value.aiTasks,
+            aiUsage = holder.state.value.aiUsage,
+        ).items.first { it.key == SettingsItemKey.AiQueue }
 
+        assertEquals(
+            "开启 · OpenAI 兼容 · gpt-5.5 · 今日 3/120 · 剩余 117 · 待处理 1 · 已完成 1 · 失败 1 · 最近 通知优先级",
+            aiEntry.value,
+        )
         assertEquals("今日 3/120 · 剩余 117 · 待处理 1 · 已完成 1 · 失败 1 · 最近 通知优先级", queueItem.value)
+    }
+
+    @Test
+    fun aiSettingsGroupExposesAssistantAutoApprovalSwitches() {
+        val group = SettingsRepository().aiSettingsGroup(
+            aiSettings = AiSettings(
+                enabled = true,
+                assistantLowRiskAutoApproval = true,
+                assistantHighRiskAutoApproval = true,
+            ),
+        )
+
+        val lowRisk = group.items.first { it.key == SettingsItemKey.AiAssistantLowRiskAutoApproval }
+        val highRisk = group.items.first { it.key == SettingsItemKey.AiAssistantHighRiskAutoApproval }
+
+        assertEquals("助手低风险自动批准", lowRisk.label)
+        assertEquals("开启", lowRisk.value)
+        assertTrue(lowRisk.enabled)
+        assertEquals("助手高风险自动批准", highRisk.label)
+        assertEquals("开启", highRisk.value)
+        assertTrue(highRisk.enabled)
     }
 
     @Test

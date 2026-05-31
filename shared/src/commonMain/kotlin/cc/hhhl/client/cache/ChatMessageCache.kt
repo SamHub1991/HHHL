@@ -124,6 +124,21 @@ object ChatMessageCacheCodec {
         explicitNulls = false
     }
 
+    fun encodeMessages(messages: List<ChatMessage>): String {
+        return json.encodeToString(
+            messages.takeLast(MAX_CHAT_CACHE_MESSAGES_PER_CONVERSATION).map { it.toCachedMessage() },
+        )
+    }
+
+    fun decodeMessages(payload: String?): List<ChatMessage> {
+        if (payload.isNullOrBlank()) return emptyList()
+        return runCatching {
+            json.decodeFromString<List<CachedChatMessage>>(payload)
+                .takeLast(MAX_CHAT_CACHE_MESSAGES_PER_CONVERSATION)
+                .map { it.toDomainMessage() }
+        }.getOrDefault(emptyList())
+    }
+
     fun encode(snapshots: Map<ChatMessageCacheKey, List<ChatMessage>>): String {
         return json.encodeToString(
             ChatMessageCacheEnvelope(

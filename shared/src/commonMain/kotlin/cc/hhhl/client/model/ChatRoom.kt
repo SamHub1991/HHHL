@@ -17,6 +17,10 @@ data class ChatRoom(
     val unreadCount: Int = 0,
     val latestMessageAtLabel: String = "",
     val latestMessageMarker: String = "",
+    val memberLimit: Int = 0,
+    val memberLimitOverride: Int? = null,
+    val canManage: Boolean = false,
+    val messageRetentionDays: Int? = null,
 )
 
 @Immutable

@@ -17,6 +17,8 @@ import cc.hhhl.client.model.SettingsPreferences
 import cc.hhhl.client.model.SettingsWebhookCreateInput
 import cc.hhhl.client.model.SettingsWebhookDetail
 import cc.hhhl.client.model.SettingsWebhookUpdateInput
+import cc.hhhl.client.notification.ChatNoiseReductionSettings
+import cc.hhhl.client.notification.toChatNoiseRules
 import cc.hhhl.client.repository.SettingsManagementMutationRepositoryResult
 import cc.hhhl.client.repository.SettingsManagementRepositoryResult
 import cc.hhhl.client.repository.SettingsRepository
@@ -43,6 +45,9 @@ data class SettingsUiState(
     val listGesturesEnabled: Boolean = true,
     val backgroundNotificationsEnabled: Boolean = false,
     val specialCareBackgroundNotificationsEnabled: Boolean = true,
+    val chatNoiseReductionSettings: ChatNoiseReductionSettings = ChatNoiseReductionSettings(),
+    val chatNoiseKeywordDraft: String = "",
+    val chatNoiseUserDraft: String = "",
     val accountDisplayName: String = "未登录",
     val remotePreferences: SettingsPreferences? = null,
     val isRemoteLoading: Boolean = false,
@@ -107,12 +112,19 @@ enum class SettingsItemKey {
     NotificationBadges,
     BackgroundNotifications,
     SpecialCareBackgroundNotifications,
+    ChatNoiseAggregate,
+    ChatNoiseImportantOnly,
+    ChatNoiseAiImportance,
+    ChatNoiseKeywords,
+    ChatNoiseUsers,
     ChatMessageCache,
     MuteReactions,
     MuteFollows,
     MutedWords,
     HardMutedWords,
     MutedInstances,
+    AiFloatingAssistant,
+    AiSettingsEntry,
     AiEnabled,
     AiProvider,
     AiBaseUrl,
@@ -124,6 +136,8 @@ enum class SettingsItemKey {
     AiEmbeddingModel,
     AiReadPermissions,
     AiAutomation,
+    AiAssistantLowRiskAutoApproval,
+    AiAssistantHighRiskAutoApproval,
     AiBackground,
     AiQueue,
     AiLimits,
@@ -158,6 +172,7 @@ class SettingsStateHolder(
         listGesturesEnabled: Boolean = true,
         backgroundNotificationsEnabled: Boolean = false,
         specialCareBackgroundNotificationsEnabled: Boolean = true,
+        chatNoiseReductionSettings: ChatNoiseReductionSettings = ChatNoiseReductionSettings(),
         accountUser: AuthenticatedUser?,
     ) {
         val accountDisplayName = accountUser?.let { user ->
@@ -177,6 +192,7 @@ class SettingsStateHolder(
                 aiUsage = aiUsage,
                 backgroundNotificationsEnabled = backgroundNotificationsEnabled,
                 specialCareBackgroundNotificationsEnabled = specialCareBackgroundNotificationsEnabled,
+                chatNoiseReductionSettings = chatNoiseReductionSettings.normalized,
                 accountDisplayName = accountDisplayName,
             )
             next.withGroups()
@@ -237,6 +253,62 @@ class SettingsStateHolder(
 
     fun updateMutedInstanceDraft(value: String) {
         mutableState.update { it.copy(mutedInstanceDraft = value) }
+    }
+
+    fun updateChatNoiseKeywordDraft(value: String) {
+        mutableState.update { it.copy(chatNoiseKeywordDraft = value.take(240)) }
+    }
+
+    fun updateChatNoiseUserDraft(value: String) {
+        mutableState.update { it.copy(chatNoiseUserDraft = value.take(240)) }
+    }
+
+    fun addChatNoiseKeyword() {
+        mutableState.update { current ->
+            val nextRules = (current.chatNoiseReductionSettings.keywordRules + current.chatNoiseKeywordDraft.toChatNoiseRules(
+                maxRules = 40,
+                maxLength = 80,
+            )).distinctBy { it.lowercase() }
+            current.copy(
+                chatNoiseReductionSettings = current.chatNoiseReductionSettings.copy(keywordRules = nextRules).normalized,
+                chatNoiseKeywordDraft = "",
+            ).withGroups()
+        }
+    }
+
+    fun removeChatNoiseKeyword(value: String) {
+        mutableState.update { current ->
+            current.copy(
+                chatNoiseReductionSettings = current.chatNoiseReductionSettings.copy(
+                    keywordRules = current.chatNoiseReductionSettings.keywordRules.filterNot { it.equals(value, ignoreCase = true) },
+                ).normalized,
+            ).withGroups()
+        }
+    }
+
+    fun addChatNoiseUser() {
+        mutableState.update { current ->
+            val nextRules = (current.chatNoiseReductionSettings.userRules + current.chatNoiseUserDraft.toChatNoiseRules())
+                .distinctBy { it.lowercase() }
+            current.copy(
+                chatNoiseReductionSettings = current.chatNoiseReductionSettings.copy(userRules = nextRules).normalized,
+                chatNoiseUserDraft = "",
+            ).withGroups()
+        }
+    }
+
+    fun removeChatNoiseUser(value: String) {
+        mutableState.update { current ->
+            current.copy(
+                chatNoiseReductionSettings = current.chatNoiseReductionSettings.copy(
+                    userRules = current.chatNoiseReductionSettings.userRules.filterNot { it.equals(value, ignoreCase = true) },
+                ).normalized,
+            ).withGroups()
+        }
+    }
+
+    fun updateChatNoiseSettings(settings: ChatNoiseReductionSettings) {
+        mutableState.update { it.copy(chatNoiseReductionSettings = settings.normalized).withGroups() }
     }
 
     fun togglePrivacy(key: SettingsItemKey, enabled: Boolean) {
@@ -686,6 +758,7 @@ class SettingsStateHolder(
                 listGesturesEnabled = listGesturesEnabled,
                 backgroundNotificationsEnabled = backgroundNotificationsEnabled,
                 specialCareBackgroundNotificationsEnabled = specialCareBackgroundNotificationsEnabled,
+                chatNoiseReductionSettings = chatNoiseReductionSettings,
                 accountDisplayName = accountDisplayName,
                 remotePreferences = remotePreferences,
                 isRemoteLoading = isRemoteLoading,

@@ -43,9 +43,189 @@ class ChatStreamingApiTest {
         val messageEvent = assertIs<ChatStreamingEvent.MessageReceived>(event)
         assertEquals("message-1", messageEvent.message.id)
         assertEquals("room-1", messageEvent.message.roomId)
+        assertEquals("room-1", messageEvent.source.roomId)
         assertEquals("实时消息", messageEvent.message.text)
         assertEquals("Alice", messageEvent.message.fromUser.displayName)
         assertEquals(1, messageEvent.message.reactionCount)
+    }
+
+    @Test
+    fun parsesChatRoomMessageAliasEvent() {
+        val event = parseSharkeyStreamingChatEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "chat-room-room-1",
+                "type": "chatMessage",
+                "body": {
+                  "id": "message-alias",
+                  "createdAt": "2026-05-25T01:23:45.000Z",
+                  "toRoomId": "room-1",
+                  "text": "@me 别名事件",
+                  "fromUser": {
+                    "id": "user-1",
+                    "username": "alice",
+                    "name": "Alice"
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val messageEvent = assertIs<ChatStreamingEvent.MessageReceived>(event)
+        assertEquals("message-alias", messageEvent.message.id)
+        assertEquals("room-1", messageEvent.message.roomId)
+        assertEquals("room-1", messageEvent.source.roomId)
+        assertEquals("@me 别名事件", messageEvent.message.text)
+    }
+
+    @Test
+    fun parsesUnreadChatMessagesBatchEvent() {
+        val events = parseSharkeyStreamingChatEvents(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "chat-room-room-1",
+                "type": "unreadChatMessages",
+                "body": [
+                  {
+                    "id": "message-batch-1",
+                    "createdAt": "2026-05-25T01:23:45.000Z",
+                    "toRoomId": "room-1",
+                    "text": "@me 第一条",
+                    "fromUser": {
+                      "id": "user-1",
+                      "username": "alice",
+                      "name": "Alice"
+                    }
+                  },
+                  {
+                    "id": "message-batch-2",
+                    "createdAt": "2026-05-25T01:24:45.000Z",
+                    "toRoomId": "room-1",
+                    "text": "第二条带引用",
+                    "fromUser": {
+                      "id": "user-2",
+                      "username": "bob",
+                      "name": "Bob"
+                    },
+                    "quote": {
+                      "id": "quoted-message",
+                      "fromUser": {
+                        "id": "me",
+                        "username": "me",
+                        "name": "Me"
+                      },
+                      "text": "原消息"
+                    }
+                  }
+                ]
+              }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(2, events.size)
+        assertEquals("message-batch-1", events[0].message.id)
+        assertEquals("message-batch-2", events[1].message.id)
+        assertEquals("quoted-message", events[1].message.quote?.id)
+        assertEquals("room-1", events[1].source.roomId)
+    }
+
+    @Test
+    fun parsesWrappedChatMessageBodyAndRoomIdAlias() {
+        val event = parseSharkeyStreamingChatEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "chat-room-room-1",
+                "type": "message",
+                "body": {
+                  "message": {
+                    "id": "message-wrapped",
+                    "createdAt": "2026-05-25T01:23:45.000Z",
+                    "roomId": "room-1",
+                    "text": "包裹后的实时消息",
+                    "fromUser": {
+                      "id": "user-1",
+                      "username": "alice",
+                      "name": "Alice"
+                    }
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val messageEvent = assertIs<ChatStreamingEvent.MessageReceived>(event)
+        assertEquals("message-wrapped", messageEvent.message.id)
+        assertEquals("room-1", messageEvent.message.roomId)
+        assertEquals("包裹后的实时消息", messageEvent.message.text)
+    }
+
+    @Test
+    fun parsesDirectMessageSourceFromChannelIdWhenPayloadDoesNotIncludePeer() {
+        val event = parseSharkeyStreamingChatEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "chat-user-user-2",
+                "type": "message",
+                "body": {
+                  "id": "message-2",
+                  "createdAt": "2026-05-25T02:23:45.000Z",
+                  "text": "私聊实时消息",
+                  "fromUser": {
+                    "id": "user-2",
+                    "username": "bob",
+                    "name": "Bob"
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val messageEvent = assertIs<ChatStreamingEvent.MessageReceived>(event)
+        assertEquals("user-2", messageEvent.source.userId)
+        assertEquals("", messageEvent.message.roomId)
+        assertEquals("user-2", messageEvent.message.fromUser.id)
+        assertEquals(null, messageEvent.message.toUserId)
+    }
+
+    @Test
+    fun fillsOutgoingDirectMessagePeerFromChannelIdWhenPayloadOmitsToUserId() {
+        val event = parseSharkeyStreamingChatEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "chat-user-user-2",
+                "type": "message",
+                "body": {
+                  "id": "message-3",
+                  "createdAt": "2026-05-25T02:24:45.000Z",
+                  "text": "我发出的私聊实时消息",
+                  "fromUser": {
+                    "id": "me",
+                    "username": "me",
+                    "name": "Me"
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val messageEvent = assertIs<ChatStreamingEvent.MessageReceived>(event)
+        assertEquals("user-2", messageEvent.source.userId)
+        assertEquals("user-2", messageEvent.message.toUserId)
     }
 
     @Test

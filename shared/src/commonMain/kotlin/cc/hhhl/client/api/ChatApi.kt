@@ -15,6 +15,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.content.TextContent
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
@@ -97,6 +98,7 @@ interface ChatApi {
         token: String,
         name: String,
         description: String = "",
+        joinMode: String = "inviteOnly",
     ): ChatRoomMutationResult
 
     suspend fun createRoomMessage(
@@ -138,9 +140,21 @@ interface ChatApi {
     suspend fun updateRoom(
         token: String,
         roomId: String,
-        name: String,
-        description: String,
+        name: String? = null,
+        description: String? = null,
+        joinMode: String? = null,
     ): ChatRoomMutationResult
+
+    suspend fun updateRoomManagement(
+        token: String,
+        roomId: String,
+        messageRetentionDays: Int?,
+    ): ChatRoomMutationResult
+
+    suspend fun deleteAllRoomMessages(
+        token: String,
+        roomId: String,
+    ): ChatRoomActionResult
 
     suspend fun inviteRoomMember(
         token: String,
@@ -741,9 +755,11 @@ class SharkeyChatApi(
         token: String,
         name: String,
         description: String,
+        joinMode: String,
     ): ChatRoomMutationResult {
         val cleanToken = token.trim()
         val cleanName = name.trim()
+        val cleanJoinMode = joinMode.cleanChatRoomJoinMode() ?: "inviteOnly"
         if (cleanToken.isEmpty()) return ChatRoomMutationResult.Unauthorized
         if (cleanName.isEmpty()) {
             return ChatRoomMutationResult.ServerError(400, "请输入聊天室名称")
@@ -757,6 +773,7 @@ class SharkeyChatApi(
                         i = cleanToken,
                         name = cleanName,
                         description = description.trim().takeIf { it.isNotEmpty() },
+                        joinMode = cleanJoinMode,
                     ),
                 )
             }
@@ -920,18 +937,21 @@ class SharkeyChatApi(
     override suspend fun updateRoom(
         token: String,
         roomId: String,
-        name: String,
-        description: String,
+        name: String?,
+        description: String?,
+        joinMode: String?,
     ): ChatRoomMutationResult {
         val cleanToken = token.trim()
         val cleanRoomId = roomId.trim()
-        val cleanName = name.trim()
+        val cleanName = name?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanDescription = description?.trim()
+        val cleanJoinMode = joinMode?.cleanChatRoomJoinMode()
         if (cleanToken.isEmpty()) return ChatRoomMutationResult.Unauthorized
         if (cleanRoomId.isEmpty()) {
             return ChatRoomMutationResult.ServerError(400, "请选择聊天室")
         }
-        if (cleanName.isEmpty()) {
-            return ChatRoomMutationResult.ServerError(400, "请输入聊天室名称")
+        if (cleanName == null && cleanDescription == null && cleanJoinMode == null) {
+            return ChatRoomMutationResult.ServerError(400, "没有要保存的聊天室设置")
         }
 
         return try {
@@ -942,7 +962,60 @@ class SharkeyChatApi(
                         i = cleanToken,
                         roomId = cleanRoomId,
                         name = cleanName,
-                        description = description.trim(),
+                        description = cleanDescription,
+                        joinMode = cleanJoinMode,
+                    ),
+                )
+            }
+
+            if (response.isSharkeyUnauthorized()) return ChatRoomMutationResult.Unauthorized
+            when (response.status) {
+                HttpStatusCode.OK -> ChatRoomMutationResult.Success(
+                    response.body<ChatRoomDto>().toDomainRoom(),
+                )
+                HttpStatusCode.Unauthorized -> ChatRoomMutationResult.Unauthorized
+                else -> ChatRoomMutationResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            ChatRoomMutationResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun updateRoomManagement(
+        token: String,
+        roomId: String,
+        messageRetentionDays: Int?,
+    ): ChatRoomMutationResult {
+        val cleanToken = token.trim()
+        val cleanRoomId = roomId.trim()
+        if (cleanToken.isEmpty()) return ChatRoomMutationResult.Unauthorized
+        if (cleanRoomId.isEmpty()) {
+            return ChatRoomMutationResult.ServerError(400, "请选择聊天室")
+        }
+        if (messageRetentionDays != null && messageRetentionDays !in 1..3650) {
+            return ChatRoomMutationResult.ServerError(400, "消息保留天数需要在 1 到 3650 之间")
+        }
+
+        return try {
+            val request = ChatRoomManagementUpdateRequest(
+                i = cleanToken,
+                roomId = cleanRoomId,
+                messageRetentionDays = messageRetentionDays,
+            )
+            val response = client.post(apiUrl("chat", "rooms", "manage", "update")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    TextContent(
+                        text = chatRoomManagementRequestJson.encodeToString(
+                            ChatRoomManagementUpdateRequest.serializer(),
+                            request,
+                        ),
+                        contentType = ContentType.Application.Json,
                     ),
                 )
             }
@@ -1016,6 +1089,17 @@ class SharkeyChatApi(
     ): ChatRoomActionResult {
         return sendRoomAction(
             endpoint = listOf("chat", "rooms", "delete"),
+            request = ChatRoomIdRequest(i = token.trim(), roomId = roomId.trim()),
+            validate = { validateRoomIdAction(token, roomId) },
+        )
+    }
+
+    override suspend fun deleteAllRoomMessages(
+        token: String,
+        roomId: String,
+    ): ChatRoomActionResult {
+        return sendRoomAction(
+            endpoint = listOf("chat", "rooms", "manage", "delete-all-messages"),
             request = ChatRoomIdRequest(i = token.trim(), roomId = roomId.trim()),
             validate = { validateRoomIdAction(token, roomId) },
         )
@@ -1251,14 +1335,23 @@ private data class ChatRoomCreateRequest(
     val i: String,
     val name: String,
     val description: String? = null,
+    val joinMode: String? = null,
 )
 
 @Serializable
 private data class ChatRoomUpdateRequest(
     val i: String,
     val roomId: String,
-    val name: String,
-    val description: String,
+    val name: String? = null,
+    val description: String? = null,
+    val joinMode: String? = null,
+)
+
+@Serializable
+private data class ChatRoomManagementUpdateRequest(
+    val i: String,
+    val roomId: String,
+    val messageRetentionDays: Int?,
 )
 
 @Serializable
@@ -1448,6 +1541,20 @@ private data class HistoryUnreadSummary(
 
 private fun Int?.coercePositive(): Int = this?.coerceAtLeast(0) ?: 0
 
+private fun String.cleanChatRoomJoinMode(): String? {
+    return when (trim()) {
+        "inviteOnly", "invite", "invitation" -> "inviteOnly"
+        "open", "public" -> "open"
+        "closed", "close" -> "closed"
+        else -> null
+    }
+}
+
+@OptIn(ExperimentalSerializationApi::class)
+private val chatRoomManagementRequestJson = Json {
+    explicitNulls = true
+}
+
 @Serializable
 private data class ChatRoomDto(
     val id: String = "",
@@ -1455,6 +1562,10 @@ private data class ChatRoomDto(
     val name: String = "聊天室",
     val description: String = "",
     val joinMode: String = "",
+    val memberLimit: Int = 0,
+    val memberLimitOverride: Int? = null,
+    val canManage: Boolean = false,
+    val messageRetentionDays: Int? = null,
     val memberCount: Int = 0,
     val isMuted: Boolean = false,
     val lastMessage: ChatRoomLatestMessageDto? = null,
@@ -1485,6 +1596,10 @@ private data class ChatRoomDto(
             unreadCount = maxOf(unreadCount, membershipUnreadCount).coerceAtLeast(0),
             latestMessageAtLabel = latestMessageAtLabelOverride.ifBlank { latestMessageTimeLabel() },
             latestMessageMarker = latestMessageMarkerOverride.ifBlank { latestMessageMarker() },
+            memberLimit = memberLimit.coerceAtLeast(0),
+            memberLimitOverride = memberLimitOverride?.coerceAtLeast(1),
+            canManage = canManage,
+            messageRetentionDays = messageRetentionDays?.coerceIn(1, 3650),
         )
     }
 
@@ -1530,6 +1645,8 @@ private data class ChatMessageDto(
     val fromUserId: String = "",
     val toUser: ChatUserDto? = null,
     val toUserId: String? = null,
+    @OptIn(ExperimentalSerializationApi::class)
+    @JsonNames("roomId")
     val toRoomId: String? = null,
     val text: String? = null,
     val file: ChatDriveFileDto? = null,

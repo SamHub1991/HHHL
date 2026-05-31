@@ -80,7 +80,8 @@ private class AutomationRuleDraftResolver(
     private suspend fun resolveAction(action: AutomationAction): AutomationAction {
         val cleanTarget = action.targetId.trim()
         return when (action.type) {
-            AutomationActionType.ForwardToRoom -> resolveRoom(cleanTarget.removePrefixIgnoreCase("room:"))?.let { room ->
+            AutomationActionType.ForwardToRoom,
+            AutomationActionType.AiForwardToRoom -> resolveRoom(cleanTarget.removePrefixIgnoreCase("room:"))?.let { room ->
                 messages += "动作聊天室 ${room.name} -> ${room.id}"
                 action.copy(targetId = room.id)
             } ?: action.copy(targetId = cleanTarget.removePrefixIgnoreCase("room:"))
@@ -124,9 +125,10 @@ private class AutomationRuleDraftResolver(
         val current = (input.rooms + loadedRooms.orEmpty()).distinctBy { it.id }
         current.uniqueByName(clean) { it.name }?.let { return it }
         val loaded = loadedRooms ?: input.loadRooms().also { loadedRooms = it }
-        val remote = (current + loaded).distinctBy { it.id }.uniqueByName(clean) { it.name }
-        if (remote == null) messages += "未能唯一解析聊天室：$clean"
-        return remote
+        val candidates = (current + loaded).distinctBy { it.id }.candidatesByName(clean) { it.name }
+        val room = candidates.singleOrNull()
+        if (room == null) messages += unresolvedEntityMessage("聊天室", clean, candidates.map { room -> "${room.name}(${room.id})" })
+        return room
     }
 
     private suspend fun resolveChannel(name: String): Channel? {
@@ -135,9 +137,10 @@ private class AutomationRuleDraftResolver(
         val current = (input.channels + loadedChannels.orEmpty()).distinctBy { it.id }
         current.uniqueByName(clean) { it.name }?.let { return it }
         val loaded = loadedChannels ?: input.loadChannels().also { loadedChannels = it }
-        val remote = (current + loaded).distinctBy { it.id }.uniqueByName(clean) { it.name }
-        if (remote == null) messages += "未能唯一解析频道：$clean"
-        return remote
+        val candidates = (current + loaded).distinctBy { it.id }.candidatesByName(clean) { it.name }
+        val channel = candidates.singleOrNull()
+        if (channel == null) messages += unresolvedEntityMessage("频道", clean, candidates.map { channel -> "${channel.name}(${channel.id})" })
+        return channel
     }
 
     private suspend fun resolveUsers(value: String): List<User> {
@@ -146,9 +149,15 @@ private class AutomationRuleDraftResolver(
         val resolved = mutableListOf<User>()
         for (name in names) {
             if (name.looksLikeId()) continue
-            val user = input.users.uniqueUser(name) ?: input.searchUsers(name).uniqueUser(name)
+            val candidates = (input.users.candidateUsers(name) + input.searchUsers(name).candidateUsers(name))
+                .distinctBy { it.id }
+            val user = candidates.singleOrNull()
             if (user == null) {
-                messages += "未能唯一解析用户：$name"
+                messages += unresolvedEntityMessage(
+                    "用户",
+                    name,
+                    candidates.map { user -> "${user.displayName.ifBlank { user.username }}(@${user.acct()}, ${user.id})" },
+                )
             } else {
                 resolved += user
             }
@@ -172,17 +181,24 @@ private class AutomationRuleDraftResolver(
 }
 
 private fun <T> List<T>.uniqueByName(name: String, selector: (T) -> String): T? {
+    return candidatesByName(name, selector).singleOrNull()
+}
+
+private fun <T> List<T>.candidatesByName(name: String, selector: (T) -> String): List<T> {
     val clean = name.normalizedEntityName()
-    if (clean.isBlank()) return null
+    if (clean.isBlank()) return emptyList()
     val exact = filter { selector(it).normalizedEntityName() == clean }
-    if (exact.size == 1) return exact.single()
-    val contains = filter { selector(it).normalizedEntityName().contains(clean) }
-    return contains.singleOrNull()
+    if (exact.isNotEmpty()) return exact
+    return filter { selector(it).normalizedEntityName().contains(clean) }
 }
 
 private fun List<User>.uniqueUser(name: String): User? {
+    return candidateUsers(name).singleOrNull()
+}
+
+private fun List<User>.candidateUsers(name: String): List<User> {
     val clean = name.normalizedEntityName().trimStart('@')
-    if (clean.isBlank()) return null
+    if (clean.isBlank()) return emptyList()
     val exact = filter { user ->
         user.id.equals(clean, ignoreCase = true) ||
             user.username.equals(clean, ignoreCase = true) ||
@@ -190,12 +206,16 @@ private fun List<User>.uniqueUser(name: String): User? {
             user.acct().equals(clean, ignoreCase = true) ||
             "@${user.acct()}".equals(clean, ignoreCase = true)
     }
-    if (exact.size == 1) return exact.single()
-    val contains = filter { user ->
+    if (exact.isNotEmpty()) return exact
+    return filter { user ->
         user.displayName.normalizedEntityName().contains(clean) ||
             user.username.normalizedEntityName().contains(clean)
     }
-    return contains.singleOrNull()
+}
+
+private fun unresolvedEntityMessage(kind: String, name: String, candidates: List<String>): String {
+    if (candidates.isEmpty()) return "未找到${kind}：$name，请改用准确名称或 ID"
+    return "${kind}名称不唯一：$name，候选 ${candidates.take(3).joinToString("、")}，请明确选择或改用 ID"
 }
 
 private fun User.acct(): String {

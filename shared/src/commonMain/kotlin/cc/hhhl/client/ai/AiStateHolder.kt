@@ -54,7 +54,10 @@ class AiStateHolder(
                 provider = provider,
                 baseUrl = provider.defaultBaseUrl.takeIf { it.isNotBlank() } ?: current.baseUrl,
                 chatModel = provider.defaultChatModel.takeIf { it.isNotBlank() } ?: current.chatModel,
-                fastModel = provider.defaultChatModel.takeIf { it.isNotBlank() } ?: current.fastModel,
+                fastModel = provider.defaultFastModel.takeIf { it.isNotBlank() } ?: current.fastModel,
+                longContextModel = provider.defaultLongContextModel.takeIf { it.isNotBlank() } ?: current.longContextModel,
+                visionModel = provider.defaultVisionModel.takeIf { it.isNotBlank() } ?: current.visionModel,
+                embeddingModel = provider.defaultEmbeddingModel.takeIf { it.isNotBlank() } ?: current.embeddingModel,
             ),
         )
     }
@@ -328,7 +331,15 @@ private fun AiSettings.validationError(kind: AiTaskKind): String? {
     if (!enabled) return "AI 未启用"
     if (!hasEndpoint) return "请先配置 AI Base URL 和模型"
     if (supportsCloudAuth && apiKey.isBlank()) return "请先填写 AI API Key"
-    if ((kind == AiTaskKind.ChatSummary || kind == AiTaskKind.ChatReplyDraft) && !readChatAllowed) {
+    if (
+        (kind == AiTaskKind.ChatSummary ||
+            kind == AiTaskKind.ChatRecentSummary ||
+            kind == AiTaskKind.ChatTodaySummary ||
+            kind == AiTaskKind.ChatUnreadSummary ||
+            kind == AiTaskKind.ChatImportanceCheck ||
+            kind == AiTaskKind.ChatReplyDraft) &&
+        !readChatAllowed
+    ) {
         return "AI 未获得聊天读取权限"
     }
     if ((kind == AiTaskKind.ChatActionItems || kind == AiTaskKind.ChatDecisionSummary) && !readChatAllowed) {
@@ -354,9 +365,9 @@ private fun AiSettings.validationError(kind: AiTaskKind): String? {
     ) {
         return "AI 未获得帖子读取权限"
     }
-    if (kind == AiTaskKind.WorkspaceActionPlan) {
+    if (kind == AiTaskKind.WorkspaceActionPlan || kind == AiTaskKind.AssistantChat) {
         val hasAnyReadableContext = readTimelineAllowed || readNotificationsAllowed || readChatAllowed || readDraftsAllowed || automationAllowed
-        if (!hasAnyReadableContext) return "AI 未获得可用于行动计划的读取权限"
+        if (!hasAnyReadableContext) return "AI 未获得可用于助手的读取权限"
     }
     if ((kind == AiTaskKind.ProfileSummary || kind == AiTaskKind.ProfileInteractionSuggestions) && !readProfileAllowed) {
         return "AI 未获得资料读取权限"
@@ -381,5 +392,10 @@ private fun AiSettings.cleaned(): AiSettings {
         dailyRequestLimit = dailyRequestLimit.coerceIn(1, 2_000),
         tonePreference = tonePreference.trim().take(240),
         systemPrompt = systemPrompt.trim().ifBlank { DEFAULT_AI_SYSTEM_PROMPT }.take(2_000),
+        assistantMemoryNotes = assistantMemoryNotes
+            .map { it.trim().take(240) }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .takeLast(20),
     )
 }

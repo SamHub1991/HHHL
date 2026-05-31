@@ -82,6 +82,18 @@ object AiPromptBuilder {
                     instruction = "总结这段聊天：重要结论、待办、谁提到了我或需要我回复。用短项目符号输出。",
                     input = compact,
                 )
+                AiTaskKind.ChatRecentSummary -> chatPrompt(
+                    instruction = "总结最近 50 条聊天：主要话题、重要结论、待办、需要我回复或关注的人。用短项目符号输出。",
+                    input = compact,
+                )
+                AiTaskKind.ChatTodaySummary -> chatPrompt(
+                    instruction = "总结今天的聊天：按时间顺序归纳发生了什么、当前结论、待办和需要我处理的点。只依据给出的今日消息；如果上下文说明没有可解析的今日消息，要明确说明。",
+                    input = compact,
+                )
+                AiTaskKind.ChatUnreadSummary -> chatPrompt(
+                    instruction = "总结我未读期间发生了什么：先说最重要的变化，再列出需要我回复、确认或稍后处理的消息。只依据给出的未读消息；如果没有未读消息，要明确说明。",
+                    input = compact,
+                )
                 AiTaskKind.ChatReplyDraft -> chatPrompt(
                     instruction = "根据这段聊天生成一个适合发送的回复草稿。只输出回复正文。",
                     input = compact,
@@ -92,6 +104,10 @@ object AiPromptBuilder {
                 )
                 AiTaskKind.ChatDecisionSummary -> chatPrompt(
                     instruction = "整理这段聊天中的决策、备选方案、尚未决定的问题和下一步。只依据聊天内容，不要编造。用短项目符号输出。",
+                    input = compact,
+                )
+                AiTaskKind.ChatImportanceCheck -> chatPrompt(
+                    instruction = "判断这批聊天消息是否值得立刻通知我。只有出现明确提到我、需要我处理、强时效任务、重要决策、异常风险或指定关注对象时才算重要。第一行只输出 Important: true 或 Important: false，第二行用一句话说明原因。",
                     input = compact,
                 )
                 AiTaskKind.NotificationSummary -> notificationPrompt(
@@ -119,6 +135,7 @@ object AiPromptBuilder {
                 AiTaskKind.AutomationExplain -> automationExplainPrompt(compact)
                 AiTaskKind.AutomationRuleSuggestions -> automationRuleSuggestionsPrompt(compact)
                 AiTaskKind.AutomationRuleDraft -> automationRuleDraftPrompt(compact)
+                AiTaskKind.AssistantChat -> assistantChatPrompt(compact)
                 AiTaskKind.WorkspaceActionPlan -> workspaceActionPlanPrompt(compact)
                 AiTaskKind.ConnectionTest -> "请只回复 OK。"
             },
@@ -128,7 +145,9 @@ object AiPromptBuilder {
                 AiTaskKind.ComposeMentionSuggestions -> 160
                 AiTaskKind.ComposeFromRecentPosts -> settings.maxOutputTokens.coerceIn(160, 1_200)
                 AiTaskKind.AutomationSemanticCondition -> 40
+                AiTaskKind.ChatImportanceCheck -> 80
                 AiTaskKind.AutomationRuleDraft -> settings.maxOutputTokens.coerceIn(320, 1_600)
+                AiTaskKind.AssistantChat -> settings.maxOutputTokens.coerceIn(240, 2_000)
                 AiTaskKind.WorkspaceActionPlan -> settings.maxOutputTokens.coerceIn(320, 4_000)
                 AiTaskKind.ConnectionTest -> 16
                 else -> settings.maxOutputTokens.coerceIn(64, 4_000)
@@ -174,7 +193,8 @@ object AiPromptBuilder {
             input.timelineNotes.forEachIndexed { index, note ->
                 val time = note.createdAtLabel.takeIf { it.isNotBlank() }?.let { "[$it] " }.orEmpty()
                 val user = note.username.takeIf { it.isNotBlank() }?.let { "@$it" }.orEmpty()
-                appendLine("${index + 1}. ${time}${note.author} $user：${note.text}")
+                val noteId = note.id.takeIf { it.isNotBlank() }?.let { " [ID: $it]" }.orEmpty()
+                appendLine("${index + 1}. ${time}${note.author} $user$noteId：${note.text}")
                 if (note.stats.isNotBlank()) appendLine("   ${note.stats}")
             }
         }.trim()
@@ -202,7 +222,8 @@ object AiPromptBuilder {
                 input.timelineNotes.forEachIndexed { index, note ->
                     val time = note.createdAtLabel.takeIf { it.isNotBlank() }?.let { "[$it] " }.orEmpty()
                     val user = note.username.takeIf { it.isNotBlank() }?.let { "@$it" }.orEmpty()
-                    appendLine("${index + 1}. ${time}${note.author} $user：${note.text}")
+                    val noteId = note.id.takeIf { it.isNotBlank() }?.let { " [ID: $it]" }.orEmpty()
+                    appendLine("${index + 1}. ${time}${note.author} $user$noteId：${note.text}")
                 }
             }
         }.trim()
@@ -212,6 +233,7 @@ object AiPromptBuilder {
         return buildString {
             appendLine(instruction)
             appendLine("聊天：${input.chatTitle.ifBlank { "当前会话" }}")
+            if (input.prompt.isNotBlank()) appendLine(input.prompt)
             appendLine()
             input.chatMessages.forEach { message ->
                 val time = message.createdAtLabel.takeIf { it.isNotBlank() }?.let { "[$it] " }.orEmpty()
@@ -226,7 +248,8 @@ object AiPromptBuilder {
             appendLine()
             input.notifications.forEach { item ->
                 val time = item.createdAtLabel.takeIf { it.isNotBlank() }?.let { "[$it] " }.orEmpty()
-                appendLine("$time${item.type} · ${item.actor}: ${item.text}")
+                val noteId = item.noteId.takeIf { it.isNotBlank() }?.let { " [帖子ID: $it]" }.orEmpty()
+                appendLine("$time${item.type} · ${item.actor}$noteId: ${item.text}")
                 if (item.notePreviewText.isNotBlank()) appendLine("帖子预览：${item.notePreviewText}")
             }
         }.trim()
@@ -251,7 +274,8 @@ object AiPromptBuilder {
                 appendLine("最近可见帖子：")
                 input.timelineNotes.forEachIndexed { index, note ->
                     val time = note.createdAtLabel.takeIf { it.isNotBlank() }?.let { "[$it] " }.orEmpty()
-                    appendLine("${index + 1}. ${time}${note.text}")
+                    val noteId = note.id.takeIf { it.isNotBlank() }?.let { " [ID: $it]" }.orEmpty()
+                    appendLine("${index + 1}. ${time}${note.text}$noteId")
                     if (note.stats.isNotBlank()) appendLine("   ${note.stats}")
                 }
             }
@@ -332,6 +356,41 @@ object AiPromptBuilder {
                 appendLine()
                 appendLine("当前自动化上下文：")
                 appendLine(input.automationEventText)
+            }
+        }.trim()
+    }
+
+    private fun assistantChatPrompt(input: AiTaskInput): String {
+        return buildString {
+            appendLine("你是 HHHL 客户端里的本地 AI 助手，运行在聊天页内，不是远程 Misskey 机器人账号。")
+            appendLine("你可以帮助用户理解当前界面、整理聊天和通知、解释自动化规则、设计规则草稿、生成回复或发帖草稿。")
+            appendLine("所有会修改状态或发送到外部的动作都只能建议给客户端执行，不能声称你自己已经执行。")
+            appendLine("当用户要求执行动作时，按风险说明需要确认：只读、草稿、需确认、高风险。")
+            appendLine("如果当前应用上下文显示高风险自动批准已开启，你可以直接给出删除、清空、退出、发送、发布等已支持动作建议；客户端会自动批准并执行，你只说明将由客户端执行。")
+            appendLine("客户端会在你的回复下方显示可批准动作按钮，例如打开时间线/通知/聊天/设置/更新日志、刷新当前页、检查更新、创建自动化草稿、打开日志、生成聊天室摘要、填入或发送聊天草稿、按聊天室/私聊用户/姓名 @ 人发送消息、填入或发布发帖草稿、按频道/可见性/@ 人发布帖子、标记通知已读、添加静音词、复制清单、打开站内/网络搜索或保存记忆；你需要在正文里说明动作意图和风险。")
+            appendLine("不要输出伪 JSON 工具调用，不要声称已经点击按钮；涉及发送消息、发布帖子、转发、删除、关注、屏蔽、举报、Webhook 或跨聊天室操作时，如果高风险自动批准未开启，必须提示用户批准。")
+            appendLine("如果你的回复会让客户端填入草稿、创建自动化草稿、打开搜索、添加静音词、保存记忆或复制清单，必须在回复最后追加一个隐藏给客户端解析的结构化载荷块。")
+            appendLine("载荷块格式必须严格如下，字段不需要时填空字符串，不要把解释写进字段值：")
+            appendLine("```hhhl-assistant-payload")
+            appendLine("{\"body\":\"\",\"targetRoom\":\"\",\"targetUser\":\"\",\"mentions\":[],\"channel\":\"\",\"visibility\":\"\",\"cw\":\"\",\"localOnly\":\"\",\"searchQuery\":\"\",\"automationGoal\":\"\",\"mutedWord\":\"\",\"memory\":\"\",\"checklist\":\"\"}")
+            appendLine("```")
+            appendLine("字段含义：body 只放要填进发帖/聊天框的正文；targetRoom 放目标聊天室名称或 ID；targetUser 放私聊收件人名称、用户名、@acct 或 ID；mentions 放正文需要 @ 的人名、显示名、用户名或 @acct 数组；channel 放目标频道名称或 ID；visibility 放 public/home/followers/specified 或中文公开/首页/关注者/指定；cw 放内容警告；localOnly 放 true/false；searchQuery 只放搜索关键词；automationGoal 只放要创建规则的目标描述；mutedWord 只放一个静音词；memory 只放要保存的偏好；checklist 只放可复制清单。")
+            appendLine("当用户用名字说“@某人”时，把原始名字写进 mentions，不要要求用户提供 ID；如果上下文有名称 -> ID，可优先用 ID 或 @acct。目标聊天室、目标用户、频道同理，名字不确定时保留用户说的名字，客户端会继续本地匹配或搜索。")
+            appendLine("回答要简洁、直接，并尽量给出下一步可点击或可复制的内容。")
+            if (input.automationEventText.isNotBlank()) {
+                appendLine()
+                appendLine("当前应用上下文：")
+                appendLine(input.automationEventText)
+            }
+            if (input.prompt.isNotBlank()) {
+                appendLine()
+                appendLine("本轮用户消息：")
+                appendLine(input.prompt)
+            }
+            if (input.text.isNotBlank()) {
+                appendLine()
+                appendLine("最近对话记忆：")
+                appendLine(input.text)
             }
         }.trim()
     }

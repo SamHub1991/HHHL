@@ -16,7 +16,9 @@ internal data class SharkeyNoteDto(
     val text: String? = null,
     val cw: String? = null,
     val visibility: String? = null,
+    val visibleUserIds: List<String>? = null,
     val replyId: String? = null,
+    val renoteId: String? = null,
     val channelId: String? = null,
     val channel: SharkeyNoteChannelDto? = null,
     val user: SharkeyUserSummaryDto,
@@ -28,6 +30,8 @@ internal data class SharkeyNoteDto(
     val isFavorited: Boolean = false,
     val poll: SharkeyPollDto? = null,
     val files: List<SharkeyFileDto> = emptyList(),
+    val localOnly: Boolean = false,
+    val reactionAcceptance: String? = null,
 ) {
     fun toDomainNote(): Note {
         val isQuote = renote != null && !text.isNullOrBlank()
@@ -54,8 +58,12 @@ internal data class SharkeyNoteDto(
             isRenote = renote != null && text.isNullOrBlank(),
             quotedNote = if (isQuote) renote?.toDomainNote() else null,
             replyId = replyId?.takeIf { it.isNotBlank() },
+            renoteId = (renoteId ?: renote?.id)?.takeIf { it.isNotBlank() },
             channelId = (channelId ?: contentNote.channelId).orEmpty(),
             channelName = (channel?.name ?: contentNote.channel?.name).orEmpty(),
+            localOnly = contentNote.localOnly,
+            visibleUserIds = contentNote.visibleUserIds.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
+            reactionAcceptance = contentNote.reactionAcceptance.orEmpty(),
         )
     }
 }

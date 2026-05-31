@@ -225,15 +225,18 @@ open class ChatRepository(
     open suspend fun createRoom(
         name: String,
         description: String,
+        joinMode: String = "inviteOnly",
     ): ChatRoomMutationRepositoryResult {
         val cleanName = name.trim()
         if (cleanName.isBlank()) {
             return ChatRoomMutationRepositoryResult.ValidationError("请输入聊天室名称")
         }
+        val cleanJoinMode = joinMode.cleanRepositoryChatRoomJoinMode()
+            ?: return ChatRoomMutationRepositoryResult.ValidationError("请选择有效的加入方式")
         val token = tokenProvider()?.takeIf { it.isNotBlank() }
             ?: return ChatRoomMutationRepositoryResult.Unauthorized
 
-        return when (val result = api.createRoom(token, cleanName, description.trim())) {
+        return when (val result = api.createRoom(token, cleanName, description.trim(), cleanJoinMode)) {
             is ChatRoomMutationResult.Success -> ChatRoomMutationRepositoryResult.RoomSaved(result.room)
             ChatRoomMutationResult.Unauthorized -> ChatRoomMutationRepositoryResult.Unauthorized
             is ChatRoomMutationResult.NetworkError -> {
@@ -263,19 +266,26 @@ open class ChatRepository(
 
     open suspend fun updateRoom(
         roomId: String,
-        name: String,
-        description: String,
+        name: String? = null,
+        description: String? = null,
+        joinMode: String? = null,
     ): ChatRoomMutationRepositoryResult {
         val cleanRoomId = roomId.takeIf { it.isNotBlank() }
             ?: return ChatRoomMutationRepositoryResult.ValidationError("请选择聊天室")
-        val cleanName = name.trim()
-        if (cleanName.isBlank()) {
+        val cleanName = name?.trim()?.takeIf { it.isNotEmpty() }
+        if (name != null && cleanName == null) {
             return ChatRoomMutationRepositoryResult.ValidationError("请输入聊天室名称")
+        }
+        val cleanDescription = description?.trim()
+        val cleanJoinMode = joinMode?.cleanRepositoryChatRoomJoinMode()
+            ?: joinMode?.let { return ChatRoomMutationRepositoryResult.ValidationError("请选择有效的加入方式") }
+        if (cleanName == null && cleanDescription == null && cleanJoinMode == null) {
+            return ChatRoomMutationRepositoryResult.ValidationError("没有要保存的聊天室设置")
         }
         val token = tokenProvider()?.takeIf { it.isNotBlank() }
             ?: return ChatRoomMutationRepositoryResult.Unauthorized
 
-        return when (val result = api.updateRoom(token, cleanRoomId, cleanName, description.trim())) {
+        return when (val result = api.updateRoom(token, cleanRoomId, cleanName, cleanDescription, cleanJoinMode)) {
             is ChatRoomMutationResult.Success -> ChatRoomMutationRepositoryResult.RoomSaved(result.room)
             ChatRoomMutationResult.Unauthorized -> ChatRoomMutationRepositoryResult.Unauthorized
             is ChatRoomMutationResult.NetworkError -> {
@@ -283,6 +293,41 @@ open class ChatRepository(
             }
             is ChatRoomMutationResult.ServerError -> result.toMutationRepositoryResult()
         }
+    }
+
+    open suspend fun updateRoomManagement(
+        roomId: String,
+        messageRetentionDays: Int?,
+    ): ChatRoomMutationRepositoryResult {
+        val cleanRoomId = roomId.takeIf { it.isNotBlank() }
+            ?: return ChatRoomMutationRepositoryResult.ValidationError("请选择聊天室")
+        if (messageRetentionDays != null && messageRetentionDays !in 1..3650) {
+            return ChatRoomMutationRepositoryResult.ValidationError("消息保留天数需要在 1 到 3650 之间")
+        }
+        val token = tokenProvider()?.takeIf { it.isNotBlank() }
+            ?: return ChatRoomMutationRepositoryResult.Unauthorized
+
+        return when (val result = api.updateRoomManagement(token, cleanRoomId, messageRetentionDays)) {
+            is ChatRoomMutationResult.Success -> ChatRoomMutationRepositoryResult.RoomSaved(result.room)
+            ChatRoomMutationResult.Unauthorized -> ChatRoomMutationRepositoryResult.Unauthorized
+            is ChatRoomMutationResult.NetworkError -> {
+                ChatRoomMutationRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is ChatRoomMutationResult.ServerError -> result.toMutationRepositoryResult()
+        }
+    }
+
+    open suspend fun deleteAllRoomMessages(roomId: String): ChatRoomMutationRepositoryResult {
+        val cleanRoomId = roomId.trim()
+        val result = roomIdAction(
+            roomId = cleanRoomId,
+            success = ChatRoomMutationRepositoryResult.RoomMessagesCleared(cleanRoomId),
+            action = { token, cleanRoomId -> api.deleteAllRoomMessages(token, cleanRoomId) },
+        )
+        if (result is ChatRoomMutationRepositoryResult.RoomMessagesCleared) {
+            deleteCachedRoomMessages(cleanRoomId)
+        }
+        return result
     }
 
     open suspend fun inviteRoomMember(
@@ -966,6 +1011,13 @@ open class ChatRepository(
         }
     }
 
+    private suspend fun deleteCachedRoomMessages(roomId: String) {
+        val key = cacheKey(ChatMessageCacheConversationType.Room, roomId) ?: return
+        messageCacheMutex.withLock {
+            messageCache.delete(key)
+        }
+    }
+
     private suspend fun cacheUserHistoryMessages(
         messages: List<ChatMessage>,
         currentUserId: String?,
@@ -1029,7 +1081,7 @@ open class ChatRepository(
     }
 
     private companion object {
-        const val DEFAULT_PAGE_SIZE = 30
+        const val DEFAULT_PAGE_SIZE = 100
         const val DEFAULT_MESSAGE_PAGE_SIZE = 40
         const val DEFAULT_UNREAD_COUNT_MESSAGE_LIMIT = 100
         const val DEFAULT_HISTORY_INDEX_PAGE_SIZE = 100
@@ -1038,6 +1090,42 @@ open class ChatRepository(
         const val MAX_UNREAD_COUNT_RESOLUTION_PER_REFRESH = 6
         const val MAX_RESTORED_MESSAGES_PER_CONVERSATION = 160
     }
+}
+
+suspend fun ChatRepository.resolveRealtimeMessage(
+    message: ChatMessage,
+    directUserId: String? = null,
+): ChatMessage {
+    if (!message.requiresRealtimeAttentionResolution()) return message
+    val cleanDirectUserId = directUserId?.trim()?.takeIf { it.isNotEmpty() }
+    val refreshedMessages = when {
+        cleanDirectUserId != null -> when (val result = refreshUserMessages(cleanDirectUserId)) {
+            is ChatMessageRepositoryResult.Success -> result.messages
+            is ChatMessageRepositoryResult.Created,
+            is ChatMessageRepositoryResult.Deleted,
+            is ChatMessageRepositoryResult.Error,
+            ChatMessageRepositoryResult.ReactionUpdated,
+            ChatMessageRepositoryResult.Unauthorized,
+                -> emptyList()
+        }
+        message.roomId.isNotBlank() -> when (val result = refreshMessages(message.roomId)) {
+            is ChatMessageRepositoryResult.Success -> result.messages
+            is ChatMessageRepositoryResult.Created,
+            is ChatMessageRepositoryResult.Deleted,
+            is ChatMessageRepositoryResult.Error,
+            ChatMessageRepositoryResult.ReactionUpdated,
+            ChatMessageRepositoryResult.Unauthorized,
+                -> emptyList()
+        }
+        else -> emptyList()
+    }
+    return refreshedMessages.firstOrNull { candidate ->
+        candidate.matchesRealtimeMessage(message, cleanDirectUserId)
+    } ?: message
+}
+
+fun ChatMessage.requiresRealtimeAttentionResolution(): Boolean {
+    return replyUnavailable || quoteUnavailable
 }
 
 private fun List<ChatRoomMember>.lastOfficialMembershipId(): String? {
@@ -1052,6 +1140,15 @@ private fun ChatRoom.stableRoomMergeKey(): String {
 
 private fun ChatRoom.stableMembershipPageKey(): String? {
     return membershipId.ifBlank { id }.takeIf { it.isNotBlank() }
+}
+
+private fun String.cleanRepositoryChatRoomJoinMode(): String? {
+    return when (trim()) {
+        "inviteOnly", "invite", "invitation" -> "inviteOnly"
+        "open", "public" -> "open"
+        "closed", "close" -> "closed"
+        else -> null
+    }
 }
 
 private fun ChatRoomMember.stableMemberMergeKey(): String {
@@ -1293,6 +1390,34 @@ private fun ChatMessage.unreadMarker(): String {
     return id.ifBlank { createdAt.ifBlank { createdAtLabel } }
 }
 
+private fun ChatMessage.matchesRealtimeMessage(
+    incoming: ChatMessage,
+    directUserId: String?,
+): Boolean {
+    if (id.isNotBlank() && id == incoming.id) return true
+    if (!matchesRealtimeConversation(incoming, directUserId)) return false
+    if (unreadMarker() == incoming.unreadMarker()) return true
+    return createdAt == incoming.createdAt &&
+        createdAt.isNotBlank() &&
+        fromUser.id == incoming.fromUser.id &&
+        text == incoming.text &&
+        file?.id.orEmpty() == incoming.file?.id.orEmpty()
+}
+
+private fun ChatMessage.matchesRealtimeConversation(
+    incoming: ChatMessage,
+    directUserId: String?,
+): Boolean {
+    val cleanDirectUserId = directUserId?.trim()?.takeIf { it.isNotEmpty() }
+    return when {
+        cleanDirectUserId != null -> roomId.isBlank() &&
+            incoming.roomId.isBlank() &&
+            (fromUser.id == cleanDirectUserId || toUserId == cleanDirectUserId || toUser?.id == cleanDirectUserId)
+        roomId.isNotBlank() -> roomId == incoming.roomId
+        else -> true
+    }
+}
+
 private fun Int?.coercePositive(): Int = this?.coerceAtLeast(0) ?: 0
 
 private data class CachedUnreadCount(
@@ -1368,6 +1493,8 @@ sealed interface ChatRoomMutationRepositoryResult {
     data class RoomSaved(val room: ChatRoom) : ChatRoomMutationRepositoryResult
 
     data class RoomRemoved(val roomId: String) : ChatRoomMutationRepositoryResult
+
+    data class RoomMessagesCleared(val roomId: String) : ChatRoomMutationRepositoryResult
 
     data class RoomMuted(
         val roomId: String,

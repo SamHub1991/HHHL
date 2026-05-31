@@ -14,6 +14,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
+import cc.hhhl.client.model.NoteVisibility
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -47,6 +48,10 @@ class SharkeyNoteDetailApiTest {
         assertEquals("note-1", result.note.id)
         assertEquals("Alice", result.note.author.displayName)
         assertEquals("detail note", result.note.text)
+        assertEquals(NoteVisibility.Specified, result.note.visibility)
+        assertEquals(listOf("user-2"), result.note.visibleUserIds)
+        assertEquals(true, result.note.localOnly)
+        assertEquals("likeOnly", result.note.reactionAcceptance)
         assertEquals(5, result.note.reactionCount)
     }
 
@@ -138,7 +143,10 @@ class SharkeyNoteDetailApiTest {
                   "id": "note-1",
                   "createdAt": "2026-05-25T02:10:00.000Z",
                   "text": "detail note",
-                  "visibility": "public",
+                  "visibility": "specified",
+                  "visibleUserIds": ["user-2"],
+                  "localOnly": true,
+                  "reactionAcceptance": "likeOnly",
                   "renoteCount": 4,
                   "repliesCount": 3,
                   "reactions": {

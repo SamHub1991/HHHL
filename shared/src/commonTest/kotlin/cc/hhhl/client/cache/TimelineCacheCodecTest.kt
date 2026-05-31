@@ -7,6 +7,7 @@ import cc.hhhl.client.model.NoteMedia
 import cc.hhhl.client.model.NotePoll
 import cc.hhhl.client.model.NotePollChoice
 import cc.hhhl.client.model.NoteReaction
+import cc.hhhl.client.model.NoteVisibility
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -77,6 +78,14 @@ class TimelineCacheCodecTest {
             reactions = listOf(NoteReaction("👍", 4)),
             myReaction = "👍",
             isFavorited = true,
+            visibility = NoteVisibility.Specified,
+            replyId = "reply-1",
+            renoteId = "renote-1",
+            channelId = "channel-1",
+            channelName = "频道",
+            localOnly = true,
+            visibleUserIds = listOf("user-1", "user-2"),
+            reactionAcceptance = "likeOnly",
             poll = NotePoll(
                 multiple = true,
                 expiresAtLabel = "2026-05-26 00:00",

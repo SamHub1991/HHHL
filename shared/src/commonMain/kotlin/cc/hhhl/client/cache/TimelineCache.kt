@@ -99,8 +99,12 @@ private data class CachedNote(
     val isRenote: Boolean = false,
     val quotedNote: CachedNote? = null,
     val replyId: String? = null,
+    val renoteId: String? = null,
     val channelId: String = "",
     val channelName: String = "",
+    val localOnly: Boolean = false,
+    val visibleUserIds: List<String> = emptyList(),
+    val reactionAcceptance: String = "",
 )
 
 @Serializable
@@ -170,8 +174,12 @@ private fun Note.toCachedNote(): CachedNote {
         isRenote = isRenote,
         quotedNote = quotedNote?.toCachedNote(),
         replyId = replyId,
+        renoteId = renoteId,
         channelId = channelId,
         channelName = channelName,
+        localOnly = localOnly,
+        visibleUserIds = visibleUserIds,
+        reactionAcceptance = reactionAcceptance,
     )
 }
 
@@ -195,8 +203,12 @@ private fun CachedNote.toDomainNote(): Note {
         isRenote = isRenote,
         quotedNote = quotedNote?.toDomainNote(),
         replyId = replyId,
+        renoteId = renoteId,
         channelId = channelId,
         channelName = channelName,
+        localOnly = localOnly,
+        visibleUserIds = visibleUserIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
+        reactionAcceptance = reactionAcceptance,
     )
 }
 

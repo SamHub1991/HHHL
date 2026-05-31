@@ -1,6 +1,7 @@
 package cc.hhhl.client.android
 
 import android.Manifest
+import android.app.Activity
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
@@ -9,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.speech.RecognizerIntent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,7 +27,9 @@ import androidx.core.content.ContextCompat
 import cc.hhhl.client.HhhlApp
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.media.MediaPicker
+import cc.hhhl.client.media.SpeechTextInput
 import cc.hhhl.client.model.NotificationItem
+import cc.hhhl.client.notification.ChatNoiseReductionSettings
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
@@ -34,6 +38,7 @@ import coil3.memory.MemoryCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private var authCallbackSession by mutableStateOf<String?>(null)
@@ -53,6 +58,7 @@ class MainActivity : ComponentActivity() {
             val automationStore = remember { AndroidAutomationStore(applicationContext) }
             val aiStore = remember { AndroidAiStore(applicationContext) }
             val composeDraftStore = remember { AndroidComposeDraftStore(applicationContext) }
+            val favoriteMessageStore = remember { AndroidFavoriteMessageStore(applicationContext) }
             val chatMessageCache = remember { AndroidChatMessageCache(applicationContext) }
             val chatUnreadStore = remember { AndroidChatUnreadStore(applicationContext) }
             val notificationCache = remember { AndroidNotificationCache(applicationContext) }
@@ -67,10 +73,15 @@ class MainActivity : ComponentActivity() {
             var specialCareBackgroundNotificationsEnabled by remember {
                 mutableStateOf(backgroundNotificationStore.isSpecialCareEnabled())
             }
+            var chatNoiseReductionSettings by remember {
+                mutableStateOf(backgroundNotificationStore.loadChatNoiseReductionSettings())
+            }
             var systemBackHandler by remember { mutableStateOf<(() -> Boolean)?>(null) }
             val coroutineScope = rememberCoroutineScope()
             var onMediaPicked by remember { mutableStateOf<((DriveFileUpload) -> Unit)?>(null) }
             var onMediaError by remember { mutableStateOf<((String) -> Unit)?>(null) }
+            var onSpeechResult by remember { mutableStateOf<((String) -> Unit)?>(null) }
+            var onSpeechError by remember { mutableStateOf<((String) -> Unit)?>(null) }
             val mediaLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.GetMultipleContents(),
             ) { uris ->
@@ -90,6 +101,25 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            val speechLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.StartActivityForResult(),
+            ) { result ->
+                val success = result.resultCode == Activity.RESULT_OK
+                val text = result.data
+                    ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                    ?.firstOrNull()
+                    .orEmpty()
+                    .trim()
+                val resultCallback = onSpeechResult
+                val errorCallback = onSpeechError
+                onSpeechResult = null
+                onSpeechError = null
+                if (success && text.isNotBlank()) {
+                    resultCallback?.invoke(text)
+                } else {
+                    errorCallback?.invoke("没有识别到语音内容")
+                }
+            }
             val mediaPicker = remember {
                 MediaPicker { mimeType, onPicked, onError ->
                     onMediaPicked = onPicked
@@ -103,16 +133,33 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            val speechTextInput = remember {
+                SpeechTextInput { prompt, onResult, onError ->
+                    onSpeechResult = onResult
+                    onSpeechError = onError
+                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+                        putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
+                        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                    }
+                    runCatching {
+                        speechLauncher.launch(intent)
+                    }.onFailure {
+                        onSpeechResult = null
+                        onSpeechError = null
+                        onError("无法打开系统语音输入")
+                    }
+                }
+            }
             val notificationPermissionLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestPermission(),
             ) { granted ->
-                if (granted && backgroundNotificationsEnabled) {
+                if (backgroundNotificationsEnabled) {
                     BackgroundNotificationScheduler.apply(applicationContext, enabled = true)
-                    BackgroundNotificationScheduler.syncNow(applicationContext)
-                } else if (!granted && backgroundNotificationsEnabled) {
-                    backgroundNotificationsEnabled = false
-                    backgroundNotificationStore.setBackgroundSyncEnabled(false)
-                    BackgroundNotificationScheduler.apply(applicationContext, enabled = false)
+                    if (granted) {
+                        BackgroundNotificationScheduler.syncNow(applicationContext)
+                    }
                 }
             }
             LaunchedEffect(backgroundNotificationsEnabled, specialCareBackgroundNotificationsEnabled) {
@@ -149,6 +196,7 @@ class MainActivity : ComponentActivity() {
                 shareUrl = ::shareUrl,
                 downloadUrl = ::downloadUrl,
                 mediaPicker = mediaPicker,
+                speechTextInput = speechTextInput,
                 authCallbackSession = authCallbackSession,
                 authTokenStore = authTokenStore,
                 themeStore = themeStore,
@@ -158,6 +206,7 @@ class MainActivity : ComponentActivity() {
                 automationStore = automationStore,
                 aiStore = aiStore,
                 composeDraftStore = composeDraftStore,
+                favoriteMessageStore = favoriteMessageStore,
                 chatMessageCache = chatMessageCache,
                 chatUnreadStore = chatUnreadStore,
                 notificationCache = notificationCache,
@@ -165,20 +214,28 @@ class MainActivity : ComponentActivity() {
                 timelineCache = timelineCache,
                 backgroundNotificationsEnabled = backgroundNotificationsEnabled,
                 specialCareBackgroundNotificationsEnabled = specialCareBackgroundNotificationsEnabled,
+                chatNoiseReductionSettings = chatNoiseReductionSettings,
                 onBackgroundNotificationsChanged = { enabled ->
                     backgroundNotificationsEnabled = enabled
                     backgroundNotificationStore.setBackgroundSyncEnabled(enabled)
+                    BackgroundNotificationScheduler.apply(applicationContext, enabled)
                     if (enabled && shouldRequestNotificationPermission()) {
                         runCatching {
                             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
-                    } else {
-                        BackgroundNotificationScheduler.apply(applicationContext, enabled)
                     }
                 },
                 onSpecialCareBackgroundNotificationsChanged = { enabled ->
                     specialCareBackgroundNotificationsEnabled = enabled
                     backgroundNotificationStore.setSpecialCareEnabled(enabled)
+                    if (backgroundNotificationsEnabled) {
+                        BackgroundNotificationScheduler.syncNow(applicationContext)
+                    }
+                },
+                onChatNoiseReductionSettingsChanged = { settings: ChatNoiseReductionSettings ->
+                    val normalized = settings.normalized
+                    chatNoiseReductionSettings = normalized
+                    backgroundNotificationStore.saveChatNoiseReductionSettings(normalized)
                     if (backgroundNotificationsEnabled) {
                         BackgroundNotificationScheduler.syncNow(applicationContext)
                     }
@@ -245,6 +302,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         AndroidAppUpdateManager(applicationContext).retryPendingInstall()
+        BackgroundNotificationScheduler.restoreIfEnabled(applicationContext)
     }
 
     private fun consumeAuthCallback(intent: Intent?) {
@@ -351,8 +409,7 @@ class MainActivity : ComponentActivity() {
         if (notification.isSpecialCare && !settings.isSpecialCareEnabled()) return
         if (shouldRequestNotificationPermission()) return
         val eventId = notification.specialCareSystemEventId()
-        val seenIds = settings.loadSeenIds()
-        if (eventId in seenIds) return
+        if (eventId !in settings.claimSeenIds(listOf(eventId))) return
 
         BackgroundNotificationPublisher(applicationContext).publish(
             listOf(
@@ -383,7 +440,6 @@ class MainActivity : ComponentActivity() {
                     )
                 }
         }
-        settings.saveSeenIds((listOf(eventId) + seenIds).take(200).toSet())
     }
 
     private fun publishAutomationSystemNotification(title: String, body: String): Boolean {

@@ -50,13 +50,15 @@ class NotificationsPresentationTest {
     fun notificationSummaryActionKeepsMarkAllReadAvailable() {
         val actions = notificationSummaryActions(
             isMarkingAllRead = false,
+            notificationCount = 2,
             onSendTestNotification = {},
             onSendReminderNotification = {},
         )
 
-        assertEquals(listOf("AI", "测试通知", "提醒自己"), actions.map { it.label })
-        assertEquals(listOf(false, true, true), actions.map { it.enabled })
-        assertEquals(listOf("总结通知", "待处理", "优先级"), actions.first().children.map { it.label })
+        assertEquals(listOf("全部已读", "清空", "AI", "测试通知", "提醒自己"), actions.map { it.label })
+        assertEquals(listOf(true, true, false, true, true), actions.map { it.enabled })
+        assertEquals(listOf("总结通知", "待处理", "优先级"), actions[2].children.map { it.label })
+        assertEquals(true, actions[1].destructive)
     }
 
     @Test

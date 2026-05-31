@@ -22,8 +22,12 @@ data class Note(
     val isRenote: Boolean = false,
     val quotedNote: Note? = null,
     val replyId: String? = null,
+    val renoteId: String? = null,
     val channelId: String = "",
     val channelName: String = "",
+    val localOnly: Boolean = false,
+    val visibleUserIds: List<String> = emptyList(),
+    val reactionAcceptance: String = "",
 )
 
 @Immutable

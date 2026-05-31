@@ -16,6 +16,9 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
         return ChatUnreadSnapshot(
             roomCounts = loadCounts(cleanAccountId, TYPE_ROOM),
             userCounts = loadCounts(cleanAccountId, TYPE_USER),
+            pinnedRoomIds = loadStringSet(cleanAccountId, TYPE_PINNED_ROOMS),
+            pinnedUserIds = loadStringSet(cleanAccountId, TYPE_PINNED_USERS),
+            roomGroups = loadStrings(cleanAccountId, TYPE_ROOM_GROUP),
         )
     }
 
@@ -25,6 +28,9 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
         preferences.edit()
             .replaceCounts(cleanAccountId, TYPE_ROOM, snapshot.roomCounts)
             .replaceCounts(cleanAccountId, TYPE_USER, snapshot.userCounts)
+            .replaceStringSet(cleanAccountId, TYPE_PINNED_ROOMS, snapshot.pinnedRoomIds)
+            .replaceStringSet(cleanAccountId, TYPE_PINNED_USERS, snapshot.pinnedUserIds)
+            .replaceStrings(cleanAccountId, TYPE_ROOM_GROUP, snapshot.roomGroups)
             .apply()
     }
 
@@ -71,11 +77,26 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
         val merged = ChatUnreadSnapshot(
             roomCounts = roomMerge.counts,
             userCounts = userMerge.counts,
+            pinnedRoomIds = current.pinnedRoomIds,
+            pinnedUserIds = current.pinnedUserIds,
+            roomGroups = current.roomGroups,
         )
         save(cleanAccountId, merged)
         saveMarkers(cleanAccountId, TYPE_ROOM_MARKER, roomMerge.markers)
         saveMarkers(cleanAccountId, TYPE_USER_MARKER, userMerge.markers)
         return merged
+    }
+
+    fun loadRoomMarkers(accountId: String): Map<String, String> {
+        val cleanAccountId = accountId.trim()
+        if (cleanAccountId.isEmpty()) return emptyMap()
+        return loadMarkers(cleanAccountId, TYPE_ROOM_MARKER)
+    }
+
+    fun loadUserMarkers(accountId: String): Map<String, String> {
+        val cleanAccountId = accountId.trim()
+        if (cleanAccountId.isEmpty()) return emptyMap()
+        return loadMarkers(cleanAccountId, TYPE_USER_MARKER)
     }
 
     private fun loadCounts(accountId: String, type: String): Map<String, Int> {
@@ -96,6 +117,20 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
             val id = key.removePrefix(prefix).takeIf { it.isNotBlank() } ?: return@mapNotNull null
             if (marker.isEmpty()) null else id to marker
         }.toMap()
+    }
+
+    private fun loadStrings(accountId: String, type: String): Map<String, String> {
+        val prefix = "$accountId|$type|"
+        return preferences.all.mapNotNull { (key, value) ->
+            if (!key.startsWith(prefix)) return@mapNotNull null
+            val text = (value as? String)?.trim().orEmpty()
+            val id = key.removePrefix(prefix).takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            if (text.isEmpty()) null else id to text
+        }.toMap()
+    }
+
+    private fun loadStringSet(accountId: String, type: String): Set<String> {
+        return loadStrings(accountId, type).keys
     }
 
     private fun saveMarkers(accountId: String, type: String, markers: Map<String, String>) {
@@ -152,6 +187,33 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
         return this
     }
 
+    private fun android.content.SharedPreferences.Editor.replaceStrings(
+        accountId: String,
+        type: String,
+        values: Map<String, String>,
+    ): android.content.SharedPreferences.Editor {
+        val prefix = "$accountId|$type|"
+        preferences.all.keys
+            .filter { it.startsWith(prefix) }
+            .forEach(::remove)
+        values.forEach { (id, value) ->
+            val cleanId = id.trim()
+            val cleanValue = value.trim()
+            if (cleanId.isNotEmpty() && cleanValue.isNotEmpty()) {
+                putString(key(accountId, type, cleanId), cleanValue)
+            }
+        }
+        return this
+    }
+
+    private fun android.content.SharedPreferences.Editor.replaceStringSet(
+        accountId: String,
+        type: String,
+        values: Set<String>,
+    ): android.content.SharedPreferences.Editor {
+        return replaceStrings(accountId, type, values.associateWith { "1" })
+    }
+
     private fun key(accountId: String, type: String, id: String): String = "$accountId|$type|$id"
 
     private companion object {
@@ -160,6 +222,9 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
         const val TYPE_USER = "user"
         const val TYPE_ROOM_MARKER = "room_marker"
         const val TYPE_USER_MARKER = "user_marker"
+        const val TYPE_PINNED_ROOMS = "pinned_room"
+        const val TYPE_PINNED_USERS = "pinned_user"
+        const val TYPE_ROOM_GROUP = "room_group"
     }
 }
 
@@ -176,14 +241,21 @@ private fun Map<String, Int>.mergeUnreadCounts(
     val mergedCounts = LinkedHashMap<String, Int>(size + incoming.size)
     val mergedMarkers = LinkedHashMap<String, String>(currentMarkers.size + incomingMarkers.size)
     forEach { (key, value) -> if (value > 0) mergedCounts[key] = value }
-    currentMarkers.forEach { (key, value) -> if (key in mergedCounts && value.isNotBlank()) mergedMarkers[key] = value }
+    currentMarkers.forEach { (key, value) -> if (value.isNotBlank()) mergedMarkers[key] = value }
+    incomingMarkers.forEach { (rawKey, rawMarker) ->
+        val key = rawKey.trim()
+        val marker = rawMarker.trim()
+        if (key.isNotEmpty() && marker.isNotEmpty()) {
+            mergedMarkers[key] = marker
+        }
+    }
     incoming.forEach { (rawKey, rawValue) ->
         val key = rawKey.trim()
         val incomingCount = rawValue.coerceAtLeast(0)
         if (key.isEmpty() || incomingCount <= 0) return@forEach
         val currentCount = mergedCounts[key] ?: 0
         val incomingMarker = incomingMarkers[key]?.trim().orEmpty()
-        val currentMarker = mergedMarkers[key].orEmpty()
+        val currentMarker = currentMarkers[key].orEmpty()
         val markerChanged = incomingMarker.isNotEmpty() &&
             currentMarker.isNotEmpty() &&
             incomingMarker != currentMarker
@@ -198,6 +270,6 @@ private fun Map<String, Int>.mergeUnreadCounts(
     }
     return UnreadMergeResult(
         counts = mergedCounts.filterValues { it > 0 },
-        markers = mergedMarkers.filterKeys { it in mergedCounts },
+        markers = mergedMarkers.filterValues { it.isNotBlank() },
     )
 }

@@ -5,6 +5,7 @@ import cc.hhhl.client.model.ChatRoom
 import cc.hhhl.client.model.User
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
 class AutomationRuleDraftResolverTest {
@@ -64,6 +65,32 @@ class AutomationRuleDraftResolverTest {
 
         assertEquals(false, result.rule.conditions.single().enabled)
         assertEquals("", result.rule.conditions.single().value)
+    }
+
+    @Test
+    fun ambiguousUserResolutionListsCandidates() = runTest {
+        val result = resolveAutomationRuleDraft(
+            rule = AutomationRule(
+                id = "rule-draft",
+                name = "模糊用户",
+                trigger = AutomationTrigger.ChatMessage,
+                conditions = listOf(
+                    AutomationCondition("condition-user", AutomationConditionType.SenderNameContains, "张"),
+                ),
+            ),
+            input = AutomationRuleDraftResolveInput(
+                users = listOf(
+                    sampleUser(id = "user-1", displayName = "张三", username = "zhangsan"),
+                    sampleUser(id = "user-2", displayName = "张四", username = "zhangsi"),
+                ),
+            ),
+        )
+
+        assertEquals(AutomationConditionType.SenderNameContains, result.rule.conditions.single().type)
+        assertEquals("张", result.rule.conditions.single().value)
+        assertTrue(result.messages.single().contains("用户名称不唯一"))
+        assertTrue(result.messages.single().contains("user-1"))
+        assertTrue(result.messages.single().contains("user-2"))
     }
 }
 

@@ -469,6 +469,78 @@ class SharkeyChatApiTest {
         assertIs<ChatRoomActionResult.Success>(result)
     }
 
+    @Test
+    fun createsRoomWithJoinModePayload() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/rooms/create", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""name":"新房间""""))
+                assertTrue(body.contains(""""description":"简介""""))
+                assertTrue(body.contains(""""joinMode":"open""""))
+                respondRoom(roomId = "room-created", joinMode = "open")
+            },
+        )
+
+        val result = api.createRoom(
+            token = "token-123",
+            name = "新房间",
+            description = "简介",
+            joinMode = "open",
+        )
+
+        assertIs<ChatRoomMutationResult.Success>(result)
+        assertEquals("open", result.room.joinMode)
+    }
+
+    @Test
+    fun updatesRoomManagementWithExplicitNullRetentionDays() = runTest {
+        var capturedBody = ""
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/rooms/manage/update", request.url.toString())
+                capturedBody = (request.body as? TextContent)?.text ?: request.body.toString()
+                respondRoom(roomId = "room-1", messageRetentionDaysJson = "null")
+            },
+        )
+
+        val result = api.updateRoomManagement(
+            token = "token-123",
+            roomId = "room-1",
+            messageRetentionDays = null,
+        )
+
+        assertIs<ChatRoomMutationResult.Success>(result)
+        assertTrue(capturedBody.contains(""""i":"token-123""""), capturedBody)
+        assertTrue(capturedBody.contains(""""roomId":"room-1""""), capturedBody)
+        assertTrue(capturedBody.contains(""""messageRetentionDays":null"""), capturedBody)
+        assertEquals(null, result.room.messageRetentionDays)
+    }
+
+    @Test
+    fun deletesAllRoomMessagesFromManageEndpoint() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/rooms/manage/delete-all-messages", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""roomId":"room-1""""))
+                respond("", status = HttpStatusCode.NoContent)
+            },
+        )
+
+        val result = api.deleteAllRoomMessages(
+            token = "token-123",
+            roomId = "room-1",
+        )
+
+        assertIs<ChatRoomActionResult.Success>(result)
+    }
+
     private fun MockRequestHandleScope.respondJoiningRooms(): HttpResponseData {
         return respond(
             content = """
@@ -632,6 +704,39 @@ class SharkeyChatApiTest {
                     "isRead": false
                   }
                 ]
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
+    private fun MockRequestHandleScope.respondRoom(
+        roomId: String,
+        joinMode: String = "inviteOnly",
+        messageRetentionDaysJson: String = "30",
+    ): HttpResponseData {
+        return respond(
+            content = """
+                {
+                  "id": "$roomId",
+                  "createdAt": "2026-05-25T00:00:00.000Z",
+                  "ownerId": "user-1",
+                  "owner": {
+                    "id": "user-1",
+                    "username": "alice",
+                    "name": "Alice"
+                  },
+                  "name": "Room $roomId",
+                  "description": "desc",
+                  "joinMode": "$joinMode",
+                  "memberLimit": 100,
+                  "memberLimitOverride": null,
+                  "canManage": true,
+                  "messageRetentionDays": $messageRetentionDaysJson,
+                  "memberCount": 2,
+                  "isJoined": true,
+                  "isMuted": false
+                }
             """.trimIndent(),
             status = HttpStatusCode.OK,
             headers = jsonHeaders,

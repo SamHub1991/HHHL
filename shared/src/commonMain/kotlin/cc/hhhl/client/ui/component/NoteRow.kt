@@ -101,6 +101,8 @@ internal const val HhhlReactionPickerMaxTotalItems = 120
 @Immutable
 data class NoteRowActions(
     val onShareNote: ((String) -> Unit)? = null,
+    val onEditNote: (Note) -> Unit = {},
+    val canEditNote: (Note) -> Boolean = { false },
     val onAiSummarizeNote: (Note) -> Unit = {},
     val onAiReplyDraft: (Note) -> Unit = {},
     val onHideFromList: (String) -> Unit = {},
@@ -128,7 +130,7 @@ data class UserQuickActions(
 
 enum class NoteRowSwipeAction(val label: String) {
     Reply("回复"),
-    Favorite("稍后看"),
+    Favorite("收藏"),
 }
 
 @Immutable
@@ -166,6 +168,7 @@ fun NoteRow(
     customEmojis: List<CustomEmoji> = emptyList(),
     recentReactions: List<String> = emptyList(),
     isActionPending: Boolean = false,
+    canEdit: Boolean = false,
     canDelete: Boolean = false,
     isSpecialCareAuthor: Boolean = false,
     density: NoteRowDensity = NoteRowDensity.Comfortable,
@@ -194,6 +197,7 @@ fun NoteRow(
     val effectiveOnMuteRenotes = rowActions.onMuteRenotes
     val effectiveOnUnmuteRenotes = rowActions.onUnmuteRenotes
     val effectiveOnReportNote = onReportNote ?: rowActions.onReportNote
+    val effectiveCanEdit = canEdit || rowActions.canEditNote(note)
     val pickerSections = remember(reactionOptions, recentReactions) {
         reactionPickerSections(
             reactionOptions = reactionOptions,
@@ -203,10 +207,11 @@ fun NoteRow(
     val isContentVisible = noteContentVisible(note, expanded = contentExpanded)
     val metrics = remember(density) { noteRowMetrics(density) }
     val canAddToClip = onAddToClip != null
-    val overflowActions = remember(canAddToClip, canDelete) {
+    val overflowActions = remember(canAddToClip, effectiveCanEdit, canDelete) {
         noteOverflowActions(
             canAddToClip = canAddToClip,
             canDelete = canDelete,
+            canEdit = effectiveCanEdit,
         )
     }
     val noteLink = remember(note.id) { notePermalink(note.id) }
@@ -479,6 +484,7 @@ fun NoteRow(
                                 NoteOverflowAction.AiReplyDraft -> rowActions.onAiReplyDraft(note)
                                 NoteOverflowAction.Favorite -> onFavorite(note.id)
                                 NoteOverflowAction.AddToClip -> onAddToClip?.invoke(note)
+                                NoteOverflowAction.Edit -> rowActions.onEditNote(note)
                                 NoteOverflowAction.HideFromList -> effectiveOnHideFromList(note.id)
                                 NoteOverflowAction.MuteNote -> effectiveOnMuteNote(note.id)
                                 NoteOverflowAction.UnmuteNote -> effectiveOnUnmuteNote(note.id)
@@ -845,6 +851,7 @@ enum class NoteOverflowAction(val label: String) {
     AiReplyDraft("AI 回复草稿"),
     Favorite("收藏"),
     AddToClip("便签"),
+    Edit("编辑"),
     HideFromList("隐藏帖子列表"),
     MuteNote("静音帖子"),
     UnmuteNote("取消帖子静音"),
@@ -1073,6 +1080,7 @@ private val noteRenoteActionList: List<NoteRenoteAction> = listOf(NoteRenoteActi
 fun noteOverflowActions(
     canAddToClip: Boolean,
     canDelete: Boolean,
+    canEdit: Boolean = false,
 ): List<NoteOverflowAction> = buildList {
     add(NoteOverflowAction.OpenDetail)
     add(NoteOverflowAction.CopyContent)
@@ -1084,6 +1092,9 @@ fun noteOverflowActions(
     add(NoteOverflowAction.Favorite)
     if (canAddToClip) {
         add(NoteOverflowAction.AddToClip)
+    }
+    if (canEdit) {
+        add(NoteOverflowAction.Edit)
     }
     add(NoteOverflowAction.HideFromList)
     add(NoteOverflowAction.MuteNote)
