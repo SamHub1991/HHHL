@@ -13,6 +13,8 @@ import cc.hhhl.client.api.ChatRoomMutationResult
 import cc.hhhl.client.api.ChatStreamingEvent
 import cc.hhhl.client.api.ChatUserHistoryLoadResult
 import cc.hhhl.client.api.DriveFileUpload
+import cc.hhhl.client.cache.ChatUnreadSnapshot
+import cc.hhhl.client.cache.ChatUnreadStore
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageReference
 import cc.hhhl.client.model.ChatMessageReaction
@@ -431,6 +433,245 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun quietRoomRefreshDoesNotRestoreUnreadForAlreadyReadLatestMarker() = runTest {
+        val readRoom = sampleRoom(
+            id = "room-read",
+            unreadCount = 3,
+            latestMessageAtLabel = "2026-05-25 10:01",
+            latestMessageMarker = "message-1",
+        )
+        val otherRoom = sampleRoom(id = "room-other")
+        val unreadStore = MemoryChatUnreadStore()
+        var rooms = listOf(readRoom, otherRoom)
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshResultProvider = { ChatRepositoryResult.Success(rooms) },
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "account-1" },
+            unreadStore = unreadStore,
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectRoom(readRoom)
+        advanceUntilIdle()
+        holder.selectRoom(otherRoom)
+        advanceUntilIdle()
+        rooms = listOf(readRoom.copy(unreadCount = 3), otherRoom)
+        holder.refreshRoomsQuietly(markSelectedRoomRead = false)
+        advanceUntilIdle()
+
+        assertEquals(0, holder.state.value.rooms.first { it.id == readRoom.id }.unreadCount)
+        assertEquals("message-1", unreadStore.load("account-1").roomReadMarkers[readRoom.id])
+    }
+
+    @Test
+    fun quietRoomRefreshDoesNotRestoreUnreadWhenReadMessageIdMatchesListMarkerAlias() = runTest {
+        val listMarker = "2026-05-25T02:00:00.000Z"
+        val readRoom = sampleRoom(
+            id = "room-read",
+            unreadCount = 3,
+            latestMessageAtLabel = "2026-05-25 10:00",
+            latestMessageMarker = listMarker,
+        )
+        val latestMessage = sampleMessage(
+            id = "message-1",
+            roomId = readRoom.id,
+            createdAt = listMarker,
+        )
+        val otherRoom = sampleRoom(id = "room-other")
+        val unreadStore = MemoryChatUnreadStore()
+        var rooms = listOf(readRoom, otherRoom)
+        var refreshingRoomId = ""
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshResultProvider = { ChatRepositoryResult.Success(rooms) },
+                onRefreshMessages = { roomId -> refreshingRoomId = roomId },
+                refreshMessagesResultProvider = {
+                    if (refreshingRoomId == readRoom.id) {
+                        ChatMessageRepositoryResult.Success(listOf(latestMessage))
+                    } else {
+                        ChatMessageRepositoryResult.Success(emptyList())
+                    }
+                },
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "account-1" },
+            unreadStore = unreadStore,
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectRoom(readRoom)
+        advanceUntilIdle()
+        holder.selectRoom(otherRoom)
+        advanceUntilIdle()
+        rooms = listOf(readRoom.copy(unreadCount = 3), otherRoom)
+        holder.refreshRoomsQuietly(markSelectedRoomRead = false)
+        advanceUntilIdle()
+
+        assertEquals(0, holder.state.value.rooms.first { it.id == readRoom.id }.unreadCount)
+        val readMarker = unreadStore.load("account-1").roomReadMarkers[readRoom.id].orEmpty()
+        assertTrue(readMarker.contains(listMarker))
+        assertTrue(readMarker.contains("message-1"))
+    }
+
+    @Test
+    fun quietRoomRefreshRestoresUnreadWhenLatestMarkerChangesAfterRead() = runTest {
+        val readRoom = sampleRoom(
+            id = "room-read",
+            unreadCount = 3,
+            latestMessageAtLabel = "2026-05-25 10:01",
+            latestMessageMarker = "message-1",
+        )
+        val otherRoom = sampleRoom(id = "room-other")
+        val unreadStore = MemoryChatUnreadStore()
+        var rooms = listOf(readRoom, otherRoom)
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshResultProvider = { ChatRepositoryResult.Success(rooms) },
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "account-1" },
+            unreadStore = unreadStore,
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectRoom(readRoom)
+        advanceUntilIdle()
+        holder.selectRoom(otherRoom)
+        advanceUntilIdle()
+        rooms = listOf(
+            readRoom.copy(
+                unreadCount = 1,
+                latestMessageAtLabel = "2026-05-25 10:02",
+                latestMessageMarker = "message-2",
+            ),
+            otherRoom,
+        )
+        holder.refreshRoomsQuietly(markSelectedRoomRead = false)
+        advanceUntilIdle()
+
+        assertEquals(1, holder.state.value.rooms.first { it.id == readRoom.id }.unreadCount)
+    }
+
+    @Test
+    fun quietUserConversationRefreshDoesNotRestoreUnreadForAlreadyReadLatestMarker() = runTest {
+        val peer = User("user-read", "Alice", "alice", "A")
+        val otherPeer = User("user-other", "Bob", "bob", "B")
+        val readMessage = sampleMessage("message-1", roomId = "").copy(fromUser = peer)
+        val readConversation = ChatUserConversation(peer, readMessage, unreadCount = 2)
+        val otherConversation = ChatUserConversation(otherPeer)
+        val unreadStore = MemoryChatUnreadStore()
+        var conversations = listOf(readConversation, otherConversation)
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                userConversationResultProvider = { ChatUserConversationRepositoryResult.Success(conversations) },
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "account-1" },
+            unreadStore = unreadStore,
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectUserConversation(readConversation)
+        advanceUntilIdle()
+        holder.selectUserConversation(otherConversation)
+        advanceUntilIdle()
+        conversations = listOf(readConversation.copy(unreadCount = 2), otherConversation)
+        holder.refreshUserConversationsQuietly(markSelectedUserRead = false)
+        advanceUntilIdle()
+
+        assertEquals(0, holder.state.value.userConversations.first { it.user.id == peer.id }.unreadCount)
+        assertEquals("message-1", unreadStore.load("account-1").userReadMarkers[peer.id])
+    }
+
+    @Test
+    fun quietUserConversationRefreshRestoresUnreadWhenLatestMarkerChangesAfterRead() = runTest {
+        val peer = User("user-read", "Alice", "alice", "A")
+        val otherPeer = User("user-other", "Bob", "bob", "B")
+        val readMessage = sampleMessage("message-1", roomId = "").copy(fromUser = peer)
+        val nextMessage = sampleMessage("message-2", roomId = "").copy(fromUser = peer)
+        val readConversation = ChatUserConversation(peer, readMessage, unreadCount = 2)
+        val otherConversation = ChatUserConversation(otherPeer)
+        val unreadStore = MemoryChatUnreadStore()
+        var conversations = listOf(readConversation, otherConversation)
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                userConversationResultProvider = { ChatUserConversationRepositoryResult.Success(conversations) },
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "account-1" },
+            unreadStore = unreadStore,
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectUserConversation(readConversation)
+        advanceUntilIdle()
+        holder.selectUserConversation(otherConversation)
+        advanceUntilIdle()
+        conversations = listOf(
+            readConversation.copy(latestMessage = nextMessage, unreadCount = 1),
+            otherConversation,
+        )
+        holder.refreshUserConversationsQuietly(markSelectedUserRead = false)
+        advanceUntilIdle()
+
+        assertEquals(1, holder.state.value.userConversations.first { it.user.id == peer.id }.unreadCount)
+    }
+
+    @Test
+    fun deleteUserConversationClearsPinnedAndLocalUnreadState() = runTest {
+        val peer = User("user-read", "Alice", "alice", "A")
+        val message = sampleMessage("message-1", roomId = "").copy(fromUser = peer)
+        val conversation = ChatUserConversation(peer, message, unreadCount = 2)
+        val unreadStore = MemoryChatUnreadStore()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                userConversationResultProvider = {
+                    ChatUserConversationRepositoryResult.Success(listOf(conversation))
+                },
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "account-1" },
+            unreadStore = unreadStore,
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.toggleUserConversationPinned(peer.id)
+        holder.selectUserConversation(conversation)
+        advanceUntilIdle()
+
+        holder.deleteUserConversation(peer.id)
+        advanceUntilIdle()
+
+        val snapshot = unreadStore.load("account-1")
+        assertEquals(emptyList(), holder.state.value.userConversations)
+        assertFalse(peer.id in holder.state.value.pinnedUserConversationIds)
+        assertEquals(null, holder.state.value.selectedUserConversation)
+        assertFalse(peer.id in snapshot.userCounts)
+        assertFalse(peer.id in snapshot.userReadMarkers)
+        assertFalse(peer.id in snapshot.pinnedUserIds)
+    }
+
+    @Test
     fun quietRoomRefreshAccumulatesUnreadWhenRemoteCountStaysFlat() = runTest {
         val first = sampleRoom(
             unreadCount = 1,
@@ -461,6 +702,39 @@ class ChatStateHolderTest {
         advanceUntilIdle()
 
         assertEquals(2, holder.state.value.rooms.first().unreadCount)
+    }
+
+    @Test
+    fun quietRoomRefreshDoesNotAccumulateUnreadWhenOnlyFallbackLabelChanges() = runTest {
+        val first = sampleRoom(
+            unreadCount = 1,
+            latestMessageAtLabel = "刚刚",
+            latestMessageMarker = "",
+        )
+        val next = first.copy(
+            unreadCount = 1,
+            latestMessageAtLabel = "1分钟前",
+            latestMessageMarker = "",
+        )
+        var refreshCount = 0
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshResultProvider = {
+                    refreshCount += 1
+                    ChatRepositoryResult.Success(if (refreshCount == 1) listOf(first) else listOf(next))
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.refreshRoomsQuietly(markSelectedRoomRead = false)
+        advanceUntilIdle()
+
+        assertEquals(1, holder.state.value.rooms.first().unreadCount)
     }
 
     @Test
@@ -2291,6 +2565,51 @@ class ChatStateHolderTest {
                 commonReactionOptions.filterNot { it in listOf("🔥", "👍", ":hhhl:") },
             holder.state.value.reactionOptions,
         )
+    }
+
+    private class MemoryChatUnreadStore : ChatUnreadStore {
+        private val snapshots = mutableMapOf<String, ChatUnreadSnapshot>()
+
+        override fun load(accountId: String): ChatUnreadSnapshot {
+            return snapshots[accountId.trim()] ?: ChatUnreadSnapshot()
+        }
+
+        override fun save(accountId: String, snapshot: ChatUnreadSnapshot) {
+            val cleanAccountId = accountId.trim()
+            if (cleanAccountId.isNotEmpty()) snapshots[cleanAccountId] = snapshot
+        }
+
+        override fun clearRoom(accountId: String, roomId: String) {
+            val cleanAccountId = accountId.trim()
+            val cleanRoomId = roomId.trim()
+            if (cleanAccountId.isEmpty() || cleanRoomId.isEmpty()) return
+            val current = load(cleanAccountId)
+            save(
+                cleanAccountId,
+                current.copy(
+                    roomCounts = current.roomCounts - cleanRoomId,
+                    roomReadMarkers = current.roomReadMarkers - cleanRoomId,
+                ),
+            )
+        }
+
+        override fun clearUser(accountId: String, userId: String) {
+            val cleanAccountId = accountId.trim()
+            val cleanUserId = userId.trim()
+            if (cleanAccountId.isEmpty() || cleanUserId.isEmpty()) return
+            val current = load(cleanAccountId)
+            save(
+                cleanAccountId,
+                current.copy(
+                    userCounts = current.userCounts - cleanUserId,
+                    userReadMarkers = current.userReadMarkers - cleanUserId,
+                ),
+            )
+        }
+
+        override fun clearAccount(accountId: String) {
+            snapshots.remove(accountId.trim())
+        }
     }
 
     private fun fakeRepository(

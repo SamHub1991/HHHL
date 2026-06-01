@@ -20,6 +20,10 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AutomationStateHolderTest {
@@ -75,6 +79,48 @@ class AutomationStateHolderTest {
         assertTrue(holder.state.value.debugRecords.single().matched)
         assertTrue(holder.state.value.debugRecords.single().reason.contains("全部"))
         assertEquals("Log matches", store.lastSnapshot.debugRecords.single().ruleName)
+    }
+
+    @Test
+    fun emitDoesNotTreatDifferentBlankIdEventsAsDuplicates() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-1",
+                        name = "Log every message",
+                        trigger = AutomationTrigger.ChatMessage,
+                        conditions = listOf(
+                            AutomationCondition(
+                                id = "condition-1",
+                                type = AutomationConditionType.MessageContains,
+                                value = "hello",
+                            ),
+                        ),
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-1",
+                                type = AutomationActionType.AddLog,
+                                bodyTemplate = "{{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.emit(AutomationEvent(id = "", trigger = AutomationTrigger.ChatMessage, messageText = "hello one"))
+        holder.emit(AutomationEvent(id = "", trigger = AutomationTrigger.ChatMessage, messageText = "hello two"))
+        advanceUntilIdle()
+
+        assertEquals(listOf("hello two", "hello one"), holder.state.value.logs.map { it.message })
+        assertEquals(2, store.lastSnapshot.executedEvents.size)
     }
 
     @Test
@@ -146,6 +192,226 @@ class AutomationStateHolderTest {
         assertEquals(1, store.lastSnapshot.logs.size)
         assertEquals(1, store.lastSnapshot.executedEvents.size)
         assertTrue(restoredHolder.state.value.debugRecords.first().reason.contains("去重"))
+    }
+
+    @Test
+    fun emitSkipsDuplicateWhenAnotherHolderClaimsEventFirst() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-1",
+                        name = "Log once across holders",
+                        trigger = AutomationTrigger.ChatMessage,
+                        conditions = listOf(
+                            AutomationCondition(
+                                id = "condition-1",
+                                type = AutomationConditionType.MessageContains,
+                                value = "hello",
+                            ),
+                        ),
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-1",
+                                type = AutomationActionType.AddLog,
+                                bodyTemplate = "{{message.id}}: {{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val firstHolder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        val secondHolder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        firstHolder.restore()
+        secondHolder.restore()
+
+        val event = AutomationEvent(
+            id = "chat-message:message-1",
+            trigger = AutomationTrigger.ChatMessage,
+            chatMessageId = "message-1",
+            messageText = "hello world",
+        )
+        firstHolder.emit(event)
+        advanceUntilIdle()
+        secondHolder.emit(event)
+        advanceUntilIdle()
+
+        assertEquals(1, store.lastSnapshot.logs.size)
+        assertEquals(1, store.lastSnapshot.executedEvents.size)
+        assertTrue(secondHolder.state.value.debugRecords.first().reason.contains("其他实例"))
+    }
+
+    @Test
+    fun failedActionDoesNotPersistDedupeForLaterRetry() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-1",
+                        name = "Webhook",
+                        trigger = AutomationTrigger.ChatMessage,
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-1",
+                                type = AutomationActionType.Webhook,
+                                targetId = "http://10.0.2.2:3000/webhook",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val failingExecutor = object : AutomationActionExecutor {
+            override suspend fun execute(
+                action: AutomationAction,
+                event: AutomationEvent,
+                title: String,
+                body: String,
+            ): AutomationActionExecutionResult {
+                return AutomationActionExecutionResult(false, "unexpected end of stream")
+            }
+        }
+        val firstHolder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            executor = failingExecutor,
+            scope = TestScope(testScheduler),
+        )
+        firstHolder.restore()
+
+        val event = AutomationEvent(
+            id = "chat-message:message-1",
+            trigger = AutomationTrigger.ChatMessage,
+            chatMessageId = "message-1",
+            messageText = "same text",
+        )
+        firstHolder.emit(event)
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), store.lastSnapshot.executedEvents)
+        assertTrue(store.lastSnapshot.logs.single().message.contains("unexpected end of stream"))
+
+        val successfulExecutor = object : AutomationActionExecutor {
+            var calls = 0
+
+            override suspend fun execute(
+                action: AutomationAction,
+                event: AutomationEvent,
+                title: String,
+                body: String,
+            ): AutomationActionExecutionResult {
+                calls += 1
+                return AutomationActionExecutionResult(true, "sent")
+            }
+        }
+        val secondHolder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            executor = successfulExecutor,
+            scope = TestScope(testScheduler),
+        )
+        secondHolder.restore()
+        secondHolder.emit(event)
+        advanceUntilIdle()
+
+        assertEquals(1, successfulExecutor.calls)
+        assertEquals(1, store.lastSnapshot.executedEvents.size)
+    }
+
+    @Test
+    fun sameTextDifferentChatMessagesAreNotDeduped() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-1",
+                        name = "Log same text",
+                        trigger = AutomationTrigger.ChatMessage,
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-1",
+                                type = AutomationActionType.AddLog,
+                                bodyTemplate = "{{message.id}}: {{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.emit(AutomationEvent(id = "chat-message:message-1", trigger = AutomationTrigger.ChatMessage, chatMessageId = "message-1", messageText = "same text"))
+        holder.emit(AutomationEvent(id = "chat-message:message-2", trigger = AutomationTrigger.ChatMessage, chatMessageId = "message-2", messageText = "same text"))
+        advanceUntilIdle()
+
+        assertEquals(2, store.lastSnapshot.logs.size)
+        assertEquals(2, store.lastSnapshot.executedEvents.size)
+        assertEquals(
+            setOf("chat-message:message-1", "chat-message:message-2"),
+            store.lastSnapshot.executedEvents.map { it.eventKey }.toSet(),
+        )
+    }
+
+    @Test
+    fun clearLogsAndDebugRecordsDoNotRestoreStoredEntries() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                logs = listOf(
+                    AutomationExecutionLog(
+                        id = "log-1",
+                        ruleId = "rule-1",
+                        ruleName = "Rule",
+                        eventId = "event-1",
+                        eventLabel = "聊天室消息",
+                        actionLabel = "记录日志",
+                        message = "old log",
+                        success = true,
+                        createdAtEpochMillis = 1L,
+                    ),
+                ),
+                debugRecords = listOf(
+                    AutomationRuleDebugRecord(
+                        id = "debug-1",
+                        ruleId = "rule-1",
+                        ruleName = "Rule",
+                        eventId = "event-1",
+                        eventLabel = "聊天室消息",
+                        eventSummary = "old debug",
+                        matched = true,
+                        reason = "old",
+                        createdAtEpochMillis = 1L,
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.clearLogs()
+        holder.clearDebugRecords()
+
+        assertEquals(emptyList(), holder.state.value.logs)
+        assertEquals(emptyList(), holder.state.value.debugRecords)
+        assertEquals(emptyList(), store.lastSnapshot.logs)
+        assertEquals(emptyList(), store.lastSnapshot.debugRecords)
     }
 
     @Test
@@ -565,6 +831,57 @@ class AutomationStateHolderTest {
     }
 
     @Test
+    fun aiSemanticConditionDebugKeepsRawModelReply() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-ai-debug",
+                        name = "AI 调试",
+                        trigger = AutomationTrigger.ChatMessage,
+                        conditions = listOf(
+                            AutomationCondition(
+                                id = "condition-ai-debug",
+                                type = AutomationConditionType.AiSemantic,
+                                value = "用户在反馈 bug",
+                            ),
+                        ),
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-log",
+                                type = AutomationActionType.AddLog,
+                                bodyTemplate = "{{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            aiBridge = SemanticReplyAiBridge("结论：满足\n对方说设置打不开，属于 bug 反馈。"),
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.emit(
+            AutomationEvent(
+                id = "event-ai-debug",
+                trigger = AutomationTrigger.ChatMessage,
+                messageText = "更新后设置打不开",
+            ),
+        )
+        advanceUntilIdle()
+
+        val condition = holder.state.value.debugRecords.single().conditionResults.single()
+        assertTrue(condition.matched)
+        assertTrue(condition.actualValue.contains("结论：满足"))
+        assertTrue(condition.message.contains("AI 返回"))
+        assertTrue(holder.state.value.logs.single().success)
+    }
+
+    @Test
     fun aiGeneratedWebhookUsesGeneratedTextAsWebhookBody() = runTest {
         var webhookBody = ""
         val executor = AppAutomationActionExecutor(
@@ -603,6 +920,79 @@ class AutomationStateHolderTest {
         assertTrue(webhookBody.contains("AI 生成的回调正文"))
         assertTrue(webhookBody.contains("AI 事件"))
         assertTrue(webhookBody.contains("event-1"))
+    }
+
+    @Test
+    fun webhookPayloadIncludesAttachmentMetadataAndVariables() = runTest {
+        var webhookBody = ""
+        val executor = AppAutomationActionExecutor(
+            chatRepository = cc.hhhl.client.repository.ChatRepository(tokenProvider = { "token" }),
+            notificationRepository = cc.hhhl.client.repository.NotificationRepository(tokenProvider = { "token" }),
+            attachmentAuthHeaderProvider = { mapOf("Authorization" to "Bearer token-123") },
+            httpClient = HttpClient(
+                MockEngine { request ->
+                    webhookBody = (request.body as TextContent).text
+                    respond("""{"ok":true}""", HttpStatusCode.OK)
+                },
+            ) {
+                install(ContentNegotiation) { json() }
+            },
+        )
+
+        val result = executor.execute(
+            action = AutomationAction(
+                id = "action-webhook",
+                type = AutomationActionType.Webhook,
+                targetId = "http://10.0.2.2:3000/hook",
+                titleTemplate = "附件消息",
+                bodyTemplate = "{{message.text}}",
+            ),
+            event = AutomationEvent(
+                id = "event-attachment",
+                trigger = AutomationTrigger.ChatMessage,
+                chatMessageId = "message-attachment",
+                sourceKind = "room",
+                senderName = "Alice",
+                senderUsername = "alice",
+                roomId = "room-1",
+                roomName = "测试聊天室",
+                messageText = "看图",
+                messageType = "text,file,image",
+                attachments = listOf(
+                    AutomationAttachment(
+                        id = "file-image",
+                        name = "demo.png",
+                        type = "image/png",
+                        url = "https://example.com/demo.png",
+                        thumbnailUrl = "https://example.com/demo-thumb.png",
+                        description = "测试图片",
+                        size = 12345,
+                        isSensitive = false,
+                    ),
+                ),
+            ),
+            title = "附件消息",
+            body = "看图",
+        )
+
+        assertTrue(result.success)
+        val payload = Json.parseToJsonElement(webhookBody).jsonObject
+        assertEquals("text,file,image", payload.getValue("messageType").jsonPrimitive.content)
+        assertEquals("1", payload.getValue("attachmentCount").jsonPrimitive.content)
+        val attachment = payload.getValue("attachments").jsonArray.single().jsonObject
+        assertEquals("file-image", attachment.getValue("id").jsonPrimitive.content)
+        assertEquals("demo.png", attachment.getValue("name").jsonPrimitive.content)
+        assertEquals("image/png", attachment.getValue("type").jsonPrimitive.content)
+        assertEquals("https://example.com/demo.png", attachment.getValue("url").jsonPrimitive.content)
+        assertEquals("https://example.com/demo-thumb.png", attachment.getValue("thumbnailUrl").jsonPrimitive.content)
+        assertEquals("12345", attachment.getValue("size").jsonPrimitive.content)
+        assertEquals("false", attachment.getValue("isSensitive").jsonPrimitive.content)
+        val variables = payload.getValue("variables").jsonObject
+        assertEquals("1", variables.getValue("attachment.count").jsonPrimitive.content)
+        assertEquals("https://example.com/demo.png", variables.getValue("attachment.url").jsonPrimitive.content)
+        assertEquals("测试聊天室", variables.getValue("room.name").jsonPrimitive.content)
+        val authHeaders = payload.getValue("attachmentAuthHeaders").jsonObject
+        assertEquals("Bearer token-123", authHeaders.getValue("Authorization").jsonPrimitive.content)
     }
 
     @Test
@@ -796,6 +1186,100 @@ class AutomationStateHolderTest {
         assertEquals(3, holder.state.value.logs.size)
         assertTrue(holder.state.value.logs.first().message.contains("上限"))
         assertTrue(holder.state.value.debugRecords.first().reason.contains("风控"))
+    }
+
+    @Test
+    fun restoredWebhookRulesWithoutBurstLimitStillDoNotCooldown() = runTest {
+        val executor = object : AutomationActionExecutor {
+            var calls = 0
+
+            override suspend fun execute(
+                action: AutomationAction,
+                event: AutomationEvent,
+                title: String,
+                body: String,
+            ): AutomationActionExecutionResult {
+                calls += 1
+                return AutomationActionExecutionResult(true, "webhook sent")
+            }
+        }
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-webhook",
+                        name = "Webhook",
+                        trigger = AutomationTrigger.ChatMessage,
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-webhook",
+                                type = AutomationActionType.Webhook,
+                                targetId = "https://example.com/webhook",
+                                bodyTemplate = "{{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            executor = executor,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        repeat(3) { index ->
+            holder.emit(
+                AutomationEvent(
+                    id = "event-webhook-$index",
+                    trigger = AutomationTrigger.ChatMessage,
+                    chatMessageId = "message-webhook-$index",
+                    roomId = "room-1",
+                    senderUsername = "alice",
+                    messageText = "hello $index",
+                ),
+            )
+        }
+        advanceUntilIdle()
+
+        assertEquals(3, executor.calls)
+        val savedRule = holder.state.value.rules.single()
+        assertEquals(0, savedRule.cooldownSeconds)
+        assertEquals(0, savedRule.maxExecutionsPer30Seconds)
+    }
+
+    @Test
+    fun confirmedWebhookDraftDefaultsToBurstLimitWithoutCooldown() = runTest {
+        val store = MemoryAutomationStore()
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.addRuleDraft(
+            AutomationRule(
+                id = "rule-webhook-draft",
+                name = "Webhook draft",
+                trigger = AutomationTrigger.ChatMessage,
+                actions = listOf(
+                    AutomationAction(
+                        id = "action-webhook-draft",
+                        type = AutomationActionType.Webhook,
+                        targetId = "host-webhook",
+                        bodyTemplate = "{{message.text}}",
+                    ),
+                ),
+            ),
+        )
+
+        val rule = holder.state.value.rules.single()
+        assertEquals(0, rule.cooldownSeconds)
+        assertEquals(12, rule.maxExecutionsPer30Seconds)
+        assertEquals(12, store.lastSnapshot.rules.single().maxExecutionsPer30Seconds)
     }
 
     @Test
@@ -1042,6 +1526,18 @@ private class FakeAiBridge(
 private object FailingSemanticAiBridge : AiBridge {
     override suspend fun evaluateSemanticCondition(prompt: String, eventText: String): AiBridgeResult {
         return AiBridgeResult.Error("AI 自动化未启用")
+    }
+
+    override suspend fun generateAutomationText(prompt: String, eventText: String): AiBridgeResult {
+        return AiBridgeResult.Success("不会执行")
+    }
+}
+
+private class SemanticReplyAiBridge(
+    private val semanticReply: String,
+) : AiBridge {
+    override suspend fun evaluateSemanticCondition(prompt: String, eventText: String): AiBridgeResult {
+        return AiBridgeResult.Success(semanticReply)
     }
 
     override suspend fun generateAutomationText(prompt: String, eventText: String): AiBridgeResult {

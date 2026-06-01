@@ -1,6 +1,7 @@
 package cc.hhhl.client.ai
 
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -15,7 +16,13 @@ class AiStateHolderTest {
     fun requestProcessesTaskAndPersistsResult() = runTest {
         val store = MemoryAiStore(
             AiSnapshot(
-                settings = AiSettings(enabled = true, apiKey = "key"),
+                settings = AiSettings(
+                    enabled = true,
+                    apiKey = "key",
+                    chatModel = "chat-model",
+                    fastModel = "fast-model",
+                    longContextModel = "long-model",
+                ),
             ),
         )
         val repository = FakeAiRepository(AiRepositoryResult.Success("整理完成"))
@@ -40,6 +47,7 @@ class AiStateHolderTest {
         assertEquals(AiTaskStatus.Completed, holder.state.value.tasks.single().status)
         assertEquals("整理完成", holder.state.value.latestResult?.resultText)
         assertEquals(AiTaskStatus.Completed, store.lastSnapshot.tasks.single().status)
+        assertContentEquals(listOf("long-model"), repository.requestedModels)
     }
 
     @Test
@@ -193,6 +201,149 @@ class AiStateHolderTest {
     }
 
     @Test
+    fun deepSeekProviderPresetUsesProDefaultsForSettings() = runTest {
+        val holder = AiStateHolder(
+            store = MemoryAiStore(),
+            accountId = "account-1",
+            repository = FakeAiRepository(AiRepositoryResult.Success("OK")),
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.applyProviderPreset(AiProviderPreset.DeepSeek)
+
+        val settings = holder.state.value.settings
+        assertEquals("deepseek-v4-pro", settings.chatModel)
+        assertEquals("deepseek-v4-flash", settings.fastModel)
+        assertEquals("deepseek-v4-pro", settings.longContextModel)
+    }
+
+    @Test
+    fun runBlockingTaskRoutesModelsByTaskKind() = runTest {
+        val repository = FakeAiRepository(AiRepositoryResult.Success("OK"))
+        val holder = AiStateHolder(
+            store = MemoryAiStore(
+                AiSnapshot(
+                    settings = AiSettings(
+                        enabled = true,
+                        apiKey = "key",
+                        chatModel = "chat-model",
+                        fastModel = "fast-model",
+                        longContextModel = "long-model",
+                        automationAllowed = true,
+                    ),
+                ),
+            ),
+            accountId = "account-1",
+            repository = repository,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.runBlockingTask(AiTaskKind.AutomationSemanticCondition, AiTaskInput(prompt = "是否重要"))
+        holder.runBlockingTask(AiTaskKind.ChatRecentSummary, AiTaskInput(chatTitle = "项目群"))
+        holder.runBlockingTask(AiTaskKind.AssistantChat, AiTaskInput(prompt = "帮我回复"))
+
+        assertContentEquals(listOf("fast-model", "long-model", "chat-model"), repository.requestedModels)
+    }
+
+    @Test
+    fun automationRuleDraftUsesDefaultModelWhenAutomationModelConfigDisabled() = runTest {
+        val repository = FakeAiRepository(AiRepositoryResult.Success("OK"))
+        val holder = AiStateHolder(
+            store = MemoryAiStore(
+                AiSnapshot(
+                    settings = AiSettings(
+                        enabled = true,
+                        apiKey = "default-",
+                        chatModel = "chat-model",
+                        fastModel = "fast-model",
+                        longContextModel = "long-model",
+                        automationAllowed = true,
+                        automationRuleDraftModel = AiAutomationModelConfig(
+                            enabled = false,
+                            apiKey = "automation-",
+                            model = "automation-model",
+                        ),
+                    ),
+                ),
+            ),
+            accountId = "account-1",
+            repository = repository,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.runBlockingTask(AiTaskKind.AutomationRuleDraft, AiTaskInput(prompt = "新规则"))
+
+        assertContentEquals(listOf("long-model"), repository.requestedModels)
+        assertEquals("default-", repository.requestedSettings.single().apiKey)
+    }
+
+    @Test
+    fun automationRuleDraftUsesAutomationModelConfigWhenEnabled() = runTest {
+        val repository = FakeAiRepository(AiRepositoryResult.Success("OK"))
+        val holder = AiStateHolder(
+            store = MemoryAiStore(
+                AiSnapshot(
+                    settings = AiSettings(
+                        enabled = true,
+                        apiKey = "default-",
+                        chatModel = "chat-model",
+                        fastModel = "fast-model",
+                        longContextModel = "long-model",
+                        automationAllowed = true,
+                        automationRuleDraftModel = AiAutomationModelConfig(
+                            enabled = true,
+                            provider = AiProviderPreset.DeepSeek,
+                            baseUrl = "https://automation.example.com/v1",
+                            apiKey = "automation-",
+                            model = "automation-rule-model",
+                        ),
+                    ),
+                ),
+            ),
+            accountId = "account-1",
+            repository = repository,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.runBlockingTask(AiTaskKind.AutomationRuleDraft, AiTaskInput(prompt = "新规则"))
+
+        assertContentEquals(listOf("automation-rule-model"), repository.requestedModels)
+        assertEquals(AiProviderPreset.DeepSeek, repository.requestedSettings.single().provider)
+        assertEquals("https://automation.example.com/v1", repository.requestedSettings.single().baseUrl)
+        assertEquals("automation-", repository.requestedSettings.single().apiKey)
+    }
+    @Test
+    fun testConnectionUsesFastModel() = runTest {
+        val repository = FakeAiRepository(AiRepositoryResult.Success("OK"))
+        val holder = AiStateHolder(
+            store = MemoryAiStore(
+                AiSnapshot(
+                    settings = AiSettings(
+                        enabled = true,
+                        apiKey = "key",
+                        chatModel = "chat-model",
+                        fastModel = "fast-model",
+                        longContextModel = "long-model",
+                    ),
+                ),
+            ),
+            accountId = "account-1",
+            repository = repository,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.testConnection()
+        advanceUntilIdle()
+
+        assertContentEquals(listOf("fast-model"), repository.requestedModels)
+    }
+
+    @Test
     fun updateSettingsPersistsNormalizedAssistantMemory() = runTest {
         val store = MemoryAiStore()
         val holder = AiStateHolder(
@@ -279,6 +430,8 @@ private class FakeAiRepository(
     private val result: AiRepositoryResult,
 ) : AiRepository() {
     var lastPrompt: AiPrompt? = null
+    val requestedModels = mutableListOf<String>()
+    val requestedSettings = mutableListOf<AiSettings>()
 
     override suspend fun complete(
         settings: AiSettings,
@@ -286,6 +439,8 @@ private class FakeAiRepository(
         model: String,
     ): AiRepositoryResult {
         lastPrompt = prompt
+        requestedModels += model
+        requestedSettings += settings
         return result
     }
 }

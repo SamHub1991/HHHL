@@ -4,7 +4,9 @@ import androidx.compose.runtime.Immutable
 import cc.hhhl.client.api.TimelineKind
 import cc.hhhl.client.ai.aiSemanticYes
 import cc.hhhl.client.model.ChatMessage
+import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.Note
+import cc.hhhl.client.model.NoteMedia
 import cc.hhhl.client.model.NotificationItem
 import cc.hhhl.client.model.User
 import cc.hhhl.client.state.ChatAttentionKind
@@ -176,6 +178,7 @@ data class AutomationEventSnapshot(
     val createdAtEpochMillis: Long = 0L,
     val isFromCurrentUser: Boolean = false,
     val isAiGenerated: Boolean = false,
+    val attachments: List<AutomationAttachment> = emptyList(),
 ) {
     fun toEvent(): AutomationEvent {
         return AutomationEvent(
@@ -204,9 +207,23 @@ data class AutomationEventSnapshot(
             createdAtEpochMillis = createdAtEpochMillis,
             isFromCurrentUser = isFromCurrentUser,
             isAiGenerated = isAiGenerated,
+            attachments = attachments,
         )
     }
 }
+
+@Immutable
+@Serializable
+data class AutomationAttachment(
+    val id: String = "",
+    val name: String = "",
+    val type: String = "",
+    val url: String = "",
+    val thumbnailUrl: String = "",
+    val description: String = "",
+    val size: Long = 0L,
+    val isSensitive: Boolean = false,
+)
 
 @Immutable
 @Serializable
@@ -271,6 +288,7 @@ data class AutomationEvent(
     val createdAtEpochMillis: Long = 0L,
     val isFromCurrentUser: Boolean = false,
     val isAiGenerated: Boolean = false,
+    val attachments: List<AutomationAttachment> = emptyList(),
 ) {
     val displayLabel: String
         get() = when (trigger) {
@@ -306,6 +324,15 @@ data class AutomationEvent(
             "direct.user.id" -> directUserId
             "message.text" -> messageText
             "message.type" -> messageType
+            "attachment.count" -> attachments.size.toString()
+            "attachment.id" -> attachments.firstOrNull()?.id.orEmpty()
+            "attachment.name" -> attachments.firstOrNull()?.name.orEmpty()
+            "attachment.type" -> attachments.firstOrNull()?.type.orEmpty()
+            "attachment.url" -> attachments.firstOrNull()?.url.orEmpty()
+            "attachment.thumbnailUrl" -> attachments.firstOrNull()?.thumbnailUrl.orEmpty()
+            "attachment.description" -> attachments.firstOrNull()?.description.orEmpty()
+            "attachment.size" -> attachments.firstOrNull()?.size?.takeIf { it > 0L }?.toString().orEmpty()
+            "attachment.isSensitive" -> attachments.firstOrNull()?.isSensitive?.toString().orEmpty()
             "attention.kind" -> attentionKind
             "notification.type" -> notificationType
             "notification.text" -> notificationText
@@ -341,6 +368,16 @@ data class AutomationEvent(
             if (createdAtLabel.isNotBlank()) appendLine("时间：$createdAtLabel")
             if (notificationText.isNotBlank()) appendLine("通知：$notificationText")
             if (messageText.isNotBlank()) appendLine("正文：$messageText")
+            if (attachments.isNotEmpty()) {
+                appendLine("附件：")
+                attachments.forEachIndexed { index, attachment ->
+                    appendLine(
+                        "${index + 1}. ${attachment.name.ifBlank { attachment.id.ifBlank { "附件" } }}" +
+                            " ${attachment.type}".trimEnd() +
+                            attachment.url.takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty(),
+                    )
+                }
+            }
         }.trim()
     }
 
@@ -371,6 +408,7 @@ data class AutomationEvent(
             createdAtEpochMillis = createdAtEpochMillis,
             isFromCurrentUser = isFromCurrentUser,
             isAiGenerated = isAiGenerated,
+            attachments = attachments,
         )
     }
 }
@@ -399,6 +437,7 @@ fun ChatMessage.toAutomationChatEvent(
         directUserId = cleanDirectUserId,
         messageText = text,
         messageType = automationChatMessageTypes().joinToString(","),
+        attachments = listOfNotNull(file?.toAutomationAttachment()),
         attentionKind = attentionKind,
         createdAtLabel = createdAtLabel,
         isFromCurrentUser = currentUserId.isNotBlank() && fromUser.id == currentUserId,
@@ -458,6 +497,7 @@ fun Note.toAutomationTimelineEvent(
         senderName = author.displayName.ifBlank { author.username },
         messageText = text,
         messageType = automationNoteMessageTypes().joinToString(","),
+        attachments = media.map { it.toAutomationAttachment() },
         noteId = id,
         channelId = channelId,
         channelName = channelName.ifBlank { this.channelName },
@@ -466,6 +506,31 @@ fun Note.toAutomationTimelineEvent(
         createdAtLabel = createdAtLabel,
         isFromCurrentUser = currentUserId.isNotBlank() && author.id == currentUserId,
         isAiGenerated = isAiGenerated,
+    )
+}
+
+private fun DriveFile.toAutomationAttachment(): AutomationAttachment {
+    return AutomationAttachment(
+        id = id,
+        name = name,
+        type = type,
+        url = url.orEmpty(),
+        thumbnailUrl = thumbnailUrl.orEmpty(),
+        description = comment.orEmpty(),
+        size = size,
+        isSensitive = isSensitive,
+    )
+}
+
+private fun NoteMedia.toAutomationAttachment(): AutomationAttachment {
+    return AutomationAttachment(
+        id = id,
+        name = description,
+        type = type,
+        url = url.orEmpty(),
+        thumbnailUrl = thumbnailUrl.orEmpty(),
+        description = description,
+        isSensitive = isSensitive,
     )
 }
 

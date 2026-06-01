@@ -67,9 +67,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.items
+import cc.hhhl.client.ai.AiAutomationModelConfig
 import cc.hhhl.client.ai.AiProviderPreset
 import cc.hhhl.client.ai.AiSettings
 import cc.hhhl.client.ai.AiTaskStatus
+import cc.hhhl.client.ai.defaultChatModelForSettings
+import cc.hhhl.client.ai.defaultFastModelForSettings
+import cc.hhhl.client.ai.defaultLongContextModelForSettings
 import cc.hhhl.client.ai.normalizedAiUsage
 import cc.hhhl.client.display.DefaultNoteVisibility
 import cc.hhhl.client.display.NotificationBadgeMode
@@ -89,6 +93,7 @@ import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.theme.toColorOrNull
 import cc.hhhl.client.update.AppReleaseNotes
 import cc.hhhl.client.ui.component.HhhlActionChip
+import cc.hhhl.client.ui.component.HhhlAnimatedSegmentedControl
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlDropdownMenu
@@ -298,6 +303,17 @@ fun SettingsScreen(
     }
 }
 
+private val AiModelConfigurationItemKeys = setOf(
+    SettingsItemKey.AiProvider,
+    SettingsItemKey.AiBaseUrl,
+    SettingsItemKey.AiApiKey,
+    SettingsItemKey.AiChatModel,
+    SettingsItemKey.AiFastModel,
+    SettingsItemKey.AiLongContextModel,
+    SettingsItemKey.AiVisionModel,
+    SettingsItemKey.AiEmbeddingModel,
+)
+
 @Composable
 fun AiSettingsScreen(
     state: SettingsUiState,
@@ -316,6 +332,9 @@ fun AiSettingsScreen(
             aiUsage = state.aiUsage,
         )
     }
+    val visibleAiItems = remember(aiGroup.items) {
+        aiGroup.items.filterNot { item -> item.key in AiModelConfigurationItemKeys }
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         HhhlTopBar(
             title = "AI 设置",
@@ -327,7 +346,7 @@ fun AiSettingsScreen(
                 SettingsGroupHeader(label = aiGroup.label)
             }
             items(
-                items = aiGroup.items,
+                items = visibleAiItems,
                 key = { item -> "ai-settings-item-${item.key}" },
                 contentType = { "settings-row" },
             ) { item ->
@@ -342,11 +361,247 @@ fun AiSettingsScreen(
                     isTestingAiConnection = isTestingAiConnection,
                 )
                 HhhlDivider()
+                if (item.key == SettingsItemKey.AiFloatingAssistant) {
+                    SettingsAiModelConfigurationTabs(
+                        settings = state.aiSettings,
+                        enabled = state.aiSettings.enabled,
+                        defaultConnectionMessage = aiConnectionMessage,
+                        isTestingDefaultConnection = isTestingAiConnection,
+                        onSettingsChanged = onAiSettingsChanged,
+                        onDefaultProviderSelected = onAiProviderSelected,
+                        onTestDefaultConnection = onTestAiConnection,
+                    )
+                    HhhlDivider()
+                }
             }
         }
     }
 }
 
+@Composable
+private fun SettingsAiModelConfigurationTabs(
+    settings: AiSettings,
+    enabled: Boolean,
+    defaultConnectionMessage: String?,
+    isTestingDefaultConnection: Boolean,
+    onSettingsChanged: (AiSettings) -> Unit,
+    onDefaultProviderSelected: (AiProviderPreset) -> Unit,
+    onTestDefaultConnection: () -> Unit,
+) {
+    var selectedTab by remember { mutableStateOf(0) }
+    HhhlInlinePanel(
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = "模型配置",
+            color = LocalHhhlColors.current.textPrimary,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        HhhlAnimatedSegmentedControl(
+            labels = listOf("默认配置", "自动化配置"),
+            selectedIndex = selectedTab,
+            onSelected = { selectedTab = it },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (selectedTab == 0) {
+            SettingsAiDefaultModelConfigFields(
+                settings = settings,
+                enabled = enabled,
+                connectionMessage = defaultConnectionMessage,
+                isTestingConnection = isTestingDefaultConnection,
+                onSettingsChanged = onSettingsChanged,
+                onProviderSelected = onDefaultProviderSelected,
+                onTestConnection = onTestDefaultConnection,
+            )
+        } else {
+            SettingsAiAutomationModelConfigFields(
+                settings = settings,
+                enabled = enabled,
+                onSettingsChanged = onSettingsChanged,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsAiDefaultModelConfigFields(
+    settings: AiSettings,
+    enabled: Boolean,
+    connectionMessage: String?,
+    isTestingConnection: Boolean,
+    onSettingsChanged: (AiSettings) -> Unit,
+    onProviderSelected: (AiProviderPreset) -> Unit,
+    onTestConnection: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "默认配置会用于普通 AI 助手、草稿处理、总结和未单独指定模型的自动化任务。",
+            color = LocalHhhlColors.current.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        SettingsModelProviderPicker(
+            provider = settings.provider,
+            onProviderSelected = onProviderSelected,
+        )
+        SettingsTextSettingLine(
+            value = settings.baseUrl,
+            placeholder = "https://api.openai.com/v1",
+            inputLabel = "Base URL",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(baseUrl = it)) },
+        )
+        SettingsTextSettingLine(
+            value = settings.apiKey,
+            placeholder = "sk-...",
+            inputLabel = "API Key",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(apiKey = it)) },
+            trailing = {
+                HhhlActionChip(
+                    label = if (isTestingConnection) "测试中" else "测试",
+                    emphasized = true,
+                    enabled = enabled && !isTestingConnection,
+                    onClick = onTestConnection,
+                )
+            },
+            helper = connectionMessage,
+        )
+        SettingsTextSettingLine(
+            value = settings.chatModel,
+            placeholder = settings.provider.defaultChatModelForSettings().ifBlank { "对话模型" },
+            inputLabel = "对话模型",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(chatModel = it)) },
+        )
+        SettingsTextSettingLine(
+            value = settings.fastModel,
+            placeholder = settings.provider.defaultFastModelForSettings().ifBlank { "快速模型" },
+            inputLabel = "快速模型",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(fastModel = it)) },
+        )
+        SettingsTextSettingLine(
+            value = settings.longContextModel,
+            placeholder = settings.provider.defaultLongContextModelForSettings().ifBlank { "长上下文模型" },
+            inputLabel = "长上下文模型",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(longContextModel = it)) },
+        )
+        SettingsTextSettingLine(
+            value = settings.visionModel,
+            placeholder = "视觉模型",
+            inputLabel = "视觉模型",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(visionModel = it)) },
+        )
+        SettingsTextSettingLine(
+            value = settings.embeddingModel,
+            placeholder = "向量模型",
+            inputLabel = "向量模型",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(embeddingModel = it)) },
+        )
+    }
+}
+
+@Composable
+private fun SettingsAiAutomationModelConfigFields(
+    settings: AiSettings,
+    enabled: Boolean,
+    onSettingsChanged: (AiSettings) -> Unit,
+) {
+    val automation = settings.automationRuleDraftModel
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "只影响自动化页根据草稿生成规则；不启用时默认使用默认配置里的模型。",
+            color = LocalHhhlColors.current.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        SettingsSwitchLine(
+            checked = automation.enabled,
+            enabled = enabled,
+            onCheckedChange = { checked ->
+                onSettingsChanged(settings.copy(automationRuleDraftModel = automation.copy(enabled = checked)))
+            },
+            supportingText = if (automation.enabled) "已启用后，AI 生成规则草稿会使用下方模型。" else "未启用时，仍使用默认配置里的模型。",
+        )
+        SettingsModelProviderPicker(
+            provider = automation.provider,
+            onProviderSelected = { provider ->
+                onSettingsChanged(
+                    settings.copy(
+                        automationRuleDraftModel = automation.withProviderDefaults(provider),
+                    ),
+                )
+            },
+        )
+        SettingsTextSettingLine(
+            value = automation.baseUrl,
+            placeholder = automation.provider.defaultBaseUrl.ifBlank { "https://api.openai.com/v1" },
+            inputLabel = "Base URL",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(automationRuleDraftModel = automation.copy(baseUrl = it))) },
+        )
+        SettingsTextSettingLine(
+            value = automation.apiKey,
+            placeholder = "sk-...",
+            inputLabel = "API Key",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(automationRuleDraftModel = automation.copy(apiKey = it))) },
+        )
+        SettingsTextSettingLine(
+            value = automation.model,
+            placeholder = automation.provider.defaultLongContextModelForSettings()
+                .ifBlank { automation.provider.defaultChatModelForSettings() }
+                .ifBlank { "模型名称" },
+            inputLabel = "模型名称",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(automationRuleDraftModel = automation.copy(model = it))) },
+        )
+    }
+}
+
+@Composable
+private fun SettingsModelProviderPicker(
+    provider: AiProviderPreset,
+    onProviderSelected: (AiProviderPreset) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = "模型来源",
+            color = LocalHhhlColors.current.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        SettingsDropdownPicker(
+            selectedLabel = provider.label,
+            options = AiProviderPreset.entries.toList(),
+            optionLabel = { it.label },
+            isSelected = { it == provider },
+            onSelected = onProviderSelected,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+private fun AiAutomationModelConfig.withProviderDefaults(provider: AiProviderPreset): AiAutomationModelConfig {
+    val defaultModel = provider.defaultLongContextModelForSettings()
+        .ifBlank { provider.defaultChatModelForSettings() }
+    return copy(
+        provider = provider,
+        baseUrl = provider.defaultBaseUrl.takeIf { it.isNotBlank() } ?: baseUrl,
+        model = defaultModel.takeIf { it.isNotBlank() } ?: model,
+    )
+}
 @Composable
 private fun SettingsAppUpdatePanel(
     status: String?,
@@ -949,19 +1204,19 @@ private fun SettingsRow(
                 )
                 SettingsItemKey.AiChatModel -> SettingsTextSettingLine(
                     value = state.aiSettings.chatModel,
-                    placeholder = state.aiSettings.provider.defaultChatModel.ifBlank { "对话模型" },
+                    placeholder = state.aiSettings.provider.defaultChatModelForSettings().ifBlank { "对话模型" },
                     enabled = item.enabled,
                     onValueChange = { onAiSettingsChanged(state.aiSettings.copy(chatModel = it)) },
                 )
                 SettingsItemKey.AiFastModel -> SettingsTextSettingLine(
                     value = state.aiSettings.fastModel,
-                    placeholder = "快速模型",
+                    placeholder = state.aiSettings.provider.defaultFastModelForSettings().ifBlank { "快速模型" },
                     enabled = item.enabled,
                     onValueChange = { onAiSettingsChanged(state.aiSettings.copy(fastModel = it)) },
                 )
                 SettingsItemKey.AiLongContextModel -> SettingsTextSettingLine(
                     value = state.aiSettings.longContextModel,
-                    placeholder = "长上下文模型",
+                    placeholder = state.aiSettings.provider.defaultLongContextModelForSettings().ifBlank { "长上下文模型" },
                     enabled = item.enabled,
                     onValueChange = { onAiSettingsChanged(state.aiSettings.copy(longContextModel = it)) },
                 )

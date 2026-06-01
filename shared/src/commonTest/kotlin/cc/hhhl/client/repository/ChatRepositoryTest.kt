@@ -642,6 +642,33 @@ class ChatRepositoryTest {
     }
 
     @Test
+    fun refreshBackfillsUnreadRoomMarkerFromResolvedMessages() = runTest {
+        val room = sampleRoom("room-1", "membership-1").copy(unreadCount = 99)
+        val older = sampleMessage(
+            id = "message-old",
+            createdAt = "2026-05-25T01:00:00.000Z",
+        ).copy(isRead = false)
+        val latest = sampleMessage(
+            id = "message-latest",
+            createdAt = "2026-05-25T02:00:00.000Z",
+        ).copy(isRead = false)
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                messageResult = ChatMessageLoadResult.Success(listOf(latest, older)),
+                result = ChatRoomLoadResult.Success(listOf(room)),
+            ),
+        )
+
+        val result = repository.refresh()
+
+        assertIs<ChatRepositoryResult.Success>(result)
+        val resolvedRoom = result.rooms.single()
+        assertEquals(99, resolvedRoom.unreadCount)
+        assertEquals("message-latest", resolvedRoom.latestMessageMarker)
+    }
+
+    @Test
     fun refreshUserConversationsLimitsUnreadCountResolution() = runTest {
         val currentUser = User("account-user", "Alice", "alice", "A")
         val history = (1..12).map { index ->

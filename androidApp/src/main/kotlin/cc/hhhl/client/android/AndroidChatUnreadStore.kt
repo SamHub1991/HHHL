@@ -16,6 +16,8 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
         return ChatUnreadSnapshot(
             roomCounts = loadCounts(cleanAccountId, TYPE_ROOM),
             userCounts = loadCounts(cleanAccountId, TYPE_USER),
+            roomReadMarkers = loadMarkers(cleanAccountId, TYPE_ROOM_READ_MARKER),
+            userReadMarkers = loadMarkers(cleanAccountId, TYPE_USER_READ_MARKER),
             pinnedRoomIds = loadStringSet(cleanAccountId, TYPE_PINNED_ROOMS),
             pinnedUserIds = loadStringSet(cleanAccountId, TYPE_PINNED_USERS),
             roomGroups = loadStrings(cleanAccountId, TYPE_ROOM_GROUP),
@@ -28,6 +30,8 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
         preferences.edit()
             .replaceCounts(cleanAccountId, TYPE_ROOM, snapshot.roomCounts)
             .replaceCounts(cleanAccountId, TYPE_USER, snapshot.userCounts)
+            .replaceMarkers(cleanAccountId, TYPE_ROOM_READ_MARKER, snapshot.roomReadMarkers)
+            .replaceMarkers(cleanAccountId, TYPE_USER_READ_MARKER, snapshot.userReadMarkers)
             .replaceStringSet(cleanAccountId, TYPE_PINNED_ROOMS, snapshot.pinnedRoomIds)
             .replaceStringSet(cleanAccountId, TYPE_PINNED_USERS, snapshot.pinnedUserIds)
             .replaceStrings(cleanAccountId, TYPE_ROOM_GROUP, snapshot.roomGroups)
@@ -35,11 +39,11 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
     }
 
     override fun clearRoom(accountId: String, roomId: String) {
-        removeCount(accountId, TYPE_ROOM, roomId, TYPE_ROOM_MARKER)
+        removeCount(accountId, TYPE_ROOM, roomId, TYPE_ROOM_MARKER, TYPE_ROOM_READ_MARKER)
     }
 
     override fun clearUser(accountId: String, userId: String) {
-        removeCount(accountId, TYPE_USER, userId, TYPE_USER_MARKER)
+        removeCount(accountId, TYPE_USER, userId, TYPE_USER_MARKER, TYPE_USER_READ_MARKER)
     }
 
     override fun clearAccount(accountId: String) {
@@ -68,18 +72,17 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
             incoming = snapshot.roomCounts,
             currentMarkers = currentRoomMarkers,
             incomingMarkers = roomLatestMarkers,
+            readMarkers = current.roomReadMarkers,
         )
         val userMerge = current.userCounts.mergeUnreadCounts(
             incoming = snapshot.userCounts,
             currentMarkers = currentUserMarkers,
             incomingMarkers = userLatestMarkers,
+            readMarkers = current.userReadMarkers,
         )
-        val merged = ChatUnreadSnapshot(
+        val merged = current.copy(
             roomCounts = roomMerge.counts,
             userCounts = userMerge.counts,
-            pinnedRoomIds = current.pinnedRoomIds,
-            pinnedUserIds = current.pinnedUserIds,
-            roomGroups = current.roomGroups,
         )
         save(cleanAccountId, merged)
         saveMarkers(cleanAccountId, TYPE_ROOM_MARKER, roomMerge.markers)
@@ -139,13 +142,17 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
             .apply()
     }
 
-    private fun removeCount(accountId: String, type: String, id: String, markerType: String) {
+    private fun removeCount(accountId: String, type: String, id: String, vararg markerTypes: String) {
         val cleanAccountId = accountId.trim()
         val cleanId = id.trim()
         if (cleanAccountId.isEmpty() || cleanId.isEmpty()) return
         preferences.edit()
             .remove(key(cleanAccountId, type, cleanId))
-            .remove(key(cleanAccountId, markerType, cleanId))
+            .apply {
+                markerTypes.forEach { markerType ->
+                    remove(key(cleanAccountId, markerType, cleanId))
+                }
+            }
             .apply()
     }
 
@@ -222,6 +229,8 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
         const val TYPE_USER = "user"
         const val TYPE_ROOM_MARKER = "room_marker"
         const val TYPE_USER_MARKER = "user_marker"
+        const val TYPE_ROOM_READ_MARKER = "room_read_marker"
+        const val TYPE_USER_READ_MARKER = "user_read_marker"
         const val TYPE_PINNED_ROOMS = "pinned_room"
         const val TYPE_PINNED_USERS = "pinned_user"
         const val TYPE_ROOM_GROUP = "room_group"
@@ -237,16 +246,31 @@ private fun Map<String, Int>.mergeUnreadCounts(
     incoming: Map<String, Int>,
     currentMarkers: Map<String, String>,
     incomingMarkers: Map<String, String>,
+    readMarkers: Map<String, String>,
 ): UnreadMergeResult {
     val mergedCounts = LinkedHashMap<String, Int>(size + incoming.size)
     val mergedMarkers = LinkedHashMap<String, String>(currentMarkers.size + incomingMarkers.size)
-    forEach { (key, value) -> if (value > 0) mergedCounts[key] = value }
-    currentMarkers.forEach { (key, value) -> if (value.isNotBlank()) mergedMarkers[key] = value }
+    fun markerAlreadyRead(key: String, marker: String): Boolean {
+        val cleanMarker = marker.trim()
+        return cleanMarker.isNotEmpty() && cleanMarker in readMarkers[key].readMarkerAliases()
+    }
+    forEach { (key, value) ->
+        val marker = currentMarkers[key].orEmpty()
+        if (value > 0 && !markerAlreadyRead(key, marker)) mergedCounts[key] = value
+    }
+    currentMarkers.forEach { (key, value) ->
+        if (value.isNotBlank() && !markerAlreadyRead(key, value)) mergedMarkers[key] = value
+    }
     incomingMarkers.forEach { (rawKey, rawMarker) ->
         val key = rawKey.trim()
         val marker = rawMarker.trim()
         if (key.isNotEmpty() && marker.isNotEmpty()) {
-            mergedMarkers[key] = marker
+            if (markerAlreadyRead(key, marker)) {
+                mergedCounts.remove(key)
+                mergedMarkers.remove(key)
+            } else {
+                mergedMarkers[key] = marker
+            }
         }
     }
     incoming.forEach { (rawKey, rawValue) ->
@@ -255,9 +279,14 @@ private fun Map<String, Int>.mergeUnreadCounts(
         if (key.isEmpty() || incomingCount <= 0) return@forEach
         val currentCount = mergedCounts[key] ?: 0
         val incomingMarker = incomingMarkers[key]?.trim().orEmpty()
+        if (markerAlreadyRead(key, incomingMarker)) {
+            mergedCounts.remove(key)
+            mergedMarkers.remove(key)
+            return@forEach
+        }
         val currentMarker = currentMarkers[key].orEmpty()
-        val markerChanged = incomingMarker.isNotEmpty() &&
-            currentMarker.isNotEmpty() &&
+        val markerChanged = incomingMarker.isStableUnreadMarker() &&
+            currentMarker.isStableUnreadMarker() &&
             incomingMarker != currentMarker
         mergedCounts[key] = if (markerChanged && incomingCount <= currentCount) {
             currentCount + 1
@@ -273,3 +302,21 @@ private fun Map<String, Int>.mergeUnreadCounts(
         markers = mergedMarkers.filterValues { it.isNotBlank() },
     )
 }
+
+private fun String?.readMarkerAliases(): List<String> {
+    return orEmpty()
+        .split(READ_MARKER_ALIAS_SEPARATOR)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+}
+
+private fun String.isStableUnreadMarker(): Boolean {
+    val clean = trim()
+    return clean.isNotEmpty() && !unstableUnreadMarkerPattern.containsMatchIn(clean)
+}
+
+private const val READ_MARKER_ALIAS_SEPARATOR = "\n"
+private val unstableUnreadMarkerPattern = Regex(
+    pattern = "(刚刚|秒前|分钟前|小时前|天前|周前|月前|年前|just now|\\bago\\b)",
+    options = setOf(RegexOption.IGNORE_CASE),
+)

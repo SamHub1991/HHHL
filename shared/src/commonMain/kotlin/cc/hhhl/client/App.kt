@@ -950,6 +950,11 @@ private data class PendingAiAssistantRoomManagementAction(
     val started: Boolean = false,
 )
 
+private data class PendingAiAssistantObservedAction(
+    val actionId: String,
+    val started: Boolean = false,
+)
+
 private const val CHAT_ROOM_REFRESH_INTERVAL_MS = 15_000L
 private const val CHAT_MESSAGE_REFRESH_INTERVAL_MS = 5_000L
 private const val STREAMING_CHAT_REFRESH_INTERVAL_MS = 60_000L
@@ -3168,6 +3173,11 @@ private fun MainShell(
                             .takeLastSet(MAX_AUTOMATION_SEEN_CHAT_EVENTS)
                     }
                 },
+                attachmentAuthHeaderProvider = {
+                    sessionToken.orEmpty().takeIf { it.isNotBlank() }
+                        ?.let { token -> mapOf("Authorization" to "Bearer $token") }
+                        .orEmpty()
+                },
             ),
             aiBridge = aiStateHolder,
             aiToolPermissionProvider = { aiStateHolder.state.value.settings.toolsAllowed },
@@ -3357,6 +3367,9 @@ private fun MainShell(
     }
     var noteActionToast by remember { mutableStateOf<String?>(null) }
     var pendingAiAssistantRoomManagementAction by remember { mutableStateOf<PendingAiAssistantRoomManagementAction?>(null) }
+    var pendingAiAssistantChatSendAction by remember { mutableStateOf<PendingAiAssistantObservedAction?>(null) }
+    var pendingAiAssistantComposeSendAction by remember { mutableStateOf<PendingAiAssistantObservedAction?>(null) }
+    var pendingAiAssistantAsyncActionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var accountBootstrapRestored by remember(currentAccountId) { mutableStateOf(false) }
 
     LaunchedEffect(currentAccountId) {
@@ -5580,12 +5593,125 @@ private fun MainShell(
             .firstOrNull { it.id == actionId }
     }
 
-    fun aiAssistantStatusAfterExecution(actionId: String, executed: Boolean): AiAssistantActionStatus {
+    fun aiAssistantStatusAfterExecution(
+        actionId: String,
+        executed: Boolean,
+        previousStatus: AiAssistantActionStatus? = null,
+    ): AiAssistantActionStatus {
+        val currentStatus = findAiAssistantAction(actionId)?.status
+        if (
+            previousStatus != null &&
+            currentStatus != null &&
+            currentStatus != previousStatus &&
+            actionId !in pendingAiAssistantAsyncActionIds &&
+            pendingAiAssistantRoomManagementAction?.actionId != actionId
+        ) {
+            return currentStatus
+        }
         return when {
             !executed -> AiAssistantActionStatus.Failed
+            actionId in pendingAiAssistantAsyncActionIds -> AiAssistantActionStatus.Running
             pendingAiAssistantRoomManagementAction?.actionId == actionId -> AiAssistantActionStatus.Running
             else -> AiAssistantActionStatus.Approved
         }
+    }
+
+    fun startAiAssistantAsyncAction(actionId: String) {
+        pendingAiAssistantAsyncActionIds = pendingAiAssistantAsyncActionIds + actionId
+        updateAiAssistantActionStatus(actionId, AiAssistantActionStatus.Running)
+    }
+
+    fun finishAiAssistantAsyncAction(
+        actionId: String,
+        result: AiAssistantActionExecutionResult,
+    ) {
+        pendingAiAssistantAsyncActionIds = pendingAiAssistantAsyncActionIds - actionId
+        updateAiAssistantActionStatus(
+            actionId,
+            if (result.success) AiAssistantActionStatus.Approved else AiAssistantActionStatus.Failed,
+            result.message,
+        )
+    }
+
+    LaunchedEffect(
+        pendingAiAssistantChatSendAction,
+        chatState.isSendingMessage,
+        chatState.messageErrorMessage,
+    ) {
+        val pending = pendingAiAssistantChatSendAction ?: return@LaunchedEffect
+        if (chatState.isSendingMessage) {
+            if (!pending.started) {
+                pendingAiAssistantChatSendAction = pending.copy(started = true)
+            }
+            return@LaunchedEffect
+        }
+        if (!pending.started) {
+            delay(250L)
+            val latest = chatStateHolder.state.value
+            when {
+                latest.isSendingMessage -> pendingAiAssistantChatSendAction = pending.copy(started = true)
+                !latest.messageErrorMessage.isNullOrBlank() -> {
+                    val result = AiAssistantActionExecutionResult(false, latest.messageErrorMessage.orEmpty())
+                    finishAiAssistantAsyncAction(pending.actionId, result)
+                    noteActionToast = result.message
+                    pendingAiAssistantChatSendAction = null
+                }
+            }
+            return@LaunchedEffect
+        }
+        val error = chatState.messageErrorMessage?.trim().orEmpty()
+        val result = if (error.isBlank()) {
+            AiAssistantActionExecutionResult(true, "已发送当前聊天草稿")
+        } else {
+            AiAssistantActionExecutionResult(false, error)
+        }
+        finishAiAssistantAsyncAction(pending.actionId, result)
+        noteActionToast = result.message
+        pendingAiAssistantChatSendAction = null
+    }
+
+    LaunchedEffect(
+        pendingAiAssistantComposeSendAction,
+        composeState.isSending,
+        composeState.errorMessage,
+        composeState.createdNoteId,
+    ) {
+        val pending = pendingAiAssistantComposeSendAction ?: return@LaunchedEffect
+        if (composeState.isSending) {
+            if (!pending.started) {
+                pendingAiAssistantComposeSendAction = pending.copy(started = true)
+            }
+            return@LaunchedEffect
+        }
+        if (!pending.started) {
+            delay(250L)
+            val latest = composeStateHolder.state.value
+            when {
+                latest.isSending -> pendingAiAssistantComposeSendAction = pending.copy(started = true)
+                !latest.errorMessage.isNullOrBlank() -> {
+                    val result = AiAssistantActionExecutionResult(false, latest.errorMessage.orEmpty())
+                    finishAiAssistantAsyncAction(pending.actionId, result)
+                    noteActionToast = result.message
+                    pendingAiAssistantComposeSendAction = null
+                }
+                !latest.createdNoteId.isNullOrBlank() -> {
+                    val result = AiAssistantActionExecutionResult(true, "已发布帖子")
+                    finishAiAssistantAsyncAction(pending.actionId, result)
+                    noteActionToast = result.message
+                    pendingAiAssistantComposeSendAction = null
+                }
+            }
+            return@LaunchedEffect
+        }
+        val error = composeState.errorMessage?.trim().orEmpty()
+        val result = if (error.isBlank()) {
+            AiAssistantActionExecutionResult(true, "已发布帖子")
+        } else {
+            AiAssistantActionExecutionResult(false, error)
+        }
+        finishAiAssistantAsyncAction(pending.actionId, result)
+        noteActionToast = result.message
+        pendingAiAssistantComposeSendAction = null
     }
 
     LaunchedEffect(
@@ -5958,13 +6084,32 @@ private fun MainShell(
             (nameValue.length >= 2 && (nameValue.contains(clean) || clean.contains(nameValue)))
     }
 
-    fun resolveAiAssistantRoom(target: String): ChatRoom? {
+    fun resolveKnownAiAssistantRoom(target: String): ChatRoom? {
         val cleanTarget = target.trim()
         if (cleanTarget.isBlank()) return aiAssistantCurrentRoom()
         val rooms = (listOfNotNull(aiAssistantCurrentRoom(), chatState.selectedRoom, aiAssistantSourceRoom) + chatState.rooms + chatState.ownedRooms)
             .filter { it.id.isNotBlank() }
             .distinctBy { it.id }
         val matched = rooms.filter { room -> room.aiAssistantMatchesTarget(cleanTarget) }
+        return when (matched.size) {
+            0 -> {
+                noteActionToast = "找不到聊天室：$cleanTarget"
+                null
+            }
+            1 -> matched.single()
+            else -> {
+                noteActionToast = "找到多个聊天室匹配“$cleanTarget”，请说完整聊天室名或 ID"
+                null
+            }
+        }
+    }
+
+    suspend fun resolveAiAssistantRoom(target: String): ChatRoom? {
+        val cleanTarget = target.trim()
+        if (cleanTarget.isBlank()) return aiAssistantCurrentRoom()
+        resolveKnownAiAssistantRoom(cleanTarget)?.let { return it }
+        val remoteRooms = loadAutomationRoomsForResolve()
+        val matched = remoteRooms.filter { room -> room.aiAssistantMatchesTarget(cleanTarget) }
         return when (matched.size) {
             0 -> {
                 noteActionToast = "找不到聊天室：$cleanTarget"
@@ -6068,26 +6213,27 @@ private fun MainShell(
     }
 
     fun executeAiAssistantTargetedChatAction(action: AiAssistantActionProposal, payload: AiAssistantActionPayload): Boolean {
+        startAiAssistantAsyncAction(action.id)
         appScope.launch {
             val mentionUsers = resolveAiAssistantMentionUsers(payload.mentions) ?: run {
-                updateAiAssistantActionStatus(action.id, AiAssistantActionStatus.Failed, noteActionToast.orEmpty())
+                finishAiAssistantAsyncAction(action.id, AiAssistantActionExecutionResult(false, noteActionToast.orEmpty()))
                 return@launch
             }
             val body = payload.body.ifBlank { chatStateHolder.state.value.messageDraft }.trim()
             val message = aiAssistantBodyWithMentions(body, mentionUsers)
             if (message.isBlank()) {
                 noteActionToast = "没有可发送的聊天内容"
-                updateAiAssistantActionStatus(action.id, AiAssistantActionStatus.Failed, noteActionToast.orEmpty())
+                finishAiAssistantAsyncAction(action.id, AiAssistantActionExecutionResult(false, noteActionToast.orEmpty()))
                 return@launch
             }
             val targetUser = payload.targetUser.takeIf { it.isNotBlank() }?.let { resolveAiAssistantUser(it) }
             if (payload.targetUser.isNotBlank() && targetUser == null) {
-                updateAiAssistantActionStatus(action.id, AiAssistantActionStatus.Failed, noteActionToast.orEmpty())
+                finishAiAssistantAsyncAction(action.id, AiAssistantActionExecutionResult(false, noteActionToast.orEmpty()))
                 return@launch
             }
             val targetRoom = if (targetUser == null) resolveAiAssistantRoom(payload.targetRoom) else null
             if (targetUser == null && targetRoom == null) {
-                updateAiAssistantActionStatus(action.id, AiAssistantActionStatus.Failed, noteActionToast.orEmpty())
+                finishAiAssistantAsyncAction(action.id, AiAssistantActionExecutionResult(false, noteActionToast.orEmpty()))
                 return@launch
             }
             val result = if (targetUser != null) {
@@ -6102,11 +6248,7 @@ private fun MainShell(
                 )
             }
             noteActionToast = result.message
-            updateAiAssistantActionStatus(
-                action.id,
-                if (result.success) AiAssistantActionStatus.Approved else AiAssistantActionStatus.Failed,
-                result.message,
-            )
+            finishAiAssistantAsyncAction(action.id, result)
             rootRoute = RootRoute.Chat
             route = AppRoute.Chat
         }
@@ -6115,9 +6257,10 @@ private fun MainShell(
     }
 
     fun executeAiAssistantTargetedComposeAction(action: AiAssistantActionProposal, payload: AiAssistantActionPayload): Boolean {
+        startAiAssistantAsyncAction(action.id)
         appScope.launch {
             val mentionUsers = resolveAiAssistantMentionUsers(payload.mentions) ?: run {
-                updateAiAssistantActionStatus(action.id, AiAssistantActionStatus.Failed, noteActionToast.orEmpty())
+                finishAiAssistantAsyncAction(action.id, AiAssistantActionExecutionResult(false, noteActionToast.orEmpty()))
                 return@launch
             }
             val targetUsers = buildList {
@@ -6126,19 +6269,19 @@ private fun MainShell(
                 }
             }
             if (payload.targetUser.isNotBlank() && targetUsers.isEmpty()) {
-                updateAiAssistantActionStatus(action.id, AiAssistantActionStatus.Failed, noteActionToast.orEmpty())
+                finishAiAssistantAsyncAction(action.id, AiAssistantActionExecutionResult(false, noteActionToast.orEmpty()))
                 return@launch
             }
             val body = payload.body.ifBlank { composeStateHolder.state.value.draft.text }.trim()
             val text = aiAssistantBodyWithMentions(body, mentionUsers)
             if (text.isBlank()) {
                 noteActionToast = "没有可发布的帖子正文"
-                updateAiAssistantActionStatus(action.id, AiAssistantActionStatus.Failed, noteActionToast.orEmpty())
+                finishAiAssistantAsyncAction(action.id, AiAssistantActionExecutionResult(false, noteActionToast.orEmpty()))
                 return@launch
             }
             val channel = payload.channel.takeIf { it.isNotBlank() }?.let { resolveAiAssistantChannel(it) }
             if (payload.channel.isNotBlank() && channel == null) {
-                updateAiAssistantActionStatus(action.id, AiAssistantActionStatus.Failed, noteActionToast.orEmpty())
+                finishAiAssistantAsyncAction(action.id, AiAssistantActionExecutionResult(false, noteActionToast.orEmpty()))
                 return@launch
             }
             val baseDraft = composeStateHolder.state.value.draft
@@ -6168,11 +6311,7 @@ private fun MainShell(
                     timelineStateHolder.refresh(TimelineKind.Home)
                 }
             }
-            updateAiAssistantActionStatus(
-                action.id,
-                if (result.success) AiAssistantActionStatus.Approved else AiAssistantActionStatus.Failed,
-                result.message,
-            )
+            finishAiAssistantAsyncAction(action.id, result)
         }
         noteActionToast = "正在解析目标并发布帖子"
         return true
@@ -6275,7 +6414,7 @@ private fun MainShell(
                         noteActionToast = "没有可填入的聊天草稿"
                         executed = false
                     } else {
-                        payload.targetRoom.takeIf { it.isNotBlank() }?.let(::resolveAiAssistantRoom)?.let(chatStateHolder::selectRoom)
+                        payload.targetRoom.takeIf { it.isNotBlank() }?.let(::resolveKnownAiAssistantRoom)?.let(chatStateHolder::selectRoom)
                         payload.targetUser.takeIf { it.isNotBlank() }?.let(::resolveKnownAiAssistantUser)?.let { user ->
                             chatStateHolder.selectUserConversation(ChatUserConversation(user = user))
                         }
@@ -6301,7 +6440,14 @@ private fun MainShell(
                     executed = false
                 } else {
                     val currentChatState = chatStateHolder.state.value
-                    if (currentChatState.messageDraft.isBlank() && payload.body.isNotBlank()) {
+                    if (currentChatState.isSendingMessage) {
+                        rootRoute = RootRoute.Chat
+                        route = AppRoute.Chat
+                        noteActionToast = "聊天消息正在发送，稍后再试"
+                        executed = false
+                    } else if (currentChatState.messageDraft.isBlank() && payload.body.isNotBlank()) {
+                        startAiAssistantAsyncAction(action.id)
+                        pendingAiAssistantChatSendAction = PendingAiAssistantObservedAction(action.id)
                         chatStateHolder.updateMessageDraft(payload.body)
                         appScope.launch {
                             delay(100L)
@@ -6316,6 +6462,8 @@ private fun MainShell(
                         noteActionToast = "聊天输入框没有可发送的草稿"
                         executed = false
                     } else {
+                        startAiAssistantAsyncAction(action.id)
+                        pendingAiAssistantChatSendAction = PendingAiAssistantObservedAction(action.id)
                         chatStateHolder.sendMessage()
                         rootRoute = RootRoute.Chat
                         route = AppRoute.Chat
@@ -6347,7 +6495,12 @@ private fun MainShell(
                 } else {
                     rootRoute = RootRoute.Timeline
                     route = AppRoute.Compose()
-                    if (composeState.draft.text.isBlank() && payload.body.isNotBlank()) {
+                    if (composeState.isSending || composeState.isResolvingVisibleUsers) {
+                        noteActionToast = "发帖正在提交，稍后再试"
+                        executed = false
+                    } else if (composeState.draft.text.isBlank() && payload.body.isNotBlank()) {
+                        startAiAssistantAsyncAction(action.id)
+                        pendingAiAssistantComposeSendAction = PendingAiAssistantObservedAction(action.id)
                         composeStateHolder.updateText(payload.body)
                         appScope.launch {
                             delay(100L)
@@ -6358,6 +6511,8 @@ private fun MainShell(
                         noteActionToast = "发帖框没有可发布的草稿"
                         executed = false
                     } else {
+                        startAiAssistantAsyncAction(action.id)
+                        pendingAiAssistantComposeSendAction = PendingAiAssistantObservedAction(action.id)
                         composeStateHolder.send()
                         noteActionToast = "已请求发布当前发帖草稿"
                     }
@@ -6498,7 +6653,7 @@ private fun MainShell(
         val failureDetail = noteActionToast.orEmpty()
         updateAiAssistantActionStatus(
             actionId,
-            aiAssistantStatusAfterExecution(actionId, executed),
+            aiAssistantStatusAfterExecution(actionId, executed, previousStatus = action.status),
             detail = failureDetail,
         )
     }
@@ -6520,7 +6675,7 @@ private fun MainShell(
                 val failureDetail = noteActionToast.orEmpty()
                 updateAiAssistantActionStatus(
                     action.id,
-                    aiAssistantStatusAfterExecution(action.id, executed),
+                    aiAssistantStatusAfterExecution(action.id, executed, previousStatus = pendingAction.status),
                     detail = failureDetail,
                 )
             }

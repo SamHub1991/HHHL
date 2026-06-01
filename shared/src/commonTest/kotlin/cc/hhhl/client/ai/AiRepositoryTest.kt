@@ -14,6 +14,7 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AiRepositoryTest {
@@ -35,6 +36,88 @@ class AiRepositoryTest {
         )
 
         assertEquals(AiRepositoryResult.Success("整理完成"), result)
+    }
+
+    @Test
+    fun completeDoesNotAppendChatEndpointWhenBaseUrlAlreadyContainsIt() = runTest {
+        val repository = AiRepository(
+            httpClient = aiTestClient { request ->
+                assertEquals("/v1/chat/completions", request.url.encodedPath)
+                respond(
+                    content = """{"choices":[{"message":{"role":"assistant","content":"OK"}}]}""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = repository.complete(
+            settings = AiSettings(
+                enabled = true,
+                apiKey = "key",
+                baseUrl = "http" + "://localhost/v1/chat/completions",
+            ),
+            prompt = AiPrompt("system", "user", 120),
+        )
+
+        assertEquals(AiRepositoryResult.Success("OK"), result)
+    }
+
+    @Test
+    fun completeUsesAnthropicMessagesEndpointForClaude() = runTest {
+        val repository = AiRepository(
+            httpClient = aiTestClient { request ->
+                assertEquals("/v1/messages", request.url.encodedPath)
+                assertEquals("claude-key", request.headers["x-api-key"])
+                assertEquals("2023-06-01", request.headers["anthropic-version"])
+                assertNull(request.headers[HttpHeaders.Authorization])
+                respond(
+                    content = """{"content":[{"type":"text","text":"Claude 完成"}]}""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = repository.complete(
+            settings = AiSettings(
+                enabled = true,
+                provider = AiProviderPreset.Claude,
+                baseUrl = "http" + "://localhost/v1",
+                apiKey = "claude-key",
+                chatModel = "claude4.7",
+            ),
+            prompt = AiPrompt("system", "user", 120),
+        )
+
+        assertEquals(AiRepositoryResult.Success("Claude 完成"), result)
+    }
+
+    @Test
+    fun completeDoesNotAppendClaudeMessagesEndpointWhenBaseUrlAlreadyContainsIt() = runTest {
+        val repository = AiRepository(
+            httpClient = aiTestClient { request ->
+                assertEquals("/v1/messages", request.url.encodedPath)
+                respond(
+                    content = """{"content":[{"type":"text","text":"Claude OK"}]}""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = repository.complete(
+            settings = AiSettings(
+                enabled = true,
+                provider = AiProviderPreset.Claude,
+                baseUrl = "http" + "://localhost/v1/messages",
+                apiKey = "claude-key",
+                chatModel = "claude4.7",
+            ),
+            prompt = AiPrompt("system", "user", 120),
+        )
+
+        assertEquals(AiRepositoryResult.Success("Claude OK"), result)
     }
 
     @Test

@@ -47,10 +47,21 @@ class AiPromptBuilderTest {
             ),
         )
 
-        assertTrue(prompt.user.contains("YES 或 NO"))
+        assertTrue(prompt.user.contains("RESULT: YES 或 RESULT: NO"))
+        assertTrue(prompt.user.contains("不要要求关键词完全一致"))
         assertTrue(prompt.user.contains("用户反馈 bug"))
         assertTrue(prompt.user.contains("无法打开设置"))
-        assertEquals(40, prompt.maxOutputTokens)
+        assertEquals(96, prompt.maxOutputTokens)
+    }
+
+    @Test
+    fun automationSemanticDecisionAcceptsCommonModelReplies() {
+        assertTrue("RESULT: YES\n这是用户反馈 bug".aiSemanticYes())
+        assertTrue("结论：满足\n对方在描述一个问题".aiSemanticYes())
+        assertTrue("可以触发，因为语义相关".aiSemanticYes())
+        assertFalse("RESULT: NO\n只是闲聊".aiSemanticYes())
+        assertFalse("结论：不满足，证据不足".aiSemanticYes())
+        assertFalse("无关：没有提到 bug".aiSemanticYes())
     }
 
     @Test
@@ -181,6 +192,22 @@ class AiPromptBuilderTest {
         assertTrue(prompt.user.contains("安全级别"))
         assertTrue(prompt.user.contains("不要建议默认自动发送"))
         assertTrue(prompt.user.contains("Webhook 失败"))
+    }
+
+    @Test
+    fun automationRuleDraftPromptExplainsWebhookAndAiWebhookFields() {
+        val prompt = AiPromptBuilder.build(
+            settings = AiSettings(enabled = true, apiKey = "key"),
+            kind = AiTaskKind.AutomationRuleDraft,
+            input = AiTaskInput(
+                prompt = "收到聊天消息后用 AI 提取任务再发到 Webhook",
+            ),
+        )
+
+        assertTrue(prompt.user.contains("webhookUrl 或 url"))
+        assertTrue(prompt.user.contains("AiGenerateWebhook"))
+        assertTrue(prompt.user.contains("只输出 JSON"))
+        assertTrue(prompt.user.contains("AiForwardToRoom"))
     }
 
     @Test

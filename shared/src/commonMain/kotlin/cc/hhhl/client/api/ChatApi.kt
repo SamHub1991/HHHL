@@ -1263,11 +1263,12 @@ class SharkeyChatApi(
         return map { room ->
             val historyUnread = unreadRoomSummaries[room.id]
             val historyUnreadCount = historyUnread?.count.coercePositive()
-            if (historyUnreadCount > room.unreadCount) {
+            val historyMarker = historyUnread?.latestMarker.orEmpty()
+            if (historyUnreadCount > room.unreadCount || (room.latestMessageMarker.isBlank() && historyMarker.isNotBlank())) {
                 room.copy(
-                    unreadCount = historyUnreadCount,
+                    unreadCount = maxOf(room.unreadCount, historyUnreadCount),
                     latestMessageMarker = room.latestMessageMarker.ifBlank {
-                        historyUnread?.latestMarker.orEmpty()
+                        historyMarker
                     },
                 )
             } else {

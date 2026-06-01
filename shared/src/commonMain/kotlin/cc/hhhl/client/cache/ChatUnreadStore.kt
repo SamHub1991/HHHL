@@ -3,6 +3,8 @@ package cc.hhhl.client.cache
 data class ChatUnreadSnapshot(
     val roomCounts: Map<String, Int> = emptyMap(),
     val userCounts: Map<String, Int> = emptyMap(),
+    val roomReadMarkers: Map<String, String> = emptyMap(),
+    val userReadMarkers: Map<String, String> = emptyMap(),
     val pinnedRoomIds: Set<String> = emptySet(),
     val pinnedUserIds: Set<String> = emptySet(),
     val roomGroups: Map<String, String> = emptyMap(),

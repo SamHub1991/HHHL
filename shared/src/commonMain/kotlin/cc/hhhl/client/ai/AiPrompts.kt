@@ -144,7 +144,7 @@ object AiPromptBuilder {
                 AiTaskKind.ComposeHashtags -> 120
                 AiTaskKind.ComposeMentionSuggestions -> 160
                 AiTaskKind.ComposeFromRecentPosts -> settings.maxOutputTokens.coerceIn(160, 1_200)
-                AiTaskKind.AutomationSemanticCondition -> 40
+                AiTaskKind.AutomationSemanticCondition -> 96
                 AiTaskKind.ChatImportanceCheck -> 80
                 AiTaskKind.AutomationRuleDraft -> settings.maxOutputTokens.coerceIn(320, 1_600)
                 AiTaskKind.AssistantChat -> settings.maxOutputTokens.coerceIn(240, 2_000)
@@ -285,7 +285,10 @@ object AiPromptBuilder {
 
     private fun automationConditionPrompt(input: AiTaskInput): String {
         return buildString {
-            appendLine("判断自动化事件是否满足语义条件。必须先输出 YES 或 NO，第二行可以用一句话说明。")
+            appendLine("判断自动化事件是否满足用户定义的自动化语义条件。")
+            appendLine("第一行必须固定输出 RESULT: YES 或 RESULT: NO，第二行用一句话说明理由。")
+            appendLine("只要事件语义、意图或同义表达能合理满足条件，就输出 RESULT: YES；只有明显无关、相反或证据不足时才输出 RESULT: NO。")
+            appendLine("不要要求关键词完全一致，不要因为措辞不同就判失败。")
             appendLine("条件：${input.prompt.ifBlank { input.text }}")
             appendLine()
             appendLine("事件：")
@@ -335,8 +338,8 @@ object AiPromptBuilder {
             appendLine("conditionMode/actionMode 只能是 All、Any / Sequential、Parallel。")
             appendLine("conditions 每项字段：type, value, enabled。type 只能是 SenderUserId、SenderUserIds、SenderUsername、SenderNameContains、MessageContains、RoomId、RoomNameContains、DirectUserId、SourceKind、AttentionKind、NotificationType、ChannelId、ChannelNameContains、MessageType、TimelineKind、NoteVisibility、AiSemantic。")
             appendLine("如果你要表达名字，也可以在条件项里输出 roomName、userName、userNames、username、channelName、messageType、timelineKind、notificationType、attentionKind，解析器会转换成对应条件。")
-            appendLine("actions 每项字段：type, targetId, titleTemplate, bodyTemplate, mentionSender, replyToEvent, quoteEvent, enabled, failurePolicy。")
-            appendLine("action.type 只能是 AddLog、SystemNotification、ForwardToRoom、ForwardToUser、ReplyToChat、AiReplyToChat、ReplyToNote、AiReplyToNote、QuoteNote、AiQuoteNote、RenoteNote、PostToChannel、CopyChannelLink、Webhook、AiGenerateLog、AiGenerateNotification、AiGenerateWebhook。")
+            appendLine("actions 每项字段：type, targetId, titleTemplate, bodyTemplate, mentionSender, replyToEvent, quoteEvent, enabled, failurePolicy。Webhook 目标也可以用 webhookUrl 或 url，AI 要求也可以用 prompt/instruction，解析器会归一成 targetId/bodyTemplate。")
+            appendLine("action.type 只能是 AddLog、SystemNotification、ForwardToRoom、AiForwardToRoom、ForwardToUser、ReplyToChat、AiReplyToChat、ReplyToNote、AiReplyToNote、QuoteNote、AiQuoteNote、RenoteNote、PostToChannel、CopyChannelLink、Webhook、AiGenerateLog、AiGenerateNotification、AiGenerateWebhook。")
             appendLine("不要编造 ID。只有当前上下文列出了名称 -> ID 时才使用 RoomId、SenderUserId/SenderUserIds、ChannelId；否则用 RoomNameContains、SenderNameContains/SenderUsername、ChannelNameContains，系统会再查服务器解析。")
             appendLine("聊天室消息：trigger=ChatMessage，聊天室来源必须加 {type: SourceKind, value: room}；指定聊天室优先 RoomId，不知道 ID 用 RoomNameContains。私聊来源用 SourceKind=direct，指定私聊用户用 DirectUserId 或 SenderUserId。")
             appendLine("某聊天室中某个/多个用户发消息：使用 ChatMessage + SourceKind=room + RoomId/RoomNameContains + SenderUserId/SenderUserIds 或 SenderNameContains。用户说全部/所有/任意用户时，不要添加发送者条件。")
@@ -346,6 +349,7 @@ object AiPromptBuilder {
             appendLine("帖子流/某人发帖/某频道有帖子：使用 trigger=TimelineNote；指定发帖用户用 SenderUserId 或 SenderNameContains；指定频道优先 ChannelId，不知道 ID 用 ChannelNameContains，并加 TimelineKind=Channel；帖子消息类型也用 MessageType，值可含 text、image、file、poll、reply、quote。")
             appendLine("关注、帖子回复、帖子提及、帖子引用等来自通知的事件：使用 trigger=Notification，并添加 NotificationType=Follow/Reply/Mention/Quote/Renote/Reaction 等。不要把聊天 @ 误生成为 Notification。")
             appendLine("failurePolicy 只能是 Continue 或 Stop。")
+            appendLine("用户说“发送到 Webhook/回调/HTTP”时，action.type=Webhook，targetId 填用户给出的 Webhook URL，bodyTemplate 放要发送的模板。用户说“用 AI 提取/总结后发送到 Webhook”时，action.type=AiGenerateWebhook，targetId 填 Webhook URL，bodyTemplate 放 AI 提取要求，例如只输出 JSON。")
             appendLine("优先生成低风险草案：AddLog、SystemNotification、AiGenerateLog、AiGenerateNotification。涉及自动发送、转发、引用、Webhook、剪贴板、频道发帖时，必须写清条件、加冷却，并在 safetyNote 说明需要用户确认。")
             appendLine("不要输出删除、屏蔽、举报、关注、批量操作。动作目标 targetId 可以用 room:聊天室名、user:用户名、channel:频道名，系统会解析；若无法确定则留空并在 safetyNote 说明。")
             appendLine("模板变量可用：{{sender.name}}、{{sender.username}}、{{sender.mention}}、{{message.text}}、{{message.id}}、{{message.type}}、{{room.id}}、{{room.name}}、{{direct.user.id}}、{{notification.text}}、{{note.id}}、{{note.link}}、{{channel.id}}、{{channel.name}}、{{channel.link}}、{{timeline.kind}}、{{event.body}}。")
@@ -411,6 +415,33 @@ object AiPromptBuilder {
 }
 
 fun String.aiSemanticYes(): Boolean {
-    val clean = trim().lowercase()
-    return clean.startsWith("yes") || clean.startsWith("是") || clean.startsWith("符合")
+    val clean = trim()
+    if (clean.isBlank()) return false
+    val decisionText = clean
+        .lineSequence()
+        .map { it.trim() }
+        .firstOrNull { it.isNotBlank() }
+        .orEmpty()
+        .ifBlank { clean }
+        .take(160)
+        .lowercase()
+    val compact = decisionText
+        .replace(" ", "")
+        .replace("\t", "")
+        .replace("_", "")
+        .replace("-", "")
+    if (aiSemanticNoPattern.containsMatchIn(compact)) return false
+    if (aiSemanticYesPattern.containsMatchIn(compact)) return true
+    return clean.take(240).lowercase().let { text ->
+        !aiSemanticNoPattern.containsMatchIn(text.replace(" ", "")) &&
+            aiSemanticYesPattern.containsMatchIn(text.replace(" ", ""))
+    }
 }
+
+private val aiSemanticYesPattern = Regex(
+    """^(?:result[:：]?|结果[:：]?|结论[:：]?|判断[:：]?|answer[:：]?)?(?:yes|y|true|是|是的|符合|满足|已满足|命中|已命中|可以触发|应触发|应该触发|触发|相关|有关|算是|属于)""",
+)
+
+private val aiSemanticNoPattern = Regex(
+    """^(?:result[:：]?|结果[:：]?|结论[:：]?|判断[:：]?|answer[:：]?)?(?:no|n|false|否|不是|不符合|未符合|不满足|未满足|不命中|未命中|无关|不相关|无需触发|不触发|不能触发|不该触发|证据不足)""",
+)

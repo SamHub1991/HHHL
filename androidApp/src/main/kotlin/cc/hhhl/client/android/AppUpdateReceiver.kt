@@ -84,6 +84,14 @@ class BackgroundNotificationBootReceiver : BroadcastReceiver() {
     }
 }
 
+class BackgroundNotificationRecoveryReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ACTION_BACKGROUND_NOTIFICATION_RECOVERY) {
+            BackgroundNotificationScheduler.watchdog(context.applicationContext)
+        }
+    }
+}
+
 private fun handleInstallResult(
     context: Context,
     downloadId: Long,

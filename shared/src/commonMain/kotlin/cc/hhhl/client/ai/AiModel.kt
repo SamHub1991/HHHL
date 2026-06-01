@@ -40,6 +40,7 @@ data class AiSettings(
     val assistantLowRiskAutoApproval: Boolean = true,
     val assistantHighRiskAutoApproval: Boolean = false,
     val floatingAssistantEnabled: Boolean = true,
+    val automationRuleDraftModel: AiAutomationModelConfig = AiAutomationModelConfig(),
 ) {
     val cleanBaseUrl: String
         get() = baseUrl.trim().trimEnd('/')
@@ -52,6 +53,22 @@ data class AiSettings(
 
     val supportsCloudAuth: Boolean
         get() = provider != AiProviderPreset.Ollama && provider != AiProviderPreset.LmStudio
+}
+
+@Immutable
+@Serializable
+data class AiAutomationModelConfig(
+    val enabled: Boolean = false,
+    val provider: AiProviderPreset = AiProviderPreset.OpenAiCompatible,
+    val baseUrl: String = AiProviderPreset.OpenAiCompatible.defaultBaseUrl,
+    val apiKey: String = "",
+    val model: String = AiProviderPreset.OpenAiCompatible.defaultChatModel,
+) {
+    val cleanBaseUrl: String
+        get() = baseUrl.trim().trimEnd('/')
+
+    val activeModel: String
+        get() = model.trim()
 }
 
 @Serializable
@@ -135,6 +152,89 @@ enum class AiTaskKind(val label: String) {
     AssistantChat("AI 助手"),
     WorkspaceActionPlan("全局行动计划"),
     ConnectionTest("连接测试"),
+}
+
+fun AiProviderPreset.defaultChatModelForSettings(): String {
+    return when (this) {
+        AiProviderPreset.DeepSeek -> "deepseek-v4-pro"
+        else -> defaultChatModel
+    }
+}
+
+fun AiProviderPreset.defaultFastModelForSettings(): String {
+    return when (this) {
+        AiProviderPreset.DeepSeek -> "deepseek-v4-flash"
+        else -> defaultFastModel
+    }
+}
+
+fun AiProviderPreset.defaultLongContextModelForSettings(): String {
+    return when (this) {
+        AiProviderPreset.DeepSeek -> "deepseek-v4-pro"
+        else -> defaultLongContextModel
+    }
+}
+
+fun AiSettings.modelForTask(kind: AiTaskKind): String {
+    val chat = activeChatModel
+    val fast = fastModel.trim().ifBlank { chat }
+    val longContext = longContextModel.trim().ifBlank { chat }
+    return when (kind) {
+        AiTaskKind.ConnectionTest,
+        AiTaskKind.ComposeContentWarning,
+        AiTaskKind.ComposeHashtags,
+        AiTaskKind.ComposeMentionSuggestions,
+        AiTaskKind.ChatImportanceCheck,
+        AiTaskKind.AutomationSemanticCondition,
+            -> fast
+
+        AiTaskKind.ComposeFromRecentPosts,
+        AiTaskKind.ThreadSummary,
+        AiTaskKind.TimelineDigest,
+        AiTaskKind.TimelineReplyOpportunities,
+        AiTaskKind.TimelineFilterSuggestions,
+        AiTaskKind.ChatSummary,
+        AiTaskKind.ChatRecentSummary,
+        AiTaskKind.ChatTodaySummary,
+        AiTaskKind.ChatUnreadSummary,
+        AiTaskKind.ChatActionItems,
+        AiTaskKind.ChatDecisionSummary,
+        AiTaskKind.NotificationSummary,
+        AiTaskKind.NotificationFollowUp,
+        AiTaskKind.NotificationPriority,
+        AiTaskKind.ProfileSummary,
+        AiTaskKind.ProfileInteractionSuggestions,
+        AiTaskKind.AutomationExplain,
+        AiTaskKind.AutomationRuleSuggestions,
+        AiTaskKind.AutomationRuleDraft,
+        AiTaskKind.WorkspaceActionPlan,
+            -> longContext
+
+        AiTaskKind.ComposePolish,
+        AiTaskKind.ComposeShorten,
+        AiTaskKind.ComposeExpand,
+        AiTaskKind.ComposeTranslateZh,
+        AiTaskKind.PostSummary,
+        AiTaskKind.PostReplyDraft,
+        AiTaskKind.ThreadReplyDraft,
+        AiTaskKind.ChatReplyDraft,
+        AiTaskKind.AutomationGeneratedAction,
+        AiTaskKind.AssistantChat,
+            -> chat
+    }.ifBlank { chat }
+}
+
+fun AiSettings.settingsForTask(kind: AiTaskKind): AiSettings {
+    if (kind != AiTaskKind.AutomationRuleDraft || !automationRuleDraftModel.enabled) return this
+    val automationModel = automationRuleDraftModel
+    return copy(
+        provider = automationModel.provider,
+        baseUrl = automationModel.baseUrl,
+        apiKey = automationModel.apiKey,
+        chatModel = automationModel.activeModel,
+        fastModel = automationModel.activeModel,
+        longContextModel = automationModel.activeModel,
+    )
 }
 
 @Serializable

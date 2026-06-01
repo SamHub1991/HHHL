@@ -332,12 +332,12 @@ class AutomationStateHolder(
 
     fun clearLogs() {
         mutableState.update { it.copy(logs = emptyList(), message = "日志已清空", errorMessage = null) }
-        persist()
+        persist(mergeLogs = false)
     }
 
     fun clearDebugRecords() {
         mutableState.update { it.copy(debugRecords = emptyList(), message = "调试记录已清空", errorMessage = null) }
-        persist()
+        persist(mergeDebugRecords = false)
     }
 
     fun emit(event: AutomationEvent) {
@@ -444,7 +444,8 @@ class AutomationStateHolder(
                 )
                 return@forEach
             }
-            val transientDedupeKey = "${event.id}:${rule.id}"
+            val transientEventKey = event.id.trim().ifBlank { event.persistentAutomationEventKey() }
+            val transientDedupeKey = "$transientEventKey:${rule.id}"
             val persistentDedupeKey = rule.persistentAutomationDedupeKey(event)
             if (
                 transientDedupeKey in recentEventRuleKeys ||
@@ -459,6 +460,27 @@ class AutomationStateHolder(
                 )
                 return@forEach
             }
+            val executedRecord = if (!event.isManualAutomationEvent()) {
+                AutomationExecutedEvent(
+                    key = persistentDedupeKey,
+                    ruleId = rule.id,
+                    eventKey = event.persistentAutomationEventKey(),
+                    eventId = event.id,
+                    createdAtEpochMillis = nowMillis(),
+                )
+            } else {
+                null
+            }
+            if (executedRecord != null && !claimExecutedEvent(executedRecord)) {
+                addDebugRecord(
+                    rule = rule,
+                    event = event,
+                    matched = false,
+                    reason = "同一消息、帖子或通知已被其他实例处理过，已去重跳过",
+                    conditionResults = evaluation.conditionResults,
+                )
+                return@forEach
+            }
             addDebugRecord(
                 rule = rule,
                 event = event,
@@ -467,38 +489,36 @@ class AutomationStateHolder(
                 conditionResults = evaluation.conditionResults,
             )
             recentEventRuleKeys = (listOf(transientDedupeKey) + recentEventRuleKeys).take(MAX_RECENT_EVENT_KEYS)
-            if (!event.isManualAutomationEvent()) {
-                recordExecutedEvent(
-                    AutomationExecutedEvent(
-                        key = persistentDedupeKey,
-                        ruleId = rule.id,
-                        eventKey = event.persistentAutomationEventKey(),
-                        eventId = event.id,
-                        createdAtEpochMillis = nowMillis(),
-                    ),
-                )
-            }
             cooldownMarkers = cooldownMarkers + (rule.id to nowMillis())
             recordRuleExecution(rule)
-            executeRule(rule, event)
+            val executedSuccessfully = executeRule(rule, event)
+            if (!executedSuccessfully) {
+                recentEventRuleKeys = recentEventRuleKeys.filterNot { key -> key == transientDedupeKey }
+                executedRecord?.let(::releaseExecutedEvent)
+            }
         }
     }
 
-    private suspend fun executeRule(rule: AutomationRule, event: AutomationEvent) {
+    private suspend fun executeRule(rule: AutomationRule, event: AutomationEvent): Boolean {
         val actions = rule.actions.filter { it.enabled }
         if (actions.isEmpty()) {
             addExecutionLog(rule, event, "无动作", "没有启用的动作", success = false)
-            return
+            return false
         }
-        if (rule.actionMode == AutomationActionMode.Parallel) {
+        return if (rule.actionMode == AutomationActionMode.Parallel) {
             coroutineScope {
-                actions.map { action -> async { executeAction(rule, action, event) } }.awaitAll()
+                actions.map { action -> async { executeAction(rule, action, event) } }.awaitAll().all { success -> success }
             }
         } else {
+            var allSucceeded = true
             for (action in actions) {
                 val success = executeAction(rule, action, event)
-                if (!success && action.failurePolicy == AutomationFailurePolicy.Stop) break
+                if (!success) {
+                    allSucceeded = false
+                    if (action.failurePolicy == AutomationFailurePolicy.Stop) break
+                }
             }
+            allSucceeded
         }
     }
 
@@ -668,12 +688,33 @@ class AutomationStateHolder(
         persist()
     }
 
-    private fun persist() {
+    private fun persist(
+        mergeLogs: Boolean = true,
+        mergeDebugRecords: Boolean = true,
+    ) {
         val current = state.value
-        val mergedExecutedEvents = runCatching {
-            store.read(cleanAccountId()).executedEvents.mergeAutomationExecutedEvents(executedEvents)
-        }.getOrDefault(executedEvents)
-            .take(AutomationStoreCodec.MAX_EXECUTED_EVENTS)
+        val storedSnapshot = runCatching { store.read(cleanAccountId()) }.getOrDefault(AutomationSnapshot())
+        val mergedLogs = if (mergeLogs) {
+            mergeAutomationLogs(
+                current = storedSnapshot.logs,
+                updates = current.logs,
+            )
+        } else {
+            current.logs.take(AutomationStoreCodec.MAX_LOGS)
+        }
+        val mergedDebugRecords = if (mergeDebugRecords) {
+            mergeAutomationDebugRecords(
+                current = storedSnapshot.debugRecords,
+                updates = current.debugRecords,
+            )
+        } else {
+            current.debugRecords.take(AutomationStoreCodec.MAX_DEBUG_RECORDS)
+        }
+        val mergedExecutedEvents =
+            mergeStoredAutomationExecutedEvents(
+                current = storedSnapshot.executedEvents,
+                updates = executedEvents,
+            )
         executedEvents = mergedExecutedEvents
         executedEventKeys = mergedExecutedEvents.mapTo(HashSet()) { it.key }
         runCatching {
@@ -681,8 +722,8 @@ class AutomationStateHolder(
                 cleanAccountId(),
                 AutomationSnapshot(
                     rules = current.rules,
-                    logs = current.logs,
-                    debugRecords = current.debugRecords,
+                    logs = mergedLogs,
+                    debugRecords = mergedDebugRecords,
                     executedEvents = mergedExecutedEvents,
                 ),
             )
@@ -763,17 +804,33 @@ class AutomationStateHolder(
         return "${cleanAccountId()}:$id:${event.persistentAutomationEventKey()}"
     }
 
+    private fun claimExecutedEvent(record: AutomationExecutedEvent): Boolean {
+        val cleanRecord = record.cleaned()
+        if (cleanRecord.key.isBlank()) return false
+        if (cleanRecord.key in executedEventKeys) return false
+        val claimed = runCatching {
+            store.claimExecutedEvent(cleanAccountId(), cleanRecord)
+        }.getOrDefault(false)
+        if (!claimed) return false
+        recordExecutedEvent(cleanRecord)
+        return true
+    }
+
     private fun recordExecutedEvent(record: AutomationExecutedEvent) {
-        val cleanRecord = record.copy(
-            key = record.key.trim(),
-            ruleId = record.ruleId.trim(),
-            eventKey = record.eventKey.trim(),
-            eventId = record.eventId.trim(),
-        )
+        val cleanRecord = record.cleaned()
         if (cleanRecord.key.isBlank() || cleanRecord.key in executedEventKeys) return
-        executedEvents = (listOf(cleanRecord) + executedEvents)
-            .dedupeAutomationExecutedEvents()
-            .take(AutomationStoreCodec.MAX_EXECUTED_EVENTS)
+        executedEvents = mergeStoredAutomationExecutedEvents(
+            current = executedEvents,
+            updates = listOf(cleanRecord),
+        )
+        executedEventKeys = executedEvents.mapTo(HashSet()) { it.key }
+    }
+
+    private fun releaseExecutedEvent(record: AutomationExecutedEvent) {
+        val cleanRecord = record.cleaned()
+        if (cleanRecord.key.isBlank()) return
+        runCatching { store.releaseExecutedEvent(cleanAccountId(), cleanRecord.key) }
+        executedEvents = executedEvents.filter { event -> event.cleaned().key != cleanRecord.key }
         executedEventKeys = executedEvents.mapTo(HashSet()) { it.key }
     }
 
@@ -861,8 +918,8 @@ class AutomationStateHolder(
             AutomationConditionType.AiSemantic -> when (val result = aiBridge.evaluateSemanticCondition(cleanValue, event.aiContextText())) {
                 is AiBridgeResult.Success -> AutomationConditionMatch(
                     matched = automationAiConditionSatisfied(result.text),
-                    actualValue = result.text,
-                    detailMessage = "AI 返回：${result.text}",
+                    actualValue = result.text.take(MAX_DEBUG_AI_RESPONSE_LENGTH),
+                    detailMessage = "AI 返回：${result.text.take(MAX_DEBUG_AI_RESPONSE_LENGTH)}",
                 )
                 is AiBridgeResult.Error -> AutomationConditionMatch(
                     matched = false,
@@ -876,15 +933,20 @@ class AutomationStateHolder(
 
     private fun AutomationCondition.toDebugResult(match: AutomationConditionMatch): AutomationConditionDebugResult {
         val expected = value.trim()
+        val maxActualValueLength = if (type == AutomationConditionType.AiSemantic) {
+            MAX_DEBUG_AI_RESPONSE_LENGTH
+        } else {
+            MAX_DEBUG_TEXT_LENGTH
+        }
         return AutomationConditionDebugResult(
             conditionId = id,
             conditionLabel = type.label,
             expectedValue = expected,
-            actualValue = match.actualValue.ifBlank { "无" }.take(MAX_DEBUG_TEXT_LENGTH),
+            actualValue = match.actualValue.ifBlank { "无" }.take(maxActualValueLength),
             matched = match.matched,
             message = match.detailMessage.ifBlank {
                 if (match.matched) "已命中 ${type.label}" else "未命中 ${type.label}：期望 ${expected.ifBlank { "空" }}，实际 ${match.actualValue.ifBlank { "无" }}"
-            }.take(MAX_DEBUG_TEXT_LENGTH),
+            }.take(maxActualValueLength),
         )
     }
 
@@ -908,6 +970,7 @@ class AutomationStateHolder(
         const val MAX_RECENT_EVENT_KEYS = 120
         const val MAX_DEBUG_CONDITIONS = 12
         const val MAX_DEBUG_RESOLVED_ENTITIES = 8
+        const val MAX_DEBUG_AI_RESPONSE_LENGTH = 1_200
         const val MAX_DEBUG_TEXT_LENGTH = 360
         const val MAX_DRAFT_SOURCE_TEXT_LENGTH = 1200
         const val MAX_DRAFT_MESSAGES = 12
@@ -945,25 +1008,44 @@ private fun AutomationEvent.persistentAutomationEventKey(): String {
 private fun List<AutomationExecutedEvent>.mergeAutomationExecutedEvents(
     events: List<AutomationExecutedEvent>,
 ): List<AutomationExecutedEvent> {
-    return (this + events)
-        .dedupeAutomationExecutedEvents()
-        .take(AutomationStoreCodec.MAX_EXECUTED_EVENTS)
+    return mergeStoredAutomationExecutedEvents(
+        current = this,
+        updates = events,
+    )
 }
 
 private fun List<AutomationExecutedEvent>.dedupeAutomationExecutedEvents(): List<AutomationExecutedEvent> {
-    val seenKeys = HashSet<String>()
-    return asSequence()
-        .map { record ->
-            record.copy(
-                key = record.key.trim(),
-                ruleId = record.ruleId.trim(),
-                eventKey = record.eventKey.trim(),
-                eventId = record.eventId.trim(),
-            )
-        }
-        .filter { record -> record.key.isNotBlank() }
+    return mergeStoredAutomationExecutedEvents(
+        current = emptyList(),
+        updates = this,
+    )
+}
+
+private fun mergeAutomationLogs(
+    current: List<AutomationExecutionLog>,
+    updates: List<AutomationExecutionLog>,
+): List<AutomationExecutionLog> {
+    val seenIds = HashSet<String>()
+    return (updates + current)
+        .asSequence()
+        .filter { log -> log.id.isNotBlank() }
+        .sortedByDescending { log -> log.createdAtEpochMillis }
+        .filter { log -> seenIds.add(log.id) }
+        .take(AutomationStoreCodec.MAX_LOGS)
+        .toList()
+}
+
+private fun mergeAutomationDebugRecords(
+    current: List<AutomationRuleDebugRecord>,
+    updates: List<AutomationRuleDebugRecord>,
+): List<AutomationRuleDebugRecord> {
+    val seenIds = HashSet<String>()
+    return (updates + current)
+        .asSequence()
+        .filter { record -> record.id.isNotBlank() }
         .sortedByDescending { record -> record.createdAtEpochMillis }
-        .filter { record -> seenKeys.add(record.key) }
+        .filter { record -> seenIds.add(record.id) }
+        .take(AutomationStoreCodec.MAX_DEBUG_RECORDS)
         .toList()
 }
 
@@ -996,17 +1078,19 @@ private fun AutomationRule.cleaned(): AutomationRule {
 }
 
 private fun AutomationRule.withDefaultRiskControls(): AutomationRule {
-    val hasRiskyAction = actions.any { action -> action.type.isLoopRiskAction() || action.mentionSender }
+    val hasLoopRiskAction = actions.any { action -> action.type.isLoopRiskAction() || action.mentionSender }
+    val hasWebhookCallbackAction = actions.any { action -> action.type.isWebhookCallbackAction() }
     return copy(
-        ignoreOwnMessages = ignoreOwnMessages || hasRiskyAction,
+        ignoreOwnMessages = ignoreOwnMessages || hasLoopRiskAction,
         cooldownSeconds = when {
             cooldownSeconds > 0 -> cooldownSeconds
-            hasRiskyAction -> DEFAULT_RISKY_ACTION_COOLDOWN_SECONDS
+            hasLoopRiskAction -> DEFAULT_RISKY_ACTION_COOLDOWN_SECONDS
             else -> cooldownSeconds
         },
         maxExecutionsPer30Seconds = when {
             maxExecutionsPer30Seconds > 0 -> maxExecutionsPer30Seconds
-            hasRiskyAction -> DEFAULT_RISKY_ACTION_BURST_LIMIT
+            hasLoopRiskAction -> DEFAULT_RISKY_ACTION_BURST_LIMIT
+            hasWebhookCallbackAction -> DEFAULT_WEBHOOK_CALLBACK_BURST_LIMIT
             else -> DEFAULT_SAFE_ACTION_BURST_LIMIT
         },
     )
@@ -1053,12 +1137,16 @@ private fun AutomationActionType.isLoopRiskAction(): Boolean {
         this == AutomationActionType.AiQuoteNote ||
         this == AutomationActionType.RenoteNote ||
         this == AutomationActionType.PostToChannel ||
-        this == AutomationActionType.Webhook ||
-        this == AutomationActionType.AiGenerateWebhook
+        this == AutomationActionType.CopyChannelLink
+}
+
+private fun AutomationActionType.isWebhookCallbackAction(): Boolean {
+    return this == AutomationActionType.Webhook || this == AutomationActionType.AiGenerateWebhook
 }
 
 private const val DEFAULT_RISKY_ACTION_COOLDOWN_SECONDS = 30
 private const val DEFAULT_RISKY_ACTION_BURST_LIMIT = 2
+private const val DEFAULT_WEBHOOK_CALLBACK_BURST_LIMIT = 12
 private const val DEFAULT_SAFE_ACTION_BURST_LIMIT = 12
 
 private fun String.normalizedAutomationSourceKind(): String {

@@ -41,6 +41,7 @@ class AppAutomationActionExecutor(
     private val aiBridge: AiBridge = NoopAiBridge,
     private val aiGeneratedChatMessageReporter: ((ChatMessage) -> Unit)? = null,
     private val aiGeneratedNoteReporter: ((String) -> Unit)? = null,
+    private val attachmentAuthHeaderProvider: () -> Map<String, String> = { emptyMap() },
     private val httpClient: HttpClient = defaultAutomationHttpClient(),
 ) : AutomationActionExecutor {
     override suspend fun execute(
@@ -441,7 +442,18 @@ class AppAutomationActionExecutor(
             val response = httpClient.post(cleanUrl) {
                 contentType(ContentType.Application.Json)
                 header(HttpHeaders.Accept, ContentType.Application.Json.toString())
-                setBody(AutomationWebhookPayload.from(event, title, body))
+                setBody(
+                    AutomationWebhookPayload.from(
+                        event = event,
+                        title = title,
+                        body = body,
+                        attachmentAuthHeaders = if (event.attachments.any { it.url.isNotBlank() } && cleanUrl.canReceiveAttachmentAuthHeaders()) {
+                            attachmentAuthHeaderProvider().cleanAttachmentAuthHeaders()
+                        } else {
+                            emptyMap()
+                        },
+                    ),
+                )
             }
             if (response.status.value in 200..299) {
                 AutomationActionExecutionResult(true, "Webhook 已发送 (${response.status.value})")
@@ -453,7 +465,7 @@ class AppAutomationActionExecutor(
                 )
             }
         }.getOrElse { error ->
-            AutomationActionExecutionResult(false, error.message ?: "Webhook 发送失败")
+            AutomationActionExecutionResult(false, error.webhookFailureMessage())
         }
     }
 }
@@ -472,14 +484,22 @@ private data class AutomationWebhookPayload(
     val senderHost: String,
     val senderName: String,
     val roomId: String,
+    val roomName: String,
     val directUserId: String,
     val messageText: String,
+    val messageType: String,
+    val attachmentCount: Int,
+    val attachments: List<AutomationAttachment>,
     val attentionKind: String,
     val notificationType: String,
     val notificationText: String,
     val noteId: String,
     val channelId: String,
+    val channelName: String,
+    val timelineKind: String,
+    val noteVisibility: String,
     val createdAt: String,
+    val attachmentAuthHeaders: Map<String, String>,
     val variables: JsonObject,
 ) {
     companion object {
@@ -487,6 +507,7 @@ private data class AutomationWebhookPayload(
             event: AutomationEvent,
             title: String,
             body: String,
+            attachmentAuthHeaders: Map<String, String> = emptyMap(),
         ): AutomationWebhookPayload {
             val variables = listOf(
                 "event.id",
@@ -500,15 +521,29 @@ private data class AutomationWebhookPayload(
                 "sender.name",
                 "sender.mention",
                 "room.id",
+                "room.name",
                 "direct.user.id",
                 "message.text",
+                "message.type",
+                "attachment.count",
+                "attachment.id",
+                "attachment.name",
+                "attachment.type",
+                "attachment.url",
+                "attachment.thumbnailUrl",
+                "attachment.description",
+                "attachment.size",
+                "attachment.isSensitive",
                 "attention.kind",
                 "notification.type",
                 "notification.text",
                 "note.id",
                 "note.link",
                 "channel.id",
+                "channel.name",
                 "channel.link",
+                "timeline.kind",
+                "note.visibility",
                 "createdAt",
             ).associateWith { name -> JsonPrimitive(event.variable(name)) }
             return AutomationWebhookPayload(
@@ -524,14 +559,22 @@ private data class AutomationWebhookPayload(
                 senderHost = event.senderHost,
                 senderName = event.senderName,
                 roomId = event.roomId,
+                roomName = event.roomName,
                 directUserId = event.directUserId,
                 messageText = event.messageText,
+                messageType = event.messageType,
+                attachmentCount = event.attachments.size,
+                attachments = event.attachments,
                 attentionKind = event.attentionKind,
                 notificationType = event.notificationType,
                 notificationText = event.notificationText,
                 noteId = event.noteId,
                 channelId = event.channelId,
+                channelName = event.channelName,
+                timelineKind = event.timelineKind,
+                noteVisibility = event.noteVisibility,
                 createdAt = event.createdAtLabel,
+                attachmentAuthHeaders = attachmentAuthHeaders,
                 variables = JsonObject(variables),
             )
         }
@@ -585,22 +628,62 @@ private fun channelLink(targetId: String, event: AutomationEvent): String? {
     return "$DEFAULT_LOCAL_BASE_URL/channels/$clean"
 }
 
+private fun String.canReceiveAttachmentAuthHeaders(): Boolean {
+    val clean = trim().lowercase()
+    val host = clean
+        .removePrefix("http://")
+        .removePrefix("https://")
+        .substringBefore('/')
+        .substringBefore(':')
+    return host == "localhost" ||
+        host == "127.0.0.1" ||
+        host == "10.0.2.2" ||
+        host.startsWith("10.") ||
+        host.startsWith("192.168.") ||
+        private172HostPattern.matches(host)
+}
+
+private fun Map<String, String>.cleanAttachmentAuthHeaders(): Map<String, String> {
+    return buildMap {
+        val authorization = this@cleanAttachmentAuthHeaders["Authorization"]
+            ?: this@cleanAttachmentAuthHeaders["authorization"]
+        if (!authorization.isNullOrBlank()) put(HttpHeaders.Authorization, authorization.trim())
+    }
+}
+
 private const val DEFAULT_LOCAL_BASE_URL = "https://dc.hhhl.cc"
 private const val MAX_AUTOMATION_OUTGOING_TEXT = 1600
+private const val AUTOMATION_WEBHOOK_REQUEST_TIMEOUT_MS = 120_000L
+private const val AUTOMATION_WEBHOOK_CONNECT_TIMEOUT_MS = 8_000L
+private val private172HostPattern = Regex("""172\.(1[6-9]|2\d|3[0-1])\..+""")
+
+private fun Throwable.webhookFailureMessage(): String {
+    val raw = message.orEmpty()
+    return when {
+        raw.contains("Request timeout", ignoreCase = true) ||
+            raw.contains("request_timeout", ignoreCase = true) ->
+            "Webhook 接收端响应超时，已等待 ${AUTOMATION_WEBHOOK_REQUEST_TIMEOUT_MS / 1000} 秒。接收服务可能还在处理图片识别、key 验证或重启 WatchApi：$raw"
+        raw.contains("unexpected end of stream", ignoreCase = true) ->
+            "Webhook 连接被接收端中途关闭。通常是本机接收脚本被重启、多开抢占端口，或处理过程中进程退出：$raw"
+        raw.isNotBlank() -> raw
+        else -> "Webhook 发送失败"
+    }
+}
 
 private fun defaultAutomationHttpClient(): HttpClient {
     return HttpClient {
         expectSuccess = false
         install(HttpTimeout) {
-            requestTimeoutMillis = 10_000
-            connectTimeoutMillis = 8_000
-            socketTimeoutMillis = 10_000
+            requestTimeoutMillis = AUTOMATION_WEBHOOK_REQUEST_TIMEOUT_MS
+            connectTimeoutMillis = AUTOMATION_WEBHOOK_CONNECT_TIMEOUT_MS
+            socketTimeoutMillis = AUTOMATION_WEBHOOK_REQUEST_TIMEOUT_MS
         }
         install(ContentNegotiation) {
             json(
                 Json {
                     ignoreUnknownKeys = true
                     explicitNulls = false
+                    encodeDefaults = true
                 },
             )
         }

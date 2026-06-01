@@ -40,6 +40,7 @@ import cc.hhhl.client.automation.AutomationAction
 import cc.hhhl.client.automation.AutomationActionMode
 import cc.hhhl.client.automation.AutomationActionType
 import cc.hhhl.client.automation.AutomationCondition
+import cc.hhhl.client.automation.AutomationConditionDebugResult
 import cc.hhhl.client.automation.AutomationConditionMode
 import cc.hhhl.client.automation.AutomationConditionType
 import cc.hhhl.client.automation.AutomationEventSnapshot
@@ -1090,12 +1091,28 @@ private fun AutomationDebugRecordCard(record: AutomationRuleDebugRecord) {
                     AutomationMetricChip(if (condition.matched) "命中" else "未命中")
                 }
                 AutomationMutedText(condition.message)
+                val aiRawReply = condition.aiRawReply()
+                if (aiRawReply.isNotBlank()) {
+                    AutomationMutedText("AI 原始回复：")
+                    Text(
+                        text = aiRawReply,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textPrimary,
+                    )
+                }
                 if (condition.expectedValue.isNotBlank() || condition.actualValue.isNotBlank()) {
                     AutomationMutedText("期望：${condition.expectedValue.ifBlank { "空" }} · 实际：${condition.actualValue.ifBlank { "无" }}")
                 }
             }
         }
     }
+}
+
+private fun AutomationConditionDebugResult.aiRawReply(): String {
+    if (conditionLabel != AutomationConditionType.AiSemantic.label) return ""
+    val actual = actualValue.trim()
+    if (actual.isNotBlank() && actual != "无") return actual
+    return message.removePrefix("AI 返回：").trim().takeIf { it != message }.orEmpty()
 }
 
 @Composable

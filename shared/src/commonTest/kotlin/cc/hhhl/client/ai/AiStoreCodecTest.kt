@@ -19,6 +19,13 @@ class AiStoreCodecTest {
                 assistantLowRiskAutoApproval = true,
                 assistantHighRiskAutoApproval = true,
                 floatingAssistantEnabled = false,
+                automationRuleDraftModel = AiAutomationModelConfig(
+                    enabled = true,
+                    provider = AiProviderPreset.Qwen,
+                    baseUrl = "https://automation.example.com/v1",
+                    apiKey = "automation-secret",
+                    model = "automation-model",
+                ),
             ),
             tasks = listOf(
                 AiTask(
@@ -51,6 +58,9 @@ class AiStoreCodecTest {
         assertTrue(decoded.settings.assistantLowRiskAutoApproval)
         assertTrue(decoded.settings.assistantHighRiskAutoApproval)
         assertEquals(false, decoded.settings.floatingAssistantEnabled)
+        assertTrue(decoded.settings.automationRuleDraftModel.enabled)
+        assertEquals(AiProviderPreset.Qwen, decoded.settings.automationRuleDraftModel.provider)
+        assertEquals("automation-model", decoded.settings.automationRuleDraftModel.model)
         assertEquals(AiTaskKind.TimelineDigest, decoded.tasks.single().kind)
         assertEquals("版本更新摘要", decoded.tasks.single().resultText)
         assertEquals("Alice", decoded.tasks.single().input.timelineNotes.single().author)

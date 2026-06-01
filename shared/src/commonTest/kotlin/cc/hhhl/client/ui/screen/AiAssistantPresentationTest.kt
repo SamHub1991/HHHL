@@ -394,6 +394,108 @@ class AiAssistantPresentationTest {
     }
 
     @Test
+    fun directChatNameInPromptBecomesTargetUserPayload() {
+        val action = aiAssistantSuggestedActions(
+            prompt = "私聊张三说我稍后确认",
+            reply = """
+                会发送这条消息。
+                ```hhhl-assistant-payload
+                {"body":"我稍后确认。"}
+                ```
+            """.trimIndent(),
+            idPrefix = "message-direct-target",
+        ).single { it.kind == AiAssistantActionKind.SendChatDraft }
+
+        val payload = aiAssistantActionPayload(action.payload)
+        assertEquals("我稍后确认。", payload.body)
+        assertEquals("张三", payload.targetUser)
+    }
+
+    @Test
+    fun naturalDirectChatPromptBodyIsUsedWithoutStructuredReply() {
+        val action = aiAssistantSuggestedActions(
+            prompt = "私聊张三说我稍后确认",
+            reply = "可以，我会发送这条消息。",
+            idPrefix = "message-direct-inline-body",
+        ).single { it.kind == AiAssistantActionKind.SendChatDraft }
+
+        val payload = aiAssistantActionPayload(action.payload)
+        assertEquals("我稍后确认", payload.body)
+        assertEquals("张三", payload.targetUser)
+    }
+
+    @Test
+    fun naturalDirectPrivateMessagePromptIsParsed() {
+        val action = aiAssistantSuggestedActions(
+            prompt = "给张三私信：我稍后确认",
+            reply = "可以，我会发送这条消息。",
+            idPrefix = "message-direct-private-letter",
+        ).single { it.kind == AiAssistantActionKind.SendChatDraft }
+
+        val payload = aiAssistantActionPayload(action.payload)
+        assertEquals("我稍后确认", payload.body)
+        assertEquals("张三", payload.targetUser)
+    }
+
+    @Test
+    fun roomNameInPromptBecomesTargetRoomPayload() {
+        val action = aiAssistantSuggestedActions(
+            prompt = "在 AGI 讨论聊天室发消息并 @李四",
+            reply = """
+                会发送这条消息。
+                ```hhhl-assistant-payload
+                {"body":"明天 10 点同步。"}
+                ```
+            """.trimIndent(),
+            idPrefix = "message-room-target",
+        ).single { it.kind == AiAssistantActionKind.SendChatDraft }
+
+        val payload = aiAssistantActionPayload(action.payload)
+        assertEquals("明天 10 点同步。", payload.body)
+        assertEquals("AGI 讨论", payload.targetRoom)
+        assertEquals(listOf("李四"), payload.mentions)
+    }
+
+    @Test
+    fun naturalRoomChatPromptBodyAfterColonIsUsedWithoutStructuredReply() {
+        val action = aiAssistantSuggestedActions(
+            prompt = "在 AGI 讨论聊天室发消息：明天 10 点同步",
+            reply = "可以，我会发送这条消息。",
+            idPrefix = "message-room-inline-body",
+        ).single { it.kind == AiAssistantActionKind.SendChatDraft }
+
+        val payload = aiAssistantActionPayload(action.payload)
+        assertEquals("明天 10 点同步", payload.body)
+        assertEquals("AGI 讨论", payload.targetRoom)
+    }
+
+    @Test
+    fun naturalRoomChatPromptBodyWithoutColonIsUsedWithoutStructuredReply() {
+        val action = aiAssistantSuggestedActions(
+            prompt = "在 AGI 讨论聊天室发消息明天 10 点同步",
+            reply = "可以，我会发送这条消息。",
+            idPrefix = "message-room-inline-body-no-colon",
+        ).single { it.kind == AiAssistantActionKind.SendChatDraft }
+
+        val payload = aiAssistantActionPayload(action.payload)
+        assertEquals("明天 10 点同步", payload.body)
+        assertEquals("AGI 讨论", payload.targetRoom)
+    }
+
+    @Test
+    fun naturalRoomGroupPromptBodyIsParsed() {
+        val action = aiAssistantSuggestedActions(
+            prompt = "在 AGI 讨论群里说今晚 8 点同步",
+            reply = "可以，我会发送这条消息。",
+            idPrefix = "message-room-group-inline-body",
+        ).single { it.kind == AiAssistantActionKind.SendChatDraft }
+
+        val payload = aiAssistantActionPayload(action.payload)
+        assertEquals("今晚 8 点同步", payload.body)
+        assertEquals("AGI 讨论", payload.targetRoom)
+    }
+
+    @Test
     fun targetedComposePayloadKeepsChannelVisibilityAndMentions() {
         val action = aiAssistantSuggestedActions(
             prompt = "直接发布到更新频道并 @李四",
@@ -412,6 +514,45 @@ class AiAssistantPresentationTest {
         assertEquals(listOf("李四"), payload.mentions)
         assertEquals("home", payload.visibility)
         assertEquals("进展", payload.contentWarning)
+    }
+
+    @Test
+    fun naturalComposePromptChannelAndBodyAreUsedWithoutStructuredReply() {
+        val action = aiAssistantSuggestedActions(
+            prompt = "发布到更新频道：今天完成了未读和 AI 助手动作修复",
+            reply = "可以，我会发布这条帖子。",
+            idPrefix = "message-compose-inline-channel",
+        ).single { it.kind == AiAssistantActionKind.PublishComposeDraft }
+
+        val payload = aiAssistantActionPayload(action.payload)
+        assertEquals("今天完成了未读和 AI 助手动作修复", payload.body)
+        assertEquals("更新", payload.channel)
+    }
+
+    @Test
+    fun naturalComposePromptChannelBeforeVerbIsUsedWithoutStructuredReply() {
+        val action = aiAssistantSuggestedActions(
+            prompt = "更新频道发帖今天完成了后台自动化去重修复",
+            reply = "可以，我会发布这条帖子。",
+            idPrefix = "message-compose-inline-channel-before-verb",
+        ).single { it.kind == AiAssistantActionKind.PublishComposeDraft }
+
+        val payload = aiAssistantActionPayload(action.payload)
+        assertEquals("今天完成了后台自动化去重修复", payload.body)
+        assertEquals("更新", payload.channel)
+    }
+
+    @Test
+    fun naturalComposePromptChannelWithLocationSuffixIsParsed() {
+        val action = aiAssistantSuggestedActions(
+            prompt = "更新频道里发帖今天完成了语音助手解析优化",
+            reply = "可以，我会发布这条帖子。",
+            idPrefix = "message-compose-inline-channel-location-suffix",
+        ).single { it.kind == AiAssistantActionKind.PublishComposeDraft }
+
+        val payload = aiAssistantActionPayload(action.payload)
+        assertEquals("今天完成了语音助手解析优化", payload.body)
+        assertEquals("更新", payload.channel)
     }
 
     @Test

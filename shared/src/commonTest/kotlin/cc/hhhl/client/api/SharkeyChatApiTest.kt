@@ -90,6 +90,27 @@ class SharkeyChatApiTest {
     }
 
     @Test
+    fun usesHistoryUnreadMarkerWhenJoiningRoomCountAlreadyExists() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://example.test/",
+            client = testClient { request ->
+                when (request.url.toString()) {
+                    "https://example.test/api/chat/rooms/joining" -> respondJoiningRoomsWithUnreadCountNoMarker()
+                    "https://example.test/api/chat/history" -> respondUnreadChatHistory()
+                    else -> error("Unexpected request ${request.url}")
+                }
+            },
+        )
+
+        val result = api.loadJoiningRooms(token = "token-123", limit = 30)
+
+        assertIs<ChatRoomLoadResult.Success>(result)
+        val room = result.rooms.single()
+        assertEquals(99, room.unreadCount)
+        assertEquals("message-1", room.latestMessageMarker)
+    }
+
+    @Test
     fun mapsUnauthorizedJoiningRoomsResponse() = runTest {
         val api = SharkeyChatApi(
             client = testClient {
@@ -561,7 +582,7 @@ class SharkeyChatApiTest {
                         "name": "Alice"
                       },
                       "name": "AGI 讨论",
-                      "description": "聊 AGI 和 Sharkey",
+                      "description": "聊 AGIkey",
                       "joinMode": "open",
                       "memberLimit": 100,
                       "memberCount": 12,
@@ -598,7 +619,38 @@ class SharkeyChatApiTest {
                         "name": "Alice"
                       },
                       "name": "AGI 讨论",
-                      "description": "聊 AGI 和 Sharkey",
+                      "description": "聊 AGIkey",
+                      "joinMode": "open",
+                      "memberCount": 12,
+                      "isMuted": false
+                    }
+                  }
+                ]
+            """.trimIndent(),
+            status = HttpStatusCode.OK,
+            headers = jsonHeaders,
+        )
+    }
+
+    private fun MockRequestHandleScope.respondJoiningRoomsWithUnreadCountNoMarker(): HttpResponseData {
+        return respond(
+            content = """
+                [
+                  {
+                    "id": "membership-1",
+                    "createdAt": "2026-05-25T00:00:00.000Z",
+                    "userId": "user-me",
+                    "roomId": "room-1",
+                    "unreadCount": 99,
+                    "room": {
+                      "id": "room-1",
+                      "owner": {
+                        "id": "user-1",
+                        "username": "alice",
+                        "name": "Alice"
+                      },
+                      "name": "AGI 讨论",
+                      "description": "聊 AGI",
                       "joinMode": "open",
                       "memberCount": 12,
                       "isMuted": false

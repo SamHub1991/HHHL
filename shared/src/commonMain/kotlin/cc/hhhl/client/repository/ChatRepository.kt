@@ -635,18 +635,22 @@ open class ChatRepository(
                 room
             } else {
                 resolvedCount += 1
-                room.copy(unreadCount = resolveRoomUnreadCount(token, room))
+                val unreadState = resolveRoomUnreadState(token, room)
+                room.copy(
+                    unreadCount = unreadState.count,
+                    latestMessageMarker = room.latestMessageMarker.ifBlank { unreadState.latestMarker },
+                )
             }
         }
     }
 
-    private suspend fun resolveRoomUnreadCount(
+    private suspend fun resolveRoomUnreadState(
         token: String,
         room: ChatRoom,
-    ): Int {
+    ): ResolvedRoomUnreadState {
         val marker = room.unreadMarker()
         roomUnreadCountCache[room.id]?.takeIf { marker.isNotBlank() && it.marker == marker }?.let {
-            return maxOf(room.unreadCount, it.count)
+            return ResolvedRoomUnreadState(count = maxOf(room.unreadCount, it.count))
         }
         return when (
             val result = api.loadRoomMessages(
@@ -658,12 +662,20 @@ open class ChatRepository(
         ) {
             is ChatMessageLoadResult.Success -> {
                 val count = result.messages.count { !it.isRead }.coerceAtLeast(room.unreadCount)
-                if (marker.isNotBlank()) {
-                    roomUnreadCountCache = roomUnreadCountCache + (room.id to CachedUnreadCount(marker, count))
+                val latestMarker = result.messages
+                    .maxWithOrNull(chatMessageChronologicalComparator)
+                    ?.unreadMarker()
+                    .orEmpty()
+                val cacheMarker = marker.ifBlank { latestMarker }
+                if (cacheMarker.isNotBlank()) {
+                    roomUnreadCountCache = roomUnreadCountCache + (room.id to CachedUnreadCount(cacheMarker, count))
                 }
-                count
+                ResolvedRoomUnreadState(
+                    count = count,
+                    latestMarker = latestMarker,
+                )
             }
-            else -> room.unreadCount
+            else -> ResolvedRoomUnreadState(count = room.unreadCount)
         }
     }
 
@@ -1585,6 +1597,11 @@ private fun ChatMessage.matchesRealtimeConversation(
 }
 
 private fun Int?.coercePositive(): Int = this?.coerceAtLeast(0) ?: 0
+
+private data class ResolvedRoomUnreadState(
+    val count: Int,
+    val latestMarker: String = "",
+)
 
 private data class CachedUnreadCount(
     val marker: String,

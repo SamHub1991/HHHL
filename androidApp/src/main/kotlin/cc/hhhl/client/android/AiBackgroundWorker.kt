@@ -12,7 +12,9 @@ import cc.hhhl.client.ai.AiSnapshot
 import cc.hhhl.client.ai.AiTask
 import cc.hhhl.client.ai.AiTaskStatus
 import cc.hhhl.client.ai.consumeAiRequest
+import cc.hhhl.client.ai.modelForTask
 import cc.hhhl.client.ai.normalizedAiUsage
+import cc.hhhl.client.ai.settingsForTask
 
 class AiBackgroundWorker(
     appContext: Context,
@@ -24,6 +26,7 @@ class AiBackgroundWorker(
         val accountIds = sessions.map { it.id }.ifEmpty { listOf("default") }
         val repository = AiRepository()
         var retriableFailure = false
+        var hasRemainingPendingTasks = false
 
         accountIds.forEach { accountId ->
             val snapshot = store.read(accountId)
@@ -63,8 +66,9 @@ class AiBackgroundWorker(
                 tasks = tasks.replaceTask(taskForRun.copy(status = AiTaskStatus.Running, updatedAtEpochMillis = now))
                 store.write(accountId, AiSnapshot(settings = settings, tasks = tasks, usage = usage))
 
-                val prompt = AiPromptBuilder.build(settings, taskForRun.kind, taskForRun.input)
-                val nextTask = when (val result = repository.complete(settings, prompt)) {
+                val taskSettings = settings.settingsForTask(taskForRun.kind)
+                val prompt = AiPromptBuilder.build(taskSettings, taskForRun.kind, taskForRun.input)
+                val nextTask = when (val result = repository.complete(taskSettings, prompt, model = taskSettings.modelForTask(taskForRun.kind))) {
                     is AiRepositoryResult.Success -> taskForRun.copy(
                         status = AiTaskStatus.Completed,
                         resultText = result.text.take(4_000),
@@ -90,8 +94,14 @@ class AiBackgroundWorker(
                 tasks = tasks.replaceTask(nextTask)
                 store.write(accountId, AiSnapshot(settings = settings, tasks = tasks, usage = usage))
             }
+            if (tasks.any { task -> task.status == AiTaskStatus.Pending || task.status == AiTaskStatus.Running }) {
+                hasRemainingPendingTasks = true
+            }
         }
 
+        if (!retriableFailure && hasRemainingPendingTasks) {
+            AiBackgroundScheduler.syncNow(applicationContext)
+        }
         return if (retriableFailure) Result.retry() else Result.success()
     }
 

@@ -93,4 +93,68 @@ class AutomationRuleDraftParserTest {
         assertEquals(AutomationConditionType.MessageType, rule.conditions[2].type)
         assertEquals("image", rule.conditions[2].value)
     }
+
+    @Test
+    fun acceptsLocalizedTriggerActionAndWebhookUrlFields() {
+        val result = parseAutomationRuleDraft(
+            """
+            {
+              "name": "消息转本机 Webhook",
+              "trigger": "聊天消息",
+              "conditions": [
+                { "type": "来源", "value": "room" }
+              ],
+              "actions": [
+                {
+                  "action": "Webhook",
+                  "url": "host-webhook",
+                  "body": "{{sender.name}}：{{message.text}}",
+                  "failurePolicy": "失败后停止"
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val rule = assertNotNull(result.rule)
+        assertEquals(AutomationTrigger.ChatMessage, rule.trigger)
+        assertEquals(AutomationConditionType.SourceKind, rule.conditions.single().type)
+        val action = rule.actions.single()
+        assertEquals(AutomationActionType.Webhook, action.type)
+        assertEquals("host-webhook", action.targetId)
+        assertEquals("{{sender.name}}：{{message.text}}", action.bodyTemplate)
+        assertEquals(AutomationFailurePolicy.Stop, action.failurePolicy)
+        assertEquals(0, rule.cooldownSeconds)
+        assertEquals(12, rule.maxExecutionsPer30Seconds)
+    }
+
+    @Test
+    fun acceptsAiWebhookNaturalFields() {
+        val result = parseAutomationRuleDraft(
+            """
+            {
+              "name": "提取任务发到宿主机",
+              "trigger": "ChatMessage",
+              "conditions": [
+                { "sourceKind": "room" }
+              ],
+              "actions": [
+                {
+                  "type": "AI 提取后发送到 Webhook",
+                  "webhookUrl": "host-webhook",
+                  "prompt": "从消息中提取任务、时间和负责人，只输出 JSON。"
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val rule = assertNotNull(result.rule)
+        val action = rule.actions.single()
+        assertEquals(AutomationActionType.AiGenerateWebhook, action.type)
+        assertEquals("host-webhook", action.targetId)
+        assertEquals("从消息中提取任务、时间和负责人，只输出 JSON。", action.bodyTemplate)
+        assertEquals(0, rule.cooldownSeconds)
+        assertEquals(12, rule.maxExecutionsPer30Seconds)
+    }
 }

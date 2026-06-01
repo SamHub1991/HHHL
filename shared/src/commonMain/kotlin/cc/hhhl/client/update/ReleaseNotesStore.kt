@@ -39,6 +39,18 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.6.0",
+            title = "HHHL 0.6.0 更新内容",
+            summary = "这版完善 AI 模型配置和自动化草稿生成链路，并修复聊天未读状态恢复问题。",
+            highlights = listOf(
+                "AI 配置页新增默认配置和自动化配置 Tab，可单独管理自动化草稿生成使用的 URL、Key 和模型名。",
+                "自动化配置未启用时继续使用默认模型；启用后只影响“根据草稿生成规则”的模型调用。",
+                "AI 自动化草稿解析和规则生成链路更稳，补齐模型配置持久化、草稿生成和执行相关测试。",
+                "修复重新打开应用后，已读聊天室可能又恢复成 99+ 未读的问题。",
+                "继续优化后台通知、实时同步和自动化触发恢复逻辑，降低后台漏触发概率。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.5.2",
             title = "HHHL 0.5.2 更新内容",
             summary = "这版继续修复后台实时收消息和自动化触发链路，并补充后台保活入口。",

@@ -760,7 +760,7 @@ private val AiAssistantPublishComposeIntentRegex = Regex("发布.*(帖子|草稿
 private val AiAssistantChatSummaryIntentRegex = Regex("聊天室摘要|聊天摘要|总结.*聊天|总结.*聊天室|最近消息|未读摘要", RegexOption.IGNORE_CASE)
 private val AiAssistantForwardTemplateIntentRegex = Regex("转发模板|聊天室转发|转发到|转发规则|forward", RegexOption.IGNORE_CASE)
 private val AiAssistantChatRewriteIntentRegex = Regex("消息改写|改写消息|改写回复|润色回复|聊天回复|回复草稿", RegexOption.IGNORE_CASE)
-private val AiAssistantSendChatIntentRegex = Regex("发送.*(消息|回复|聊天|草稿)|把.*(消息|回复|聊天草稿|当前聊天草稿|草稿).*(发送|发出去)|直接发出去|发出去.*(消息|回复|聊天|草稿)|草稿发送|send.*message|私聊.*(说|告诉|通知|发)|发给.*(说|消息|回复|通知)|告诉(?!我).{1,80}|通知(?!页|列表|全部|已读|设置).{1,80}|在.*(聊天室|房间|群聊|群).*(说|发|发送|告诉|通知)", RegexOption.IGNORE_CASE)
+private val AiAssistantSendChatIntentRegex = Regex("发送.*(消息|回复|聊天|草稿)|把.*(消息|回复|聊天草稿|当前聊天草稿|草稿).*(发送|发出去)|直接发出去|发出去.*(消息|回复|聊天|草稿)|草稿发送|send.*message|私聊.*(说|告诉|通知|发|回复)|发给.*(说|消息|回复|通知)|给.{1,40}(发消息|发个消息|发送消息|说|回复|通知)|告诉(?!我).{1,80}|通知(?!页|列表|全部|已读|设置).{1,80}|在.*(聊天室|房间|群聊|群).*(说|发|发送|告诉|通知|回复)", RegexOption.IGNORE_CASE)
 private val AiAssistantMutedIntentRegex = Regex("静音词|过滤词|屏蔽词|关键词过滤|mute", RegexOption.IGNORE_CASE)
 private val AiAssistantWebSearchIntentRegex = Regex("网络搜索|外部搜索|网页搜索|浏览器搜索|google|web search", RegexOption.IGNORE_CASE)
 private val AiAssistantDiscoverSearchIntentRegex = Regex("站内搜索|搜索帖子|搜帖子|找帖子|搜索用户|搜用户|找用户|搜索话题|搜话题|查找|search", RegexOption.IGNORE_CASE)
@@ -941,8 +941,17 @@ fun aiAssistantSuggestedActions(
     val structuredReply = aiAssistantStructuredReply(reply)
     val cleanReply = structuredReply.visibleText.trim()
     val payload = structuredReply.payload.copy(
+        targetRoom = structuredReply.payload.targetRoom.ifBlank {
+            aiAssistantTargetRoomCandidate(cleanPrompt)
+        },
+        targetUser = structuredReply.payload.targetUser.ifBlank {
+            aiAssistantTargetUserCandidate(cleanPrompt)
+        },
         mentions = structuredReply.payload.mentions.ifEmpty {
             aiAssistantMentionCandidates(cleanPrompt)
+        },
+        channel = structuredReply.payload.channel.ifBlank {
+            aiAssistantTargetChannelCandidate(cleanPrompt)
         },
     )
     val source = listOf(cleanPrompt, cleanReply, payload.intentText())
@@ -1463,7 +1472,6 @@ private fun JsonElement.toStructuredListValues(): List<String> {
         is JsonPrimitive -> listOf(jsonPrimitive.contentOrNull.orEmpty())
         is JsonArray -> flatMap { it.toStructuredListValues() }
         is JsonObject -> values.flatMap { it.toStructuredListValues() }
-        else -> listOf(toString())
     }
 }
 
@@ -1474,7 +1482,6 @@ private fun JsonElement.toStructuredText(): String {
             .filter { it.isNotBlank() }
             .joinToString("\n")
         is JsonObject -> values.joinToString("\n") { it.toStructuredText() }
-        else -> toString()
     }
 }
 
@@ -1553,6 +1560,7 @@ fun aiAssistantPublishPayloadCandidate(prompt: String, reply: String): String {
     if (fromReply.isNotBlank()) return fromReply.take(AiAssistantStructuredMaxChars).trim()
     return aiAssistantStructuredCandidate(prompt, AiAssistantPayloadField.Body)
         .ifBlank { aiAssistantLabeledSection(prompt, AiAssistantPayloadField.Body) }
+        .ifBlank { aiAssistantInlineBodyCandidate(prompt) }
         .take(AiAssistantStructuredMaxChars)
         .trim()
 }
@@ -1626,6 +1634,117 @@ private fun aiAssistantMentionCandidates(text: String): List<String> {
         .filter { it.length in 1..80 }
         .distinct()
         .take(8)
+}
+
+private fun aiAssistantTargetUserCandidate(text: String): String {
+    return AiAssistantTargetUserRegexes.firstNotNullOfOrNull { regex ->
+        regex.find(text)?.groupValues?.getOrNull(1)
+            ?.trimAiAssistantInferredTarget()
+            ?.takeIf { it.isUsableAiAssistantTarget() }
+    }.orEmpty()
+}
+
+private fun aiAssistantTargetRoomCandidate(text: String): String {
+    return AiAssistantTargetRoomRegexes.firstNotNullOfOrNull { regex ->
+        regex.find(text)?.groupValues?.getOrNull(1)
+            ?.trimAiAssistantInferredTarget()
+            ?.takeIf { it.isUsableAiAssistantTarget() }
+    }.orEmpty()
+}
+
+private fun aiAssistantTargetChannelCandidate(text: String): String {
+    return AiAssistantTargetChannelRegexes.firstNotNullOfOrNull { regex ->
+        regex.find(text)?.groupValues?.getOrNull(1)
+            ?.trimAiAssistantInferredTarget()
+            ?.takeIf { it.isUsableAiAssistantTarget() }
+    }.orEmpty()
+}
+
+private fun aiAssistantInlineBodyCandidate(text: String): String {
+    return AiAssistantInlineBodyRegexes.firstNotNullOfOrNull { regex ->
+        regex.find(text)?.groupValues?.getOrNull(1)
+            ?.trimAiAssistantInlineBody()
+            ?.takeIf { it.isUsableAiAssistantInlineBody() }
+    }.orEmpty()
+}
+
+private val AiAssistantTargetUserRegexes = listOf(
+    Regex("""私聊\s*([^\s，,。；;、：:]{1,40}?)(?:说|告诉|通知|发|回复|[:：]|，|,|。|$)""", RegexOption.IGNORE_CASE),
+    Regex("""(?:给|向)\s*([^\s，,。；;、：:]{1,40}?)(?:发?私信|发?私聊|私聊消息|私信消息)(?:说|告诉|通知|回复|[:：]|，|,|。|$)""", RegexOption.IGNORE_CASE),
+    Regex("""发给\s*([^\s，,。；;、：:]{1,40}?)(?:一?条?(?:消息|回复)|说|通知|[:：]|，|,|。|$)""", RegexOption.IGNORE_CASE),
+    Regex("""给\s*([^\s，,。；;、：:]{1,40}?)(?:发消息|发个消息|发送消息|说|回复|通知|[:：])""", RegexOption.IGNORE_CASE),
+    Regex("""(?:告诉|通知)\s*([^\s，,。；;、：:]{1,40}?)(?:说|[:：]|，|,|。|$)""", RegexOption.IGNORE_CASE),
+)
+
+private val AiAssistantTargetRoomRegexes = listOf(
+    Regex("""(?:在|到)\s*(.{1,60}?)(?:聊天室|房间|群聊|群)(?:里面|里|中|内)?\s*(?:发|发送|说|告诉|通知|回复|[:：]|，|,|。|$)""", RegexOption.IGNORE_CASE),
+    Regex("""(?:聊天室|房间|群聊)\s*[:：]\s*(.{1,60}?)(?:\s|，|,|。|；|;|$)""", RegexOption.IGNORE_CASE),
+)
+
+private val AiAssistantTargetChannelRegexes = listOf(
+    Regex("""(?:发布到|发到|发送到|投到)\s*(.{1,60}?)(?:频道|channel)(?:里面|里|中|内)?\s*(?:[:：]|，|,|。|；|;|$)""", RegexOption.IGNORE_CASE),
+    Regex("""(?:在|到)\s*(.{1,60}?)(?:频道|channel)(?:里面|里|中|内)?\s*(?:发布|发帖|发|发送)\s*(?:[:：]|，|,|。|；|;|$)""", RegexOption.IGNORE_CASE),
+    Regex("""(.{1,60}?)(?:频道|channel)(?:里面|里|中|内)?\s*(?:发布|发帖|发|发送)\s*(?:[:：]|，|,|。|；|;|$|(?=[\p{L}\p{N}]))""", RegexOption.IGNORE_CASE),
+    Regex("""(?:频道|channel)\s*[:：]\s*(.{1,60}?)(?:\s|，|,|。|；|;|$)""", RegexOption.IGNORE_CASE),
+)
+
+private val AiAssistantInlineBodyRegexes = listOf(
+    Regex("""私聊\s*[^\s，,。；;、：:]{1,40}?(?:说|告诉|通知|回复)\s*[:：]?\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""(?:给|向)\s*[^\s，,。；;、：:]{1,40}?(?:发?私信|发?私聊|私聊消息|私信消息)(?:说|告诉|通知|回复)?\s*[:：]?\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""发给\s*[^\s，,。；;、：:]{1,40}?(?:一?条?(?:消息|回复)|说|通知|回复|[:：])\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""给\s*[^\s，,。；;、：:]{1,40}?(?:发消息|发个消息|发送消息|说|回复|通知)\s*[:：]?\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""(?:告诉|通知)\s*[^\s，,。；;、：:]{1,40}?(?:说|[:：])\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""(?:在|到)\s*.{1,60}?(?:聊天室|房间|群聊|群)(?:里面|里|中|内)?\s*(?:说|告诉|通知|回复)\s*[:：]?\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""(?:在|到)\s*.{1,60}?(?:聊天室|房间|群聊|群)(?:里面|里|中|内)?\s*(?:发|发送)(?:消息|回复)?\s*[:：]\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""(?:在|到)\s*.{1,60}?(?:聊天室|房间|群聊|群)(?:里面|里|中|内)?\s*(?:发|发送)(?:一?条?)?(?:消息|回复)\s*[:：]?\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""(?:发布到|发到|发送到|投到)\s*.{1,60}?(?:频道|channel)(?:里面|里|中|内)?\s*[:：]?\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""(?:在|到)?\s*.{1,60}?(?:频道|channel)(?:里面|里|中|内)?\s*(?:发布|发帖|发|发送)\s*[:：]?\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""(?:消息|回复|正文|内容)\s*[:：]\s*(.+)$""", RegexOption.IGNORE_CASE),
+    Regex("""^[^:：]{1,80}[:：]\s*(.+)$""", RegexOption.IGNORE_CASE),
+)
+
+private fun String.trimAiAssistantInferredTarget(): String {
+    return trim()
+        .trim('@', '＠', '：', ':', '，', ',', '。', '.', '；', ';', '“', '”', '"', '\'', '「', '」')
+        .replace(Regex("""^(给|向|跟|和)\s*"""), "")
+        .replace(Regex("""\s*(用户|同学|这位)$"""), "")
+        .trim()
+}
+
+private fun String.isUsableAiAssistantTarget(): Boolean {
+    if (length !in 1..80) return false
+    val lowered = lowercase()
+    return lowered !in setOf(
+        "我",
+        "自己",
+        "本人",
+        "大家",
+        "所有人",
+        "全部",
+        "全体",
+        "当前",
+        "这个",
+        "这位",
+        "他",
+        "她",
+        "ta",
+    )
+}
+
+private fun String.trimAiAssistantInlineBody(): String {
+    return trim()
+        .trim(' ', '：', ':', '，', ',', '。', '.', '；', ';', '“', '”', '"', '\'', '「', '」')
+        .replace(Regex("""^(说|回复|通知|告诉|消息|内容|正文)\s*[:：]?\s*"""), "")
+        .trim()
+}
+
+private fun String.isUsableAiAssistantInlineBody(): Boolean {
+    if (isBlank() || length > AiAssistantStructuredMaxChars) return false
+    val clean = trim()
+    if (clean.startsWith("并 @") || clean.startsWith("并@") || clean.startsWith("并艾特") || clean.startsWith("并 提及")) {
+        return false
+    }
+    return clean.any { it.isLetterOrDigit() }
 }
 
 private val AiAssistantAtMentionRegex = Regex("""[@＠]([A-Za-z0-9_.-]+(?:@[A-Za-z0-9_.-]+)?|[\p{L}\p{N}_\-.]{1,40})""")

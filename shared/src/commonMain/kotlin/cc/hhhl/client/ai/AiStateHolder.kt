@@ -53,9 +53,9 @@ class AiStateHolder(
             current.copy(
                 provider = provider,
                 baseUrl = provider.defaultBaseUrl.takeIf { it.isNotBlank() } ?: current.baseUrl,
-                chatModel = provider.defaultChatModel.takeIf { it.isNotBlank() } ?: current.chatModel,
-                fastModel = provider.defaultFastModel.takeIf { it.isNotBlank() } ?: current.fastModel,
-                longContextModel = provider.defaultLongContextModel.takeIf { it.isNotBlank() } ?: current.longContextModel,
+                chatModel = provider.defaultChatModelForSettings().takeIf { it.isNotBlank() } ?: current.chatModel,
+                fastModel = provider.defaultFastModelForSettings().takeIf { it.isNotBlank() } ?: current.fastModel,
+                longContextModel = provider.defaultLongContextModelForSettings().takeIf { it.isNotBlank() } ?: current.longContextModel,
                 visionModel = provider.defaultVisionModel.takeIf { it.isNotBlank() } ?: current.visionModel,
                 embeddingModel = provider.defaultEmbeddingModel.takeIf { it.isNotBlank() } ?: current.embeddingModel,
             ),
@@ -68,7 +68,7 @@ class AiStateHolder(
         scope.launch {
             val settings = state.value.settings.copy(enabled = true)
             val prompt = AiPromptBuilder.build(settings, AiTaskKind.ConnectionTest, AiTaskInput())
-            when (val result = repository.complete(settings, prompt)) {
+            when (val result = repository.complete(settings, prompt, model = settings.modelForTask(AiTaskKind.ConnectionTest))) {
                 is AiRepositoryResult.Success -> mutableState.update {
                     it.copy(isTestingConnection = false, message = "AI 连接正常：${result.text.take(40)}", errorMessage = null)
                 }
@@ -88,7 +88,8 @@ class AiStateHolder(
 
     fun enqueue(kind: AiTaskKind, input: AiTaskInput, processImmediately: Boolean = true): AiTask? {
         val settings = state.value.settings
-        val validation = settings.validationError(kind)
+        val taskSettings = settings.settingsForTask(kind)
+        val validation = taskSettings.validationError(kind)
         if (validation != null) {
             mutableState.update { it.copy(errorMessage = validation, message = null) }
             return null
@@ -106,7 +107,7 @@ class AiStateHolder(
             id = nextId("ai"),
             accountId = cleanAccountId(),
             kind = kind,
-            input = input.compact(settings.maxInputChars),
+            input = input.compact(taskSettings.maxInputChars),
             createdAtEpochMillis = now,
             updatedAtEpochMillis = now,
             usageCharged = true,
@@ -139,7 +140,8 @@ class AiStateHolder(
         if (state.value.isProcessing) return
         val task = state.value.tasks.firstOrNull { it.id == taskId } ?: return
         val settings = state.value.settings
-        val validation = settings.validationError(task.kind)
+        val taskSettings = settings.settingsForTask(task.kind)
+        val validation = taskSettings.validationError(task.kind)
         if (validation != null) {
             markTaskFailed(task.id, validation)
             return
@@ -169,7 +171,8 @@ class AiStateHolder(
 
     suspend fun runBlockingTask(kind: AiTaskKind, input: AiTaskInput): AiRepositoryResult {
         val settings = state.value.settings
-        val validation = settings.validationError(kind)
+        val taskSettings = settings.settingsForTask(kind)
+        val validation = taskSettings.validationError(kind)
         if (validation != null) return AiRepositoryResult.Error(validation)
         val usageResult = state.value.usage.consumeAiRequest(settings)
         if (usageResult.errorMessage != null) {
@@ -179,8 +182,8 @@ class AiStateHolder(
         }
         mutableState.update { it.copy(usage = usageResult.usage) }
         persist()
-        val prompt = AiPromptBuilder.build(settings, kind, input)
-        return repository.complete(settings, prompt)
+        val prompt = AiPromptBuilder.build(taskSettings, kind, input)
+        return repository.complete(taskSettings, prompt, model = taskSettings.modelForTask(kind))
     }
 
     override suspend fun evaluateSemanticCondition(prompt: String, eventText: String): AiBridgeResult {
@@ -223,8 +226,9 @@ class AiStateHolder(
     }
 
     private suspend fun executeTask(task: AiTask, settings: AiSettings) {
-        val prompt = AiPromptBuilder.build(settings, task.kind, task.input)
-        when (val result = repository.complete(settings, prompt)) {
+        val taskSettings = settings.settingsForTask(task.kind)
+        val prompt = AiPromptBuilder.build(taskSettings, task.kind, task.input)
+        when (val result = repository.complete(taskSettings, prompt, model = taskSettings.modelForTask(task.kind))) {
             is AiRepositoryResult.Success -> markTaskCompleted(task.id, result.text.take(AI_MAX_RESULT_CHARS))
             AiRepositoryResult.Unauthorized -> markTaskFailed(task.id, "AI API Key 无效或权限不足")
             is AiRepositoryResult.Error -> markTaskFailed(task.id, result.message)
@@ -378,6 +382,14 @@ private fun AiSettings.validationError(kind: AiTaskKind): String? {
     return null
 }
 
+private fun AiAutomationModelConfig.cleaned(): AiAutomationModelConfig {
+    return copy(
+        baseUrl = baseUrl.trim().take(240),
+        apiKey = apiKey.trim().take(1_000),
+        model = model.trim().take(160),
+    )
+}
+
 private fun AiSettings.cleaned(): AiSettings {
     return copy(
         baseUrl = baseUrl.trim().take(240),
@@ -392,6 +404,7 @@ private fun AiSettings.cleaned(): AiSettings {
         dailyRequestLimit = dailyRequestLimit.coerceIn(1, 2_000),
         tonePreference = tonePreference.trim().take(240),
         systemPrompt = systemPrompt.trim().ifBlank { DEFAULT_AI_SYSTEM_PROMPT }.take(2_000),
+        automationRuleDraftModel = automationRuleDraftModel.cleaned(),
         assistantMemoryNotes = assistantMemoryNotes
             .map { it.trim().take(240) }
             .filter { it.isNotBlank() }

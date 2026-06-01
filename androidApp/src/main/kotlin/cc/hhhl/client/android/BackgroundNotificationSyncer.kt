@@ -259,7 +259,7 @@ class BackgroundNotificationSyncer(
             add(chatEvent)
             if (attentionEvent != null) add(attentionEvent)
         }
-        automationEvents.distinctBy { it.id }.forEach { event -> automationHolder.emitNow(event) }
+        automationEvents.distinctBy { it.backgroundAutomationCandidateKey() }.forEach { event -> automationHolder.emitNow(event) }
 
         val notification = attentionKind?.let { kind ->
             normalizedMessage.toRealtimeChatAttentionEvent(
@@ -290,9 +290,7 @@ class BackgroundNotificationSyncer(
             settings.mergeSeenIds(handledIds, MAX_STORED_SEEN_IDS)
         }
         if (automationEvents.isNotEmpty()) AiBackgroundScheduler.syncNow(context)
-        // Even when realtime attention has already been handled, trigger a debounced sync so
-        // room/user lists and unread snapshots catch up for sources that were not loaded yet.
-        return false
+        return true
     }
 
     private fun recordRealtimeUnread(
@@ -925,7 +923,7 @@ class BackgroundNotificationSyncer(
                     limit = MAX_STORED_SEEN_IDS,
                 )
                 val visibleEvents = visibleEventCandidates.filter { it.id in claimedVisibleEventIds }
-                val automationEventCandidates = automationEvents.distinctBy { it.id }
+                val automationEventCandidates = automationEvents.distinctBy { it.backgroundAutomationCandidateKey() }
                 if (visibleEvents.isNotEmpty()) {
                     BackgroundNotificationPublisher(context).publish(visibleEvents)
                     context.cacheBackgroundNotificationEvents(
@@ -1050,6 +1048,11 @@ class BackgroundNotificationSyncer(
                     true
                 },
                 aiBridge = aiStateHolder,
+                attachmentAuthHeaderProvider = {
+                    token.takeIf { it.isNotBlank() }
+                        ?.let { value -> mapOf("Authorization" to "Bearer $value") }
+                        .orEmpty()
+                },
             ),
             aiBridge = aiStateHolder,
             aiToolPermissionProvider = { aiStateHolder.state.value.settings.toolsAllowed },
@@ -1939,6 +1942,23 @@ private fun String.toAndroidColorOrNull(): Int? {
     } else {
         value.toInt()
     }
+}
+
+private fun AutomationEvent.backgroundAutomationCandidateKey(): String {
+    val cleanId = id.trim()
+    if (cleanId.isNotEmpty()) return cleanId
+    return buildList {
+        add(trigger.name)
+        sourceKind.trim().takeIf { it.isNotEmpty() }?.let(::add)
+        senderUserId.trim().takeIf { it.isNotEmpty() }?.let(::add)
+        roomId.trim().takeIf { it.isNotEmpty() }?.let(::add)
+        directUserId.trim().takeIf { it.isNotEmpty() }?.let(::add)
+        notificationType.trim().takeIf { it.isNotEmpty() }?.let(::add)
+        noteId.trim().takeIf { it.isNotEmpty() }?.let(::add)
+        channelId.trim().takeIf { it.isNotEmpty() }?.let(::add)
+        if (createdAtEpochMillis > 0L) add(createdAtEpochMillis.toString())
+        defaultBody.trim().takeIf { it.isNotEmpty() }?.let { body -> add(body.take(120)) }
+    }.joinToString(":").ifBlank { trigger.name }
 }
 
 fun ensureChannels(context: Context) {

@@ -27,6 +27,34 @@ interface AutomationStore {
     fun write(accountId: String, snapshot: AutomationSnapshot)
 
     fun clearAccount(accountId: String)
+
+    fun claimExecutedEvent(accountId: String, record: AutomationExecutedEvent): Boolean {
+        val cleanRecord = record.cleaned()
+        if (cleanRecord.key.isBlank()) return false
+        val cleanAccountId = accountId.trim()
+        val snapshot = read(cleanAccountId)
+        if (snapshot.executedEvents.any { event -> event.cleaned().key == cleanRecord.key }) return false
+        write(
+            cleanAccountId,
+            snapshot.copy(
+                executedEvents = mergeStoredAutomationExecutedEvents(
+                    current = snapshot.executedEvents,
+                    updates = listOf(cleanRecord),
+                ),
+            ),
+        )
+        return true
+    }
+
+    fun releaseExecutedEvent(accountId: String, key: String) {
+        val cleanKey = key.trim()
+        if (cleanKey.isBlank()) return
+        val cleanAccountId = accountId.trim()
+        val snapshot = read(cleanAccountId)
+        val remaining = snapshot.executedEvents.filter { event -> event.cleaned().key != cleanKey }
+        if (remaining.size == snapshot.executedEvents.size) return
+        write(cleanAccountId, snapshot.copy(executedEvents = remaining))
+    }
 }
 
 object NoopAutomationStore : AutomationStore {
@@ -81,3 +109,27 @@ private data class CachedAutomationEnvelope(
     val debugRecords: List<AutomationRuleDebugRecord> = emptyList(),
     val executedEvents: List<AutomationExecutedEvent> = emptyList(),
 )
+
+internal fun mergeStoredAutomationExecutedEvents(
+    current: List<AutomationExecutedEvent>,
+    updates: List<AutomationExecutedEvent>,
+): List<AutomationExecutedEvent> {
+    val seenKeys = HashSet<String>()
+    return (updates + current)
+        .asSequence()
+        .map(AutomationExecutedEvent::cleaned)
+        .filter { event -> event.key.isNotBlank() }
+        .sortedByDescending { event -> event.createdAtEpochMillis }
+        .filter { event -> seenKeys.add(event.key) }
+        .take(AutomationStoreCodec.MAX_EXECUTED_EVENTS)
+        .toList()
+}
+
+internal fun AutomationExecutedEvent.cleaned(): AutomationExecutedEvent {
+    return copy(
+        key = key.trim(),
+        ruleId = ruleId.trim(),
+        eventKey = eventKey.trim(),
+        eventId = eventId.trim(),
+    )
+}

@@ -1,6 +1,7 @@
 package cc.hhhl.client.automation
 
 import cc.hhhl.client.model.ChatMessage
+import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
 import cc.hhhl.client.state.ChatAttentionKind
 import kotlin.test.Test
@@ -122,14 +123,54 @@ class AutomationStoreCodecTest {
             senderHost = "example.com",
             noteId = "note-1",
             channelId = "channel-1",
+            messageType = "text,file,image",
+            attachments = listOf(
+                AutomationAttachment(
+                    id = "file-1",
+                    name = "demo.png",
+                    type = "image/png",
+                    url = "https://example.com/demo.png",
+                    thumbnailUrl = "https://example.com/demo-thumb.png",
+                    size = 12345,
+                ),
+            ),
         )
 
         val rendered = renderAutomationTemplate(
-            template = "{{sender.mention}} @ {{room.id}} / {{message.id}} / {{note.link}} / {{channel.link}}: {{message.text}}",
+            template = "{{sender.mention}} @ {{room.id}} / {{message.id}} / {{message.type}} / {{attachment.count}} / {{attachment.name}} / {{attachment.url}} / {{note.link}} / {{channel.link}}: {{message.text}}",
             event = event,
         )
 
-        assertEquals("@alice@example.com @ room-1 / message-1 / https://dc.hhhl.cc/notes/note-1 / https://dc.hhhl.cc/channels/channel-1: hello", rendered)
+        assertEquals("@alice@example.com @ room-1 / message-1 / text,file,image / 1 / demo.png / https://example.com/demo.png / https://dc.hhhl.cc/notes/note-1 / https://dc.hhhl.cc/channels/channel-1: hello", rendered)
+    }
+
+    @Test
+    fun chatMessageAttachmentBecomesAutomationAttachment() {
+        val message = ChatMessage(
+            id = "message-image",
+            roomId = "room-1",
+            fromUser = User(id = "alice", displayName = "Alice", username = "alice", avatarInitial = "A"),
+            text = "看图",
+            file = DriveFile(
+                id = "file-image",
+                name = "image.png",
+                type = "image/png",
+                url = "https://example.com/image.png",
+                thumbnailUrl = "https://example.com/image-thumb.png",
+                comment = "截图",
+                size = 2048,
+                isSensitive = false,
+            ),
+            createdAtLabel = "刚刚",
+        )
+
+        val event = message.toAutomationChatEvent(roomId = "room-1")
+
+        assertEquals("text,file,image", event.messageType)
+        assertEquals(1, event.attachments.size)
+        assertEquals("file-image", event.attachments.single().id)
+        assertEquals("image.png", event.attachments.single().name)
+        assertEquals("https://example.com/image.png", event.attachments.single().url)
     }
 
     @Test

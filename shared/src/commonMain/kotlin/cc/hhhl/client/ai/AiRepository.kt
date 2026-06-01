@@ -34,8 +34,21 @@ open class AiRepository(
             return AiRepositoryResult.Unauthorized
         }
 
+        return if (settings.provider == AiProviderPreset.Claude) {
+            completeAnthropic(settings, prompt, cleanModel, baseUrl)
+        } else {
+            completeOpenAiCompatible(settings, prompt, cleanModel, baseUrl)
+        }
+    }
+
+    private suspend fun completeOpenAiCompatible(
+        settings: AiSettings,
+        prompt: AiPrompt,
+        cleanModel: String,
+        baseUrl: String,
+    ): AiRepositoryResult {
         return runCatching {
-            val response = httpClient.post("$baseUrl/chat/completions") {
+            val response = httpClient.post(baseUrl.aiEndpointUrl("chat/completions")) {
                 contentType(ContentType.Application.Json)
                 header(HttpHeaders.Accept, ContentType.Application.Json.toString())
                 if (settings.apiKey.isNotBlank()) header(HttpHeaders.Authorization, "Bearer ${settings.apiKey.trim()}")
@@ -63,6 +76,54 @@ open class AiRepository(
 
             val payload = response.body<OpenAiChatCompletionResponse>()
             val text = payload.choices.firstOrNull()?.message?.content?.trim().orEmpty()
+            if (text.isBlank()) {
+                AiRepositoryResult.Error("AI 没有返回内容")
+            } else {
+                AiRepositoryResult.Success(text)
+            }
+        }.getOrElse { error ->
+            AiRepositoryResult.Error(error.message ?: "AI 请求失败")
+        }
+    }
+
+    private suspend fun completeAnthropic(
+        settings: AiSettings,
+        prompt: AiPrompt,
+        cleanModel: String,
+        baseUrl: String,
+    ): AiRepositoryResult {
+        return runCatching {
+            val response = httpClient.post(baseUrl.aiEndpointUrl("messages")) {
+                contentType(ContentType.Application.Json)
+                header(HttpHeaders.Accept, ContentType.Application.Json.toString())
+                header("anthropic-version", ANTHROPIC_API_VERSION)
+                if (settings.apiKey.isNotBlank()) header("x-api-key", settings.apiKey.trim())
+                setBody(
+                    AnthropicMessagesRequest(
+                        model = cleanModel,
+                        system = prompt.system,
+                        messages = listOf(
+                            AnthropicMessage(role = "user", content = prompt.user),
+                        ),
+                        maxTokens = prompt.maxOutputTokens.coerceAtLeast(1),
+                    ),
+                )
+            }
+
+            val status = response.status.value
+            if (status == 401 || status == 403) return@runCatching AiRepositoryResult.Unauthorized
+            if (status !in 200..299) {
+                val body = runCatching { response.body<String>() }.getOrDefault("").take(240)
+                return@runCatching AiRepositoryResult.Error(
+                    "AI 接口返回 $status${body.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()}",
+                )
+            }
+
+            val payload = response.body<AnthropicMessagesResponse>()
+            val text = payload.content
+                .mapNotNull { block -> block.text.trim().takeIf { it.isNotBlank() } }
+                .joinToString("\n\n")
+                .trim()
             if (text.isBlank()) {
                 AiRepositoryResult.Error("AI 没有返回内容")
             } else {
@@ -103,6 +164,45 @@ private data class OpenAiChatCompletionResponse(
 private data class OpenAiChatChoice(
     val message: OpenAiChatMessage = OpenAiChatMessage(role = "assistant", content = ""),
 )
+
+@Serializable
+private data class AnthropicMessagesRequest(
+    val model: String,
+    val system: String,
+    val messages: List<AnthropicMessage>,
+    val temperature: Double = 0.3,
+    @SerialName("max_tokens") val maxTokens: Int,
+)
+
+@Serializable
+private data class AnthropicMessage(
+    val role: String,
+    val content: String,
+)
+
+@Serializable
+private data class AnthropicMessagesResponse(
+    val content: List<AnthropicContentBlock> = emptyList(),
+)
+
+@Serializable
+private data class AnthropicContentBlock(
+    val type: String = "",
+    val text: String = "",
+)
+
+private const val ANTHROPIC_API_VERSION = "2023-06-01"
+
+private fun String.aiEndpointUrl(endpointPath: String): String {
+    val cleanBase = trim().trimEnd('/')
+    val cleanEndpointPath = endpointPath.trim('/')
+    if (cleanBase.isBlank() || cleanEndpointPath.isBlank()) return cleanBase
+    return if (cleanBase.lowercase().endsWith("/${cleanEndpointPath.lowercase()}")) {
+        cleanBase
+    } else {
+        "$cleanBase/$cleanEndpointPath"
+    }
+}
 
 private fun defaultAiHttpClient(): HttpClient {
     return HttpClient {

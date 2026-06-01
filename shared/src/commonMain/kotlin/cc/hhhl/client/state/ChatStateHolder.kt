@@ -184,6 +184,48 @@ class ChatStateHolder(
         currentAccountId()?.let { accountId -> unreadStore.clearUser(accountId, userId) }
     }
 
+    private fun markLocalRoomRead(roomId: String, marker: String) {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isEmpty()) return
+        val cleanMarker = marker.trim()
+        val current = localUnreadSnapshot()
+        saveLocalUnreadSnapshot(
+            current.copy(
+                roomCounts = current.roomCounts - cleanRoomId,
+                roomReadMarkers = if (cleanMarker.isNotEmpty()) {
+                    current.roomReadMarkers + (cleanRoomId to current.roomReadMarkers[cleanRoomId].withReadMarkerAlias(cleanMarker))
+                } else {
+                    current.roomReadMarkers
+                },
+            ),
+        )
+    }
+
+    private fun markLocalRoomRead(room: ChatRoom) {
+        markLocalRoomRead(room.id, room.unreadMarker())
+    }
+
+    private fun markLocalUserRead(userId: String, marker: String) {
+        val cleanUserId = userId.trim()
+        if (cleanUserId.isEmpty()) return
+        val cleanMarker = marker.trim()
+        val current = localUnreadSnapshot()
+        saveLocalUnreadSnapshot(
+            current.copy(
+                userCounts = current.userCounts - cleanUserId,
+                userReadMarkers = if (cleanMarker.isNotEmpty()) {
+                    current.userReadMarkers + (cleanUserId to current.userReadMarkers[cleanUserId].withReadMarkerAlias(cleanMarker))
+                } else {
+                    current.userReadMarkers
+                },
+            ),
+        )
+    }
+
+    private fun markLocalUserRead(conversation: ChatUserConversation) {
+        markLocalUserRead(conversation.user.id, conversation.latestMessage?.unreadMarker().orEmpty())
+    }
+
     private fun saveObservedLocalRoomUnread(roomId: String, unreadCount: Int) {
         val cleanRoomId = roomId.trim()
         val cleanUnreadCount = unreadCount.coerceAtLeast(0)
@@ -528,7 +570,7 @@ class ChatStateHolder(
                 requiresRelogin = false,
             )
         }
-        clearLocalRoomUnread(room.id)
+        markLocalRoomRead(room)
         startMessageStreaming(room.id)
         restoreCachedRoomMessages(room.id)
         refreshMessages()
@@ -595,10 +637,15 @@ class ChatStateHolder(
         if (deletingSelectedConversation) {
             stopMessageStreaming()
         }
+        clearLocalUserUnread(cleanUserId)
         mutableState.update {
+            val nextPinnedUserConversationIds = it.pinnedUserConversationIds - cleanUserId
+            if (nextPinnedUserConversationIds != it.pinnedUserConversationIds) {
+                saveLocalChatPreferences(pinnedUserIds = nextPinnedUserConversationIds)
+            }
             it.copy(
                 userConversations = it.userConversations.filterNot { conversation -> conversation.user.id == cleanUserId },
-                pinnedUserConversationIds = it.pinnedUserConversationIds - cleanUserId,
+                pinnedUserConversationIds = nextPinnedUserConversationIds,
                 userConversationAttentionKinds = it.userConversationAttentionKinds - cleanUserId,
                 selectedUserConversation = it.selectedUserConversation?.takeIf { conversation ->
                     conversation.user.id != cleanUserId
@@ -675,7 +722,7 @@ class ChatStateHolder(
                 requiresRelogin = false,
             )
         }
-        clearLocalUserUnread(conversation.user.id)
+        markLocalUserRead(conversation)
         startUserMessageStreaming(conversation.user.id)
         restoreCachedUserMessages(conversation.user.id)
         refreshMessages()
@@ -1108,6 +1155,16 @@ class ChatStateHolder(
                     }),
                 )
             }
+        }
+        if (cleanDirectUserId != null) {
+            if (
+                state.value.selectedUserConversation?.user?.id == cleanDirectUserId &&
+                message.belongsToUserConversation(cleanDirectUserId)
+            ) {
+                markLocalUserRead(cleanDirectUserId, message.unreadMarker())
+            }
+        } else if (cleanRoomId != null && state.value.selectedRoom?.id == cleanRoomId) {
+            markLocalRoomRead(cleanRoomId, message.unreadMarker())
         }
     }
 
@@ -2076,11 +2133,11 @@ class ChatStateHolder(
                         previous = current.rooms,
                         selectedRoomId = current.selectedRoom?.id,
                         localUnreadCounts = localUnread.roomCounts,
+                        localReadMarkers = localUnread.roomReadMarkers,
                         persistUnread = { counts ->
                             saveLocalUnreadSnapshot(
-                                ChatUnreadSnapshot(
+                                localUnread.copy(
                                     roomCounts = counts,
-                                    userCounts = localUnread.userCounts,
                                     pinnedRoomIds = current.pinnedRoomIds,
                                     pinnedUserIds = current.pinnedUserConversationIds,
                                     roomGroups = current.roomGroups,
@@ -2095,6 +2152,9 @@ class ChatStateHolder(
                         selectedRoomId = current.selectedRoom?.id,
                     )
                     .sortedByPinnedIds(current.pinnedRoomIds) { room -> room.id }
+                current.selectedRoom?.id
+                    ?.let { selectedRoomId -> nextRooms.firstOrNull { room -> room.id == selectedRoomId } }
+                    ?.let(::markLocalRoomRead)
                 current.copy(
                     rooms = nextRooms,
                     isLoading = false,
@@ -2194,11 +2254,11 @@ class ChatStateHolder(
                     previous = current.rooms,
                     selectedRoomId = selectedRoomId.takeIf { markSelectedRoomRead },
                     localUnreadCounts = localUnread.roomCounts,
+                    localReadMarkers = localUnread.roomReadMarkers,
                     persistUnread = { counts ->
                         saveLocalUnreadSnapshot(
-                            ChatUnreadSnapshot(
+                            localUnread.copy(
                                 roomCounts = counts,
-                                userCounts = localUnread.userCounts,
                                 pinnedRoomIds = current.pinnedRoomIds,
                                 pinnedUserIds = current.pinnedUserConversationIds,
                                 roomGroups = current.roomGroups,
@@ -2207,7 +2267,7 @@ class ChatStateHolder(
                     },
                 ).map { room ->
                     if (markSelectedRoomRead && room.id == selectedRoomId) {
-                        clearLocalRoomUnread(room.id)
+                        markLocalRoomRead(room)
                         room.copy(unreadCount = 0)
                     } else {
                         room
@@ -2274,16 +2334,16 @@ class ChatStateHolder(
                             previous = current.userConversations,
                             selectedUserId = selectedUserId,
                             localUnreadCounts = localUnread.userCounts,
+                            localReadMarkers = localUnread.userReadMarkers,
                             persistUnread = { counts ->
                                 saveLocalUnreadSnapshot(
-                                    ChatUnreadSnapshot(
-                                    roomCounts = localUnread.roomCounts,
-                                    userCounts = counts,
-                                    pinnedRoomIds = current.pinnedRoomIds,
-                                    pinnedUserIds = current.pinnedUserConversationIds,
-                                    roomGroups = current.roomGroups,
-                                ),
-                            )
+                                    localUnread.copy(
+                                        userCounts = counts,
+                                        pinnedRoomIds = current.pinnedRoomIds,
+                                        pinnedUserIds = current.pinnedUserConversationIds,
+                                        roomGroups = current.roomGroups,
+                                    ),
+                                )
                             },
                         )
                         .mergeChatUserConversations(current.userConversations)
@@ -2306,6 +2366,9 @@ class ChatStateHolder(
                             selectedUserId?.let { userId -> attentionKinds - userId } ?: attentionKinds
                         }
                         .withAttentionToast(attentionToast?.takeIf { toast -> toast.chatUserId != null })
+                    selectedUserId
+                        ?.let { userId -> nextConversations.firstOrNull { it.user.id == userId } }
+                        ?.let(::markLocalUserRead)
                     current.copy(
                         userConversations = nextConversations,
                         selectedUserConversation = current.selectedUserConversation?.let { selected ->
@@ -2360,51 +2423,66 @@ class ChatStateHolder(
         loadingMore: Boolean,
     ) {
         when (result) {
-            is ChatMessageRepositoryResult.Success -> mutableState.update {
-                if (it.selectedRoom?.id != roomId) return@update it
-                val nextMessages = result.messages.ensureChronologicalMessages()
-                val latestMessage = if (loadingMore) null else nextMessages.lastOrNull()
-                val nextRooms = latestMessage?.let { message ->
-                    it.rooms
-                        .withChatRoomLatestMessage(roomId, message)
-                        .sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id }
-                } ?: it.rooms
-                it.copy(
-                    rooms = nextRooms,
-                    selectedRoom = latestMessage?.let { message -> it.selectedRoom?.withLatestMessageAt(message) }
-                        ?: it.selectedRoom,
-                    messages = nextMessages,
-                    unreadJumpMessageId = if (!loadingMore) {
-                        nextMessages.firstUnreadMessageId(it.selectedRoomUnreadCount)
-                    } else {
-                        it.unreadJumpMessageId
-                    },
-                    isLoadingMessages = false,
-                    isLoadingOlderMessages = false,
-                    messagesEndReached = result.endReached,
-                    messageErrorMessage = null,
-                    requiresRelogin = false,
-                )
+            is ChatMessageRepositoryResult.Success -> {
+                val latestReadMarker = if (loadingMore) {
+                    ""
+                } else {
+                    result.messages.ensureChronologicalMessages().lastOrNull()?.unreadMarker().orEmpty()
+                }
+                mutableState.update {
+                    if (it.selectedRoom?.id != roomId) return@update it
+                    val nextMessages = result.messages.ensureChronologicalMessages()
+                    val latestMessage = if (loadingMore) null else nextMessages.lastOrNull()
+                    val nextRooms = latestMessage?.let { message ->
+                        it.rooms
+                            .withChatRoomLatestMessage(roomId, message)
+                            .sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id }
+                    } ?: it.rooms
+                    it.copy(
+                        rooms = nextRooms,
+                        selectedRoom = latestMessage?.let { message -> it.selectedRoom?.withLatestMessageAt(message) }
+                            ?: it.selectedRoom,
+                        messages = nextMessages,
+                        unreadJumpMessageId = if (!loadingMore) {
+                            nextMessages.firstUnreadMessageId(it.selectedRoomUnreadCount)
+                        } else {
+                            it.unreadJumpMessageId
+                        },
+                        isLoadingMessages = false,
+                        isLoadingOlderMessages = false,
+                        messagesEndReached = result.endReached,
+                        messageErrorMessage = null,
+                        requiresRelogin = false,
+                    )
+                }
+                if (latestReadMarker.isNotBlank() && state.value.selectedRoom?.id == roomId) {
+                    markLocalRoomRead(roomId, latestReadMarker)
+                }
             }
-            is ChatMessageRepositoryResult.Created -> mutableState.update {
-                if (it.selectedRoom?.id != roomId) return@update it
-                it.copy(
-                    rooms = it.rooms
-                        .withChatRoomLatestMessage(roomId, result.message)
-                        .sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
-                    selectedRoom = it.selectedRoom?.withLatestMessageAt(result.message),
-                    messages = it.messages.withChronologicalMessage(result.message),
-                    messageDraft = "",
-                    replyingMessage = null,
-                    quotedMessage = null,
-                    attachedFile = null,
-                    attachments = emptyList(),
-                    isSendingMessage = false,
-                    selectedRoomUnreadCount = 0,
-                    unreadJumpMessageId = null,
-                    messageErrorMessage = null,
-                    requiresRelogin = false,
-                )
+            is ChatMessageRepositoryResult.Created -> {
+                mutableState.update {
+                    if (it.selectedRoom?.id != roomId) return@update it
+                    it.copy(
+                        rooms = it.rooms
+                            .withChatRoomLatestMessage(roomId, result.message)
+                            .sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
+                        selectedRoom = it.selectedRoom?.withLatestMessageAt(result.message),
+                        messages = it.messages.withChronologicalMessage(result.message),
+                        messageDraft = "",
+                        replyingMessage = null,
+                        quotedMessage = null,
+                        attachedFile = null,
+                        attachments = emptyList(),
+                        isSendingMessage = false,
+                        selectedRoomUnreadCount = 0,
+                        unreadJumpMessageId = null,
+                        messageErrorMessage = null,
+                        requiresRelogin = false,
+                    )
+                }
+                if (state.value.selectedRoom?.id == roomId) {
+                    markLocalRoomRead(roomId, result.message.unreadMarker())
+                }
             }
             ChatMessageRepositoryResult.ReactionUpdated -> mutableState.update {
                 if (it.selectedRoom?.id != roomId) return@update it
@@ -2471,48 +2549,67 @@ class ChatStateHolder(
         loadingMore: Boolean,
     ) {
         when (result) {
-            is ChatMessageRepositoryResult.Success -> mutableState.update {
-                if (it.selectedUserConversation?.user?.id != userId) return@update it
-                val nextMessages = result.messages.ensureChronologicalMessages()
-                it.copy(
-                    userConversations = it.userConversations
-                        .markChatUserConversationRead(userId)
-                        .sortedByPinnedIds(it.pinnedUserConversationIds) { conversation -> conversation.user.id },
-                    selectedUserConversation = it.selectedUserConversation?.copy(unreadCount = 0),
-                    messages = nextMessages,
-                    unreadJumpMessageId = if (!loadingMore) {
-                        nextMessages.firstUnreadMessageId(it.selectedUserUnreadCount)
-                    } else {
-                        it.unreadJumpMessageId
-                    },
-                    isLoadingMessages = false,
-                    isLoadingOlderMessages = false,
-                    messagesEndReached = result.endReached,
-                    selectedUserUnreadCount = 0,
-                    messageErrorMessage = null,
-                    requiresRelogin = false,
-                )
+            is ChatMessageRepositoryResult.Success -> {
+                val latestReadMarker = if (loadingMore) {
+                    ""
+                } else {
+                    result.messages.ensureChronologicalMessages().lastOrNull()?.unreadMarker().orEmpty()
+                }
+                mutableState.update {
+                    if (it.selectedUserConversation?.user?.id != userId) return@update it
+                    val nextMessages = result.messages.ensureChronologicalMessages()
+                    it.copy(
+                        userConversations = it.userConversations
+                            .markChatUserConversationRead(userId)
+                            .sortedByPinnedIds(it.pinnedUserConversationIds) { conversation -> conversation.user.id },
+                        selectedUserConversation = it.selectedUserConversation?.copy(unreadCount = 0),
+                        messages = nextMessages,
+                        unreadJumpMessageId = if (!loadingMore) {
+                            nextMessages.firstUnreadMessageId(it.selectedUserUnreadCount)
+                        } else {
+                            it.unreadJumpMessageId
+                        },
+                        isLoadingMessages = false,
+                        isLoadingOlderMessages = false,
+                        messagesEndReached = result.endReached,
+                        selectedUserUnreadCount = 0,
+                        messageErrorMessage = null,
+                        requiresRelogin = false,
+                    )
+                }
+                if (latestReadMarker.isNotBlank() && state.value.selectedUserConversation?.user?.id == userId) {
+                    markLocalUserRead(userId, latestReadMarker)
+                }
             }
-            is ChatMessageRepositoryResult.Created -> mutableState.update {
-                if (it.selectedUserConversation?.user?.id != userId) return@update it
-                hiddenUserConversationLatestMessageIds = hiddenUserConversationLatestMessageIds - userId
-                val nextMessages = it.messages.withChronologicalMessage(result.message)
-                it.copy(
-                    userConversations = it.userConversations
-                        .withUserConversationLatest(userId, result.message)
-                        .sortedByPinnedIds(it.pinnedUserConversationIds) { conversation -> conversation.user.id },
-                    messages = nextMessages,
-                    messageDraft = "",
-                    replyingMessage = null,
-                    quotedMessage = null,
-                    attachedFile = null,
-                    attachments = emptyList(),
-                    isSendingMessage = false,
-                    selectedUserUnreadCount = 0,
-                    unreadJumpMessageId = null,
-                    messageErrorMessage = null,
-                    requiresRelogin = false,
-                )
+            is ChatMessageRepositoryResult.Created -> {
+                mutableState.update {
+                    if (it.selectedUserConversation?.user?.id != userId) return@update it
+                    hiddenUserConversationLatestMessageIds = hiddenUserConversationLatestMessageIds - userId
+                    val nextMessages = it.messages.withChronologicalMessage(result.message)
+                    it.copy(
+                        userConversations = it.userConversations
+                            .withUserConversationLatest(userId, result.message)
+                            .sortedByPinnedIds(it.pinnedUserConversationIds) { conversation -> conversation.user.id },
+                        selectedUserConversation = it.selectedUserConversation?.copy(
+                            latestMessage = result.message,
+                            unreadCount = 0,
+                        ),
+                        messages = nextMessages,
+                        messageDraft = "",
+                        replyingMessage = null,
+                        quotedMessage = null,
+                        attachedFile = null,
+                        attachments = emptyList(),
+                        isSendingMessage = false,
+                        selectedUserUnreadCount = 0,
+                        unreadJumpMessageId = null,
+                        messageErrorMessage = null,
+                        requiresRelogin = false,
+                    )
+                }
+                if (state.value.selectedUserConversation?.user?.id == userId) {
+                    markLocalUserRead(userId, result.message.unreadMarker())
+                }
             }
             ChatMessageRepositoryResult.ReactionUpdated -> mutableState.update {
                 if (it.selectedUserConversation?.user?.id != userId) return@update it
@@ -2690,40 +2787,46 @@ class ChatStateHolder(
         result: ChatMessageRepositoryResult,
     ) {
         when (result) {
-            is ChatMessageRepositoryResult.Success -> mutableState.update { current ->
-                val selectedRoom = current.selectedRoom ?: return@update current
-                if (selectedRoom.id != roomId) return@update current
-                val nextMessages = current.messages.mergeReplacingChronologicalMessages(result.messages)
-                val latestMessage = nextMessages.lastOrNull()
-                val unreadJumpMessageId = if (
-                    current.unreadJumpMessageId == null &&
-                    current.selectedRoomUnreadCount > 0
-                ) {
-                    nextMessages.firstUnreadMessageId(current.selectedRoomUnreadCount)
-                } else {
-                    current.unreadJumpMessageId
+            is ChatMessageRepositoryResult.Success -> {
+                val latestReadMarker = result.messages.ensureChronologicalMessages().lastOrNull()?.unreadMarker().orEmpty()
+                mutableState.update { current ->
+                    val selectedRoom = current.selectedRoom ?: return@update current
+                    if (selectedRoom.id != roomId) return@update current
+                    val nextMessages = current.messages.mergeReplacingChronologicalMessages(result.messages)
+                    val latestMessage = nextMessages.lastOrNull()
+                    val unreadJumpMessageId = if (
+                        current.unreadJumpMessageId == null &&
+                        current.selectedRoomUnreadCount > 0
+                    ) {
+                        nextMessages.firstUnreadMessageId(current.selectedRoomUnreadCount)
+                    } else {
+                        current.unreadJumpMessageId
+                    }
+                    if (
+                        nextMessages == current.messages &&
+                        (latestMessage == null || latestMessage.createdAtLabel == selectedRoom.latestMessageAtLabel) &&
+                        unreadJumpMessageId == current.unreadJumpMessageId &&
+                        current.messageErrorMessage == null
+                    ) {
+                        return@update current
+                    }
+                    current.copy(
+                        rooms = latestMessage?.let { message ->
+                            current.rooms
+                                .withChatRoomLatestMessage(roomId, message)
+                                .sortedByPinnedIds(current.pinnedRoomIds) { room -> room.id }
+                        } ?: current.rooms,
+                        selectedRoom = latestMessage?.let { message -> selectedRoom.withLatestMessageAt(message) }
+                            ?: selectedRoom,
+                        messages = nextMessages,
+                        unreadJumpMessageId = unreadJumpMessageId,
+                        messageErrorMessage = null,
+                        requiresRelogin = false,
+                    )
                 }
-                if (
-                    nextMessages == current.messages &&
-                    (latestMessage == null || latestMessage.createdAtLabel == selectedRoom.latestMessageAtLabel) &&
-                    unreadJumpMessageId == current.unreadJumpMessageId &&
-                    current.messageErrorMessage == null
-                ) {
-                    return@update current
+                if (latestReadMarker.isNotBlank() && state.value.selectedRoom?.id == roomId) {
+                    markLocalRoomRead(roomId, latestReadMarker)
                 }
-                current.copy(
-                    rooms = latestMessage?.let { message ->
-                        current.rooms
-                            .withChatRoomLatestMessage(roomId, message)
-                            .sortedByPinnedIds(current.pinnedRoomIds) { room -> room.id }
-                    } ?: current.rooms,
-                    selectedRoom = latestMessage?.let { message -> selectedRoom.withLatestMessageAt(message) }
-                        ?: selectedRoom,
-                    messages = nextMessages,
-                    unreadJumpMessageId = unreadJumpMessageId,
-                    messageErrorMessage = null,
-                    requiresRelogin = false,
-                )
             }
             ChatMessageRepositoryResult.Unauthorized -> mutableState.update {
                 if (it.selectedRoom?.id != roomId) return@update it
@@ -2745,35 +2848,41 @@ class ChatStateHolder(
         result: ChatMessageRepositoryResult,
     ) {
         when (result) {
-            is ChatMessageRepositoryResult.Success -> mutableState.update { current ->
-                if (current.selectedUserConversation?.user?.id != userId) return@update current
-                val nextMessages = current.messages.mergeReplacingChronologicalMessages(result.messages)
-                val unreadJumpMessageId = if (
-                    current.unreadJumpMessageId == null &&
-                    current.selectedUserUnreadCount > 0
-                ) {
-                    nextMessages.firstUnreadMessageId(current.selectedUserUnreadCount)
-                } else {
-                    current.unreadJumpMessageId
+            is ChatMessageRepositoryResult.Success -> {
+                val latestReadMarker = result.messages.ensureChronologicalMessages().lastOrNull()?.unreadMarker().orEmpty()
+                mutableState.update { current ->
+                    if (current.selectedUserConversation?.user?.id != userId) return@update current
+                    val nextMessages = current.messages.mergeReplacingChronologicalMessages(result.messages)
+                    val unreadJumpMessageId = if (
+                        current.unreadJumpMessageId == null &&
+                        current.selectedUserUnreadCount > 0
+                    ) {
+                        nextMessages.firstUnreadMessageId(current.selectedUserUnreadCount)
+                    } else {
+                        current.unreadJumpMessageId
+                    }
+                    if (
+                        nextMessages == current.messages &&
+                        unreadJumpMessageId == current.unreadJumpMessageId &&
+                        current.messageErrorMessage == null
+                    ) {
+                        return@update current
+                    }
+                    current.copy(
+                        messages = nextMessages,
+                        userConversations = current.userConversations
+                            .markChatUserConversationRead(userId)
+                            .sortedByPinnedIds(current.pinnedUserConversationIds) { conversation -> conversation.user.id },
+                        selectedUserConversation = current.selectedUserConversation?.copy(unreadCount = 0),
+                        selectedUserUnreadCount = 0,
+                        unreadJumpMessageId = unreadJumpMessageId,
+                        messageErrorMessage = null,
+                        requiresRelogin = false,
+                    )
                 }
-                if (
-                    nextMessages == current.messages &&
-                    unreadJumpMessageId == current.unreadJumpMessageId &&
-                    current.messageErrorMessage == null
-                ) {
-                    return@update current
+                if (latestReadMarker.isNotBlank() && state.value.selectedUserConversation?.user?.id == userId) {
+                    markLocalUserRead(userId, latestReadMarker)
                 }
-                current.copy(
-                    messages = nextMessages,
-                    userConversations = current.userConversations
-                        .markChatUserConversationRead(userId)
-                        .sortedByPinnedIds(current.pinnedUserConversationIds) { conversation -> conversation.user.id },
-                    selectedUserConversation = current.selectedUserConversation?.copy(unreadCount = 0),
-                    selectedUserUnreadCount = 0,
-                    unreadJumpMessageId = unreadJumpMessageId,
-                    messageErrorMessage = null,
-                    requiresRelogin = false,
-                )
             }
             ChatMessageRepositoryResult.Unauthorized -> mutableState.update {
                 if (it.selectedUserConversation?.user?.id != userId) return@update it
@@ -3077,6 +3186,9 @@ class ChatStateHolder(
                         )
                     }
                 }
+                if (event.message.roomId == roomId && state.value.selectedRoom?.id == roomId) {
+                    markLocalRoomRead(roomId, event.message.unreadMarker())
+                }
             }
             is ChatStreamingEvent.Error -> mutableState.update {
                 if (it.selectedRoom?.id != roomId) return@update it
@@ -3149,6 +3261,12 @@ class ChatStateHolder(
                             streamingErrorMessage = null,
                         )
                     }
+                }
+                if (
+                    event.message.belongsToUserConversation(userId) &&
+                    state.value.selectedUserConversation?.user?.id == userId
+                ) {
+                    markLocalUserRead(userId, event.message.unreadMarker())
                 }
             }
             is ChatStreamingEvent.Error -> mutableState.update {
@@ -3247,13 +3365,20 @@ private fun List<ChatRoom>.mergeRoomUnreadCounts(
     previous: List<ChatRoom>,
     selectedRoomId: String?,
     localUnreadCounts: Map<String, Int>,
+    localReadMarkers: Map<String, String>,
     persistUnread: ((Map<String, Int>) -> Unit)?,
 ): List<ChatRoom> {
     val previousById = previous.associateBy { it.id }
     var changedLocalCounts = false
     val nextLocalCounts = localUnreadCounts.toMutableMap()
     val merged = map { room ->
+        val roomLatestMarker = room.unreadMarker()
+        val readMarker = localReadMarkers[room.id].orEmpty().trim()
         if (room.id == selectedRoomId) {
+            nextLocalCounts.remove(room.id)?.let { changedLocalCounts = true }
+            return@map room.copy(unreadCount = 0)
+        }
+        if (roomLatestMarker.matchesReadMarker(readMarker)) {
             nextLocalCounts.remove(room.id)?.let { changedLocalCounts = true }
             return@map room.copy(unreadCount = 0)
         }
@@ -3261,10 +3386,9 @@ private fun List<ChatRoom>.mergeRoomUnreadCounts(
         val localCount = nextLocalCounts[room.id].coercePositive()
         val remoteCount = room.unreadCount.coerceAtLeast(0)
         val previousCount = previousRoom?.unreadCount.coercePositive()
-        val roomLatestMarker = room.unreadMarker()
         val previousLatestMarker = previousRoom?.unreadMarker().orEmpty()
         val latestChanged = previousRoom != null &&
-            roomLatestMarker.isNotBlank() &&
+            room.hasStableUnreadMarker() &&
             roomLatestMarker != previousLatestMarker
         val inferredCount = inferUnreadCount(
             remoteCount = remoteCount,
@@ -3341,10 +3465,10 @@ private fun List<ChatRoom>.withRealtimeRoomMessage(
     if (roomId.isBlank()) return this
     val index = indexOfFirst { room -> room.id == roomId }
     val sourceRoom = if (index >= 0) this[index] else placeholderRoom(roomId)
-    val latestChanged = message.unreadMarker()
-        .takeIf { marker -> marker.isNotBlank() }
-        ?.let { marker -> marker != sourceRoom.unreadMarker() }
-        ?: false
+    val messageMarker = message.unreadMarker()
+    val latestChanged = message.hasStableUnreadMarker() &&
+        messageMarker.isNotBlank() &&
+        messageMarker != sourceRoom.unreadMarker()
     val room = sourceRoom.withLatestMessageAt(message)
         .let { current ->
             if (incrementUnread && latestChanged) {
@@ -3395,6 +3519,7 @@ private fun List<ChatUserConversation>.mergeUserUnreadCounts(
     previous: List<ChatUserConversation>,
     selectedUserId: String?,
     localUnreadCounts: Map<String, Int>,
+    localReadMarkers: Map<String, String>,
     persistUnread: ((Map<String, Int>) -> Unit)?,
 ): List<ChatUserConversation> {
     val previousByUserId = previous.associateBy { it.user.id }
@@ -3402,18 +3527,25 @@ private fun List<ChatUserConversation>.mergeUserUnreadCounts(
     val nextLocalCounts = localUnreadCounts.toMutableMap()
     val merged = map { conversation ->
         val userId = conversation.user.id
+        val latestMessage = conversation.latestMessage
+        val latestMarker = latestMessage?.unreadMarker().orEmpty()
+        val readMarker = localReadMarkers[userId].orEmpty().trim()
         if (userId == selectedUserId) {
+            nextLocalCounts.remove(userId)?.let { changedLocalCounts = true }
+            return@map conversation.copy(unreadCount = 0)
+        }
+        if (latestMarker.matchesReadMarker(readMarker)) {
             nextLocalCounts.remove(userId)?.let { changedLocalCounts = true }
             return@map conversation.copy(unreadCount = 0)
         }
         val previousConversation = previousByUserId[userId]
         val localCount = nextLocalCounts[userId].coercePositive()
         val remoteCount = conversation.unreadCount.coerceAtLeast(0)
-        val latestMessage = conversation.latestMessage
         val previousCount = previousConversation?.unreadCount.coercePositive()
         val latestChanged = previousConversation != null &&
             latestMessage != null &&
-            latestMessage.id != previousConversation.latestMessage?.id &&
+            latestMessage.hasStableUnreadMarker() &&
+            latestMarker != previousConversation.latestMessage?.unreadMarker().orEmpty() &&
             !latestMessage.isRead
         val inferredCount = inferUnreadCount(
             remoteCount = remoteCount,
@@ -3457,6 +3589,10 @@ private fun ChatRoom.unreadMarker(): String {
     return latestMessageMarker.ifBlank { latestMessageAtLabel }
 }
 
+private fun ChatRoom.hasStableUnreadMarker(): Boolean {
+    return latestMessageMarker.isStableUnreadMarker()
+}
+
 private fun ChatRoom.hasNewUnreadAttentionComparedWith(previous: ChatRoom?): Boolean {
     if (unreadCount.coerceAtLeast(0) <= 0) return false
     if (previous == null) return false
@@ -3468,6 +3604,43 @@ private fun ChatRoom.hasNewUnreadAttentionComparedWith(previous: ChatRoom?): Boo
 private fun ChatMessage.unreadMarker(): String {
     return id.ifBlank { createdAt.ifBlank { createdAtLabel } }
 }
+
+private fun ChatMessage.hasStableUnreadMarker(): Boolean {
+    return id.isStableUnreadMarker() || createdAt.isStableUnreadMarker()
+}
+
+private fun String?.withReadMarkerAlias(marker: String): String {
+    val cleanMarker = marker.trim()
+    if (cleanMarker.isEmpty()) return this?.trim().orEmpty()
+    val markers = (this.readMarkerAliases() + cleanMarker)
+        .distinct()
+        .takeLast(MAX_READ_MARKER_ALIASES)
+    return markers.joinToString(READ_MARKER_ALIAS_SEPARATOR)
+}
+
+private fun String.matchesReadMarker(readMarkerValue: String): Boolean {
+    val cleanMarker = trim()
+    return cleanMarker.isNotEmpty() && cleanMarker in readMarkerValue.readMarkerAliases()
+}
+
+private fun String?.readMarkerAliases(): List<String> {
+    return orEmpty()
+        .split(READ_MARKER_ALIAS_SEPARATOR)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+}
+
+private fun String.isStableUnreadMarker(): Boolean {
+    val clean = trim()
+    return clean.isNotEmpty() && !unstableUnreadMarkerPattern.containsMatchIn(clean)
+}
+
+private const val READ_MARKER_ALIAS_SEPARATOR = "\n"
+private const val MAX_READ_MARKER_ALIASES = 4
+private val unstableUnreadMarkerPattern = Regex(
+    pattern = "(刚刚|秒前|分钟前|小时前|天前|周前|月前|年前|just now|\\bago\\b)",
+    options = setOf(RegexOption.IGNORE_CASE),
+)
 
 private fun List<ChatUserConversation>.withUserConversationLatest(
     userId: String,
@@ -3496,10 +3669,10 @@ private fun List<ChatUserConversation>.withRealtimeUserConversationMessage(
             unreadCount = 0,
         )
     }
-    val latestChanged = message.unreadMarker()
-        .takeIf { marker -> marker.isNotBlank() }
-        ?.let { marker -> marker != conversation.latestMessage?.unreadMarker().orEmpty() }
-        ?: false
+    val messageMarker = message.unreadMarker()
+    val latestChanged = message.hasStableUnreadMarker() &&
+        messageMarker.isNotBlank() &&
+        messageMarker != conversation.latestMessage?.unreadMarker().orEmpty()
     val updated = conversation.copy(
         latestMessage = message,
         unreadCount = when {

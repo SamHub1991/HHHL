@@ -467,7 +467,7 @@ class RealtimeNotificationService : Service() {
         private const val TIMELINE_SYNC_DEBOUNCE_MS = 2_000L
         private const val CHAT_SYNC_DEBOUNCE_MS = 3_000L
         private const val CHAT_EVENT_RECHECK_DELAY_MS = 1_500L
-        private const val CHAT_TARGET_REFRESH_INTERVAL_MS = 60_000L
+        private const val CHAT_TARGET_REFRESH_INTERVAL_MS = 30_000L
         private const val NOTIFICATION_EVENT_RECHECK_DELAY_MS = 1_500L
         private const val NOTIFICATION_EVENT_LATE_RECHECK_DELAY_MS = 4_000L
         private const val POLLING_SAFETY_INTERVAL_MS = 30_000L
