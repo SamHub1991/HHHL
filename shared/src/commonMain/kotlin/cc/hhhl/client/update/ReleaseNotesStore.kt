@@ -39,6 +39,17 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.6.1",
+            title = "HHHL 0.6.1 更新内容",
+            summary = "这版修复聊天搜索选择和 AI 结果卡片恢复问题，减少重新打开界面后的误显示。",
+            highlights = listOf(
+                "修复聊天消息搜索里服务器下拉用户偶尔点了没反应的问题，选中的远程用户现在会稳定保留并开始筛选消息。",
+                "聊天搜索按远程用户过滤时，如果当前页没有匹配但服务器还有更多结果，会继续自动加载后续消息。",
+                "关闭过的 AI 结果卡片会被持久记录，重新打开聊天等界面时不会再把旧的已关闭卡片显示出来。",
+                "新的 AI 生成结果仍会正常弹出，不受之前关闭旧卡片影响。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.6.0",
             title = "HHHL 0.6.0 更新内容",
             summary = "这版完善 AI 模型配置和自动化草稿生成链路，并修复聊天未读状态恢复问题。",

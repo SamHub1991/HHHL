@@ -259,6 +259,7 @@ data class AiTask(
     val updatedAtEpochMillis: Long = createdAtEpochMillis,
     val retryCount: Int = 0,
     val usageCharged: Boolean = false,
+    val resultConsumed: Boolean = false,
 ) {
     val isFinished: Boolean
         get() = status == AiTaskStatus.Completed || status == AiTaskStatus.Failed

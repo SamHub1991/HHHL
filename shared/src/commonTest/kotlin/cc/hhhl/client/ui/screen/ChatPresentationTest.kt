@@ -598,6 +598,34 @@ class ChatPresentationTest {
     }
 
     @Test
+    fun pinnedRemoteAuthorFilterSurvivesClearedServerUserResults() {
+        val memberOnly = chatUser(
+            id = "member-only",
+            displayName = "林间",
+            username = "lin",
+            host = "example.social",
+        )
+        val remoteAuthor = chatUser(id = "remote-user", displayName = "赵远程", username = "zhao", host = "remote.example")
+        val searchFilters = buildChatSearchAuthorFilters(
+            members = listOf(chatRoomMember(memberOnly)),
+            messages = emptyList(),
+            searchResults = emptyList(),
+            remoteUsers = listOf(remoteAuthor),
+        )
+        val pinnedRemote = searchFilters.first { it.userId == "remote-user" }
+
+        val filtersAfterDropdownClose = buildChatSearchAuthorFilters(
+            members = listOf(chatRoomMember(memberOnly)),
+            messages = emptyList(),
+            searchResults = emptyList(),
+            remoteUsers = emptyList(),
+        ).withPinnedChatSearchAuthorFilter(pinnedRemote)
+
+        assertEquals(listOf("remote-user", "member-only"), filtersAfterDropdownClose.map { it.userId })
+        assertEquals(listOf("remote-user"), filtersAfterDropdownClose.filterByChatSearchAuthorQuery("赵").map { it.userId })
+    }
+
+    @Test
     fun chatFilterUsersIncludeRemoteUserSearchResults() {
         val remoteUser = chatUser(id = "remote-user", displayName = "远端用户", username = "remote", host = "remote.example")
         val memberUser = chatUser(id = "member-user", displayName = "成员用户", username = "member")

@@ -21,12 +21,13 @@ class AiStateHolder(
     fun restore() {
         val snapshot = runCatching { store.read(cleanAccountId()) }.getOrDefault(AiSnapshot())
         val sortedTasks = snapshot.tasks.sortedByDescending { task -> task.updatedAtEpochMillis }
+        val latestCompletedTask = sortedTasks.firstOrNull { task -> task.status == AiTaskStatus.Completed }
         mutableState.update {
             it.copy(
                 settings = snapshot.settings,
                 tasks = sortedTasks,
                 usage = snapshot.usage.normalizedAiUsage(),
-                latestResult = sortedTasks.firstOrNull { task -> task.status == AiTaskStatus.Completed },
+                latestResult = latestCompletedTask?.takeUnless { task -> task.resultConsumed },
                 activeTaskId = null,
                 isProcessing = false,
                 isTestingConnection = false,
@@ -209,7 +210,21 @@ class AiStateHolder(
     }
 
     fun consumeLatestResult() {
-        mutableState.update { it.copy(latestResult = null, activeTaskId = null) }
+        val consumedTaskId = state.value.latestResult?.id
+        mutableState.update { current ->
+            current.copy(
+                tasks = if (consumedTaskId == null) {
+                    current.tasks
+                } else {
+                    current.tasks.map { task ->
+                        if (task.id == consumedTaskId) task.copy(resultConsumed = true) else task
+                    }
+                },
+                latestResult = null,
+                activeTaskId = null,
+            )
+        }
+        if (consumedTaskId != null) persist()
     }
 
     fun clearFinishedTasks() {
@@ -246,6 +261,7 @@ class AiStateHolder(
                         resultText = text,
                         errorMessage = "",
                         updatedAtEpochMillis = now,
+                        resultConsumed = false,
                     ).also { completed = it }
                 } else {
                     task

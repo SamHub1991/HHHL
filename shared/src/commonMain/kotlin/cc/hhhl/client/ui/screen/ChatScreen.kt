@@ -3680,6 +3680,7 @@ private fun ChatMessageSearchScreen(
     var query by remember(title) { mutableStateOf("") }
     var dateQuery by remember(title) { mutableStateOf("") }
     var authorFilterUserId by remember(title) { mutableStateOf<String?>(null) }
+    var pinnedAuthorFilter by remember(title) { mutableStateOf<ChatSearchAuthorFilter?>(null) }
     var authorFilterExpanded by remember(title) { mutableStateOf(false) }
     var authorFilterQuery by remember(title) { mutableStateOf("") }
     var searchRegexMode by remember(title) { mutableStateOf(false) }
@@ -3712,13 +3713,15 @@ private fun ChatMessageSearchScreen(
             onSearchUsers(cleanAuthorQuery)
         }
     }
-    val authorFilters = remember(members, messages, searchResults, remoteUsers) {
+    val authorFilters = remember(members, messages, searchResults, remoteUsers, pinnedAuthorFilter) {
         buildChatSearchAuthorFilters(members, messages, searchResults, remoteUsers)
+            .withPinnedChatSearchAuthorFilter(pinnedAuthorFilter)
     }
     val selectedAuthor = authorFilters.firstOrNull { it.userId == authorFilterUserId }
     LaunchedEffect(authorFilters, authorFilterUserId) {
         if (authorFilterUserId != null && authorFilters.none { it.userId == authorFilterUserId }) {
             authorFilterUserId = null
+            pinnedAuthorFilter = null
         }
     }
     val results = remember(baseResults, query, dateQuery, authorFilterUserId, searchRegexMode, searchRegex) {
@@ -3743,6 +3746,33 @@ private fun ChatMessageSearchScreen(
     val canSubmitSearch = cleanQuery.isNotBlank() && !searchRegexMode && !isSearchingMessages
     val searchListState = rememberLazyListState()
     var lastOlderSearchAutoLoadCount by remember(title) { mutableStateOf(0) }
+    var lastAuthorFilteredSearchAutoLoadCount by remember(title, authorFilterUserId, cleanQuery) { mutableStateOf(0) }
+
+    LaunchedEffect(
+        authorFilterUserId,
+        results.size,
+        searchResults.size,
+        canLoadMoreSearch,
+        isLoadingMoreSearch,
+        isSearchingMessages,
+        searchRegexMode,
+        cleanQuery,
+    ) {
+        if (
+            authorFilterUserId != null &&
+            results.isEmpty() &&
+            !searchRegexMode &&
+            cleanQuery.isNotBlank() &&
+            searchResults.isNotEmpty() &&
+            canLoadMoreSearch &&
+            !isLoadingMoreSearch &&
+            !isSearchingMessages &&
+            searchResults.size != lastAuthorFilteredSearchAutoLoadCount
+        ) {
+            lastAuthorFilteredSearchAutoLoadCount = searchResults.size
+            onLoadMoreSearch()
+        }
+    }
 
     AutoLoadMoreEffect(
         listState = searchListState,
@@ -3837,6 +3867,7 @@ private fun ChatMessageSearchScreen(
                                 query = ""
                                 dateQuery = ""
                                 authorFilterUserId = null
+                                pinnedAuthorFilter = null
                                 authorFilterQuery = ""
                                 searchRegexMode = false
                                 onSearch("")
@@ -3868,6 +3899,7 @@ private fun ChatMessageSearchScreen(
                             query = ""
                             dateQuery = ""
                             authorFilterUserId = null
+                            pinnedAuthorFilter = null
                             authorFilterQuery = ""
                             searchRegexMode = false
                             onSearch("")
@@ -3887,6 +3919,9 @@ private fun ChatMessageSearchScreen(
                 onExpandedChanged = { authorFilterExpanded = it },
                 onDismissUserSearchError = onDismissUserSearchError,
                 onSelected = { userId ->
+                    pinnedAuthorFilter = userId?.let { selectedId ->
+                        authorFilters.firstOrNull { it.userId == selectedId }
+                    }
                     authorFilterUserId = userId
                     authorFilterExpanded = false
                     authorFilterQuery = ""
@@ -4214,6 +4249,14 @@ private fun ChatSearchAuthorFilter.chatSearchAuthorSubtitle(): String {
     )
         .filterNotNull()
         .joinToString(" · ")
+}
+
+internal fun List<ChatSearchAuthorFilter>.withPinnedChatSearchAuthorFilter(
+    pinned: ChatSearchAuthorFilter?,
+): List<ChatSearchAuthorFilter> {
+    if (pinned == null || pinned.userId.isBlank()) return this
+    if (any { it.userId == pinned.userId }) return this
+    return listOf(pinned) + this
 }
 
 internal fun List<ChatSearchAuthorFilter>.filterByChatSearchAuthorQuery(query: String): List<ChatSearchAuthorFilter> {

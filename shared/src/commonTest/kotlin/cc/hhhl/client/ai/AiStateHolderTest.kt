@@ -126,6 +126,101 @@ class AiStateHolderTest {
     }
 
     @Test
+    fun consumedLatestResultDoesNotReappearAfterRestore() = runTest {
+        val store = MemoryAiStore(
+            AiSnapshot(
+                settings = AiSettings(enabled = true, apiKey = ""),
+                tasks = listOf(
+                    AiTask(
+                        id = "old-completed",
+                        accountId = "account-1",
+                        kind = AiTaskKind.PostSummary,
+                        input = AiTaskInput(),
+                        status = AiTaskStatus.Completed,
+                        resultText = "旧结果",
+                        updatedAtEpochMillis = 10,
+                    ),
+                    AiTask(
+                        id = "completed",
+                        accountId = "account-1",
+                        kind = AiTaskKind.ChatSummary,
+                        input = AiTaskInput(chatTitle = "聊天"),
+                        status = AiTaskStatus.Completed,
+                        resultText = "聊天总结",
+                        updatedAtEpochMillis = 20,
+                    ),
+                ),
+            ),
+        )
+        val holder = AiStateHolder(
+            store = store,
+            accountId = "account-1",
+            repository = FakeAiRepository(AiRepositoryResult.Success("不应调用")),
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        assertEquals("completed", holder.state.value.latestResult?.id)
+
+        holder.consumeLatestResult()
+
+        assertEquals(null, holder.state.value.latestResult)
+        assertTrue(store.lastSnapshot.tasks.first { it.id == "completed" }.resultConsumed)
+
+        val restored = AiStateHolder(
+            store = store,
+            accountId = "account-1",
+            repository = FakeAiRepository(AiRepositoryResult.Success("不应调用")),
+            scope = TestScope(testScheduler),
+        )
+        restored.restore()
+
+        assertEquals(null, restored.state.value.latestResult)
+    }
+
+    @Test
+    fun newlyCompletedTaskIsAvailableAsLatestResultEvenAfterOlderResultWasConsumed() = runTest {
+        val store = MemoryAiStore(
+            AiSnapshot(
+                settings = AiSettings(
+                    enabled = true,
+                    apiKey = "test-token",
+                    chatModel = "chat-model",
+                    fastModel = "fast-model",
+                    longContextModel = "long-model",
+                ),
+                tasks = listOf(
+                    AiTask(
+                        id = "old-completed",
+                        accountId = "account-1",
+                        kind = AiTaskKind.ChatSummary,
+                        input = AiTaskInput(chatTitle = "旧聊天"),
+                        status = AiTaskStatus.Completed,
+                        resultText = "旧结果",
+                        updatedAtEpochMillis = 10,
+                        resultConsumed = true,
+                    ),
+                ),
+            ),
+        )
+        val holder = AiStateHolder(
+            store = store,
+            accountId = "account-1",
+            repository = FakeAiRepository(AiRepositoryResult.Success("新结果")),
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        val task = holder.request(AiTaskKind.ChatSummary, AiTaskInput(chatTitle = "新聊天"))
+        advanceUntilIdle()
+
+        val completedTask = assertNotNull(task)
+        assertEquals(completedTask.id, holder.state.value.latestResult?.id)
+        assertEquals("新结果", holder.state.value.latestResult?.resultText)
+        assertEquals(false, store.lastSnapshot.tasks.first { it.id == completedTask.id }.resultConsumed)
+    }
+
+    @Test
     fun dailyRequestLimitBlocksNewQueuedTasks() = runTest {
         val store = MemoryAiStore(
             AiSnapshot(
