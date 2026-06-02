@@ -187,18 +187,7 @@ class ChatStateHolder(
     private fun markLocalRoomRead(roomId: String, marker: String) {
         val cleanRoomId = roomId.trim()
         if (cleanRoomId.isEmpty()) return
-        val cleanMarker = marker.trim()
-        val current = localUnreadSnapshot()
-        saveLocalUnreadSnapshot(
-            current.copy(
-                roomCounts = current.roomCounts - cleanRoomId,
-                roomReadMarkers = if (cleanMarker.isNotEmpty()) {
-                    current.roomReadMarkers + (cleanRoomId to current.roomReadMarkers[cleanRoomId].withReadMarkerAlias(cleanMarker))
-                } else {
-                    current.roomReadMarkers
-                },
-            ),
-        )
+        currentAccountId()?.let { accountId -> unreadStore.markRoomRead(accountId, cleanRoomId, marker) }
     }
 
     private fun markLocalRoomRead(room: ChatRoom) {
@@ -208,18 +197,7 @@ class ChatStateHolder(
     private fun markLocalUserRead(userId: String, marker: String) {
         val cleanUserId = userId.trim()
         if (cleanUserId.isEmpty()) return
-        val cleanMarker = marker.trim()
-        val current = localUnreadSnapshot()
-        saveLocalUnreadSnapshot(
-            current.copy(
-                userCounts = current.userCounts - cleanUserId,
-                userReadMarkers = if (cleanMarker.isNotEmpty()) {
-                    current.userReadMarkers + (cleanUserId to current.userReadMarkers[cleanUserId].withReadMarkerAlias(cleanMarker))
-                } else {
-                    current.userReadMarkers
-                },
-            ),
-        )
+        currentAccountId()?.let { accountId -> unreadStore.markUserRead(accountId, cleanUserId, marker) }
     }
 
     private fun markLocalUserRead(conversation: ChatUserConversation) {

@@ -69,8 +69,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.items
 import cc.hhhl.client.ai.AiAutomationModelConfig
 import cc.hhhl.client.ai.AiProviderPreset
+import cc.hhhl.client.ai.AiServiceMode
 import cc.hhhl.client.ai.AiSettings
 import cc.hhhl.client.ai.AiTaskStatus
+import cc.hhhl.client.ai.DEFAULT_SERVER_AI_BASE_URL
+import cc.hhhl.client.ai.DEFAULT_SERVER_AI_MODEL
 import cc.hhhl.client.ai.defaultChatModelForSettings
 import cc.hhhl.client.ai.defaultFastModelForSettings
 import cc.hhhl.client.ai.defaultLongContextModelForSettings
@@ -402,13 +405,21 @@ private fun SettingsAiModelConfigurationTabs(
             overflow = TextOverflow.Ellipsis,
         )
         HhhlAnimatedSegmentedControl(
-            labels = listOf("默认配置", "自动化配置"),
+            labels = listOf("远端主配置", "本地兜底", "自动化配置"),
             selectedIndex = selectedTab,
             onSelected = { selectedTab = it },
             modifier = Modifier.fillMaxWidth(),
         )
-        if (selectedTab == 0) {
-            SettingsAiDefaultModelConfigFields(
+        when (selectedTab) {
+            0 -> SettingsAiRemoteModelConfigFields(
+                settings = settings,
+                enabled = enabled,
+                connectionMessage = defaultConnectionMessage,
+                isTestingConnection = isTestingDefaultConnection,
+                onSettingsChanged = onSettingsChanged,
+                onTestConnection = onTestDefaultConnection,
+            )
+            1 -> SettingsAiDefaultModelConfigFields(
                 settings = settings,
                 enabled = enabled,
                 connectionMessage = defaultConnectionMessage,
@@ -417,13 +428,63 @@ private fun SettingsAiModelConfigurationTabs(
                 onProviderSelected = onDefaultProviderSelected,
                 onTestConnection = onTestDefaultConnection,
             )
-        } else {
-            SettingsAiAutomationModelConfigFields(
+            else -> SettingsAiAutomationModelConfigFields(
                 settings = settings,
                 enabled = enabled,
                 onSettingsChanged = onSettingsChanged,
             )
         }
+    }
+}
+
+@Composable
+private fun SettingsAiRemoteModelConfigFields(
+    settings: AiSettings,
+    enabled: Boolean,
+    connectionMessage: String?,
+    isTestingConnection: Boolean,
+    onSettingsChanged: (AiSettings) -> Unit,
+    onTestConnection: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "主 AI 使用服务器内置模型，默认优先选择远端模型里的 gpt-5.5；本机不需要填写 API Key。",
+            color = LocalHhhlColors.current.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        SettingsDropdownPicker(
+            selectedLabel = settings.serviceMode.label,
+            options = AiServiceMode.entries.toList(),
+            optionLabel = { it.label },
+            isSelected = { it == settings.serviceMode },
+            onSelected = { mode -> onSettingsChanged(settings.copy(serviceMode = mode)) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        SettingsTextSettingLine(
+            value = settings.remoteBaseUrl,
+            placeholder = DEFAULT_SERVER_AI_BASE_URL,
+            inputLabel = "远端服务器",
+            enabled = enabled && settings.serviceMode != AiServiceMode.LocalOnly,
+            onValueChange = { onSettingsChanged(settings.copy(remoteBaseUrl = it)) },
+        )
+        SettingsTextSettingLine(
+            value = settings.remotePreferredModel,
+            placeholder = DEFAULT_SERVER_AI_MODEL,
+            inputLabel = "优先模型",
+            enabled = enabled && settings.serviceMode != AiServiceMode.LocalOnly,
+            onValueChange = { onSettingsChanged(settings.copy(remotePreferredModel = it)) },
+            trailing = {
+                HhhlActionChip(
+                    label = if (isTestingConnection) "测试中" else "测试",
+                    emphasized = true,
+                    enabled = enabled && settings.serviceMode != AiServiceMode.LocalOnly && !isTestingConnection,
+                    onClick = onTestConnection,
+                )
+            },
+            helper = connectionMessage,
+        )
     }
 }
 
@@ -437,12 +498,13 @@ private fun SettingsAiDefaultModelConfigFields(
     onProviderSelected: (AiProviderPreset) -> Unit,
     onTestConnection: () -> Unit,
 ) {
+    val localEnabled = enabled && settings.serviceMode != AiServiceMode.RemoteOnly
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            text = "默认配置会用于普通 AI 助手、草稿处理、总结和未单独指定模型的自动化任务。",
+            text = "本地配置只在仅本地模式或远端优先失败时兜底使用；可继续填写自己的中转、Key 和模型。",
             color = LocalHhhlColors.current.textMuted,
             style = MaterialTheme.typography.labelSmall,
-            maxLines = 2,
+            maxLines = 3,
             overflow = TextOverflow.Ellipsis,
         )
         SettingsModelProviderPicker(
@@ -453,20 +515,20 @@ private fun SettingsAiDefaultModelConfigFields(
             value = settings.baseUrl,
             placeholder = "https://api.openai.com/v1",
             inputLabel = "Base URL",
-            enabled = enabled,
+            enabled = localEnabled,
             onValueChange = { onSettingsChanged(settings.copy(baseUrl = it)) },
         )
         SettingsTextSettingLine(
             value = settings.apiKey,
             placeholder = "sk-...",
             inputLabel = "API Key",
-            enabled = enabled,
+            enabled = localEnabled,
             onValueChange = { onSettingsChanged(settings.copy(apiKey = it)) },
             trailing = {
                 HhhlActionChip(
                     label = if (isTestingConnection) "测试中" else "测试",
                     emphasized = true,
-                    enabled = enabled && !isTestingConnection,
+                    enabled = localEnabled && !isTestingConnection,
                     onClick = onTestConnection,
                 )
             },
@@ -476,35 +538,35 @@ private fun SettingsAiDefaultModelConfigFields(
             value = settings.chatModel,
             placeholder = settings.provider.defaultChatModelForSettings().ifBlank { "对话模型" },
             inputLabel = "对话模型",
-            enabled = enabled,
+            enabled = localEnabled,
             onValueChange = { onSettingsChanged(settings.copy(chatModel = it)) },
         )
         SettingsTextSettingLine(
             value = settings.fastModel,
             placeholder = settings.provider.defaultFastModelForSettings().ifBlank { "快速模型" },
             inputLabel = "快速模型",
-            enabled = enabled,
+            enabled = localEnabled,
             onValueChange = { onSettingsChanged(settings.copy(fastModel = it)) },
         )
         SettingsTextSettingLine(
             value = settings.longContextModel,
             placeholder = settings.provider.defaultLongContextModelForSettings().ifBlank { "长上下文模型" },
             inputLabel = "长上下文模型",
-            enabled = enabled,
+            enabled = localEnabled,
             onValueChange = { onSettingsChanged(settings.copy(longContextModel = it)) },
         )
         SettingsTextSettingLine(
             value = settings.visionModel,
             placeholder = "视觉模型",
             inputLabel = "视觉模型",
-            enabled = enabled,
+            enabled = localEnabled,
             onValueChange = { onSettingsChanged(settings.copy(visionModel = it)) },
         )
         SettingsTextSettingLine(
             value = settings.embeddingModel,
             placeholder = "向量模型",
             inputLabel = "向量模型",
-            enabled = enabled,
+            enabled = localEnabled,
             onValueChange = { onSettingsChanged(settings.copy(embeddingModel = it)) },
         )
     }

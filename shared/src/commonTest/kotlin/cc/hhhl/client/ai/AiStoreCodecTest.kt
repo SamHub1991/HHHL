@@ -67,6 +67,50 @@ class AiStoreCodecTest {
     }
 
     @Test
+    fun mergeStoredAiTasksKeepsNewerTaskAndUnrelatedTasks() {
+        val storedOnly = AiTask(
+            id = "stored-only",
+            accountId = "account-1",
+            kind = AiTaskKind.NotificationSummary,
+            input = AiTaskInput(),
+            status = AiTaskStatus.Pending,
+            updatedAtEpochMillis = 40,
+        )
+        val staleShared = AiTask(
+            id = "shared-task",
+            accountId = "account-1",
+            kind = AiTaskKind.PostSummary,
+            input = AiTaskInput(),
+            status = AiTaskStatus.Pending,
+            updatedAtEpochMillis = 20,
+        )
+        val completedShared = staleShared.copy(
+            status = AiTaskStatus.Completed,
+            resultText = "完成",
+            updatedAtEpochMillis = 60,
+        )
+
+        val merged = mergeStoredAiTasks(
+            current = listOf(storedOnly, staleShared),
+            updates = listOf(completedShared),
+        )
+
+        assertEquals(listOf("shared-task", "stored-only"), merged.map { it.id })
+        assertEquals(AiTaskStatus.Completed, merged.first { it.id == "shared-task" }.status)
+    }
+
+    @Test
+    fun mergeStoredAiUsageDoesNotLowerCurrentDayCount() {
+        val today = AiUsageWindow().normalizedAiUsage().dayKey
+
+        val merged = mergeStoredAiUsage(
+            current = AiUsageWindow(dayKey = today, requestCount = 5),
+            update = AiUsageWindow(dayKey = today, requestCount = 2),
+        )
+
+        assertEquals(5, merged.requestCount)
+    }
+    @Test
     fun invalidPayloadFallsBackToEmptySnapshot() {
         val decoded = AiStoreCodec.decode("not json")
 

@@ -55,6 +55,7 @@ import cc.hhhl.client.automation.toAutomationNotificationEvent
 import cc.hhhl.client.automation.toAutomationTimelineEvent
 import cc.hhhl.client.automation.toMainStreamingOptions
 import cc.hhhl.client.ai.AiProviderPreset
+import cc.hhhl.client.ai.AiRepository
 import cc.hhhl.client.ai.AiRepositoryResult
 import cc.hhhl.client.ai.AiSettings
 import cc.hhhl.client.ai.AiStore
@@ -73,6 +74,7 @@ import cc.hhhl.client.ai.toAiTaskInput
 import cc.hhhl.client.api.ComposeDraft
 import cc.hhhl.client.api.ComposeReactionAcceptance
 import cc.hhhl.client.api.ComposeScheduledNote
+import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.api.TimelineKind
 import cc.hhhl.client.api.ChatStreamingEvent
 import cc.hhhl.client.api.MainStreamingEvent
@@ -107,7 +109,9 @@ import cc.hhhl.client.model.ChatRoom
 import cc.hhhl.client.model.ChatUserConversation
 import cc.hhhl.client.model.Channel
 import cc.hhhl.client.model.ChannelListKind
+import cc.hhhl.client.model.CustomEmoji
 import cc.hhhl.client.model.InstanceCapabilities
+import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.NotificationFilter
 import cc.hhhl.client.model.NotificationItem
@@ -137,6 +141,7 @@ import cc.hhhl.client.repository.ComposeRepository
 import cc.hhhl.client.repository.DiscoverRepository
 import cc.hhhl.client.repository.DiscoverRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepository
+import cc.hhhl.client.repository.DriveFileRepositoryResult
 import cc.hhhl.client.repository.EmojiRepository
 import cc.hhhl.client.repository.FavoriteNoteRepository
 import cc.hhhl.client.repository.FlashRepository
@@ -938,6 +943,7 @@ private fun appRouteForRootRoute(route: RootRoute): AppRoute {
 private enum class DrivePickerTarget {
     Compose,
     Chat,
+    AiAssistant,
 }
 
 private data class UserListQuickTarget(
@@ -953,6 +959,38 @@ private data class PendingAiAssistantRoomManagementAction(
 private data class PendingAiAssistantObservedAction(
     val actionId: String,
     val started: Boolean = false,
+)
+
+private data class AiAssistantRouteState(
+    val messages: List<AiAssistantMessage>,
+    val draft: String,
+    val contextSummary: String,
+    val aiState: AiUiState,
+    val isProcessing: Boolean,
+    val attachments: List<DriveFile>,
+    val isUploadingAttachment: Boolean,
+    val mediaPicker: MediaPicker?,
+    val customEmojis: List<CustomEmoji>,
+    val recentEmojiCodes: List<String>,
+    val autoApprovalSettings: AiAssistantAutoApprovalSettings,
+)
+
+private data class AiAssistantRouteActions(
+    val onDraftChanged: (String) -> Unit,
+    val onSend: () -> Unit,
+    val onSendPrompt: (String) -> Unit,
+    val onRetry: (String, List<DriveFile>) -> Unit,
+    val onNewConversation: () -> Unit,
+    val onUploadAttachment: (DriveFileUpload) -> Unit,
+    val onUploadAttachmentError: (String) -> Unit,
+    val onOpenDrivePicker: () -> Unit,
+    val onRemoveAttachment: (String) -> Unit,
+    val onOpenAttachmentUrl: (String) -> Unit,
+    val onOpenAutomation: () -> Unit,
+    val onAutoApprovalSettingsChanged: (AiAssistantAutoApprovalSettings) -> Unit,
+    val onApproveAction: (String) -> Unit,
+    val onRejectAction: (String) -> Unit,
+    val onBack: () -> Unit,
 )
 
 private const val CHAT_ROOM_REFRESH_INTERVAL_MS = 15_000L
@@ -973,6 +1011,7 @@ private const val MAX_AUTOMATION_CHAT_SOURCES = 120
 private const val AUTOMATION_ROOM_SCAN_LIMIT = 64
 private const val REALTIME_CHAT_STREAM_ROOM_LIMIT = 256
 private const val REALTIME_CHAT_STREAM_USER_LIMIT = 256
+private const val AI_ASSISTANT_MAX_ATTACHMENTS = 8
 
 private fun Set<String>.takeLastSet(limit: Int): Set<String> {
     if (size <= limit) return this
@@ -986,6 +1025,242 @@ private fun Map<String, String>.takeLastEntries(limit: Int): Map<String, String>
 
 private fun ChatMessage.automationMessageKey(): String {
     return id.ifBlank { createdAt.ifBlank { createdAtLabel } }
+}
+
+private fun aiAssistantAttachmentContext(files: List<DriveFile>): String {
+    if (files.isEmpty()) return ""
+    return buildString {
+        appendLine("附件列表：")
+        files.take(AI_ASSISTANT_MAX_ATTACHMENTS).forEachIndexed { index, file ->
+            val name = file.name.ifBlank { "附件 ${index + 1}" }
+            val type = file.type.ifBlank { "unknown" }
+            appendLine("${index + 1}. $name")
+            appendLine("   id: ${file.id}")
+            appendLine("   type: $type")
+            appendLine("   size: ${file.size} bytes")
+            file.comment?.takeIf { it.isNotBlank() }?.let { appendLine("   comment: ${it.take(240)}") }
+            file.url?.takeIf { it.isNotBlank() }?.let { appendLine("   url: $it") }
+        }
+    }.trim()
+}
+
+private data class AiAssistantSendStart(
+    val promptForAi: String,
+    val attachmentContext: String,
+    val pendingMessageId: String,
+    val messages: List<AiAssistantMessage>,
+    val draft: String,
+    val attachments: List<DriveFile>,
+    val memoryText: String,
+)
+
+private fun prepareAiAssistantSend(
+    prompt: String,
+    attachments: List<DriveFile>,
+    currentAttachments: List<DriveFile>,
+    currentDraft: String,
+    messages: List<AiAssistantMessage>,
+): AiAssistantSendStart {
+    val cleanPrompt = prompt.trim()
+    val cleanAttachments = attachments.distinctBy { it.id }.take(AI_ASSISTANT_MAX_ATTACHMENTS)
+    val promptForAi = cleanPrompt.ifBlank { "请分析这些附件，并结合当前应用上下文给出结论或下一步建议。" }
+    val attachmentContext = aiAssistantAttachmentContext(cleanAttachments)
+    val now = Clock.System.now().toEpochMilliseconds()
+    val userMessage = AiAssistantMessage(
+        id = "assistant-user-$now",
+        role = AiAssistantRole.User,
+        text = cleanPrompt.ifBlank { "请分析附件" },
+        attachments = cleanAttachments,
+    )
+    val pendingMessage = AiAssistantMessage(
+        id = "assistant-pending-$now",
+        role = AiAssistantRole.Assistant,
+        text = "正在结合当前上下文生成回复...",
+        status = AiAssistantMessageStatus.Sending,
+        retryPrompt = promptForAi,
+        retryAttachments = cleanAttachments,
+    )
+    val memoryText = (messages + userMessage)
+        .takeLast(12)
+        .joinToString("\n") { message ->
+            val files = aiAssistantAttachmentContext(message.attachments).takeIf { it.isNotBlank() }
+                ?.let { "\n$it" }
+                .orEmpty()
+            "${message.role.label}: ${message.text}$files"
+        }
+    return AiAssistantSendStart(
+        promptForAi = promptForAi,
+        attachmentContext = attachmentContext,
+        pendingMessageId = pendingMessage.id,
+        messages = messages + userMessage + pendingMessage,
+        draft = if (cleanAttachments == currentAttachments) "" else currentDraft,
+        attachments = if (cleanAttachments == currentAttachments) emptyList() else currentAttachments,
+        memoryText = memoryText,
+    )
+}
+
+private fun completeAiAssistantMessage(
+    messages: List<AiAssistantMessage>,
+    pendingMessageId: String,
+    result: AiRepositoryResult,
+    promptForAi: String,
+): Pair<List<AiAssistantMessage>, List<AiAssistantActionProposal>> {
+    return when (result) {
+        is AiRepositoryResult.Success -> {
+            val structuredReply = aiAssistantStructuredReply(result.text)
+            val visibleReply = structuredReply.visibleText.ifBlank { result.text.trim() }
+            val actions = aiAssistantSuggestedActions(
+                prompt = promptForAi,
+                reply = result.text,
+                idPrefix = pendingMessageId,
+            )
+            messages.map { message ->
+                if (message.id == pendingMessageId) {
+                    message.copy(
+                        text = visibleReply,
+                        status = AiAssistantMessageStatus.Completed,
+                        actions = actions,
+                    )
+                } else {
+                    message
+                }
+            } to actions
+        }
+        AiRepositoryResult.Unauthorized -> {
+            messages.map { message ->
+                if (message.id == pendingMessageId) {
+                    message.copy(
+                        text = "AI API Key 无效或权限不足",
+                        status = AiAssistantMessageStatus.Failed,
+                    )
+                } else {
+                    message
+                }
+            } to emptyList()
+        }
+        is AiRepositoryResult.Error -> {
+            messages.map { message ->
+                if (message.id == pendingMessageId) {
+                    message.copy(
+                        text = result.message,
+                        status = AiAssistantMessageStatus.Failed,
+                    )
+                } else {
+                    message
+                }
+            } to emptyList()
+        }
+    }
+}
+
+private fun aiAssistantUploadToast(result: DriveFileRepositoryResult): String {
+    return when (result) {
+        is DriveFileRepositoryResult.Success -> "已添加附件"
+        DriveFileRepositoryResult.Unauthorized -> "登录已失效，请重新登录"
+        is DriveFileRepositoryResult.ValidationError -> result.message
+        is DriveFileRepositoryResult.Error -> result.message
+    }
+}
+
+private fun appendAiAssistantAttachment(current: List<DriveFile>, file: DriveFile): List<DriveFile> {
+    return (current + file)
+        .distinctBy { it.id }
+        .take(AI_ASSISTANT_MAX_ATTACHMENTS)
+}
+
+private fun startAiAssistantAttachmentUpload(
+    upload: DriveFileUpload,
+    isUploading: Boolean,
+    currentAttachments: List<DriveFile>,
+    tokenProvider: () -> String?,
+    scope: CoroutineScope,
+    onToast: (String) -> Unit,
+    onUploadingChanged: (Boolean) -> Unit,
+    onAttachFile: (DriveFile) -> Unit,
+) {
+    if (isUploading) {
+        onToast("附件正在上传，稍后再选")
+        return
+    }
+    if (currentAttachments.size >= AI_ASSISTANT_MAX_ATTACHMENTS) {
+        onToast("AI 助手最多添加 $AI_ASSISTANT_MAX_ATTACHMENTS 个附件")
+        return
+    }
+    onUploadingChanged(true)
+    onToast("正在上传附件")
+    val repository = DriveFileRepository(tokenProvider = tokenProvider)
+    scope.launch {
+        val result = repository.upload(upload)
+        if (result is DriveFileRepositoryResult.Success) {
+            onAttachFile(result.file)
+        }
+        onToast(aiAssistantUploadToast(result))
+        onUploadingChanged(false)
+    }
+}
+
+private fun startAiAssistantReply(
+    prompt: String,
+    attachments: List<DriveFile>,
+    currentAttachments: List<DriveFile>,
+    currentDraft: String,
+    messages: List<AiAssistantMessage>,
+    pendingPrompt: String?,
+    aiProcessing: Boolean,
+    attachmentUploading: Boolean,
+    aiStateHolder: AiStateHolder,
+    scope: CoroutineScope,
+    contextTextProvider: () -> String,
+    onToast: (String) -> Unit,
+    onMessagesChanged: (List<AiAssistantMessage>) -> Unit,
+    onPendingPromptChanged: (String?) -> Unit,
+    onDraftChanged: (String) -> Unit,
+    onAttachmentsChanged: (List<DriveFile>) -> Unit,
+    onAutoApproveActions: (List<AiAssistantActionProposal>) -> Unit,
+) {
+    val cleanPrompt = prompt.trim()
+    val cleanAttachments = attachments.distinctBy { it.id }.take(AI_ASSISTANT_MAX_ATTACHMENTS)
+    if (cleanPrompt.isBlank() && cleanAttachments.isEmpty()) return
+    if (pendingPrompt != null || aiProcessing) {
+        onToast("AI 正在处理上一条消息")
+        return
+    }
+    if (attachmentUploading) {
+        onToast("附件上传中，稍后再发送")
+        return
+    }
+    val prepared = prepareAiAssistantSend(
+        prompt = prompt,
+        attachments = cleanAttachments,
+        currentAttachments = currentAttachments,
+        currentDraft = currentDraft,
+        messages = messages,
+    )
+    onMessagesChanged(prepared.messages)
+    onPendingPromptChanged(prepared.promptForAi)
+    onDraftChanged(prepared.draft)
+    onAttachmentsChanged(prepared.attachments)
+    scope.launch {
+        val result = aiStateHolder.runBlockingTask(
+            AiTaskKind.AssistantChat,
+            AiTaskInput(
+                prompt = prepared.promptForAi,
+                text = prepared.memoryText,
+                automationEventText = contextTextProvider(),
+                fileIds = cleanAttachments.map { it.id },
+                fileContext = prepared.attachmentContext,
+            ),
+        )
+        val (nextMessages, actions) = completeAiAssistantMessage(
+            messages = prepared.messages,
+            pendingMessageId = prepared.pendingMessageId,
+            result = result,
+            promptForAi = prepared.promptForAi,
+        )
+        onMessagesChanged(nextMessages)
+        if (actions.isNotEmpty()) onAutoApproveActions(actions)
+        onPendingPromptChanged(null)
+    }
 }
 
 private fun ChatMessage.unreadMarker(): String {
@@ -1847,6 +2122,53 @@ private fun NoteDetailRouteContent(
         canDeleteAuthor = noteCallbacks.canDeleteAuthor,
         noteRowDensity = noteCallbacks.noteRowDensity,
         onBack = onBack,
+    )
+}
+
+@Composable
+private fun AiAssistantRouteContent(
+    state: AiAssistantRouteState,
+    actions: AiAssistantRouteActions,
+) {
+    AiAssistantScreen(
+        messages = state.messages,
+        draft = state.draft,
+        contextSummary = state.contextSummary,
+        aiEnabled = state.aiState.hasUsableModel,
+        isProcessing = state.isProcessing,
+        errorMessage = state.aiState.errorMessage,
+        attachments = state.attachments,
+        isUploadingAttachment = state.isUploadingAttachment,
+        isMediaPickerAvailable = state.mediaPicker != null,
+        customEmojis = state.customEmojis,
+        recentEmojiCodes = state.recentEmojiCodes,
+        memoryNotes = state.aiState.settings.assistantMemoryNotes,
+        autoApprovalSettings = state.autoApprovalSettings,
+        onDraftChanged = actions.onDraftChanged,
+        onSend = actions.onSend,
+        onSendPrompt = actions.onSendPrompt,
+        onRetry = actions.onRetry,
+        onNewConversation = actions.onNewConversation,
+        onAddImage = {
+            state.mediaPicker?.pickImages(
+                onPicked = actions.onUploadAttachment,
+                onError = actions.onUploadAttachmentError,
+            )
+        },
+        onAddFile = {
+            state.mediaPicker?.pickFiles(
+                onPicked = actions.onUploadAttachment,
+                onError = actions.onUploadAttachmentError,
+            )
+        },
+        onOpenDrivePicker = actions.onOpenDrivePicker,
+        onRemoveAttachment = actions.onRemoveAttachment,
+        onOpenAttachmentUrl = actions.onOpenAttachmentUrl,
+        onOpenAutomation = actions.onOpenAutomation,
+        onAutoApprovalSettingsChanged = actions.onAutoApprovalSettingsChanged,
+        onApproveAction = actions.onApproveAction,
+        onRejectAction = actions.onRejectAction,
+        onBack = actions.onBack,
     )
 }
 
@@ -2936,6 +3258,8 @@ private fun MainShell(
     var nestedBackHandler by remember { mutableStateOf<(() -> Boolean)?>(null) }
     var aiAssistantMessages by remember(currentAccountId) { mutableStateOf<List<AiAssistantMessage>>(emptyList()) }
     var aiAssistantDraft by remember(currentAccountId) { mutableStateOf("") }
+    var aiAssistantAttachments by remember(currentAccountId) { mutableStateOf<List<DriveFile>>(emptyList()) }
+    var aiAssistantAttachmentUploading by remember(currentAccountId) { mutableStateOf(false) }
     var aiAssistantPendingPrompt by remember(currentAccountId) { mutableStateOf<String?>(null) }
     var pendingAiAssistantComposeDraft by remember(currentAccountId) { mutableStateOf<String?>(null) }
     var viewedUserId by remember { mutableStateOf<String?>(null) }
@@ -3096,10 +3420,14 @@ private fun MainShell(
         )
     }
     val notificationState by notificationStateHolder.state.collectAsState()
-    val aiStateHolder = remember(currentAccountId, aiStore) {
+    val aiStateHolder = remember(currentAccountId, aiStore, sessionToken, currentAccountHost) {
         AiStateHolder(
             store = aiStore,
             accountId = currentAccountId,
+            repository = AiRepository(
+                remoteTokenProvider = { sessionToken },
+                remoteBaseUrlProvider = { "https://${currentAccountHost.orEmpty().ifBlank { "dc.hhhl.cc" }}" },
+            ),
             onQueueChanged = onAiQueueChanged,
             scope = appScope,
         )
@@ -5235,89 +5563,83 @@ private fun MainShell(
 
     var autoApproveAiAssistantActions: (List<AiAssistantActionProposal>) -> Unit = {}
 
-    fun requestAiAssistantReply(prompt: String) {
-        val cleanPrompt = prompt.trim()
-        if (cleanPrompt.isBlank()) return
-        if (aiAssistantPendingPrompt != null || aiState.isProcessing) {
-            noteActionToast = "AI 正在处理上一条消息"
-            return
-        }
-        val now = Clock.System.now().toEpochMilliseconds()
-        val userMessage = AiAssistantMessage(
-            id = "assistant-user-$now",
-            role = AiAssistantRole.User,
-            text = cleanPrompt,
+    fun attachAiAssistantFile(file: DriveFile) {
+        aiAssistantAttachments = appendAiAssistantAttachment(aiAssistantAttachments, file)
+    }
+
+    fun removeAiAssistantAttachment(fileId: String) {
+        aiAssistantAttachments = aiAssistantAttachments.filterNot { it.id == fileId }
+    }
+
+    fun uploadAiAssistantAttachment(upload: DriveFileUpload) {
+        startAiAssistantAttachmentUpload(
+            upload = upload,
+            isUploading = aiAssistantAttachmentUploading,
+            currentAttachments = aiAssistantAttachments,
+            tokenProvider = { sessionToken },
+            scope = appScope,
+            onToast = { noteActionToast = it },
+            onUploadingChanged = { aiAssistantAttachmentUploading = it },
+            onAttachFile = ::attachAiAssistantFile,
         )
-        val pendingMessage = AiAssistantMessage(
-            id = "assistant-pending-$now",
-            role = AiAssistantRole.Assistant,
-            text = "正在结合当前上下文生成回复...",
-            status = AiAssistantMessageStatus.Sending,
-            retryPrompt = cleanPrompt,
+    }
+
+    fun reportAiAssistantAttachmentError(message: String) {
+        noteActionToast = message.trim().takeIf { it.isNotBlank() } ?: "无法读取所选文件"
+    }
+
+    fun requestAiAssistantReply(prompt: String, attachments: List<DriveFile> = aiAssistantAttachments) {
+        startAiAssistantReply(
+            prompt = prompt,
+            attachments = attachments,
+            currentAttachments = aiAssistantAttachments,
+            currentDraft = aiAssistantDraft,
+            messages = aiAssistantMessages,
+            pendingPrompt = aiAssistantPendingPrompt,
+            aiProcessing = aiState.isProcessing,
+            attachmentUploading = aiAssistantAttachmentUploading,
+            aiStateHolder = aiStateHolder,
+            scope = appScope,
+            contextTextProvider = ::aiAssistantContextText,
+            onToast = { noteActionToast = it },
+            onMessagesChanged = { aiAssistantMessages = it },
+            onPendingPromptChanged = { aiAssistantPendingPrompt = it },
+            onDraftChanged = { aiAssistantDraft = it },
+            onAttachmentsChanged = { aiAssistantAttachments = it },
+            onAutoApproveActions = autoApproveAiAssistantActions,
         )
-        val memoryText = (aiAssistantMessages + userMessage)
-            .takeLast(12)
-            .joinToString("\n") { message -> "${message.role.label}: ${message.text}" }
-        aiAssistantMessages = aiAssistantMessages + userMessage + pendingMessage
-        aiAssistantPendingPrompt = cleanPrompt
+    }
+
+    fun updateAiAssistantDraft(value: String) {
+        aiAssistantDraft = value
+    }
+
+    fun sendAiAssistantDraft() {
+        requestAiAssistantReply(aiAssistantDraft)
+    }
+
+    fun sendAiAssistantPrompt(prompt: String) {
+        requestAiAssistantReply(prompt)
+    }
+
+    fun retryAiAssistantPrompt(prompt: String, attachments: List<DriveFile>) {
+        requestAiAssistantReply(prompt, attachments)
+    }
+
+    fun clearAiAssistantConversation() {
+        aiAssistantMessages = emptyList()
         aiAssistantDraft = ""
-        appScope.launch {
-            when (val result = aiStateHolder.runBlockingTask(
-                AiTaskKind.AssistantChat,
-                AiTaskInput(
-                    prompt = cleanPrompt,
-                    text = memoryText,
-                    automationEventText = aiAssistantContextText(),
-                ),
-            )) {
-                is AiRepositoryResult.Success -> {
-                    val structuredReply = aiAssistantStructuredReply(result.text)
-                    val visibleReply = structuredReply.visibleText.ifBlank { result.text.trim() }
-                    val actions = aiAssistantSuggestedActions(
-                        prompt = cleanPrompt,
-                        reply = result.text,
-                        idPrefix = pendingMessage.id,
-                    )
-                    aiAssistantMessages = aiAssistantMessages.map { message ->
-                        if (message.id == pendingMessage.id) {
-                            message.copy(
-                                text = visibleReply,
-                                status = AiAssistantMessageStatus.Completed,
-                                actions = actions,
-                            )
-                        } else {
-                            message
-                        }
-                    }
-                    autoApproveAiAssistantActions(actions)
-                }
-                AiRepositoryResult.Unauthorized -> {
-                    aiAssistantMessages = aiAssistantMessages.map { message ->
-                        if (message.id == pendingMessage.id) {
-                            message.copy(
-                                text = "AI API Key 无效或权限不足",
-                                status = AiAssistantMessageStatus.Failed,
-                            )
-                        } else {
-                            message
-                        }
-                    }
-                }
-                is AiRepositoryResult.Error -> {
-                    aiAssistantMessages = aiAssistantMessages.map { message ->
-                        if (message.id == pendingMessage.id) {
-                            message.copy(
-                                text = result.message,
-                                status = AiAssistantMessageStatus.Failed,
-                            )
-                        } else {
-                            message
-                        }
-                    }
-                }
-            }
-            aiAssistantPendingPrompt = null
-        }
+        aiAssistantAttachments = emptyList()
+        aiAssistantPendingPrompt = null
+    }
+
+    fun openAiAssistantDrivePicker() {
+        drivePickerTarget = DrivePickerTarget.AiAssistant
+    }
+
+    fun openAiAssistantAutomation() {
+        rootRoute = RootRoute.Profile
+        route = AppRoute.Automation
     }
 
     fun requestAiAssistantVoiceInput() {
@@ -7398,6 +7720,36 @@ private fun MainShell(
         mutedWords = settingsState.remotePreferences?.filters?.mutedWords.orEmpty(),
         hardMutedWords = settingsState.remotePreferences?.filters?.hardMutedWords.orEmpty(),
     )
+    val aiAssistantRouteState = AiAssistantRouteState(
+        messages = aiAssistantMessages,
+        draft = aiAssistantDraft,
+        contextSummary = aiAssistantContextSummary(),
+        aiState = aiState,
+        isProcessing = aiAssistantPendingPrompt != null,
+        attachments = aiAssistantAttachments,
+        isUploadingAttachment = aiAssistantAttachmentUploading,
+        mediaPicker = mediaPicker,
+        customEmojis = noteActionState.customEmojis,
+        recentEmojiCodes = noteActionState.recentReactions,
+        autoApprovalSettings = aiAssistantAutoApprovalSettings,
+    )
+    val aiAssistantRouteActions = AiAssistantRouteActions(
+        onDraftChanged = ::updateAiAssistantDraft,
+        onSend = ::sendAiAssistantDraft,
+        onSendPrompt = ::sendAiAssistantPrompt,
+        onRetry = ::retryAiAssistantPrompt,
+        onNewConversation = ::clearAiAssistantConversation,
+        onUploadAttachment = ::uploadAiAssistantAttachment,
+        onUploadAttachmentError = ::reportAiAssistantAttachmentError,
+        onOpenDrivePicker = ::openAiAssistantDrivePicker,
+        onRemoveAttachment = ::removeAiAssistantAttachment,
+        onOpenAttachmentUrl = openUrl,
+        onOpenAutomation = ::openAiAssistantAutomation,
+        onAutoApprovalSettingsChanged = ::updateAiAssistantAutoApprovalSettings,
+        onApproveAction = ::approveAiAssistantAction,
+        onRejectAction = ::rejectAiAssistantAction,
+        onBack = ::returnFromAiAssistant,
+    )
 
     CompositionLocalProvider(
         LocalCustomEmojiUrls provides noteActionState.customEmojiUrls,
@@ -7535,32 +7887,9 @@ private fun MainShell(
                     },
                     onBackHandlerChanged = { handler -> nestedBackHandler = handler },
                 )
-                AppRoute.AiAssistant -> AiAssistantScreen(
-                    messages = aiAssistantMessages,
-                    draft = aiAssistantDraft,
-                    contextSummary = aiAssistantContextSummary(),
-                    aiEnabled = aiState.hasUsableModel,
-                    isProcessing = aiAssistantPendingPrompt != null,
-                    errorMessage = aiState.errorMessage,
-                    memoryNotes = aiState.settings.assistantMemoryNotes,
-                    autoApprovalSettings = aiAssistantAutoApprovalSettings,
-                    onDraftChanged = { aiAssistantDraft = it },
-                    onSend = { requestAiAssistantReply(aiAssistantDraft) },
-                    onSendPrompt = { prompt -> requestAiAssistantReply(prompt) },
-                    onRetry = { prompt -> requestAiAssistantReply(prompt) },
-                    onNewConversation = {
-                        aiAssistantMessages = emptyList()
-                        aiAssistantDraft = ""
-                        aiAssistantPendingPrompt = null
-                    },
-                    onOpenAutomation = {
-                        rootRoute = RootRoute.Profile
-                        route = AppRoute.Automation
-                    },
-                    onAutoApprovalSettingsChanged = ::updateAiAssistantAutoApprovalSettings,
-                    onApproveAction = ::approveAiAssistantAction,
-                    onRejectAction = ::rejectAiAssistantAction,
-                    onBack = ::returnFromAiAssistant,
+                AppRoute.AiAssistant -> AiAssistantRouteContent(
+                    state = aiAssistantRouteState,
+                    actions = aiAssistantRouteActions,
                 )
                 AppRoute.Drive -> DriveRouteContent(
                     state = driveFilesState,
@@ -8171,6 +8500,7 @@ private fun MainShell(
                         when (target) {
                             DrivePickerTarget.Compose -> composeStateHolder.attachDriveFile(file)
                             DrivePickerTarget.Chat -> chatStateHolder.attachDriveFile(file)
+                            DrivePickerTarget.AiAssistant -> attachAiAssistantFile(file)
                         }
                         drivePickerTarget = null
                     },

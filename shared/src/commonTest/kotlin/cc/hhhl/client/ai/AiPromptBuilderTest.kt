@@ -229,7 +229,7 @@ class AiPromptBuilderTest {
     }
 
     @Test
-    fun assistantChatPromptStaysLocalAndConfirmationGated() {
+    fun assistantChatPromptSupportsRemoteAssistantChatAndConfirmationGates() {
         val prompt = AiPromptBuilder.build(
             settings = AiSettings(enabled = true, apiKey = "key"),
             kind = AiTaskKind.AssistantChat,
@@ -240,8 +240,11 @@ class AiPromptBuilderTest {
             ),
         )
 
-        assertTrue(prompt.user.contains("本地 AI 助手"))
+        assertTrue(prompt.user.contains("AI 助手"))
         assertTrue(prompt.user.contains("不是远程 Misskey 机器人账号"))
+        assertTrue(prompt.user.contains("普通大模型助手一样回答用户问题"))
+        assertTrue(prompt.user.contains("Markdown 代码块"))
+        assertTrue(prompt.user.contains("searchQuery"))
         assertTrue(prompt.user.contains("不能声称你自己已经执行"))
         assertTrue(prompt.user.contains("高风险自动批准已开启"))
         assertTrue(prompt.user.contains("需确认"))

@@ -22,6 +22,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import cc.hhhl.client.ai.AiStateHolder
+import cc.hhhl.client.ai.AiRepository
 import cc.hhhl.client.ai.AiRepositoryResult
 import cc.hhhl.client.ai.AiTaskInput
 import cc.hhhl.client.ai.AiTaskKind
@@ -393,7 +394,7 @@ class BackgroundNotificationSyncer(
                     chatRepository = chatRepository,
                 )
                 automationHolder.restore()
-                val aiStateHolder = backgroundAiStateHolder(session.id)
+                val aiStateHolder = backgroundAiStateHolder(session.id, session.token, session.host)
                 val automationRules = automationHolder.state.value.rules
                 val timelinePlan = automationRules.backgroundTimelineAutomationPlan()
                 val timelineRepository = TimelineRepository(tokenProvider = { token })
@@ -1019,7 +1020,7 @@ class BackgroundNotificationSyncer(
         token: String,
         chatRepository: ChatRepository,
     ): AutomationStateHolder {
-        val aiStateHolder = backgroundAiStateHolder(accountId)
+        val aiStateHolder = backgroundAiStateHolder(accountId, token)
         return AutomationStateHolder(
             store = AndroidAutomationStore(context),
             accountId = accountId,
@@ -1060,10 +1061,18 @@ class BackgroundNotificationSyncer(
         )
     }
 
-    private fun backgroundAiStateHolder(accountId: String): AiStateHolder {
+    private fun backgroundAiStateHolder(
+        accountId: String,
+        token: String,
+        host: String = "dc.hhhl.cc",
+    ): AiStateHolder {
         return AiStateHolder(
             store = AndroidAiStore(context),
             accountId = accountId,
+            repository = AiRepository(
+                remoteTokenProvider = { token },
+                remoteBaseUrlProvider = { "https://${host.ifBlank { "dc.hhhl.cc" }}" },
+            ),
             onQueueChanged = { AiBackgroundScheduler.syncNow(context) },
             scope = CoroutineScope(Dispatchers.Default),
         ).also { it.restore() }
@@ -1115,28 +1124,26 @@ internal fun Context.cacheSpecialCareNotifications(
     val cleanAccountId = accountId.trim()
     if (cleanAccountId.isBlank() || notifications.isEmpty()) return
     val cache = AndroidNotificationCache(this)
-    val snapshot = cache.read(cleanAccountId)
-    val previousNotificationsById = snapshot.specialCareNotifications.associateBy { it.id }
-    val nextSpecialCareNotifications = (
-        notifications.map { notification ->
-            notification.copy(
-                isSpecialCare = true,
-                isRead = previousNotificationsById[notification.id]?.isRead == true,
+    cache.update(cleanAccountId) { snapshot ->
+        val previousNotificationsById = snapshot.specialCareNotifications.associateBy { it.id }
+        val nextSpecialCareNotifications = (
+            notifications.map { notification ->
+                notification.copy(
+                    isSpecialCare = true,
+                    isRead = previousNotificationsById[notification.id]?.isRead == true,
+                )
+            } +
+                snapshot.specialCareNotifications
             )
-        } +
-            snapshot.specialCareNotifications
-        )
-        .distinctBy { it.id }
-        .sortedByDescending { it.createdAtEpochMillis }
-        .take(MAX_CACHED_SPECIAL_CARE_NOTIFICATIONS)
-    cache.write(
-        cleanAccountId,
+            .distinctBy { it.id }
+            .sortedByDescending { it.createdAtEpochMillis }
+            .take(MAX_CACHED_SPECIAL_CARE_NOTIFICATIONS)
         NotificationCacheSnapshot(
             notifications = snapshot.notifications,
             chatAttentionNotifications = snapshot.chatAttentionNotifications,
             specialCareNotifications = nextSpecialCareNotifications,
-        ),
-    )
+        )
+    }
 }
 
 internal fun Context.cacheRemoteNotifications(
@@ -1146,26 +1153,24 @@ internal fun Context.cacheRemoteNotifications(
     val cleanAccountId = accountId.trim()
     if (cleanAccountId.isBlank() || notifications.isEmpty()) return
     val cache = AndroidNotificationCache(this)
-    val snapshot = cache.read(cleanAccountId)
-    val previousNotificationsById = snapshot.notifications.associateBy { it.id }
-    val nextNotifications = (
-        notifications.map { notification ->
-            notification.copy(
-                isRead = previousNotificationsById[notification.id]?.isRead == true,
+    cache.update(cleanAccountId) { snapshot ->
+        val previousNotificationsById = snapshot.notifications.associateBy { it.id }
+        val nextNotifications = (
+            notifications.map { notification ->
+                notification.copy(
+                    isRead = previousNotificationsById[notification.id]?.isRead == true,
+                )
+            } + snapshot.notifications
             )
-        } + snapshot.notifications
-        )
-        .distinctBy { it.id }
-        .sortedByDescending { it.createdAtEpochMillis }
-        .take(MAX_CACHED_REMOTE_NOTIFICATIONS)
-    cache.write(
-        cleanAccountId,
+            .distinctBy { it.id }
+            .sortedByDescending { it.createdAtEpochMillis }
+            .take(MAX_CACHED_REMOTE_NOTIFICATIONS)
         NotificationCacheSnapshot(
             notifications = nextNotifications,
             chatAttentionNotifications = snapshot.chatAttentionNotifications,
             specialCareNotifications = snapshot.specialCareNotifications,
-        ),
-    )
+        )
+    }
 }
 
 internal fun Context.cacheBackgroundNotificationEvents(
@@ -1174,8 +1179,6 @@ internal fun Context.cacheBackgroundNotificationEvents(
 ) {
     val cleanAccountId = accountId.trim()
     if (cleanAccountId.isBlank() || events.isEmpty()) return
-    val cache = AndroidNotificationCache(this)
-    val snapshot = cache.read(cleanAccountId)
     val chatAttentionNotifications = events
         .filter { !it.gatedBySpecialCareSetting }
         .mapNotNull { it.cacheNotification }
@@ -1184,8 +1187,8 @@ internal fun Context.cacheBackgroundNotificationEvents(
         .mapNotNull { it.cacheNotification }
     if (chatAttentionNotifications.isEmpty() && specialCareNotifications.isEmpty()) return
 
-    cache.write(
-        cleanAccountId,
+    val cache = AndroidNotificationCache(this)
+    cache.update(cleanAccountId) { snapshot ->
         NotificationCacheSnapshot(
             notifications = snapshot.notifications,
             chatAttentionNotifications = snapshot.chatAttentionNotifications.mergeCachedBackgroundNotifications(
@@ -1194,8 +1197,8 @@ internal fun Context.cacheBackgroundNotificationEvents(
             specialCareNotifications = snapshot.specialCareNotifications.mergeCachedBackgroundNotifications(
                 specialCareNotifications,
             ),
-        ),
-    )
+        )
+    }
 }
 
 private fun List<NotificationItem>.mergeCachedBackgroundNotifications(

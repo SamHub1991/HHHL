@@ -150,6 +150,7 @@ import cc.hhhl.client.ui.component.hhhlNeutralControlContainerColor
 import cc.hhhl.client.ui.component.hhhlReadableOnControlColor
 import cc.hhhl.client.ui.component.mediaTypeDisplayName
 import cc.hhhl.client.presentation.richTextPlainPreviewText
+import cc.hhhl.client.presentation.truncateRichTextPreviewText
 import kotlinx.datetime.Clock
 
 private data class ChatOlderLoadAnchor(
@@ -218,6 +219,8 @@ private const val CHAT_FILTER_USER_CANDIDATE_MAX_USERS = 500
 private const val CHAT_USER_SEARCH_DEBOUNCE_MS = 320L
 private const val CHAT_ROOM_GROUP_MAX_LENGTH = 24
 private const val CHAT_ROOM_GROUP_UNGROUPED_TITLE = "未分组"
+private const val CHAT_ROOM_LIST_DESCRIPTION_MAX_CHARS = 96
+private val CHAT_ROOM_LIST_GROUP_BADGE_MAX_WIDTH = 112.dp
 
 private val ChatRoomGroupWhitespaceRegex = Regex("\\s+")
 
@@ -1091,14 +1094,17 @@ private fun ChatRoomRow(
                     ChatRoomMuteGlyph(isMuted = room.isMuted)
                 }
                 if (room.description.isNotBlank()) {
-                    InlineRichText(
-                        text = room.description,
+                    Text(
+                        text = richTextPlainPreviewText(room.description)
+                            .truncateRichTextPreviewText(CHAT_ROOM_LIST_DESCRIPTION_MAX_CHARS),
                         color = if (hasUnread) {
                             colors.textPrimary.copy(alpha = 0.74f)
                         } else {
                             colors.textSecondary
                         },
                         style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Row(
@@ -1503,6 +1509,7 @@ private fun ChatRoomGroupBadge(groupName: String) {
     val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
+            .widthIn(max = CHAT_ROOM_LIST_GROUP_BADGE_MAX_WIDTH)
             .clip(RoundedCornerShape(999.dp))
             .background(colors.chipBackground.copy(alpha = 0.72f))
             .border(1.dp, colors.border.copy(alpha = 0.24f), RoundedCornerShape(999.dp))

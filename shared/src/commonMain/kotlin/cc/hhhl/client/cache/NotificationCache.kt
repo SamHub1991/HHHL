@@ -19,6 +19,13 @@ interface NotificationCache {
 
     fun write(accountId: String, snapshot: NotificationCacheSnapshot)
 
+    fun update(accountId: String, transform: (NotificationCacheSnapshot) -> NotificationCacheSnapshot): NotificationCacheSnapshot {
+        val cleanAccountId = accountId.trim()
+        val updated = transform(read(cleanAccountId))
+        write(cleanAccountId, updated)
+        return updated
+    }
+
     fun clearAccount(accountId: String)
 }
 

@@ -23,9 +23,13 @@ class AndroidAuthTokenStore(context: Context) : AuthTokenStore {
     }
 
     override suspend fun readToken(): String? {
-        return readEncryptedString(KEY_TOKEN) {
-            clearLegacyToken()
-        }
+        val payload = readStoredString(KEY_TOKEN) ?: return null
+        decryptStoredString(payload)?.let { return it }
+        if (payload.looksEncryptedPayload()) return null
+
+        val legacyToken = payload.trim().takeIf { it.isNotEmpty() } ?: return null
+        writeEncryptedString(KEY_TOKEN, legacyToken)
+        return legacyToken
     }
 
     override suspend fun saveToken(token: String) {
@@ -37,15 +41,15 @@ class AndroidAuthTokenStore(context: Context) : AuthTokenStore {
     }
 
     override suspend fun readAccountSessions(): List<AccountSession> {
-        val sessionsPayload = readEncryptedString(KEY_ACCOUNTS) {
-            clearAllAccountPreferences()
-        }
+        val sessionsPayload = readStoredString(KEY_ACCOUNTS)
         if (!sessionsPayload.isNullOrBlank()) {
-            return runCatching {
-                decodeAccountSessions(sessionsPayload)
-            }.getOrElse { _ ->
-                clearAllAccountPreferences()
-                emptyList()
+            val decodedPayload = decryptStoredString(sessionsPayload)
+            when {
+                decodedPayload != null -> decodeStoredAccountSessions(decodedPayload)?.let { return it }
+                !sessionsPayload.looksEncryptedPayload() -> decodeStoredAccountSessions(sessionsPayload)?.let { sessions ->
+                    saveAccountSessions(sessions)
+                    return sessions
+                }
             }
         }
 
@@ -61,9 +65,11 @@ class AndroidAuthTokenStore(context: Context) : AuthTokenStore {
             ),
         )
         saveAccountSessions(migrated)
-        preferences.edit()
-            .remove(KEY_TOKEN)
-            .apply()
+        synchronized(STORE_LOCK) {
+            preferences.edit()
+                .remove(KEY_TOKEN)
+                .commit()
+        }
         return migrated
     }
 
@@ -81,28 +87,33 @@ class AndroidAuthTokenStore(context: Context) : AuthTokenStore {
     }
 
     private fun clearLegacyToken() {
-        preferences.edit()
-            .remove(KEY_TOKEN)
-            .apply()
+        synchronized(STORE_LOCK) {
+            preferences.edit()
+                .remove(KEY_TOKEN)
+                .commit()
+        }
     }
 
     private fun clearAllAccountPreferences() {
-        preferences.edit()
-            .remove(KEY_ACCOUNTS)
-            .remove(KEY_TOKEN)
-            .apply()
+        synchronized(STORE_LOCK) {
+            preferences.edit()
+                .remove(KEY_ACCOUNTS)
+                .remove(KEY_TOKEN)
+                .commit()
+        }
     }
 
-    private fun readEncryptedString(
-        key: String,
-        onInvalidPayload: () -> Unit,
-    ): String? {
-        val payload = preferences.getString(key, null) ?: return null
+    private fun readStoredString(key: String): String? = synchronized(STORE_LOCK) {
+        preferences.getString(key, null)
+    }
+
+    private fun decodeStoredAccountSessions(payload: String): List<AccountSession>? {
+        return runCatching { decodeAccountSessions(payload) }.getOrNull()
+    }
+
+    private fun decryptStoredString(payload: String): String? {
         val parts = payload.split(DELIMITER, limit = 2)
-        if (parts.size != 2) {
-            onInvalidPayload()
-            return null
-        }
+        if (parts.size != 2) return null
 
         return runCatching {
             val iv = Base64.decode(parts[0], Base64.NO_WRAP)
@@ -110,10 +121,7 @@ class AndroidAuthTokenStore(context: Context) : AuthTokenStore {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateSecretKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
             cipher.doFinal(encrypted).toString(Charsets.UTF_8)
-        }.getOrElse {
-            onInvalidPayload()
-            null
-        }
+        }.getOrNull()
     }
 
     private fun writeEncryptedString(key: String, value: String) {
@@ -124,9 +132,21 @@ class AndroidAuthTokenStore(context: Context) : AuthTokenStore {
             DELIMITER +
             Base64.encodeToString(encrypted, Base64.NO_WRAP)
 
-        preferences.edit()
-            .putString(key, payload)
-            .apply()
+        synchronized(STORE_LOCK) {
+            preferences.edit()
+                .putString(key, payload)
+                .commit()
+        }
+    }
+
+    private fun String.looksEncryptedPayload(): Boolean {
+        val parts = split(DELIMITER, limit = 2)
+        if (parts.size != 2) return false
+        return runCatching {
+            val iv = Base64.decode(parts[0], Base64.NO_WRAP)
+            val encrypted = Base64.decode(parts[1], Base64.NO_WRAP)
+            iv.isNotEmpty() && encrypted.isNotEmpty()
+        }.getOrDefault(false)
     }
 
     private fun getOrCreateSecretKey(): SecretKey {
@@ -159,6 +179,7 @@ class AndroidAuthTokenStore(context: Context) : AuthTokenStore {
         const val KEYSTORE_PROVIDER = "AndroidKeyStore"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val GCM_TAG_BITS = 128
+        val STORE_LOCK = Any()
         const val DELIMITER = ":"
     }
 }

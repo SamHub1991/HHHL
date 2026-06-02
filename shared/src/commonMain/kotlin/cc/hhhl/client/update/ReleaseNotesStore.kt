@@ -39,6 +39,20 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.7.0",
+            title = "HHHL 0.7.0 更新内容",
+            summary = "这版继续把 AI 助手、自动化和后台消息链路做成更完整的工作流，并修复多处聊天体验问题。",
+            highlights = listOf(
+                "AI 助手支持图片、文件、表情和附件上下文，可直接把附件一起交给远程模型处理。",
+                "AI 配置优先接入远程 gpt-5.5 流式模型，同时保留本地供应商配置作为高级模式。",
+                "自动化 Webhook 增强消息原文、变量和附件传递，方便把聊天里的图片、文件和提取结果送到外部服务。",
+                "优化后台消息同步和自动化补扫逻辑，降低不打开聊天室时漏触发特别关心、@、回复、引用和规则动作的概率。",
+                "修复聊天室未读数在刷新后可能重新变未读、偶尔显示 99+ 的问题。",
+                "聊天室列表的长简介和长分组名会自动压缩省略，不再把列表项撑得过高。",
+                "自动化调试信息补充 AI 真实判断回复，便于排查规则为什么命中或没有执行。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.6.1",
             title = "HHHL 0.6.1 更新内容",
             summary = "这版修复聊天搜索选择和 AI 结果卡片恢复问题，减少重新打开界面后的误显示。",

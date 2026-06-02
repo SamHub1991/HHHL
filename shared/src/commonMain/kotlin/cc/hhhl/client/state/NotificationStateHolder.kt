@@ -780,16 +780,48 @@ class NotificationStateHolder(
 
     private fun persistNotificationCache() {
         val cleanAccountId = accountId?.takeIf { it.isNotBlank() } ?: return
+        val currentSnapshot = NotificationCacheSnapshot(
+            notifications = remoteNotifications.take(MAX_LOCAL_CACHED_NOTIFICATIONS),
+            chatAttentionNotifications = chatAttentionNotifications.take(MAX_LOCAL_CACHED_NOTIFICATIONS),
+            specialCareNotifications = specialCareNotifications.take(MAX_LOCAL_CACHED_NOTIFICATIONS),
+        )
         runCatching {
-            notificationCache.write(
-                cleanAccountId,
-                NotificationCacheSnapshot(
-                    notifications = remoteNotifications.take(MAX_LOCAL_CACHED_NOTIFICATIONS),
-                    chatAttentionNotifications = chatAttentionNotifications.take(MAX_LOCAL_CACHED_NOTIFICATIONS),
-                    specialCareNotifications = specialCareNotifications.take(MAX_LOCAL_CACHED_NOTIFICATIONS),
-                ),
-            )
+            notificationCache.update(cleanAccountId) { storedSnapshot ->
+                currentSnapshot.mergeWithStoredCache(storedSnapshot)
+            }
         }
+    }
+
+    private fun NotificationCacheSnapshot.mergeWithStoredCache(
+        storedSnapshot: NotificationCacheSnapshot,
+    ): NotificationCacheSnapshot {
+        return NotificationCacheSnapshot(
+            notifications = notifications.mergeStoredCacheNotifications(
+                storedSnapshot.notifications,
+                MAX_LOCAL_CACHED_NOTIFICATIONS,
+            ),
+            chatAttentionNotifications = chatAttentionNotifications.mergeStoredCacheNotifications(
+                storedSnapshot.chatAttentionNotifications,
+                MAX_LOCAL_CACHED_NOTIFICATIONS,
+            ),
+            specialCareNotifications = specialCareNotifications.mergeStoredCacheNotifications(
+                storedSnapshot.specialCareNotifications,
+                MAX_LOCAL_CACHED_NOTIFICATIONS,
+            ),
+        )
+    }
+
+    private fun List<NotificationItem>.mergeStoredCacheNotifications(
+        storedNotifications: List<NotificationItem>,
+        limit: Int,
+    ): List<NotificationItem> {
+        val storedById = storedNotifications.associateBy { it.id }
+        return (map { notification ->
+            notification.copy(isRead = notification.isRead || storedById[notification.id]?.isRead == true)
+        } + storedNotifications)
+            .distinctBy { it.id }
+            .sortedByDescending { it.createdAtEpochMillis }
+            .take(limit)
     }
 
     private fun notificationsForFilter(filter: NotificationFilter): List<NotificationItem> {

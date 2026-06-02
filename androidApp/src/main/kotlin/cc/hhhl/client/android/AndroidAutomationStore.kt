@@ -12,20 +12,29 @@ class AndroidAutomationStore(context: Context) : AutomationStore {
         Context.MODE_PRIVATE,
     )
 
-    override fun read(accountId: String): AutomationSnapshot {
-        return AutomationStoreCodec.decode(preferences.getString(keyFor(accountId), null))
+    override fun read(accountId: String): AutomationSnapshot = synchronized(CLAIM_LOCK) {
+        readLocked(accountId)
     }
 
-    override fun write(accountId: String, snapshot: AutomationSnapshot) {
-        preferences.edit()
-            .putString(keyFor(accountId), AutomationStoreCodec.encode(snapshot))
-            .apply()
+    override fun write(accountId: String, snapshot: AutomationSnapshot) = synchronized(CLAIM_LOCK) {
+        writeLocked(accountId, snapshot)
     }
 
     override fun clearAccount(accountId: String) {
-        preferences.edit()
-            .remove(keyFor(accountId))
-            .apply()
+        synchronized(CLAIM_LOCK) {
+            preferences.edit()
+                .remove(keyFor(accountId))
+                .commit()
+        }
+    }
+
+    override fun update(
+        accountId: String,
+        transform: (AutomationSnapshot) -> AutomationSnapshot,
+    ): AutomationSnapshot = synchronized(CLAIM_LOCK) {
+        val updated = transform(readLocked(accountId))
+        writeLocked(accountId, updated)
+        updated
     }
 
     override fun claimExecutedEvent(accountId: String, record: AutomationExecutedEvent): Boolean {
@@ -48,6 +57,16 @@ class AndroidAutomationStore(context: Context) : AutomationStore {
                 .putString(key, AutomationStoreCodec.encode(updated))
                 .commit()
         }
+    }
+
+    private fun readLocked(accountId: String): AutomationSnapshot {
+        return AutomationStoreCodec.decode(preferences.getString(keyFor(accountId), null))
+    }
+
+    private fun writeLocked(accountId: String, snapshot: AutomationSnapshot) {
+        preferences.edit()
+            .putString(keyFor(accountId), AutomationStoreCodec.encode(snapshot))
+            .commit()
     }
 
     private fun keyFor(accountId: String): String {

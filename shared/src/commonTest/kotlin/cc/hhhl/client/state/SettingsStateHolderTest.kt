@@ -165,7 +165,7 @@ class SettingsStateHolderTest {
         ).items.first { it.key == SettingsItemKey.AiQueue }
 
         assertEquals(
-            "开启 · OpenAI 兼容 · gpt-5.5 · 今日 3/120 · 剩余 117 · 待处理 1 · 已完成 1 · 失败 1 · 最近 通知优先级",
+            "开启 · 远端优先 · gpt-5.5 · 今日 3/120 · 剩余 117 · 待处理 1 · 已完成 1 · 失败 1 · 最近 通知优先级",
             aiEntry.value,
         )
         assertEquals("今日 3/120 · 剩余 117 · 待处理 1 · 已完成 1 · 失败 1 · 最近 通知优先级", queueItem.value)

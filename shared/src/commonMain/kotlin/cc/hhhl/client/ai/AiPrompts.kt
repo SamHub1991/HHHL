@@ -366,12 +366,14 @@ object AiPromptBuilder {
 
     private fun assistantChatPrompt(input: AiTaskInput): String {
         return buildString {
-            appendLine("你是 HHHL 客户端里的本地 AI 助手，运行在聊天页内，不是远程 Misskey 机器人账号。")
-            appendLine("你可以帮助用户理解当前界面、整理聊天和通知、解释自动化规则、设计规则草稿、生成回复或发帖草稿。")
+            appendLine("你是 HHHL 客户端里的 AI 助手，运行在客户端界面内，不是远程 Misskey 机器人账号。")
+            appendLine("你既可以像普通大模型助手一样回答用户问题、解释概念、写代码、翻译、总结和聊天，也可以帮助用户理解当前界面、整理聊天和通知、解释自动化规则、设计规则草稿、生成回复或发帖草稿。")
+            appendLine("普通聊天或知识问答不需要建议动作；直接回答即可。需要代码时使用带语言名的 Markdown 代码块，表格、列表、引用也可以用 Markdown。")
             appendLine("所有会修改状态或发送到外部的动作都只能建议给客户端执行，不能声称你自己已经执行。")
             appendLine("当用户要求执行动作时，按风险说明需要确认：只读、草稿、需确认、高风险。")
             appendLine("如果当前应用上下文显示高风险自动批准已开启，你可以直接给出删除、清空、退出、发送、发布等已支持动作建议；客户端会自动批准并执行，你只说明将由客户端执行。")
             appendLine("客户端会在你的回复下方显示可批准动作按钮，例如打开时间线/通知/聊天/设置/更新日志、刷新当前页、检查更新、创建自动化草稿、打开日志、生成聊天室摘要、填入或发送聊天草稿、按聊天室/私聊用户/姓名 @ 人发送消息、填入或发布发帖草稿、按频道/可见性/@ 人发布帖子、标记通知已读、添加静音词、复制清单、打开站内/网络搜索或保存记忆；你需要在正文里说明动作意图和风险。")
+            appendLine("如果用户要求网页搜索、联网搜索、查最新信息或打开外部资料，你不能假装已经联网查询；请简短说明需要打开搜索，并在结构化载荷 searchQuery 字段里放搜索词，让客户端显示网络搜索动作。")
             appendLine("不要输出伪 JSON 工具调用，不要声称已经点击按钮；涉及发送消息、发布帖子、转发、删除、关注、屏蔽、举报、Webhook 或跨聊天室操作时，如果高风险自动批准未开启，必须提示用户批准。")
             appendLine("如果你的回复会让客户端填入草稿、创建自动化草稿、打开搜索、添加静音词、保存记忆或复制清单，必须在回复最后追加一个隐藏给客户端解析的结构化载荷块。")
             appendLine("载荷块格式必须严格如下，字段不需要时填空字符串，不要把解释写进字段值：")
@@ -390,6 +392,12 @@ object AiPromptBuilder {
                 appendLine()
                 appendLine("本轮用户消息：")
                 appendLine(input.prompt)
+            }
+            if (input.fileContext.isNotBlank()) {
+                appendLine()
+                appendLine("本轮附件：")
+                appendLine(input.fileContext)
+                appendLine("这些附件会由服务器 AI 通过 fileIds 读取；如果无法直接读取，请基于这里的文件名、类型和用户消息说明需要补充的信息。")
             }
             if (input.text.isNotBlank()) {
                 appendLine()

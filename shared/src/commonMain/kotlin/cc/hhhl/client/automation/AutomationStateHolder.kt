@@ -693,41 +693,39 @@ class AutomationStateHolder(
         mergeDebugRecords: Boolean = true,
     ) {
         val current = state.value
-        val storedSnapshot = runCatching { store.read(cleanAccountId()) }.getOrDefault(AutomationSnapshot())
-        val mergedLogs = if (mergeLogs) {
-            mergeAutomationLogs(
-                current = storedSnapshot.logs,
-                updates = current.logs,
-            )
-        } else {
-            current.logs.take(AutomationStoreCodec.MAX_LOGS)
-        }
-        val mergedDebugRecords = if (mergeDebugRecords) {
-            mergeAutomationDebugRecords(
-                current = storedSnapshot.debugRecords,
-                updates = current.debugRecords,
-            )
-        } else {
-            current.debugRecords.take(AutomationStoreCodec.MAX_DEBUG_RECORDS)
-        }
-        val mergedExecutedEvents =
-            mergeStoredAutomationExecutedEvents(
-                current = storedSnapshot.executedEvents,
-                updates = executedEvents,
-            )
-        executedEvents = mergedExecutedEvents
-        executedEventKeys = mergedExecutedEvents.mapTo(HashSet()) { it.key }
-        runCatching {
-            store.write(
-                cleanAccountId(),
+        val account = cleanAccountId()
+        val updatedSnapshot = runCatching {
+            store.update(account) { storedSnapshot ->
+                val mergedLogs = if (mergeLogs) {
+                    mergeAutomationLogs(
+                        current = storedSnapshot.logs,
+                        updates = current.logs,
+                    )
+                } else {
+                    current.logs.take(AutomationStoreCodec.MAX_LOGS)
+                }
+                val mergedDebugRecords = if (mergeDebugRecords) {
+                    mergeAutomationDebugRecords(
+                        current = storedSnapshot.debugRecords,
+                        updates = current.debugRecords,
+                    )
+                } else {
+                    current.debugRecords.take(AutomationStoreCodec.MAX_DEBUG_RECORDS)
+                }
+                val mergedExecutedEvents = mergeStoredAutomationExecutedEvents(
+                    current = storedSnapshot.executedEvents,
+                    updates = executedEvents,
+                )
                 AutomationSnapshot(
                     rules = current.rules,
                     logs = mergedLogs,
                     debugRecords = mergedDebugRecords,
                     executedEvents = mergedExecutedEvents,
-                ),
-            )
-        }
+                )
+            }
+        }.getOrNull() ?: return
+        executedEvents = updatedSnapshot.executedEvents.dedupeAutomationExecutedEvents()
+        executedEventKeys = executedEvents.mapTo(HashSet()) { it.key }
     }
 
     private suspend fun AutomationRule.evaluateMatch(event: AutomationEvent): AutomationRuleMatchEvaluation {

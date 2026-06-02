@@ -11,7 +11,10 @@ import kotlinx.serialization.Serializable
 @Immutable
 @Serializable
 data class AiSettings(
-    val enabled: Boolean = false,
+    val enabled: Boolean = true,
+    val serviceMode: AiServiceMode = AiServiceMode.RemoteFirst,
+    val remoteBaseUrl: String = DEFAULT_SERVER_AI_BASE_URL,
+    val remotePreferredModel: String = DEFAULT_SERVER_AI_MODEL,
     val provider: AiProviderPreset = AiProviderPreset.OpenAiCompatible,
     val baseUrl: String = AiProviderPreset.OpenAiCompatible.defaultBaseUrl,
     val apiKey: String = "",
@@ -42,17 +45,40 @@ data class AiSettings(
     val floatingAssistantEnabled: Boolean = true,
     val automationRuleDraftModel: AiAutomationModelConfig = AiAutomationModelConfig(),
 ) {
+    val cleanRemoteBaseUrl: String
+        get() = remoteBaseUrl.trim().trimEnd('/')
+
     val cleanBaseUrl: String
         get() = baseUrl.trim().trimEnd('/')
 
     val hasEndpoint: Boolean
-        get() = cleanBaseUrl.isNotBlank() && activeChatModel.isNotBlank()
+        get() = hasServerAiEndpoint || hasLocalEndpoint
+
+    val hasServerAiEndpoint: Boolean
+        get() = serviceMode != AiServiceMode.LocalOnly &&
+            cleanRemoteBaseUrl.isNotBlank() &&
+            remotePreferredModel.trim().isNotBlank()
+
+    val hasLocalEndpoint: Boolean
+        get() = serviceMode != AiServiceMode.RemoteOnly &&
+            cleanBaseUrl.isNotBlank() &&
+            activeChatModel.isNotBlank()
+
+    val allowLocalFallback: Boolean
+        get() = serviceMode == AiServiceMode.RemoteFirst
 
     val activeChatModel: String
         get() = chatModel.trim().ifBlank { fastModel.trim() }
 
     val supportsCloudAuth: Boolean
         get() = provider != AiProviderPreset.Ollama && provider != AiProviderPreset.LmStudio
+}
+
+@Serializable
+enum class AiServiceMode(val label: String) {
+    RemoteFirst("远端优先"),
+    RemoteOnly("仅远端"),
+    LocalOnly("仅本地"),
 }
 
 @Immutable
@@ -113,6 +139,9 @@ enum class AiProviderPreset(
     val defaultVisionModel: String = defaultVisionModelValue ?: defaultChatModel
     val defaultEmbeddingModel: String = defaultEmbeddingModelValue ?: defaultChatModel
 }
+
+const val DEFAULT_SERVER_AI_BASE_URL: String = "https://dc.hhhl.cc"
+const val DEFAULT_SERVER_AI_MODEL: String = "gpt-5.5"
 
 @Serializable
 enum class AiTaskKind(val label: String) {
@@ -282,6 +311,8 @@ data class AiTaskInput(
     val notifications: List<AiNotificationContext> = emptyList(),
     val profile: AiProfileContext? = null,
     val automationEventText: String = "",
+    val fileIds: List<String> = emptyList(),
+    val fileContext: String = "",
 ) {
     fun compact(maxChars: Int): AiTaskInput {
         return copy(
@@ -299,6 +330,8 @@ data class AiTaskInput(
             notifications = notifications.take(80).map { it.compact(420) },
             profile = profile?.compact(1_200),
             automationEventText = automationEventText.take(maxChars),
+            fileIds = fileIds.map { it.trim().take(128) }.filter { it.isNotBlank() }.distinct().take(16),
+            fileContext = fileContext.take(maxChars / 2),
         )
     }
 }
@@ -394,7 +427,10 @@ data class AiUiState(
     val errorMessage: String? = null,
 ) {
     val hasUsableModel: Boolean
-        get() = settings.enabled && settings.hasEndpoint && (!settings.supportsCloudAuth || settings.apiKey.isNotBlank())
+        get() = settings.enabled && (
+            settings.hasServerAiEndpoint ||
+                (settings.hasLocalEndpoint && (!settings.supportsCloudAuth || settings.apiKey.isNotBlank()))
+            )
 
     val remainingDailyRequests: Int
         get() = (settings.dailyRequestLimit - usage.normalizedAiUsage().requestCount).coerceAtLeast(0)

@@ -184,7 +184,12 @@ class AiStateHolder(
         mutableState.update { it.copy(usage = usageResult.usage) }
         persist()
         val prompt = AiPromptBuilder.build(taskSettings, kind, input)
-        return repository.complete(taskSettings, prompt, model = taskSettings.modelForTask(kind))
+        return repository.complete(
+            settings = taskSettings,
+            prompt = prompt,
+            model = taskSettings.modelForTask(kind),
+            fileIds = input.fileIds,
+        )
     }
 
     override suspend fun evaluateSemanticCondition(prompt: String, eventText: String): AiBridgeResult {
@@ -237,13 +242,18 @@ class AiStateHolder(
                 errorMessage = null,
             )
         }
-        persist()
+        persist(removeFinishedTasks = true)
     }
 
     private suspend fun executeTask(task: AiTask, settings: AiSettings) {
         val taskSettings = settings.settingsForTask(task.kind)
         val prompt = AiPromptBuilder.build(taskSettings, task.kind, task.input)
-        when (val result = repository.complete(taskSettings, prompt, model = taskSettings.modelForTask(task.kind))) {
+        when (val result = repository.complete(
+            settings = taskSettings,
+            prompt = prompt,
+            model = taskSettings.modelForTask(task.kind),
+            fileIds = task.input.fileIds,
+        )) {
             is AiRepositoryResult.Success -> markTaskCompleted(task.id, result.text.take(AI_MAX_RESULT_CHARS))
             AiRepositoryResult.Unauthorized -> markTaskFailed(task.id, "AI API Key 无效或权限不足")
             is AiRepositoryResult.Error -> markTaskFailed(task.id, result.message)
@@ -302,17 +312,28 @@ class AiStateHolder(
         persist()
     }
 
-    private fun persist() {
+    private fun persist(removeFinishedTasks: Boolean = false) {
         val current = state.value
+        val account = cleanAccountId()
         runCatching {
-            store.write(
-                cleanAccountId(),
+            store.update(account) { storedSnapshot ->
+                val storedTasks = if (removeFinishedTasks) {
+                    storedSnapshot.tasks.filterNot { task -> task.isFinished }
+                } else {
+                    storedSnapshot.tasks
+                }
                 AiSnapshot(
                     settings = current.settings,
-                    tasks = current.tasks.take(AI_MAX_TASKS),
-                    usage = current.usage.normalizedAiUsage(),
-                ),
-            )
+                    tasks = mergeStoredAiTasks(
+                        current = storedTasks,
+                        updates = current.tasks,
+                    ),
+                    usage = mergeStoredAiUsage(
+                        current = storedSnapshot.usage,
+                        update = current.usage,
+                    ),
+                )
+            }
         }
     }
 
@@ -349,8 +370,11 @@ sealed interface AiBridgeResult {
 
 private fun AiSettings.validationError(kind: AiTaskKind): String? {
     if (!enabled) return "AI 未启用"
-    if (!hasEndpoint) return "请先配置 AI Base URL 和模型"
-    if (supportsCloudAuth && apiKey.isBlank()) return "请先填写 AI API Key"
+    if (!hasEndpoint) return "请先配置远端 AI 或本地 AI 模型"
+    if (serviceMode == AiServiceMode.LocalOnly && supportsCloudAuth && apiKey.isBlank()) return "请先填写 AI API Key"
+    if (serviceMode == AiServiceMode.RemoteFirst && !hasServerAiEndpoint && supportsCloudAuth && apiKey.isBlank()) {
+        return "请先填写 AI API Key"
+    }
     if (
         (kind == AiTaskKind.ChatSummary ||
             kind == AiTaskKind.ChatRecentSummary ||
@@ -408,6 +432,8 @@ private fun AiAutomationModelConfig.cleaned(): AiAutomationModelConfig {
 
 private fun AiSettings.cleaned(): AiSettings {
     return copy(
+        remoteBaseUrl = remoteBaseUrl.trim().take(240).ifBlank { DEFAULT_SERVER_AI_BASE_URL },
+        remotePreferredModel = remotePreferredModel.trim().take(160).ifBlank { DEFAULT_SERVER_AI_MODEL },
         baseUrl = baseUrl.trim().take(240),
         apiKey = apiKey.trim().take(1_000),
         chatModel = chatModel.trim().take(160),

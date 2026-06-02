@@ -532,6 +532,7 @@ private class FakeAiRepository(
         settings: AiSettings,
         prompt: AiPrompt,
         model: String,
+        fileIds: List<String>,
     ): AiRepositoryResult {
         lastPrompt = prompt
         requestedModels += model

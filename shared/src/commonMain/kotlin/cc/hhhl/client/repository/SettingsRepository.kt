@@ -732,21 +732,21 @@ open class SettingsRepository(
                 ),
                 SettingsItem(
                     key = SettingsItemKey.AiProvider,
-                    label = "Provider",
+                    label = "本地 Provider",
                     value = aiSettings.provider.label,
                     icon = "源",
                     enabled = aiSettings.enabled,
                 ),
                 SettingsItem(
                     key = SettingsItemKey.AiBaseUrl,
-                    label = "Base URL",
+                    label = "本地 Base URL",
                     value = aiSettings.cleanBaseUrl.ifBlank { "未配置" },
                     icon = "址",
                     enabled = aiSettings.enabled,
                 ),
                 SettingsItem(
                     key = SettingsItemKey.AiApiKey,
-                    label = "API Key",
+                    label = "本地 API Key",
                     value = if (aiSettings.apiKey.isBlank()) "未配置" else "已配置",
                     icon = "钥",
                     enabled = aiSettings.enabled,
@@ -911,8 +911,12 @@ private fun aiReadPermissionSummary(settings: AiSettings): String {
 }
 
 private fun aiSettingsSummary(settings: AiSettings, tasks: List<AiTask>, usage: AiUsageWindow): String {
-    val model = settings.activeChatModel.ifBlank { "未配置模型" }
-    return "${settings.enabled.onOffLabel()} · ${settings.provider.label} · $model · ${aiQueueSummary(tasks, settings, usage)}"
+    val model = when {
+        settings.serviceMode != cc.hhhl.client.ai.AiServiceMode.LocalOnly ->
+            settings.remotePreferredModel.ifBlank { cc.hhhl.client.ai.DEFAULT_SERVER_AI_MODEL }
+        else -> settings.activeChatModel.ifBlank { "未配置模型" }
+    }
+    return "${settings.enabled.onOffLabel()} · ${settings.serviceMode.label} · $model · ${aiQueueSummary(tasks, settings, usage)}"
 }
 
 private fun aiQueueSummary(tasks: List<AiTask>, settings: AiSettings, usage: AiUsageWindow): String {

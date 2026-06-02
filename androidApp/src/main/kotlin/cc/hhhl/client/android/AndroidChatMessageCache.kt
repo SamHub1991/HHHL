@@ -17,71 +17,85 @@ class AndroidChatMessageCache(context: Context) : ChatMessageCache {
     private var snapshotsPayload: String? = null
     private val mutex = Mutex()
 
-    override suspend fun read(key: ChatMessageCacheKey): List<ChatMessage> {
+    override suspend fun read(cacheEntry: ChatMessageCacheKey): List<ChatMessage> {
         return mutex.withLock {
-            loadedSnapshots()[key].orEmpty()
+            synchronized(STORE_LOCK) {
+                loadedSnapshots()[cacheEntry].orEmpty()
+            }
         }
     }
 
     override suspend fun readAccount(accountId: String): Map<ChatMessageCacheKey, List<ChatMessage>> {
         return mutex.withLock {
-            loadedSnapshots().filterKeys { it.accountId == accountId }
+            synchronized(STORE_LOCK) {
+                loadedSnapshots().filterKeys { it.accountId == accountId }
+            }
         }
     }
 
-    override suspend fun write(key: ChatMessageCacheKey, messages: List<ChatMessage>) {
+    override suspend fun write(cacheEntry: ChatMessageCacheKey, messages: List<ChatMessage>) {
         mutex.withLock {
-            val nextSnapshots = (loadedSnapshots() + (key to messages))
-                .trimmed()
-            val nextPayload = ChatMessageCacheCodec.encode(nextSnapshots)
-            snapshots = nextSnapshots
-            snapshotsPayload = nextPayload
-            preferences.edit()
-                .putString(KEY_SNAPSHOTS, nextPayload)
-                .apply()
+            synchronized(STORE_LOCK) {
+                val nextSnapshots = (loadedSnapshots() + (cacheEntry to messages))
+                    .trimmed()
+                val nextPayload = ChatMessageCacheCodec.encode(nextSnapshots)
+                snapshots = nextSnapshots
+                snapshotsPayload = nextPayload
+                preferences.edit()
+                    .putString(KEY_SNAPSHOTS, nextPayload)
+                    .commit()
+            }
         }
     }
 
-    override suspend fun isComplete(key: ChatMessageCacheKey): Boolean {
+    override suspend fun isComplete(cacheEntry: ChatMessageCacheKey): Boolean {
         return mutex.withLock {
-            key.storageKey in completeStorageKeys()
+            synchronized(STORE_LOCK) {
+                cacheEntry.storageEntry in completeStorageEntries()
+            }
         }
     }
 
-    override suspend fun markComplete(key: ChatMessageCacheKey) {
+    override suspend fun markComplete(cacheEntry: ChatMessageCacheKey) {
         mutex.withLock {
-            preferences.edit()
-                .putStringSet(KEY_COMPLETE_SNAPSHOTS, completeStorageKeys() + key.storageKey)
-                .apply()
+            synchronized(STORE_LOCK) {
+                preferences.edit()
+                    .putStringSet(KEY_COMPLETE_SNAPSHOTS, completeStorageEntries() + cacheEntry.storageEntry)
+                    .commit()
+            }
         }
     }
 
-    override suspend fun delete(key: ChatMessageCacheKey) {
+    override suspend fun delete(cacheEntry: ChatMessageCacheKey) {
         mutex.withLock {
-            val nextSnapshots = loadedSnapshots() - key
-            val nextPayload = ChatMessageCacheCodec.encode(nextSnapshots)
-            snapshots = nextSnapshots
-            snapshotsPayload = nextPayload
-            preferences.edit()
-                .putString(KEY_SNAPSHOTS, nextPayload)
-                .putStringSet(KEY_COMPLETE_SNAPSHOTS, completeStorageKeys() - key.storageKey)
-                .apply()
+            synchronized(STORE_LOCK) {
+                val nextSnapshots = loadedSnapshots() - cacheEntry
+                val nextPayload = ChatMessageCacheCodec.encode(nextSnapshots)
+                snapshots = nextSnapshots
+                snapshotsPayload = nextPayload
+                preferences.edit()
+                    .putString(KEY_SNAPSHOTS, nextPayload)
+                    .putStringSet(KEY_COMPLETE_SNAPSHOTS, completeStorageEntries() - cacheEntry.storageEntry)
+                    .commit()
+            }
         }
     }
 
     override suspend fun clearAccount(accountId: String) {
         mutex.withLock {
-            val nextSnapshots = loadedSnapshots().filterKeys { it.accountId != accountId }
-            val nextPayload = ChatMessageCacheCodec.encode(nextSnapshots)
-            snapshots = nextSnapshots
-            snapshotsPayload = nextPayload
-            preferences.edit()
-                .putString(KEY_SNAPSHOTS, nextPayload)
-                .putStringSet(
-                    KEY_COMPLETE_SNAPSHOTS,
-                    completeStorageKeys().filterNot { it.startsWith("${accountId.encodeStorageKeyPart()}|") }.toSet(),
-                )
-                .apply()
+            synchronized(STORE_LOCK) {
+                val nextSnapshots = loadedSnapshots().filterKeys { it.accountId != accountId }
+                val nextPayload = ChatMessageCacheCodec.encode(nextSnapshots)
+                snapshots = nextSnapshots
+                snapshotsPayload = nextPayload
+                preferences.edit()
+                    .putString(KEY_SNAPSHOTS, nextPayload)
+                    .putStringSet(
+                        KEY_COMPLETE_SNAPSHOTS,
+                        completeStorageEntries().filterNot { it.startsWith("${accountId.encodeStorageEntryPart()}|") }.toSet(),
+                    )
+                    .commit()
+            }
         }
     }
 
@@ -99,7 +113,7 @@ class AndroidChatMessageCache(context: Context) : ChatMessageCache {
         return ChatMessageCacheCodec.decode(payload).trimmed()
     }
 
-    private fun completeStorageKeys(): Set<String> {
+    private fun completeStorageEntries(): Set<String> {
         return preferences.getStringSet(KEY_COMPLETE_SNAPSHOTS, emptySet()).orEmpty()
     }
 
@@ -109,7 +123,7 @@ class AndroidChatMessageCache(context: Context) : ChatMessageCache {
                 messages.maxOfOrNull { it.createdAt.ifBlank { it.createdAtLabel } }.orEmpty()
             }
             .take(MAX_CONVERSATIONS)
-            .associate { (key, messages) -> key to messages }
+            .associate { (entry, messages) -> entry to messages }
     }
 
     private companion object {
@@ -117,12 +131,13 @@ class AndroidChatMessageCache(context: Context) : ChatMessageCache {
         const val KEY_SNAPSHOTS = "snapshots"
         const val KEY_COMPLETE_SNAPSHOTS = "complete_snapshots"
         const val MAX_CONVERSATIONS = 160
+        val STORE_LOCK = Any()
     }
 }
 
-private val ChatMessageCacheKey.storageKey: String
-    get() = listOf(accountId, type.name, conversationId).joinToString("|") { it.encodeStorageKeyPart() }
+private val ChatMessageCacheKey.storageEntry: String
+    get() = listOf(accountId, type.name, conversationId).joinToString("|") { it.encodeStorageEntryPart() }
 
-private fun String.encodeStorageKeyPart(): String {
+private fun String.encodeStorageEntryPart(): String {
     return replace("%", "%25").replace("|", "%7C")
 }

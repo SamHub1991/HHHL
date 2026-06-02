@@ -11,6 +11,10 @@ import cc.hhhl.client.ai.AiRepositoryResult
 import cc.hhhl.client.ai.AiSnapshot
 import cc.hhhl.client.ai.AiTask
 import cc.hhhl.client.ai.AiTaskStatus
+import cc.hhhl.client.ai.AiSettings
+import cc.hhhl.client.ai.AiUsageWindow
+import cc.hhhl.client.ai.mergeStoredAiTasks
+import cc.hhhl.client.ai.mergeStoredAiUsage
 import cc.hhhl.client.ai.consumeAiRequest
 import cc.hhhl.client.ai.modelForTask
 import cc.hhhl.client.ai.normalizedAiUsage
@@ -24,11 +28,16 @@ class AiBackgroundWorker(
         val store = AndroidAiStore(applicationContext)
         val sessions = AndroidAuthTokenStore(applicationContext).readAccountSessions()
         val accountIds = sessions.map { it.id }.ifEmpty { listOf("default") }
-        val repository = AiRepository()
+        val sessionById = sessions.associateBy { it.id }
         var retriableFailure = false
         var hasRemainingPendingTasks = false
 
         accountIds.forEach { accountId ->
+            val session = sessionById[accountId]
+            val repository = AiRepository(
+                remoteTokenProvider = { session?.token },
+                remoteBaseUrlProvider = { "https://${session?.host?.ifBlank { "dc.hhhl.cc" } ?: "dc.hhhl.cc"}" },
+            )
             val snapshot = store.read(accountId)
             val settings = snapshot.settings
             if (!settings.enabled || !settings.backgroundAllowed) return@forEach
@@ -56,7 +65,7 @@ class AiBackgroundWorker(
                                 updatedAtEpochMillis = System.currentTimeMillis(),
                             ),
                         )
-                        store.write(accountId, AiSnapshot(settings = settings, tasks = tasks, usage = usage))
+                        store.writeMergedSnapshot(accountId, settings, tasks, usage)
                         return@forEach
                     }
                     usage = usageResult.usage
@@ -64,7 +73,7 @@ class AiBackgroundWorker(
                 }
                 val now = System.currentTimeMillis()
                 tasks = tasks.replaceTask(taskForRun.copy(status = AiTaskStatus.Running, updatedAtEpochMillis = now))
-                store.write(accountId, AiSnapshot(settings = settings, tasks = tasks, usage = usage))
+                store.writeMergedSnapshot(accountId, settings, tasks, usage)
 
                 val taskSettings = settings.settingsForTask(taskForRun.kind)
                 val prompt = AiPromptBuilder.build(taskSettings, taskForRun.kind, taskForRun.input)
@@ -92,7 +101,7 @@ class AiBackgroundWorker(
                     }
                 }
                 tasks = tasks.replaceTask(nextTask)
-                store.write(accountId, AiSnapshot(settings = settings, tasks = tasks, usage = usage))
+                store.writeMergedSnapshot(accountId, settings, tasks, usage)
             }
             if (tasks.any { task -> task.status == AiTaskStatus.Pending || task.status == AiTaskStatus.Running }) {
                 hasRemainingPendingTasks = true
@@ -103,6 +112,27 @@ class AiBackgroundWorker(
             AiBackgroundScheduler.syncNow(applicationContext)
         }
         return if (retriableFailure) Result.retry() else Result.success()
+    }
+
+    private fun AndroidAiStore.writeMergedSnapshot(
+        accountId: String,
+        fallbackSettings: AiSettings,
+        tasks: List<AiTask>,
+        usage: AiUsageWindow,
+    ) {
+        update(accountId) { storedSnapshot ->
+            AiSnapshot(
+                settings = storedSnapshot.settings.takeUnless { it == AiSettings() } ?: fallbackSettings,
+                tasks = mergeStoredAiTasks(
+                    current = storedSnapshot.tasks,
+                    updates = tasks,
+                ),
+                usage = mergeStoredAiUsage(
+                    current = storedSnapshot.usage,
+                    update = usage,
+                ),
+            )
+        }
     }
 
     private fun List<AiTask>.replaceTask(task: AiTask): List<AiTask> {

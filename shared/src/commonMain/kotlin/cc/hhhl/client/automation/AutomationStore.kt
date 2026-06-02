@@ -28,32 +28,46 @@ interface AutomationStore {
 
     fun clearAccount(accountId: String)
 
+    fun update(accountId: String, transform: (AutomationSnapshot) -> AutomationSnapshot): AutomationSnapshot {
+        val cleanAccountId = accountId.trim()
+        val updated = transform(read(cleanAccountId))
+        write(cleanAccountId, updated)
+        return updated
+    }
+
     fun claimExecutedEvent(accountId: String, record: AutomationExecutedEvent): Boolean {
         val cleanRecord = record.cleaned()
         if (cleanRecord.key.isBlank()) return false
         val cleanAccountId = accountId.trim()
-        val snapshot = read(cleanAccountId)
-        if (snapshot.executedEvents.any { event -> event.cleaned().key == cleanRecord.key }) return false
-        write(
-            cleanAccountId,
-            snapshot.copy(
-                executedEvents = mergeStoredAutomationExecutedEvents(
-                    current = snapshot.executedEvents,
-                    updates = listOf(cleanRecord),
-                ),
-            ),
-        )
-        return true
+        var claimed = false
+        update(cleanAccountId) { snapshot ->
+            if (snapshot.executedEvents.any { event -> event.cleaned().key == cleanRecord.key }) {
+                snapshot
+            } else {
+                claimed = true
+                snapshot.copy(
+                    executedEvents = mergeStoredAutomationExecutedEvents(
+                        current = snapshot.executedEvents,
+                        updates = listOf(cleanRecord),
+                    ),
+                )
+            }
+        }
+        return claimed
     }
 
     fun releaseExecutedEvent(accountId: String, key: String) {
         val cleanKey = key.trim()
         if (cleanKey.isBlank()) return
         val cleanAccountId = accountId.trim()
-        val snapshot = read(cleanAccountId)
-        val remaining = snapshot.executedEvents.filter { event -> event.cleaned().key != cleanKey }
-        if (remaining.size == snapshot.executedEvents.size) return
-        write(cleanAccountId, snapshot.copy(executedEvents = remaining))
+        update(cleanAccountId) { snapshot ->
+            val remaining = snapshot.executedEvents.filter { event -> event.cleaned().key != cleanKey }
+            if (remaining.size == snapshot.executedEvents.size) {
+                snapshot
+            } else {
+                snapshot.copy(executedEvents = remaining)
+            }
+        }
     }
 }
 

@@ -251,6 +251,63 @@ class AutomationStateHolderTest {
     }
 
     @Test
+    fun persistKeepsExecutedEventsClaimedDuringStoreUpdate() = runTest {
+        val externalEventKey = "account-1:rule-external:chat-message:external-message"
+        val store = InterleavingAutomationStore(
+            initialSnapshot = AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-1",
+                        name = "Log once with interleaving",
+                        trigger = AutomationTrigger.ChatMessage,
+                        conditions = listOf(
+                            AutomationCondition(
+                                id = "condition-1",
+                                type = AutomationConditionType.MessageContains,
+                                value = "hello",
+                            ),
+                        ),
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-1",
+                                type = AutomationActionType.AddLog,
+                                bodyTemplate = "{{message.id}}: {{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            injectedEvent = AutomationExecutedEvent(
+                key = externalEventKey,
+                ruleId = "rule-external",
+                eventKey = "chat-message:external-message",
+                eventId = "external-event",
+                createdAtEpochMillis = 1L,
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.emit(
+            AutomationEvent(
+                id = "chat-message:message-local",
+                trigger = AutomationTrigger.ChatMessage,
+                chatMessageId = "message-local",
+                messageText = "hello world",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(
+            setOf(externalEventKey, "account-1:rule-1:chat-message:message-local"),
+            store.lastSnapshot.executedEvents.map { it.key }.toSet(),
+        )
+    }
+    @Test
     fun failedActionDoesNotPersistDedupeForLaterRetry() = runTest {
         val store = MemoryAutomationStore(
             AutomationSnapshot(
@@ -1562,6 +1619,43 @@ private class MemoryAutomationStore(
     }
 }
 
+private class InterleavingAutomationStore(
+    initialSnapshot: AutomationSnapshot,
+    private val injectedEvent: AutomationExecutedEvent,
+) : AutomationStore {
+    var lastSnapshot: AutomationSnapshot = initialSnapshot
+        private set
+    private var injected = false
+
+    override fun read(accountId: String): AutomationSnapshot = lastSnapshot
+
+    override fun write(accountId: String, snapshot: AutomationSnapshot) {
+        injectOnce()
+        lastSnapshot = snapshot
+    }
+
+    override fun update(accountId: String, transform: (AutomationSnapshot) -> AutomationSnapshot): AutomationSnapshot {
+        injectOnce()
+        val updated = transform(lastSnapshot)
+        lastSnapshot = updated
+        return updated
+    }
+
+    override fun clearAccount(accountId: String) {
+        lastSnapshot = AutomationSnapshot()
+    }
+
+    private fun injectOnce() {
+        if (injected) return
+        injected = true
+        lastSnapshot = lastSnapshot.copy(
+            executedEvents = mergeStoredAutomationExecutedEvents(
+                current = lastSnapshot.executedEvents,
+                updates = listOf(injectedEvent),
+            ),
+        )
+    }
+}
 private class RecordingChatRepository : ChatRepository(tokenProvider = { "token" }) {
     var lastRoomId: String? = null
     var lastUserId: String? = null

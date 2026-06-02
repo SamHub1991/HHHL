@@ -1,8 +1,7 @@
 package cc.hhhl.client.android
 
 import android.content.Context
-import cc.hhhl.client.cache.ChatUnreadSnapshot
-import cc.hhhl.client.cache.ChatUnreadStore
+import cc.hhhl.client.cache.*
 
 class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
     private val preferences = context.applicationContext.getSharedPreferences(
@@ -10,48 +9,46 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
         Context.MODE_PRIVATE,
     )
 
-    override fun load(accountId: String): ChatUnreadSnapshot {
+    override fun load(accountId: String): ChatUnreadSnapshot = synchronized(STORE_LOCK) {
         val cleanAccountId = accountId.trim()
-        if (cleanAccountId.isEmpty()) return ChatUnreadSnapshot()
-        return ChatUnreadSnapshot(
-            roomCounts = loadCounts(cleanAccountId, TYPE_ROOM),
-            userCounts = loadCounts(cleanAccountId, TYPE_USER),
-            roomReadMarkers = loadMarkers(cleanAccountId, TYPE_ROOM_READ_MARKER),
-            userReadMarkers = loadMarkers(cleanAccountId, TYPE_USER_READ_MARKER),
-            pinnedRoomIds = loadStringSet(cleanAccountId, TYPE_PINNED_ROOMS),
-            pinnedUserIds = loadStringSet(cleanAccountId, TYPE_PINNED_USERS),
-            roomGroups = loadStrings(cleanAccountId, TYPE_ROOM_GROUP),
-        )
+        if (cleanAccountId.isEmpty()) return@synchronized ChatUnreadSnapshot()
+        loadLocked(cleanAccountId)
     }
 
-    override fun save(accountId: String, snapshot: ChatUnreadSnapshot) {
+    override fun save(accountId: String, snapshot: ChatUnreadSnapshot) = synchronized(STORE_LOCK) {
         val cleanAccountId = accountId.trim()
-        if (cleanAccountId.isEmpty()) return
-        preferences.edit()
-            .replaceCounts(cleanAccountId, TYPE_ROOM, snapshot.roomCounts)
-            .replaceCounts(cleanAccountId, TYPE_USER, snapshot.userCounts)
-            .replaceMarkers(cleanAccountId, TYPE_ROOM_READ_MARKER, snapshot.roomReadMarkers)
-            .replaceMarkers(cleanAccountId, TYPE_USER_READ_MARKER, snapshot.userReadMarkers)
-            .replaceStringSet(cleanAccountId, TYPE_PINNED_ROOMS, snapshot.pinnedRoomIds)
-            .replaceStringSet(cleanAccountId, TYPE_PINNED_USERS, snapshot.pinnedUserIds)
-            .replaceStrings(cleanAccountId, TYPE_ROOM_GROUP, snapshot.roomGroups)
-            .apply()
+        if (cleanAccountId.isEmpty()) return@synchronized
+        saveLocked(cleanAccountId, snapshot.withCurrentReadMarkers(cleanAccountId))
     }
 
-    override fun clearRoom(accountId: String, roomId: String) {
+    override fun markRoomRead(accountId: String, roomId: String, marker: String) = synchronized(STORE_LOCK) {
+        val cleanAccountId = accountId.trim()
+        val cleanRoomId = roomId.trim()
+        if (cleanAccountId.isEmpty() || cleanRoomId.isEmpty()) return@synchronized
+        saveLocked(cleanAccountId, loadLocked(cleanAccountId).withRoomReadMarker(cleanRoomId, marker))
+    }
+
+    override fun markUserRead(accountId: String, userId: String, marker: String) = synchronized(STORE_LOCK) {
+        val cleanAccountId = accountId.trim()
+        val cleanUserId = userId.trim()
+        if (cleanAccountId.isEmpty() || cleanUserId.isEmpty()) return@synchronized
+        saveLocked(cleanAccountId, loadLocked(cleanAccountId).withUserReadMarker(cleanUserId, marker))
+    }
+
+    override fun clearRoom(accountId: String, roomId: String) = synchronized(STORE_LOCK) {
         removeCount(accountId, TYPE_ROOM, roomId, TYPE_ROOM_MARKER, TYPE_ROOM_READ_MARKER)
     }
 
-    override fun clearUser(accountId: String, userId: String) {
+    override fun clearUser(accountId: String, userId: String) = synchronized(STORE_LOCK) {
         removeCount(accountId, TYPE_USER, userId, TYPE_USER_MARKER, TYPE_USER_READ_MARKER)
     }
 
-    override fun clearAccount(accountId: String) {
+    override fun clearAccount(accountId: String) = synchronized(STORE_LOCK) {
         val cleanAccountId = accountId.trim()
-        if (cleanAccountId.isEmpty()) return
+        if (cleanAccountId.isEmpty()) return@synchronized
         val prefix = "$cleanAccountId|"
         val keys = preferences.all.keys.filter { it.startsWith(prefix) }
-        if (keys.isEmpty()) return
+        if (keys.isEmpty()) return@synchronized
         preferences.edit().apply {
             keys.forEach(::remove)
         }.apply()
@@ -62,10 +59,10 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
         snapshot: ChatUnreadSnapshot,
         roomLatestMarkers: Map<String, String> = emptyMap(),
         userLatestMarkers: Map<String, String> = emptyMap(),
-    ): ChatUnreadSnapshot {
+    ): ChatUnreadSnapshot = synchronized(STORE_LOCK) {
         val cleanAccountId = accountId.trim()
-        if (cleanAccountId.isEmpty()) return ChatUnreadSnapshot()
-        val current = load(cleanAccountId)
+        if (cleanAccountId.isEmpty()) return@synchronized ChatUnreadSnapshot()
+        val current = loadLocked(cleanAccountId)
         val currentRoomMarkers = loadMarkers(cleanAccountId, TYPE_ROOM_MARKER)
         val currentUserMarkers = loadMarkers(cleanAccountId, TYPE_USER_MARKER)
         val roomMerge = current.roomCounts.mergeUnreadCounts(
@@ -84,22 +81,63 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
             roomCounts = roomMerge.counts,
             userCounts = userMerge.counts,
         )
-        save(cleanAccountId, merged)
+        saveLocked(cleanAccountId, merged)
         saveMarkers(cleanAccountId, TYPE_ROOM_MARKER, roomMerge.markers)
         saveMarkers(cleanAccountId, TYPE_USER_MARKER, userMerge.markers)
-        return merged
+        merged
     }
 
-    fun loadRoomMarkers(accountId: String): Map<String, String> {
+    fun loadRoomMarkers(accountId: String): Map<String, String> = synchronized(STORE_LOCK) {
         val cleanAccountId = accountId.trim()
-        if (cleanAccountId.isEmpty()) return emptyMap()
-        return loadMarkers(cleanAccountId, TYPE_ROOM_MARKER)
+        if (cleanAccountId.isEmpty()) return@synchronized emptyMap()
+        loadMarkers(cleanAccountId, TYPE_ROOM_MARKER)
     }
 
-    fun loadUserMarkers(accountId: String): Map<String, String> {
+    fun loadUserMarkers(accountId: String): Map<String, String> = synchronized(STORE_LOCK) {
         val cleanAccountId = accountId.trim()
-        if (cleanAccountId.isEmpty()) return emptyMap()
-        return loadMarkers(cleanAccountId, TYPE_USER_MARKER)
+        if (cleanAccountId.isEmpty()) return@synchronized emptyMap()
+        loadMarkers(cleanAccountId, TYPE_USER_MARKER)
+    }
+
+    private fun loadLocked(accountId: String): ChatUnreadSnapshot {
+        return ChatUnreadSnapshot(
+            roomCounts = loadCounts(accountId, TYPE_ROOM),
+            userCounts = loadCounts(accountId, TYPE_USER),
+            roomReadMarkers = loadMarkers(accountId, TYPE_ROOM_READ_MARKER),
+            userReadMarkers = loadMarkers(accountId, TYPE_USER_READ_MARKER),
+            pinnedRoomIds = loadStringSet(accountId, TYPE_PINNED_ROOMS),
+            pinnedUserIds = loadStringSet(accountId, TYPE_PINNED_USERS),
+            roomGroups = loadStrings(accountId, TYPE_ROOM_GROUP),
+        )
+    }
+
+    private fun saveLocked(accountId: String, snapshot: ChatUnreadSnapshot) {
+        preferences.edit()
+            .replaceCounts(accountId, TYPE_ROOM, snapshot.roomCounts)
+            .replaceCounts(accountId, TYPE_USER, snapshot.userCounts)
+            .replaceMarkers(accountId, TYPE_ROOM_READ_MARKER, snapshot.roomReadMarkers)
+            .replaceMarkers(accountId, TYPE_USER_READ_MARKER, snapshot.userReadMarkers)
+            .replaceStringSet(accountId, TYPE_PINNED_ROOMS, snapshot.pinnedRoomIds)
+            .replaceStringSet(accountId, TYPE_PINNED_USERS, snapshot.pinnedUserIds)
+            .replaceStrings(accountId, TYPE_ROOM_GROUP, snapshot.roomGroups)
+            .apply()
+    }
+
+    private fun ChatUnreadSnapshot.withCurrentReadMarkers(accountId: String): ChatUnreadSnapshot {
+        val current = loadLocked(accountId)
+        return copy(
+            roomReadMarkers = roomReadMarkers.mergeReadMarkers(current.roomReadMarkers),
+            userReadMarkers = userReadMarkers.mergeReadMarkers(current.userReadMarkers),
+        )
+    }
+
+    private fun Map<String, String>.mergeReadMarkers(existing: Map<String, String>): Map<String, String> {
+        if (isEmpty()) return existing
+        if (existing.isEmpty()) return this
+        return (keys + existing.keys).associateWith { key ->
+            (existing[key].chatReadMarkerAliases() + this[key].chatReadMarkerAliases())
+                .fold("") { merged, marker -> merged.withChatReadMarkerAlias(marker) }
+        }.filterValues { it.isNotBlank() }
     }
 
     private fun loadCounts(accountId: String, type: String): Map<String, Int> {
@@ -224,6 +262,7 @@ class AndroidChatUnreadStore(context: Context) : ChatUnreadStore {
     private fun key(accountId: String, type: String, id: String): String = "$accountId|$type|$id"
 
     private companion object {
+        val STORE_LOCK = Any()
         const val PREFERENCES_NAME = "hhhl_chat_unread"
         const val TYPE_ROOM = "room"
         const val TYPE_USER = "user"

@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -20,7 +22,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,7 +45,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import cc.hhhl.client.model.CustomEmoji
+import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.theme.LocalHhhlColors
+import cc.hhhl.client.ui.component.CustomEmojiPicker
+import cc.hhhl.client.ui.component.DriveFilePreview
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlCheckbox
@@ -51,6 +62,7 @@ import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.HhhlTextButton
 import cc.hhhl.client.ui.component.HhhlTextInput
 import cc.hhhl.client.ui.component.HhhlTopBar
+import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.ui.component.aiResultMutedWordCandidate
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
@@ -67,8 +79,10 @@ data class AiAssistantMessage(
     val id: String,
     val role: AiAssistantRole,
     val text: String,
+    val attachments: List<DriveFile> = emptyList(),
     val status: AiAssistantMessageStatus = AiAssistantMessageStatus.Completed,
     val retryPrompt: String = "",
+    val retryAttachments: List<DriveFile> = emptyList(),
     val actions: List<AiAssistantActionProposal> = emptyList(),
 )
 
@@ -198,13 +212,23 @@ fun AiAssistantScreen(
     aiEnabled: Boolean,
     isProcessing: Boolean,
     errorMessage: String?,
+    attachments: List<DriveFile> = emptyList(),
+    isUploadingAttachment: Boolean = false,
+    isMediaPickerAvailable: Boolean = false,
+    customEmojis: List<CustomEmoji> = emptyList(),
+    recentEmojiCodes: List<String> = emptyList(),
     memoryNotes: List<String> = emptyList(),
     autoApprovalSettings: AiAssistantAutoApprovalSettings = AiAssistantAutoApprovalSettings(),
     onDraftChanged: (String) -> Unit,
     onSend: () -> Unit,
     onSendPrompt: (String) -> Unit,
-    onRetry: (String) -> Unit,
+    onRetry: (String, List<DriveFile>) -> Unit,
     onNewConversation: () -> Unit,
+    onAddImage: () -> Unit = {},
+    onAddFile: () -> Unit = {},
+    onOpenDrivePicker: () -> Unit = {},
+    onRemoveAttachment: (String) -> Unit = {},
+    onOpenAttachmentUrl: (String) -> Unit = {},
     onOpenAutomation: () -> Unit,
     onAutoApprovalSettingsChanged: (AiAssistantAutoApprovalSettings) -> Unit = {},
     onApproveAction: (String) -> Unit = {},
@@ -267,6 +291,7 @@ fun AiAssistantScreen(
                         onRetry = onRetry,
                         onApproveAction = onApproveAction,
                         onRejectAction = onRejectAction,
+                        onOpenAttachmentUrl = onOpenAttachmentUrl,
                     )
                 }
             }
@@ -279,6 +304,7 @@ fun AiAssistantScreen(
                     onRetry = onRetry,
                     onApproveAction = onApproveAction,
                     onRejectAction = onRejectAction,
+                    onOpenAttachmentUrl = onOpenAttachmentUrl,
                 )
             }
         }
@@ -289,6 +315,16 @@ fun AiAssistantScreen(
             isProcessing = isProcessing,
             onDraftChanged = onDraftChanged,
             onSend = onSend,
+            attachments = attachments,
+            isUploadingAttachment = isUploadingAttachment,
+            isMediaPickerAvailable = isMediaPickerAvailable,
+            customEmojis = customEmojis,
+            recentEmojiCodes = recentEmojiCodes,
+            onAddImage = onAddImage,
+            onAddFile = onAddFile,
+            onOpenDrivePicker = onOpenDrivePicker,
+            onRemoveAttachment = onRemoveAttachment,
+            onOpenAttachmentUrl = onOpenAttachmentUrl,
         )
     }
 }
@@ -387,9 +423,9 @@ private fun AiAssistantApprovalMenuItem(
 
 private fun aiAssistantAutoApprovalSupportingText(settings: AiAssistantAutoApprovalSettings): String {
     return when {
-        settings.highRiskEnabled -> "本地对话 · 高风险也自动批准"
-        settings.lowRiskEnabled -> "本地对话 · 低风险自动批准"
-        else -> "本地对话 · 全部需确认"
+        settings.highRiskEnabled -> "远端 AI · 高风险也自动批准"
+        settings.lowRiskEnabled -> "远端 AI · 低风险自动批准"
+        else -> "远端 AI · 全部需确认"
     }
 }
 
@@ -487,9 +523,10 @@ private fun AiAssistantContextPanel(
 @Composable
 private fun AiAssistantMessageBubble(
     message: AiAssistantMessage,
-    onRetry: (String) -> Unit,
+    onRetry: (String, List<DriveFile>) -> Unit,
     onApproveAction: (String) -> Unit,
     onRejectAction: (String) -> Unit,
+    onOpenAttachmentUrl: (String) -> Unit,
 ) {
     val colors = LocalHhhlColors.current
     val isUser = message.role == AiAssistantRole.User
@@ -551,14 +588,21 @@ private fun AiAssistantMessageBubble(
                     )
                 }
             }
-            Text(
+            InlineRichText(
                 text = displayText,
                 color = if (isFailed) colors.danger else colors.textPrimary,
                 style = MaterialTheme.typography.bodyMedium,
             )
+            if (message.attachments.isNotEmpty()) {
+                AiAssistantAttachmentGrid(
+                    attachments = message.attachments,
+                    onRemoveAttachment = null,
+                    onOpenAttachmentUrl = onOpenAttachmentUrl,
+                )
+            }
             if (isFailed && message.retryPrompt.isNotBlank()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    HhhlTextButton(onClick = { onRetry(message.retryPrompt) }) {
+                    HhhlTextButton(onClick = { onRetry(message.retryPrompt, message.retryAttachments) }) {
                         Text("重试")
                     }
                 }
@@ -653,34 +697,169 @@ private fun AiAssistantComposer(
     draft: String,
     enabled: Boolean,
     isProcessing: Boolean,
+    attachments: List<DriveFile>,
+    isUploadingAttachment: Boolean,
+    isMediaPickerAvailable: Boolean,
+    customEmojis: List<CustomEmoji>,
+    recentEmojiCodes: List<String>,
     onDraftChanged: (String) -> Unit,
     onSend: () -> Unit,
+    onAddImage: () -> Unit,
+    onAddFile: () -> Unit,
+    onOpenDrivePicker: () -> Unit,
+    onRemoveAttachment: (String) -> Unit,
+    onOpenAttachmentUrl: (String) -> Unit,
 ) {
+    var emojiPickerOpen by remember { mutableStateOf(false) }
+    val canEdit = enabled && !isUploadingAttachment
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (attachments.isNotEmpty()) {
+            AiAssistantAttachmentGrid(
+                attachments = attachments,
+                onRemoveAttachment = onRemoveAttachment,
+                onOpenAttachmentUrl = onOpenAttachmentUrl,
+            )
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            HhhlIconActionButton(
+                icon = Icons.Filled.Image,
+                contentDescription = if (isUploadingAttachment) "上传中" else "添加图片",
+                enabled = canEdit && isMediaPickerAvailable,
+                onClick = onAddImage,
+            )
+            HhhlIconActionButton(
+                icon = Icons.Filled.AttachFile,
+                contentDescription = if (isUploadingAttachment) "上传中" else "添加文件",
+                enabled = canEdit && isMediaPickerAvailable,
+                onClick = onAddFile,
+            )
+            HhhlIconActionButton(
+                icon = Icons.Filled.Folder,
+                contentDescription = "从 Drive 选择",
+                enabled = canEdit,
+                onClick = onOpenDrivePicker,
+            )
+            HhhlIconActionButton(
+                icon = Icons.Filled.EmojiEmotions,
+                contentDescription = if (emojiPickerOpen) "收起表情" else "选择表情",
+                emphasized = emojiPickerOpen,
+                enabled = enabled,
+                onClick = { emojiPickerOpen = !emojiPickerOpen },
+            )
+        }
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.Bottom,
+            modifier = Modifier.fillMaxWidth(),
         ) {
             HhhlTextInput(
                 value = draft,
                 onValueChange = onDraftChanged,
-                placeholder = if (enabled) "问 AI 助手" else "AI 不可用或正在处理",
+                placeholder = when {
+                    isUploadingAttachment -> "附件上传中"
+                    enabled -> "问 AI 助手"
+                    else -> "AI 不可用或正在处理"
+                },
                 minLines = 1,
                 maxLines = 4,
-                enabled = enabled,
+                enabled = canEdit,
                 modifier = Modifier.weight(1f),
             )
             HhhlIconActionButton(
                 icon = Icons.AutoMirrored.Filled.Send,
-                contentDescription = if (isProcessing) "生成中" else "发送给 AI 助手",
+                contentDescription = when {
+                    isProcessing -> "生成中"
+                    isUploadingAttachment -> "附件上传中"
+                    else -> "发送给 AI 助手"
+                },
                 emphasized = true,
-                enabled = enabled && draft.isNotBlank(),
+                enabled = canEdit && (draft.isNotBlank() || attachments.isNotEmpty()),
                 onClick = onSend,
+            )
+        }
+        if (emojiPickerOpen) {
+            CustomEmojiPicker(
+                customEmojis = customEmojis,
+                recentEmojiCodes = recentEmojiCodes,
+                onEmojiSelected = { emoji ->
+                    onDraftChanged(draft + emoji)
+                    emojiPickerOpen = false
+                },
+                compact = true,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AiAssistantAttachmentGrid(
+    attachments: List<DriveFile>,
+    onRemoveAttachment: ((String) -> Unit)?,
+    onOpenAttachmentUrl: (String) -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        attachments.forEach { file ->
+            AiAssistantAttachmentItem(
+                file = file,
+                onRemoveAttachment = onRemoveAttachment,
+                onOpenAttachmentUrl = onOpenAttachmentUrl,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AiAssistantAttachmentItem(
+    file: DriveFile,
+    onRemoveAttachment: ((String) -> Unit)?,
+    onOpenAttachmentUrl: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Box(
+        modifier = Modifier
+            .width(104.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.surfaceElevated.copy(alpha = 0.56f))
+            .border(1.dp, colors.border.copy(alpha = 0.28f), RoundedCornerShape(8.dp))
+            .padding(5.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            DriveFilePreview(
+                file = file,
+                onOpenUrl = onOpenAttachmentUrl,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(72.dp),
+            )
+            Text(
+                text = file.name.ifBlank { file.type.ifBlank { "附件" } },
+                color = colors.textSecondary,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (onRemoveAttachment != null) {
+            HhhlIconActionButton(
+                icon = Icons.Filled.Close,
+                contentDescription = "移除附件",
+                onClick = { onRemoveAttachment(file.id) },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .size(24.dp),
             )
         }
     }

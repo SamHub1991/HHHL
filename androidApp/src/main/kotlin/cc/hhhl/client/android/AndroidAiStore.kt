@@ -19,31 +19,48 @@ class AndroidAiStore(context: Context) : AiStore {
         Context.MODE_PRIVATE,
     )
 
-    override fun read(accountId: String): AiSnapshot {
-        val key = keyFor(accountId)
-        val encryptedPayload = preferences.getString(key, null) ?: return AiSnapshot()
+    override fun read(accountId: String): AiSnapshot = synchronized(STORE_LOCK) {
+        readLocked(accountId)
+    }
+
+    override fun write(accountId: String, snapshot: AiSnapshot) = synchronized(STORE_LOCK) {
+        writeLocked(accountId, snapshot)
+    }
+
+    override fun clearAccount(accountId: String) {
+        synchronized(STORE_LOCK) {
+            preferences.edit()
+                .remove(keyFor(accountId))
+                .commit()
+        }
+    }
+
+    override fun update(accountId: String, transform: (AiSnapshot) -> AiSnapshot): AiSnapshot = synchronized(STORE_LOCK) {
+        val updated = transform(readLocked(accountId))
+        writeLocked(accountId, updated)
+        updated
+    }
+
+    private fun readLocked(accountId: String): AiSnapshot {
+        val storageName = keyFor(accountId)
+        val encryptedPayload = preferences.getString(storageName, null) ?: return AiSnapshot()
         decrypt(encryptedPayload)?.let { payload ->
             return AiStoreCodec.decode(payload)
         }
+        if (encryptedPayload.startsWith(ENCRYPTED_PREFIX)) return AiSnapshot()
 
         val legacySnapshot = AiStoreCodec.decode(encryptedPayload)
         if (encryptedPayload.isNotBlank()) {
-            write(accountId, legacySnapshot)
+            writeLocked(accountId, legacySnapshot)
         }
         return legacySnapshot
     }
 
-    override fun write(accountId: String, snapshot: AiSnapshot) {
+    private fun writeLocked(accountId: String, snapshot: AiSnapshot) {
         val payload = encrypt(AiStoreCodec.encode(snapshot))
         preferences.edit()
             .putString(keyFor(accountId), payload)
-            .apply()
-    }
-
-    override fun clearAccount(accountId: String) {
-        preferences.edit()
-            .remove(keyFor(accountId))
-            .apply()
+            .commit()
     }
 
     private fun keyFor(accountId: String): String = "ai:$accountId"
@@ -101,6 +118,7 @@ class AndroidAiStore(context: Context) : AiStore {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val GCM_TAG_BITS = 128
         const val ENCRYPTED_PREFIX = "gcm:v1:"
+        val STORE_LOCK = Any()
         const val DELIMITER = ":"
     }
 }
