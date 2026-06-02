@@ -39,6 +39,17 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.7.1",
+            title = "HHHL 0.7.1 更新内容",
+            summary = "这版修复远程 AI 调用和助手误触发问题，并补齐聊天室完整公告入口。",
+            highlights = listOf(
+                "修复远程 AI 小助手调用 chat-stream 接口不可用的问题，现在会走正确的远程流式接口。",
+                "优化 AI 助手提示词和动作解析，降低普通对话误触发打开页面、执行操作等动作的概率。",
+                "聊天室右上角菜单新增“查看公告”，可打开独立公告页查看完整聊天室公告内容。",
+                "聊天室公告只在房间公告非空时显示入口，完整公告页会保留原始长文本，不再使用列表里的省略预览。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.7.0",
             title = "HHHL 0.7.0 更新内容",
             summary = "这版继续把 AI 助手、自动化和后台消息链路做成更完整的工作流，并修复多处聊天体验问题。",

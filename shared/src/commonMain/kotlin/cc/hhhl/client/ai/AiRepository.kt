@@ -443,6 +443,7 @@ open class AiRepository(
                 header(HttpHeaders.Authorization, "Bearer $token")
                 setBody(
                     ServerAiChatStreamRequest(
+                        i = token,
                         conversationId = null,
                         providerId = selection.providerId,
                         model = selection.model,
@@ -632,6 +633,7 @@ private data class AnthropicContentBlock(
 
 @Serializable
 private data class ServerAiChatStreamRequest(
+    val i: String,
     val conversationId: String? = null,
     val providerId: String? = null,
     val model: String? = null,
@@ -670,9 +672,7 @@ private fun String.serverApiUrl(vararg endpoint: String): String {
 }
 
 private fun String.serverAiStreamUrl(): String {
-    return URLBuilder(trim().trimEnd('/'))
-        .appendPathSegments("ai", "chat-stream")
-        .buildString()
+    return serverApiUrl("ai", "chat-stream")
 }
 
 private fun JsonObject.withServerAiToken(token: String): JsonObject {

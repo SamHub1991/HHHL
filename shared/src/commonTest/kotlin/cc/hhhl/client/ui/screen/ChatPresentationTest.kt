@@ -74,6 +74,45 @@ class ChatPresentationTest {
     }
 
     @Test
+    fun chatDetailOverflowShowsAnnouncementOnlyWhenRoomHasAnnouncement() {
+        val actionsWithAnnouncement = chatDetailSummaryActions(
+            showingMembers = false,
+            isUploadingMedia = false,
+            hasAttachment = false,
+            canRefreshCurrent = true,
+            canAddMedia = true,
+            hasAnnouncement = true,
+            onRefresh = {},
+            onAddMedia = {},
+        )
+        val actionsWithoutAnnouncement = chatDetailSummaryActions(
+            showingMembers = false,
+            isUploadingMedia = false,
+            hasAttachment = false,
+            canRefreshCurrent = true,
+            canAddMedia = true,
+            hasAnnouncement = false,
+            onRefresh = {},
+            onAddMedia = {},
+        )
+
+        assertEquals(true, "查看公告" in actionsWithAnnouncement.map { it.label })
+        assertEquals(false, "查看公告" in actionsWithoutAnnouncement.map { it.label })
+    }
+
+    @Test
+    fun chatRoomAnnouncementTextKeepsFullDescription() {
+        val announcement = "\n请完整阅读：" + "A".repeat(260) + "\n"
+
+        assertEquals(
+            "请完整阅读：" + "A".repeat(260),
+            chatRoomAnnouncementText(chatRoom("room-announcement", description = announcement)),
+        )
+        assertEquals("", chatRoomAnnouncementText(chatRoom("room-empty", description = "  \n  ")))
+        assertEquals("", chatRoomAnnouncementText(null))
+    }
+
+    @Test
     fun chatDetailStatusNamesCurrentPane() {
         assertEquals("0 条消息", chatDetailStatusText(ChatUiState()))
         assertEquals(
@@ -943,12 +982,13 @@ class ChatPresentationTest {
     private fun chatRoom(
         id: String,
         ownerId: String = "owner",
+        description: String = "desc",
     ): ChatRoom {
         return ChatRoom(
             id = id,
             membershipId = "membership-$id",
             name = "Room $id",
-            description = "desc",
+            description = description,
             joinMode = "open",
             memberCount = 1,
             isMuted = false,

@@ -199,7 +199,7 @@ class AiRepositoryTest {
                         status = HttpStatusCode.OK,
                         headers = jsonHeaders,
                     )
-                    "/ai/chat-stream" -> respond(
+                    "/api/ai/chat-stream" -> respond(
                         content = """
                             event: delta
                             data: {"delta":"远端"}
@@ -226,8 +226,9 @@ class AiRepositoryTest {
         )
 
         assertEquals(AiRepositoryResult.Success("远端完成"), result)
-        assertEquals(listOf("/api/ai/status", "/ai/chat-stream"), paths)
+        assertEquals(listOf("/api/ai/status", "/api/ai/chat-stream"), paths)
         assertTrue(bodies[0].contains(""""i":"session-token""""))
+        assertTrue(bodies[1].contains(""""i":"session-token""""))
         assertTrue(bodies[1].contains(""""providerId":"remote-gpt""""))
         assertTrue(bodies[1].contains(""""model":"gpt-5.5""""))
         assertTrue(bodies[1].contains(""""content":"user prompt""""))
@@ -253,7 +254,7 @@ class AiRepositoryTest {
                         status = HttpStatusCode.OK,
                         headers = jsonHeaders,
                     )
-                    "/ai/chat-stream" -> {
+                    "/api/ai/chat-stream" -> {
                         streamBody = (request.body as TextContent).text
                         respond(
                             content = """event: done${"\n"}data: {"message":"OK"}""",

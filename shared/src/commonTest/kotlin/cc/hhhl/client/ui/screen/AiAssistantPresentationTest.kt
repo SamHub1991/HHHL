@@ -33,6 +33,32 @@ class AiAssistantPresentationTest {
         assertTrue(actions.any { it.kind == AiAssistantActionKind.OpenAutomationLogs })
         assertTrue(actions.any { it.kind == AiAssistantActionKind.OpenWebSearch })
         assertTrue(actions.none { it.kind == AiAssistantActionKind.OpenDiscoverSearch })
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.OpenWebhookManagement })
+    }
+
+    @Test
+    fun casualAssistantReplyDoesNotCreateCapabilityActions() {
+        val actions = aiAssistantSuggestedActions(
+            prompt = "你好",
+            reply = "你好！我可以帮你写消息、整理规则、检查自动化和复制清单。",
+            idPrefix = "message-casual",
+        )
+
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.OpenAutomation })
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.CreateAutomationDraft })
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.OpenAutomationLogs })
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.CopyChecklist })
+    }
+
+    @Test
+    fun multiLineAssistantReplyDoesNotAutoCreateChecklistAction() {
+        val actions = aiAssistantSuggestedActions(
+            prompt = "解释一下这个功能",
+            reply = "第一点：它用于整理消息。\n第二点：它可以辅助写草稿。\n第三点：涉及操作时需要确认。",
+            idPrefix = "message-multiline",
+        )
+
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.CopyChecklist })
     }
 
     @Test
@@ -140,26 +166,42 @@ class AiAssistantPresentationTest {
     }
 
     @Test
-    fun sendChatDraftActionCanComeFromAssistantReply() {
-        val action = aiAssistantSuggestedActions(
+    fun assistantReplyAloneDoesNotTriggerSendChatDraftAction() {
+        val actions = aiAssistantSuggestedActions(
             prompt = "执行",
             reply = "我会发送当前聊天草稿。",
             idPrefix = "message-send-continuation",
-        ).single { it.kind == AiAssistantActionKind.SendChatDraft }
+        )
 
-        assertEquals(AiAssistantActionRisk.RequiresConfirmation, action.risk)
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.SendChatDraft })
     }
 
     @Test
-    fun publishComposeDraftActionCanComeFromAssistantReply() {
+    fun assistantReplyAloneDoesNotTriggerPublishComposeDraftAction() {
         val actions = aiAssistantSuggestedActions(
             prompt = "继续",
             reply = "我会发布当前发帖草稿。",
             idPrefix = "message-publish-continuation",
         )
 
-        val publish = actions.single { it.kind == AiAssistantActionKind.PublishComposeDraft }
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.PublishComposeDraft })
         assertTrue(actions.none { it.kind == AiAssistantActionKind.FillComposeDraft })
+    }
+
+    @Test
+    fun explicitPromptStillTriggersSendAndPublishActions() {
+        val send = aiAssistantSuggestedActions(
+            prompt = "发送当前聊天草稿",
+            reply = "需要批准后发送。",
+            idPrefix = "message-explicit-send",
+        ).single { it.kind == AiAssistantActionKind.SendChatDraft }
+        val publish = aiAssistantSuggestedActions(
+            prompt = "发布当前发帖草稿",
+            reply = "需要批准后发布。",
+            idPrefix = "message-explicit-publish",
+        ).single { it.kind == AiAssistantActionKind.PublishComposeDraft }
+
+        assertEquals(AiAssistantActionRisk.RequiresConfirmation, send.risk)
         assertEquals(AiAssistantActionRisk.RequiresConfirmation, publish.risk)
     }
 

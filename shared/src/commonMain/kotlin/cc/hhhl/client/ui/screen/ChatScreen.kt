@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
@@ -1781,10 +1782,21 @@ private fun ChatDetailScreen(
             openComposerPanel(panel)
         }
     }
+    val roomAnnouncementText = remember(room?.id, room?.description) { chatRoomAnnouncementText(room) }
+    var showingRoomAnnouncement by remember(conversationKey) { mutableStateOf(false) }
     var showingMessageSearch by remember(conversationKey) { mutableStateOf(false) }
     var showingMessageFilters by remember(conversationKey) { mutableStateOf(false) }
+    LaunchedEffect(roomAnnouncementText) {
+        if (roomAnnouncementText.isBlank()) {
+            showingRoomAnnouncement = false
+        }
+    }
     val latestChatBackHandler by rememberUpdatedState<() -> Boolean> {
         when {
+            showingRoomAnnouncement -> {
+                showingRoomAnnouncement = false
+                true
+            }
             showingMessageSearch -> {
                 showingMessageSearch = false
                 true
@@ -1871,6 +1883,18 @@ private fun ChatDetailScreen(
         currentUserId = currentUserId,
     )
     val canLeaveRoom = room != null && !canManageRoom
+
+    if (showingRoomAnnouncement && room != null && roomAnnouncementText.isNotBlank()) {
+        ChatRoomAnnouncementScreen(
+            room = room,
+            announcementText = roomAnnouncementText,
+            onBack = { showingRoomAnnouncement = false },
+            onOpenUrl = onOpenUrl,
+            onOpenMention = onOpenMention,
+            onOpenHashtag = onOpenHashtag,
+        )
+        return
+    }
 
     if (showingMessageSearch) {
         ChatMessageSearchScreen(
@@ -1960,6 +1984,11 @@ private fun ChatDetailScreen(
                         onSearchMessages = {
                             closeComposerPanel()
                             showingMessageSearch = true
+                        },
+                        hasAnnouncement = roomAnnouncementText.isNotBlank(),
+                        onOpenAnnouncement = {
+                            closeComposerPanel()
+                            showingRoomAnnouncement = true
                         },
                         aiEnabled = aiEnabled,
                         isAiProcessing = isAiProcessing,
@@ -2659,6 +2688,57 @@ private fun ChatDetailScreen(
 }
 
 @Composable
+private fun ChatRoomAnnouncementScreen(
+    room: ChatRoom,
+    announcementText: String,
+    onBack: () -> Unit,
+    onOpenUrl: (String) -> Unit,
+    onOpenMention: (String) -> Unit,
+    onOpenHashtag: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Column(modifier = Modifier.fillMaxSize()) {
+        HhhlTopBar(
+            title = "聊天室公告",
+            supportingText = room.name.ifBlank { "聊天室" },
+            navigation = { HhhlBackButton(onClick = onBack) },
+        )
+        HhhlDivider()
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            item(key = "chat-room-announcement-${room.id}") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = "完整公告",
+                        color = colors.textPrimary,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    InlineRichText(
+                        text = announcementText,
+                        color = colors.textPrimary,
+                        style = MaterialTheme.typography.bodyLarge,
+                        accentColor = colors.accent,
+                        onOpenUrl = onOpenUrl,
+                        onOpenMention = onOpenMention,
+                        onOpenHashtag = onOpenHashtag,
+                    )
+                    Text(
+                        text = "${room.memberCount} 位成员 · ${room.joinMode.toDisplayJoinMode()}",
+                        color = colors.textMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ChatRoomEditDialog(
     title: String,
     confirmText: String,
@@ -2969,6 +3049,10 @@ fun canManageChatRoom(
         ownedRooms.any { ownedRoom -> ownedRoom.id == targetRoom.id }
 }
 
+fun chatRoomAnnouncementText(room: ChatRoom?): String {
+    return room?.description?.trim().orEmpty()
+}
+
 fun chatDetailSummaryActions(
     showingMembers: Boolean,
     isUploadingMedia: Boolean,
@@ -2989,6 +3073,7 @@ fun chatDetailSummaryActions(
     onAiActionItems: () -> Unit = {},
     onAiDecisionSummary: () -> Unit = {},
     onOpenFilters: () -> Unit = {},
+    onOpenAnnouncement: () -> Unit = {},
     onEditRoom: () -> Unit = {},
     onOpenRoomManagement: () -> Unit = {},
     onClearRoomMessages: () -> Unit = {},
@@ -2999,6 +3084,7 @@ fun chatDetailSummaryActions(
     canManageRoom: Boolean = true,
     canLeaveRoom: Boolean = true,
     canShowMembers: Boolean = true,
+    hasAnnouncement: Boolean = false,
 ): List<HhhlOverflowMenuAction> = buildList {
     add(
         HhhlOverflowMenuAction(
@@ -3013,6 +3099,15 @@ fun chatDetailSummaryActions(
             onClick = onSearchMessages,
         ),
     )
+    if (hasAnnouncement) {
+        add(
+            HhhlOverflowMenuAction(
+                label = "查看公告",
+                icon = Icons.Filled.Notifications,
+                onClick = onOpenAnnouncement,
+            ),
+        )
+    }
     add(
         HhhlOverflowMenuAction(
             label = if (isAiProcessing) "AI 处理中" else "AI",
