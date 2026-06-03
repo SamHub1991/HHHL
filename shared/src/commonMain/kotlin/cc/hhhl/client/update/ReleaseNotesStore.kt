@@ -39,6 +39,18 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.7.5",
+            title = "HHHL 0.7.5 更新内容",
+            summary = "这版继续修复高风险异步回写和 AI 小助手展示问题，让旧请求结果更难污染当前界面。",
+            highlights = listOf(
+                "修复 AI 小助手显示远程 AI 返回 JSON 时只显示部分内容的问题，message、code、example、output 等字段会完整拆成多个气泡展示。",
+                "AI 小助手代码块支持横向滚动，长代码和复杂格式不会再被气泡宽度截断。",
+                "修复聊天室管理设置保存较慢时，用户已经切到其他聊天室后旧保存结果又把当前聊天室切回去的问题。",
+                "继续补齐公告、天线、频道、聊天、剪辑和用户列表等页面的旧请求回写保护，降低页面切换后的竞态污染。",
+                "补充对应回归测试，并通过 shared 全量单测和 Android Debug/Release 构建验证。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.7.4",
             title = "HHHL 0.7.4 更新内容",
             summary = "这版继续修复页面切换后旧请求回写当前界面的竞态问题，减少旧操作结果污染新打开内容。",

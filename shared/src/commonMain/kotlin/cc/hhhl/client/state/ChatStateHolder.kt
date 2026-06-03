@@ -157,6 +157,7 @@ class ChatStateHolder(
     private val mutableState = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = mutableState
     private var pendingMediaUploads: List<DriveFileUpload> = emptyList()
+    private var mediaUploadRequestId = 0L
     private var streamingJob: Job? = null
     private var isRefreshingRoomsQuietly: Boolean = false
     private var isRefreshingUserConversationsQuietly: Boolean = false
@@ -202,6 +203,17 @@ class ChatStateHolder(
 
     private fun matchesUserMessageRequestGeneration(userId: String, requestGeneration: Int?): Boolean {
         return requestGeneration == null || userMessageRequestGeneration(userId) == requestGeneration
+    }
+
+    private fun ChatUiState.isCurrentMessageActionContext(
+        roomId: String?,
+        userId: String?,
+    ): Boolean {
+        return when {
+            roomId != null -> selectedRoom?.id == roomId
+            userId != null -> selectedUserConversation?.user?.id == userId
+            else -> false
+        }
     }
 
     private fun localUnreadSnapshot(): ChatUnreadSnapshot {
@@ -434,6 +446,8 @@ class ChatStateHolder(
             stopMessageStreaming()
             isRefreshingUserConversationsQuietly = false
             hasUserConversationSnapshot = false
+            pendingMediaUploads = emptyList()
+            mediaUploadRequestId += 1
         }
         mutableState.update {
             if (!chatAvailable) {
@@ -551,6 +565,8 @@ class ChatStateHolder(
             return
         }
 
+        pendingMediaUploads = emptyList()
+        mediaUploadRequestId += 1
         mutableState.update {
             val roomInList = it.rooms.any { existing -> existing.id == room.id }
             val nextRooms = if (roomInList) {
@@ -712,6 +728,8 @@ class ChatStateHolder(
 
         hiddenUserConversationLatestMessageIds = hiddenUserConversationLatestMessageIds - conversation.user.id
         bumpUserMessageRequestGeneration(conversation.user.id)
+        pendingMediaUploads = emptyList()
+        mediaUploadRequestId += 1
         mutableState.update {
             it.copy(
                 userConversations = it.userConversations
@@ -1929,6 +1947,13 @@ class ChatStateHolder(
             return
         }
 
+        val uploadStartState = state.value
+        val roomId = uploadStartState.selectedRoom?.id
+        val userId = uploadStartState.selectedUserConversation?.user?.id
+        val isContextBound = roomId != null || userId != null
+        mediaUploadRequestId += 1
+        val uploadRequestId = mediaUploadRequestId
+
         mutableState.update {
             it.copy(
                 isUploadingMedia = true,
@@ -1938,50 +1963,94 @@ class ChatStateHolder(
         }
 
         scope.launch {
-            when (val result = uploadRepository.upload(upload)) {
-                is DriveFileRepositoryResult.Success -> mutableState.update {
-                    val attachments = (it.attachments + result.file.toChatComposerAttachment())
-                        .distinctBy { attachment -> attachment.id }
-                    it.copy(
-                        attachedFile = attachments.lastOrNull()?.file,
-                        attachments = attachments,
-                        isUploadingMedia = false,
-                        messageErrorMessage = null,
-                        requiresRelogin = false,
-                    )
-                }
-                DriveFileRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
-                        isUploadingMedia = false,
-                        messageErrorMessage = "登录已失效，请重新登录",
-                        requiresRelogin = true,
-                    )
-                }
-                is DriveFileRepositoryResult.ValidationError -> mutableState.update {
-                    it.copy(
-                        isUploadingMedia = false,
-                        messageErrorMessage = result.message,
-                        requiresRelogin = false,
-                    )
-                }
-                is DriveFileRepositoryResult.Error -> mutableState.update {
-                    it.copy(
-                        isUploadingMedia = false,
-                        messageErrorMessage = result.message,
-                        requiresRelogin = false,
-                    )
+            fun ChatUiState.canApplyUploadResult(): Boolean {
+                return mediaUploadRequestId == uploadRequestId &&
+                    (!isContextBound || isCurrentMessageActionContext(roomId, userId))
+            }
+
+            fun ChatUiState.ignoreStaleUploadResult(): ChatUiState {
+                return if (mediaUploadRequestId == uploadRequestId) {
+                    copy(isUploadingMedia = false)
+                } else {
+                    this
                 }
             }
-            uploadPendingMediaIfAny()
+
+            var shouldUploadPending = false
+            when (val result = uploadRepository.upload(upload)) {
+                is DriveFileRepositoryResult.Success -> mutableState.update { current ->
+                    val canApply = current.canApplyUploadResult()
+                    shouldUploadPending = canApply
+                    if (!canApply) {
+                        current.ignoreStaleUploadResult()
+                    } else {
+                        val attachments = (current.attachments + result.file.toChatComposerAttachment())
+                            .distinctBy { attachment -> attachment.id }
+                        current.copy(
+                            attachedFile = attachments.lastOrNull()?.file,
+                            attachments = attachments,
+                            isUploadingMedia = false,
+                            messageErrorMessage = null,
+                            requiresRelogin = false,
+                        )
+                    }
+                }
+                DriveFileRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val canApply = current.canApplyUploadResult()
+                    shouldUploadPending = canApply
+                    if (!canApply) {
+                        current.ignoreStaleUploadResult()
+                    } else {
+                        current.copy(
+                            isUploadingMedia = false,
+                            messageErrorMessage = "登录已失效，请重新登录",
+                            requiresRelogin = true,
+                        )
+                    }
+                }
+                is DriveFileRepositoryResult.ValidationError -> mutableState.update { current ->
+                    val canApply = current.canApplyUploadResult()
+                    shouldUploadPending = canApply
+                    if (!canApply) {
+                        current.ignoreStaleUploadResult()
+                    } else {
+                        current.copy(
+                            isUploadingMedia = false,
+                            messageErrorMessage = result.message,
+                            requiresRelogin = false,
+                        )
+                    }
+                }
+                is DriveFileRepositoryResult.Error -> mutableState.update { current ->
+                    val canApply = current.canApplyUploadResult()
+                    shouldUploadPending = canApply
+                    if (!canApply) {
+                        current.ignoreStaleUploadResult()
+                    } else {
+                        current.copy(
+                            isUploadingMedia = false,
+                            messageErrorMessage = result.message,
+                            requiresRelogin = false,
+                        )
+                    }
+                }
+            }
+            if (shouldUploadPending) {
+                uploadPendingMediaIfAny()
+            } else if (mediaUploadRequestId == uploadRequestId) {
+                pendingMediaUploads = emptyList()
+            }
         }
     }
 
     fun removeAttachedFile() {
         pendingMediaUploads = emptyList()
+        mediaUploadRequestId += 1
         mutableState.update {
             it.copy(
                 attachedFile = null,
                 attachments = emptyList(),
+                isUploadingMedia = false,
                 messageErrorMessage = null,
                 requiresRelogin = false,
             )
@@ -2151,27 +2220,38 @@ class ChatStateHolder(
                     userId = userId,
                 )
             ) {
-                is ChatMessageRepositoryResult.Deleted -> mutableState.update {
-                    it.copy(
-                        messages = it.messages.filterNot { message -> message.id == result.messageId },
-                        messageSearchResults = it.messageSearchResults.filterNot { message -> message.id == result.messageId },
-                        pendingMessageDeleteIds = it.pendingMessageDeleteIds - result.messageId,
-                        messageErrorMessage = null,
-                        requiresRelogin = false,
+                is ChatMessageRepositoryResult.Deleted -> mutableState.update { current ->
+                    val isCurrentContext = current.isCurrentMessageActionContext(roomId, userId)
+                    current.copy(
+                        messages = if (isCurrentContext) {
+                            current.messages.filterNot { message -> message.id == result.messageId }
+                        } else {
+                            current.messages
+                        },
+                        messageSearchResults = if (isCurrentContext) {
+                            current.messageSearchResults.filterNot { message -> message.id == result.messageId }
+                        } else {
+                            current.messageSearchResults
+                        },
+                        pendingMessageDeleteIds = current.pendingMessageDeleteIds - result.messageId - cleanMessageId,
+                        messageErrorMessage = if (isCurrentContext) null else current.messageErrorMessage,
+                        requiresRelogin = if (isCurrentContext) false else current.requiresRelogin,
                     )
                 }
-                ChatMessageRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
-                        pendingMessageDeleteIds = it.pendingMessageDeleteIds - cleanMessageId,
-                        messageErrorMessage = "登录已失效，请重新登录",
-                        requiresRelogin = true,
+                ChatMessageRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val isCurrentContext = current.isCurrentMessageActionContext(roomId, userId)
+                    current.copy(
+                        pendingMessageDeleteIds = current.pendingMessageDeleteIds - cleanMessageId,
+                        messageErrorMessage = if (isCurrentContext) "登录已失效，请重新登录" else current.messageErrorMessage,
+                        requiresRelogin = if (isCurrentContext) true else current.requiresRelogin,
                     )
                 }
-                is ChatMessageRepositoryResult.Error -> mutableState.update {
-                    it.copy(
-                        pendingMessageDeleteIds = it.pendingMessageDeleteIds - cleanMessageId,
-                        messageErrorMessage = result.message,
-                        requiresRelogin = false,
+                is ChatMessageRepositoryResult.Error -> mutableState.update { current ->
+                    val isCurrentContext = current.isCurrentMessageActionContext(roomId, userId)
+                    current.copy(
+                        pendingMessageDeleteIds = current.pendingMessageDeleteIds - cleanMessageId,
+                        messageErrorMessage = if (isCurrentContext) result.message else current.messageErrorMessage,
+                        requiresRelogin = if (isCurrentContext) false else current.requiresRelogin,
                     )
                 }
                 is ChatMessageRepositoryResult.Success,
@@ -2190,6 +2270,9 @@ class ChatStateHolder(
         react: Boolean,
     ) {
         if (state.value.pendingMessageReactionIds.contains(messageId)) return
+        val current = state.value
+        val roomId = current.selectedRoom?.id
+        val userId = current.selectedUserConversation?.user?.id
 
         mutableState.update {
             it.copy(
@@ -2209,6 +2292,8 @@ class ChatStateHolder(
                 messageId = messageId,
                 reaction = reaction,
                 react = react,
+                roomId = roomId,
+                userId = userId,
                 result = result,
             )
         }
@@ -3101,7 +3186,11 @@ class ChatStateHolder(
                         .sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
                     ownedRooms = (listOf(savedOwnedRoom) + it.ownedRooms.filterNot { room -> room.id == savedOwnedRoom.id })
                         .sortedByPinnedIds(it.pinnedRoomIds) { room -> room.id },
-                    selectedRoom = if (selectSavedRoom) savedRoom else it.selectedRoom,
+                    selectedRoom = if (selectSavedRoom && it.selectedRoom?.id == savedRoom.id) {
+                        savedRoom
+                    } else {
+                        it.selectedRoom
+                    },
                     isManagingRoom = false,
                     roomManagementMessage = successMessage.takeIf { message -> message.isNotBlank() },
                     errorMessage = null,
@@ -3242,29 +3331,38 @@ class ChatStateHolder(
         messageId: String,
         reaction: String,
         react: Boolean,
+        roomId: String?,
+        userId: String?,
         result: ChatMessageRepositoryResult,
     ) {
         when (result) {
-            ChatMessageRepositoryResult.ReactionUpdated -> mutableState.update {
-                it.copy(
-                    messages = it.messages.withMessageReactionUpdated(messageId, reaction, react),
-                    pendingMessageReactionIds = it.pendingMessageReactionIds - messageId,
-                    messageErrorMessage = null,
-                    requiresRelogin = false,
+            ChatMessageRepositoryResult.ReactionUpdated -> mutableState.update { current ->
+                val isCurrentContext = current.isCurrentMessageActionContext(roomId, userId)
+                current.copy(
+                    messages = if (isCurrentContext) {
+                        current.messages.withMessageReactionUpdated(messageId, reaction, react)
+                    } else {
+                        current.messages
+                    },
+                    pendingMessageReactionIds = current.pendingMessageReactionIds - messageId,
+                    messageErrorMessage = if (isCurrentContext) null else current.messageErrorMessage,
+                    requiresRelogin = if (isCurrentContext) false else current.requiresRelogin,
                 )
             }
-            ChatMessageRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
-                    pendingMessageReactionIds = it.pendingMessageReactionIds - messageId,
-                    messageErrorMessage = "登录已失效，请重新登录",
-                    requiresRelogin = true,
+            ChatMessageRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val isCurrentContext = current.isCurrentMessageActionContext(roomId, userId)
+                current.copy(
+                    pendingMessageReactionIds = current.pendingMessageReactionIds - messageId,
+                    messageErrorMessage = if (isCurrentContext) "登录已失效，请重新登录" else current.messageErrorMessage,
+                    requiresRelogin = if (isCurrentContext) true else current.requiresRelogin,
                 )
             }
-            is ChatMessageRepositoryResult.Error -> mutableState.update {
-                it.copy(
-                    pendingMessageReactionIds = it.pendingMessageReactionIds - messageId,
-                    messageErrorMessage = result.message,
-                    requiresRelogin = false,
+            is ChatMessageRepositoryResult.Error -> mutableState.update { current ->
+                val isCurrentContext = current.isCurrentMessageActionContext(roomId, userId)
+                current.copy(
+                    pendingMessageReactionIds = current.pendingMessageReactionIds - messageId,
+                    messageErrorMessage = if (isCurrentContext) result.message else current.messageErrorMessage,
+                    requiresRelogin = if (isCurrentContext) false else current.requiresRelogin,
                 )
             }
             is ChatMessageRepositoryResult.Success,

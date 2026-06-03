@@ -236,17 +236,19 @@ class AntennaStateHolder(
                         requiresRelogin = false,
                     )
                 }
-                AntennaMutationRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                AntennaMutationRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val updatingSelectedAntenna = current.selectedAntenna?.id == antenna.id
+                    current.copy(
                         isMutatingAntenna = false,
-                        errorMessage = "登录已失效，请重新登录",
+                        errorMessage = if (updatingSelectedAntenna) "登录已失效，请重新登录" else current.errorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is AntennaMutationRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is AntennaMutationRepositoryResult.Error -> mutableState.update { current ->
+                    val updatingSelectedAntenna = current.selectedAntenna?.id == antenna.id
+                    current.copy(
                         isMutatingAntenna = false,
-                        errorMessage = result.message,
+                        errorMessage = if (updatingSelectedAntenna) result.message else current.errorMessage,
                         requiresRelogin = false,
                     )
                 }

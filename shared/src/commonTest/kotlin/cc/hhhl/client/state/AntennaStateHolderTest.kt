@@ -194,6 +194,41 @@ class AntennaStateHolderTest {
     }
 
     @Test
+    fun pendingUpdateErrorDoesNotShowOnNewlySelectedAntenna() = runTest {
+        val updateResult = CompletableDeferred<AntennaMutationRepositoryResult>()
+        val first = sampleAntenna("antenna-1")
+        val second = sampleAntenna("antenna-2")
+        val note = FakeData.timeline[0]
+        val holder = AntennaStateHolder(
+            repository = fakeRepository(
+                antennasResult = AntennasRepositoryResult.Success(listOf(first, second)),
+                notesResult = AntennaNotesRepositoryResult.Success(listOf(note)),
+                mutationResultProvider = { updateResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshAntennas()
+        advanceUntilIdle()
+        holder.updateSelectedAntenna(sampleDraft(name = "LLM"))
+        runCurrent()
+
+        assertTrue(holder.state.value.isMutatingAntenna)
+
+        holder.selectAntenna(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedAntenna)
+        assertEquals(null, holder.state.value.errorMessage)
+
+        updateResult.complete(AntennaMutationRepositoryResult.Error("更新失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMutatingAntenna)
+        assertEquals(second, holder.state.value.selectedAntenna)
+        assertEquals(null, holder.state.value.errorMessage)
+    }
+
+    @Test
     fun deleteSelectedAntennaRemovesAndSelectsNext() = runTest {
         val first = sampleAntenna("antenna-1")
         val second = sampleAntenna("antenna-2")
@@ -293,6 +328,7 @@ class AntennaStateHolderTest {
         onUpdateAntenna: (String, AntennaDraft) -> Unit = { _, _ -> },
         onDeleteAntenna: (String) -> Unit = {},
         antennasResultProvider: (() -> AntennasRepositoryResult)? = null,
+        mutationResultProvider: suspend () -> AntennaMutationRepositoryResult = { mutationResult },
         actionResultProvider: suspend (String) -> AntennaActionRepositoryResult = { actionResult },
     ): AntennaRepository {
         return object : AntennaRepository(
@@ -352,7 +388,7 @@ class AntennaStateHolderTest {
 
             override suspend fun createAntenna(draft: AntennaDraft): AntennaMutationRepositoryResult {
                 onCreateAntenna(draft)
-                return mutationResult
+                return mutationResultProvider()
             }
 
             override suspend fun updateAntenna(
@@ -360,7 +396,7 @@ class AntennaStateHolderTest {
                 draft: AntennaDraft,
             ): AntennaMutationRepositoryResult {
                 onUpdateAntenna(antennaId, draft)
-                return mutationResult
+                return mutationResultProvider()
             }
 
             override suspend fun deleteAntenna(antennaId: String): AntennaActionRepositoryResult {

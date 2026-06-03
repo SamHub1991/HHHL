@@ -1161,6 +1161,7 @@ data class AiAssistantActionPayload(
 data class AiAssistantStructuredReply(
     val visibleText: String,
     val payload: AiAssistantStructuredPayload = AiAssistantStructuredPayload(),
+    val displayBlocks: List<String> = emptyList(),
 )
 
 private val AiAssistantJson = Json { ignoreUnknownKeys = true }
@@ -1234,6 +1235,53 @@ private val AiAssistantJsonDisplayOnlyKeys = setOf(
     "说明",
     "回复",
 )
+private val AiAssistantJsonDisplayKeySet = AiAssistantJsonDisplayKeys.map { it.lowercase() }.toSet()
+private val AiAssistantJsonContainerKeys = listOf("choices", "output", "messages", "items", "result", "response", "data", "payload")
+private val AiAssistantJsonMetadataKeys = setOf(
+    "id",
+    "object",
+    "created",
+    "created_at",
+    "model",
+    "usage",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "input_tokens",
+    "output_tokens",
+    "role",
+    "type",
+    "index",
+    "finish_reason",
+    "stop_reason",
+    "status",
+    "refusal",
+    "annotations",
+    "logprobs",
+    "seed",
+    "system_fingerprint",
+    "provider",
+    "request_id",
+    "response_id",
+)
+private val AiAssistantJsonAuxiliaryDisplayKeys = setOf(
+    "code",
+    "example",
+    "examples",
+    "input",
+    "output",
+    "result",
+    "result_text",
+    "error",
+    "detail",
+    "details",
+    "steps",
+    "markdown",
+)
+private val AiAssistantJsonPayloadKeys = AiAssistantPayloadField.values()
+    .flatMap { field -> field.keys }
+    .map { key -> key.lowercase() }
+    .toSet()
 
 fun aiAssistantSuggestedActions(
     prompt: String,
@@ -1766,11 +1814,17 @@ fun aiAssistantStructuredReply(text: String): AiAssistantStructuredReply {
 }
 
 fun aiAssistantDisplayBubbles(text: String): List<String> {
-    val visible = aiAssistantStructuredReply(text).visibleText
+    val structuredReply = aiAssistantStructuredReply(text)
+    val visible = structuredReply.visibleText
         .replace("\r\n", "\n")
         .trim()
     if (visible.isBlank()) return listOf("")
-    val blocks = visible.aiAssistantSplitDisplayBlocks()
+    val blocks = structuredReply.displayBlocks
+        .map { it.replace("\r\n", "\n").replace('\r', '\n').aiAssistantNormalizeDisplayText() }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .takeIf { it.isNotEmpty() }
+        ?: visible.aiAssistantSplitDisplayBlocks()
     if (blocks.size <= AI_ASSISTANT_MAX_DISPLAY_BUBBLES) return blocks
     return blocks.take(AI_ASSISTANT_MAX_DISPLAY_BUBBLES - 1) +
         blocks.drop(AI_ASSISTANT_MAX_DISPLAY_BUBBLES - 1).joinToString("\n\n")
@@ -1782,13 +1836,20 @@ private fun aiAssistantJsonReply(raw: String): AiAssistantStructuredReply? {
         ?: return null
     val payload = aiAssistantPayloadFromJson(jsonText).takeIf { it?.hasAny == true }
         ?: AiAssistantStructuredPayload()
-    val visible = root.aiAssistantJsonVisibleText()
+    if (!root.hasAiAssistantJsonReplyShape() && !payload.hasAny) return null
+    val visibleBlocks = root.aiAssistantJsonVisibleBlocks()
+        .map { it.aiAssistantNormalizeDisplayText() }
+        .filter { it.isNotBlank() }
+        .distinct()
+    val visible = visibleBlocks
+        .joinToString("\n\n")
         .ifBlank { payload.body }
         .trim()
     if (visible.isBlank() && !payload.hasAny) return null
     return AiAssistantStructuredReply(
         visibleText = visible.ifBlank { raw },
         payload = payload,
+        displayBlocks = visibleBlocks,
     )
 }
 
@@ -1822,8 +1883,14 @@ private fun JsonElement.aiAssistantJsonVisibleText(depth: Int = 0): String {
 }
 
 private fun JsonObject.aiAssistantJsonVisibleText(depth: Int = 0): String {
-    AiAssistantJsonDisplayKeys.forEach { key ->
-        this[key]?.toDisplayText()?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+    val directVisible = AiAssistantJsonDisplayKeys.firstNotNullOfOrNull { key ->
+        this[key]?.toDisplayText()?.trim()?.takeIf { it.isNotBlank() }
+    }
+    if (directVisible != null) {
+        return listOf(directVisible, aiAssistantJsonAuxiliaryVisibleText(depth))
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString("\n\n")
     }
     val payload = this["payload"] as? JsonObject
     if (payload != null) {
@@ -1837,13 +1904,160 @@ private fun JsonObject.aiAssistantJsonVisibleText(depth: Int = 0): String {
             data[key]?.toDisplayText()?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
         }
     }
-    listOf("choices", "output", "messages", "items", "result", "response", "data", "payload").forEach { key ->
+    AiAssistantJsonContainerKeys.forEach { key ->
         this[key]?.aiAssistantJsonVisibleText(depth + 1)?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
     }
-    values.forEach { child ->
-        child.aiAssistantJsonVisibleText(depth + 1).trim().takeIf { it.isNotBlank() }?.let { return it }
+    return aiAssistantJsonAuxiliaryVisibleText(depth)
+}
+
+private fun JsonObject.aiAssistantJsonAuxiliaryVisibleText(depth: Int): String {
+    if (depth > 5) return ""
+    return entries
+        .asSequence()
+        .filterNot { (key, _) -> key.isAiAssistantHiddenJsonDisplayKey() }
+        .mapNotNull { (_, value) ->
+            value.aiAssistantJsonLooseVisibleText(depth + 1)
+                .trim()
+                .takeIf { it.isNotBlank() }
+        }
+        .distinct()
+        .joinToString("\n\n")
+}
+
+private fun JsonElement.aiAssistantJsonLooseVisibleText(depth: Int): String {
+    if (depth > 5) return ""
+    return when (this) {
+        is JsonPrimitive -> jsonPrimitive.contentOrNull.orEmpty()
+        is JsonArray -> map { item -> item.aiAssistantJsonLooseVisibleText(depth + 1).trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString("\n\n")
+        is JsonObject -> aiAssistantJsonVisibleText(depth)
+            .ifBlank {
+                entries
+                    .asSequence()
+                    .filterNot { (key, _) -> key.isAiAssistantHiddenJsonDisplayKey() }
+                    .mapNotNull { (_, value) ->
+                        value.aiAssistantJsonLooseVisibleText(depth + 1)
+                            .trim()
+                            .takeIf { it.isNotBlank() }
+                    }
+                    .distinct()
+                    .joinToString("\n\n")
+            }
     }
-    return ""
+}
+
+private fun JsonElement.hasAiAssistantJsonReplyShape(depth: Int = 0): Boolean {
+    if (depth > 5) return false
+    return when (this) {
+        is JsonArray -> any { item -> item.hasAiAssistantJsonReplyShape(depth + 1) }
+        is JsonObject -> keys.any { jsonKey -> jsonKey.isAiAssistantJsonReplyShapeKey() }
+        else -> false
+    }
+}
+
+private fun String.isAiAssistantJsonReplyShapeKey(): Boolean {
+    val clean = lowercase()
+    return clean in AiAssistantJsonDisplayKeySet ||
+        clean in AiAssistantJsonContainerKeys ||
+        clean in AiAssistantJsonAuxiliaryDisplayKeys ||
+        clean == "payload" ||
+        clean == "data"
+}
+
+private fun JsonElement.aiAssistantJsonVisibleBlocks(depth: Int = 0): List<String> {
+    if (depth > 5) return emptyList()
+    return when (this) {
+        is JsonArray -> flatMap { item -> item.aiAssistantJsonVisibleBlocks(depth + 1) }
+            .filter { it.isNotBlank() }
+            .ifEmpty { toDisplayBlocks(splitParagraphs = false) }
+        is JsonObject -> aiAssistantJsonVisibleBlocks(depth)
+        else -> emptyList()
+    }
+}
+
+private fun JsonObject.aiAssistantJsonVisibleBlocks(depth: Int = 0): List<String> {
+    val directVisible = AiAssistantJsonDisplayKeys.firstNotNullOfOrNull { jsonKey ->
+        this[jsonKey]?.toDisplayBlocks(splitParagraphs = true)?.takeIf { it.isNotEmpty() }
+    }
+    if (directVisible != null) {
+        return (directVisible + aiAssistantJsonAuxiliaryVisibleBlocks(depth))
+            .distinct()
+    }
+    val payload = this["payload"] as? JsonObject
+    if (payload != null) {
+        AiAssistantJsonDisplayKeys.forEach { jsonKey ->
+            payload[jsonKey]?.toDisplayBlocks(splitParagraphs = true)?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
+    }
+    val data = this["data"] as? JsonObject
+    if (data != null) {
+        AiAssistantJsonDisplayKeys.forEach { jsonKey ->
+            data[jsonKey]?.toDisplayBlocks(splitParagraphs = true)?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
+    }
+    AiAssistantJsonContainerKeys.forEach { jsonKey ->
+        this[jsonKey]?.aiAssistantJsonVisibleBlocks(depth + 1)?.takeIf { it.isNotEmpty() }?.let { return it }
+    }
+    return aiAssistantJsonAuxiliaryVisibleBlocks(depth)
+}
+
+private fun JsonObject.aiAssistantJsonAuxiliaryVisibleBlocks(depth: Int): List<String> {
+    if (depth > 5) return emptyList()
+    return entries
+        .asSequence()
+        .filterNot { (jsonKey, _) -> jsonKey.isAiAssistantHiddenJsonDisplayKey() }
+        .flatMap { (_, value) -> value.aiAssistantJsonLooseVisibleBlocks(depth + 1) }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .toList()
+}
+
+private fun JsonElement.aiAssistantJsonLooseVisibleBlocks(depth: Int): List<String> {
+    if (depth > 5) return emptyList()
+    return when (this) {
+        is JsonPrimitive -> listOf(jsonPrimitive.contentOrNull.orEmpty())
+        is JsonArray -> flatMap { item -> item.aiAssistantJsonLooseVisibleBlocks(depth + 1) }
+            .filter { it.isNotBlank() }
+            .distinct()
+        is JsonObject -> aiAssistantJsonVisibleBlocks(depth)
+            .ifEmpty {
+                entries
+                    .asSequence()
+                    .filterNot { (jsonKey, _) -> jsonKey.isAiAssistantHiddenJsonDisplayKey() }
+                    .flatMap { (_, value) -> value.aiAssistantJsonLooseVisibleBlocks(depth + 1) }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .toList()
+            }
+    }
+}
+
+private fun JsonElement.toDisplayBlocks(splitParagraphs: Boolean): List<String> {
+    return when (this) {
+        is JsonArray -> map { item -> item.toDisplayText().trim() }
+            .filter { it.isNotBlank() }
+        else -> {
+            val text = toDisplayText().trim()
+            if (text.isBlank()) {
+                emptyList()
+            } else if (splitParagraphs) {
+                text.aiAssistantSplitDisplayBlocks()
+            } else {
+                listOf(text)
+            }
+        }
+    }
+}
+
+private fun String.isAiAssistantHiddenJsonDisplayKey(): Boolean {
+    val clean = lowercase()
+    return clean in AiAssistantJsonDisplayKeySet ||
+        clean in AiAssistantJsonMetadataKeys ||
+        clean in AiAssistantJsonPayloadKeys ||
+        clean == "payload" ||
+        clean == "data"
 }
 
 private fun String.aiAssistantSplitDisplayBlocks(): List<String> {

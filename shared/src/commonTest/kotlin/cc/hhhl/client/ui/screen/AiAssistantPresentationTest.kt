@@ -546,6 +546,28 @@ class AiAssistantPresentationTest {
     }
 
     @Test
+    fun assistantDisplayBubblesPreserveRemoteJsonMessageAndAdditionalSections() {
+        val bubbles = aiAssistantDisplayBubbles(
+            """
+                {
+                  "message": "下面是完整示例。",
+                  "code": "```kotlin\nfun main() {\n    println(10 * 3)\n}\n```",
+                  "example": "示例输入：\n10\n*\n3\n\n输出：\n30"
+                }
+            """.trimIndent(),
+        )
+
+        assertEquals(
+            listOf(
+                "下面是完整示例。",
+                "```kotlin\nfun main() {\n    println(10 * 3)\n}\n```",
+                "示例输入：\n10\n*\n3\n\n输出：\n30",
+            ),
+            bubbles,
+        )
+    }
+
+    @Test
     fun assistantDisplayBubblesExtractEmbeddedJsonFenceAndHideProtocol() {
         val bubbles = aiAssistantDisplayBubbles(
             """

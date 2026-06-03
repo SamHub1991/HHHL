@@ -247,6 +247,49 @@ class AnnouncementStateHolderTest {
     }
 
     @Test
+    fun concurrentDeleteAnnouncementsApplyIndependently() = runTest {
+        val first = sampleAnnouncement("ann-1")
+        val second = sampleAnnouncement("ann-2")
+        val firstDelete = CompletableDeferred<AnnouncementDeleteRepositoryResult>()
+        val secondDelete = CompletableDeferred<AnnouncementDeleteRepositoryResult>()
+        val holder = AnnouncementStateHolder(
+            repository = fakeRepository(
+                adminListResult = AnnouncementsRepositoryResult.Success(listOf(first, second)),
+                deleteHandler = { announcementId ->
+                    when (announcementId) {
+                        first.id -> firstDelete.await()
+                        second.id -> secondDelete.await()
+                        else -> AnnouncementDeleteRepositoryResult.Error("unknown announcement")
+                    }
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.enterManagement()
+        advanceUntilIdle()
+
+        holder.deleteAnnouncement(first.id)
+        runCurrent()
+        holder.deleteAnnouncement(second.id)
+        runCurrent()
+
+        assertEquals(setOf(first.id, second.id), holder.state.value.pendingAnnouncementIds)
+
+        firstDelete.complete(AnnouncementDeleteRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertEquals(listOf(second.id), holder.state.value.announcements.map { it.id })
+        assertEquals(setOf(second.id), holder.state.value.pendingAnnouncementIds)
+
+        secondDelete.complete(AnnouncementDeleteRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), holder.state.value.announcements)
+        assertEquals(emptySet(), holder.state.value.pendingAnnouncementIds)
+    }
+
+    @Test
     fun exitManagementInvalidatesPendingAdminRefresh() = runTest {
         val pending = CompletableDeferred<AnnouncementsRepositoryResult>()
         val adminAnnouncement = sampleAnnouncement("admin-1")

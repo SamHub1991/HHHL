@@ -193,6 +193,41 @@ class ClipStateHolderTest {
     }
 
     @Test
+    fun pendingFavoriteErrorDoesNotShowOnNewlySelectedClip() = runTest {
+        val favoriteResult = CompletableDeferred<ClipActionRepositoryResult>()
+        val first = sampleClip("clip-1").copy(isFavorited = false)
+        val second = sampleClip("clip-2")
+        val note = FakeData.timeline[0]
+        val holder = ClipStateHolder(
+            repository = fakeRepository(
+                clipsResult = ClipsRepositoryResult.Success(listOf(first, second)),
+                notesResult = ClipNotesRepositoryResult.Success(listOf(note)),
+                favoriteActionResultProvider = { favoriteResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshClips()
+        advanceUntilIdle()
+        holder.toggleFavoriteSelectedClip()
+        runCurrent()
+
+        assertTrue(holder.state.value.isChangingFavorite)
+
+        holder.selectClip(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedClip)
+        assertEquals(null, holder.state.value.errorMessage)
+
+        favoriteResult.complete(ClipActionRepositoryResult.Error("收藏失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isChangingFavorite)
+        assertEquals(second, holder.state.value.selectedClip)
+        assertEquals(null, holder.state.value.errorMessage)
+    }
+
+    @Test
     fun removeNoteFromSelectedClipRemovesNoteAndUpdatesCounts() = runTest {
         val first = FakeData.timeline[0]
         val second = FakeData.timeline[1]
@@ -219,6 +254,77 @@ class ClipStateHolderTest {
         assertEquals(listOf(second), holder.state.value.notes)
         assertEquals(1, holder.state.value.selectedClip?.notesCount)
         assertEquals(1, holder.state.value.clips.single().notesCount)
+    }
+
+    @Test
+    fun pendingRemoveNoteErrorDoesNotShowOnNewlySelectedClip() = runTest {
+        val removeResult = CompletableDeferred<ClipActionRepositoryResult>()
+        val first = sampleClip("clip-1").copy(notesCount = 2)
+        val second = sampleClip("clip-2").copy(notesCount = 2)
+        val note = FakeData.timeline[0]
+        val holder = ClipStateHolder(
+            repository = fakeRepository(
+                clipsResult = ClipsRepositoryResult.Success(listOf(first, second)),
+                notesResult = ClipNotesRepositoryResult.Success(listOf(note)),
+                removeNoteActionResultProvider = { _, _ -> removeResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshClips()
+        advanceUntilIdle()
+        holder.removeNoteFromSelectedClip(note.id)
+        runCurrent()
+
+        assertTrue(holder.state.value.isChangingClipNote)
+
+        holder.selectClip(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedClip)
+        assertEquals(null, holder.state.value.notesErrorMessage)
+
+        removeResult.complete(ClipActionRepositoryResult.Error("移除失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isChangingClipNote)
+        assertEquals(second, holder.state.value.selectedClip)
+        assertEquals(null, holder.state.value.notesErrorMessage)
+        assertEquals(listOf(note), holder.state.value.notes)
+    }
+
+    @Test
+    fun pendingRemoveNoteSuccessDoesNotRemoveNoteFromNewlySelectedClip() = runTest {
+        val removeResult = CompletableDeferred<ClipActionRepositoryResult>()
+        val first = sampleClip("clip-1").copy(notesCount = 2)
+        val second = sampleClip("clip-2").copy(notesCount = 2)
+        val note = FakeData.timeline[0]
+        val holder = ClipStateHolder(
+            repository = fakeRepository(
+                clipsResult = ClipsRepositoryResult.Success(listOf(first, second)),
+                notesResult = ClipNotesRepositoryResult.Success(listOf(note)),
+                removeNoteActionResultProvider = { _, _ -> removeResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshClips()
+        advanceUntilIdle()
+        holder.removeNoteFromSelectedClip(note.id)
+        runCurrent()
+
+        holder.selectClip(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedClip)
+        assertEquals(listOf(note), holder.state.value.notes)
+
+        removeResult.complete(ClipActionRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isChangingClipNote)
+        assertEquals(second, holder.state.value.selectedClip)
+        assertEquals(listOf(note), holder.state.value.notes)
+        assertEquals(1, holder.state.value.clips.first { it.id == first.id }.notesCount)
+        assertEquals(2, holder.state.value.clips.first { it.id == second.id }.notesCount)
     }
 
     @Test
@@ -280,6 +386,33 @@ class ClipStateHolderTest {
     }
 
     @Test
+    fun addNoteToSpecificClipErrorDoesNotShowOnSelectedClip() = runTest {
+        val first = FakeData.timeline[0]
+        val second = FakeData.timeline[1]
+        val selected = sampleClip("clip-1").copy(notesCount = 1)
+        val target = sampleClip("clip-2").copy(notesCount = 4)
+        val holder = ClipStateHolder(
+            repository = fakeRepository(
+                clipsResult = ClipsRepositoryResult.Success(listOf(selected, target)),
+                notesResult = ClipNotesRepositoryResult.Success(listOf(first)),
+                actionResult = ClipActionRepositoryResult.Error("添加失败"),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshClips()
+        advanceUntilIdle()
+        holder.addNoteToClip(target, second)
+        advanceUntilIdle()
+
+        assertEquals(selected, holder.state.value.selectedClip)
+        assertEquals(null, holder.state.value.notesErrorMessage)
+        assertEquals(listOf(first), holder.state.value.notes)
+        assertEquals(1, holder.state.value.clips.first { it.id == selected.id }.notesCount)
+        assertEquals(4, holder.state.value.clips.first { it.id == target.id }.notesCount)
+    }
+
+    @Test
     fun createClipPrependsAndSelectsCreatedClip() = runTest {
         val existing = sampleClip("clip-1").copy(notesCount = 1)
         val created = sampleClip("clip-created").copy(name = "阅读清单", description = "长文", isPublic = true)
@@ -337,6 +470,41 @@ class ClipStateHolderTest {
         assertEquals(updated, holder.state.value.selectedClip)
         assertEquals(updated, holder.state.value.clips.single())
         assertEquals(listOf(FakeData.timeline[0]), holder.state.value.notes)
+    }
+
+    @Test
+    fun pendingUpdateErrorDoesNotShowOnNewlySelectedClip() = runTest {
+        val updateResult = CompletableDeferred<ClipUpdateRepositoryResult>()
+        val first = sampleClip("clip-1")
+        val second = sampleClip("clip-2")
+        val note = FakeData.timeline[0]
+        val holder = ClipStateHolder(
+            repository = fakeRepository(
+                clipsResult = ClipsRepositoryResult.Success(listOf(first, second)),
+                notesResult = ClipNotesRepositoryResult.Success(listOf(note)),
+                updateResultProvider = { _, _, _, _ -> updateResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshClips()
+        advanceUntilIdle()
+        holder.updateSelectedClip("新名称", "新描述", isPublic = true)
+        runCurrent()
+
+        assertTrue(holder.state.value.isUpdatingClip)
+
+        holder.selectClip(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedClip)
+        assertEquals(null, holder.state.value.errorMessage)
+
+        updateResult.complete(ClipUpdateRepositoryResult.Error("更新失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isUpdatingClip)
+        assertEquals(second, holder.state.value.selectedClip)
+        assertEquals(null, holder.state.value.errorMessage)
     }
 
     @Test
@@ -444,6 +612,10 @@ class ClipStateHolderTest {
         onCreateClip: (String, String, Boolean) -> Unit = { _, _, _ -> },
         onUpdateClip: (String, String, String, Boolean) -> Unit = { _, _, _, _ -> },
         onDeleteClip: (String) -> Unit = {},
+        updateResultProvider: suspend (String, String, String, Boolean) -> ClipUpdateRepositoryResult = { _, _, _, _ -> updateResult },
+        favoriteActionResultProvider: suspend (String) -> ClipActionRepositoryResult = { actionResult },
+        addNoteActionResultProvider: suspend (String, String) -> ClipActionRepositoryResult = { _, _ -> actionResult },
+        removeNoteActionResultProvider: suspend (String, String) -> ClipActionRepositoryResult = { _, _ -> actionResult },
         deleteActionResultProvider: suspend (String) -> ClipActionRepositoryResult = { actionResult },
     ): ClipRepository {
         return sequenceRepository(
@@ -460,6 +632,10 @@ class ClipStateHolderTest {
             onCreateClip = onCreateClip,
             onUpdateClip = onUpdateClip,
             onDeleteClip = onDeleteClip,
+            updateResultProvider = updateResultProvider,
+            favoriteActionResultProvider = favoriteActionResultProvider,
+            addNoteActionResultProvider = addNoteActionResultProvider,
+            removeNoteActionResultProvider = removeNoteActionResultProvider,
             deleteActionResultProvider = deleteActionResultProvider,
         )
     }
@@ -478,6 +654,10 @@ class ClipStateHolderTest {
         onCreateClip: (String, String, Boolean) -> Unit = { _, _, _ -> },
         onUpdateClip: (String, String, String, Boolean) -> Unit = { _, _, _, _ -> },
         onDeleteClip: (String) -> Unit = {},
+        updateResultProvider: suspend (String, String, String, Boolean) -> ClipUpdateRepositoryResult = { _, _, _, _ -> updateResult },
+        favoriteActionResultProvider: suspend (String) -> ClipActionRepositoryResult = { actionResult },
+        addNoteActionResultProvider: suspend (String, String) -> ClipActionRepositoryResult = { _, _ -> actionResult },
+        removeNoteActionResultProvider: suspend (String, String) -> ClipActionRepositoryResult = { _, _ -> actionResult },
         deleteActionResultProvider: suspend (String) -> ClipActionRepositoryResult = { actionResult },
     ): ClipRepository {
         var clipResultIndex = 0
@@ -584,11 +764,11 @@ class ClipStateHolderTest {
             }
 
             override suspend fun favoriteClip(clipId: String): ClipActionRepositoryResult {
-                return actionResult
+                return favoriteActionResultProvider(clipId)
             }
 
             override suspend fun unfavoriteClip(clipId: String): ClipActionRepositoryResult {
-                return actionResult
+                return favoriteActionResultProvider(clipId)
             }
 
             override suspend fun addNoteToClip(
@@ -596,7 +776,7 @@ class ClipStateHolderTest {
                 noteId: String,
             ): ClipActionRepositoryResult {
                 onAddNote(clipId, noteId)
-                return actionResult
+                return addNoteActionResultProvider(clipId, noteId)
             }
 
             override suspend fun removeNoteFromClip(
@@ -604,7 +784,7 @@ class ClipStateHolderTest {
                 noteId: String,
             ): ClipActionRepositoryResult {
                 onRemoveNote(clipId, noteId)
-                return actionResult
+                return removeNoteActionResultProvider(clipId, noteId)
             }
 
             override suspend fun createClip(
@@ -623,7 +803,7 @@ class ClipStateHolderTest {
                 isPublic: Boolean,
             ): ClipUpdateRepositoryResult {
                 onUpdateClip(clipId, name, description, isPublic)
-                return updateResult
+                return updateResultProvider(clipId, name, description, isPublic)
             }
 
             override suspend fun deleteClip(clipId: String): ClipActionRepositoryResult {

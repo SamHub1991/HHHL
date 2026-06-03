@@ -237,17 +237,19 @@ class UserListStateHolder(
                         requiresRelogin = false,
                     )
                 }
-                UserListMutationRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                UserListMutationRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val updatingSelectedList = current.selectedList?.id == list.id
+                    current.copy(
                         isMutatingList = false,
-                        errorMessage = "登录已失效，请重新登录",
+                        errorMessage = if (updatingSelectedList) "登录已失效，请重新登录" else current.errorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is UserListMutationRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is UserListMutationRepositoryResult.Error -> mutableState.update { current ->
+                    val updatingSelectedList = current.selectedList?.id == list.id
+                    current.copy(
                         isMutatingList = false,
-                        errorMessage = result.message,
+                        errorMessage = if (updatingSelectedList) result.message else current.errorMessage,
                         requiresRelogin = false,
                     )
                 }
@@ -360,17 +362,19 @@ class UserListStateHolder(
                         requiresRelogin = false,
                     )
                 }
-                UserListActionRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                UserListActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val mutatingSelectedList = current.selectedList?.id == list.id
+                    current.copy(
                         isMutatingMembers = false,
-                        errorMessage = "登录已失效，请重新登录",
+                        errorMessage = if (mutatingSelectedList) "登录已失效，请重新登录" else current.errorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is UserListActionRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is UserListActionRepositoryResult.Error -> mutableState.update { current ->
+                    val mutatingSelectedList = current.selectedList?.id == list.id
+                    current.copy(
                         isMutatingMembers = false,
-                        errorMessage = result.message,
+                        errorMessage = if (mutatingSelectedList) result.message else current.errorMessage,
                         requiresRelogin = false,
                     )
                 }

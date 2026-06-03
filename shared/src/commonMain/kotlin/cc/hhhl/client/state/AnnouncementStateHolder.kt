@@ -391,7 +391,6 @@ class AnnouncementStateHolder(
 
     fun deleteAnnouncement(announcementId: String) {
         if (announcementId.isBlank() || state.value.pendingAnnouncementIds.contains(announcementId)) return
-        val requestId = ++adminMutationRequestId
 
         mutableState.update {
             it.copy(
@@ -405,7 +404,11 @@ class AnnouncementStateHolder(
         scope.launch {
             when (val result = repository.deleteAnnouncement(announcementId)) {
                 AnnouncementDeleteRepositoryResult.Success -> mutableState.update { current ->
-                    if (!isCurrentAdminMutation(requestId)) return@update current
+                    if (!current.isManaging) {
+                        return@update current.copy(
+                            pendingAnnouncementIds = current.pendingAnnouncementIds - announcementId,
+                        )
+                    }
                     current.copy(
                         announcements = current.announcements.filterNot { it.id == announcementId },
                         selectedAnnouncement = current.selectedAnnouncement?.takeIf { it.id != announcementId },
@@ -415,18 +418,26 @@ class AnnouncementStateHolder(
                         requiresRelogin = false,
                     )
                 }
-                AnnouncementDeleteRepositoryResult.Unauthorized -> mutableState.update {
-                    if (!isCurrentAdminMutation(requestId)) return@update it
-                    it.copy(
-                        pendingAnnouncementIds = it.pendingAnnouncementIds - announcementId,
+                AnnouncementDeleteRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    if (!current.isManaging) {
+                        return@update current.copy(
+                            pendingAnnouncementIds = current.pendingAnnouncementIds - announcementId,
+                        )
+                    }
+                    current.copy(
+                        pendingAnnouncementIds = current.pendingAnnouncementIds - announcementId,
                         adminErrorMessage = "当前账号没有公告管理权限",
                         requiresRelogin = false,
                     )
                 }
-                is AnnouncementDeleteRepositoryResult.Error -> mutableState.update {
-                    if (!isCurrentAdminMutation(requestId)) return@update it
-                    it.copy(
-                        pendingAnnouncementIds = it.pendingAnnouncementIds - announcementId,
+                is AnnouncementDeleteRepositoryResult.Error -> mutableState.update { current ->
+                    if (!current.isManaging) {
+                        return@update current.copy(
+                            pendingAnnouncementIds = current.pendingAnnouncementIds - announcementId,
+                        )
+                    }
+                    current.copy(
+                        pendingAnnouncementIds = current.pendingAnnouncementIds - announcementId,
                         adminErrorMessage = result.message,
                         requiresRelogin = false,
                     )

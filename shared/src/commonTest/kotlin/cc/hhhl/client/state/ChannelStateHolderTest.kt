@@ -366,6 +366,111 @@ class ChannelStateHolderTest {
     }
 
     @Test
+    fun pendingUpdateErrorDoesNotShowOnNewlySelectedChannel() = runTest {
+        val updateResult = CompletableDeferred<ChannelMutationRepositoryResult>()
+        val first = sampleChannel("channel-1")
+        val second = sampleChannel("channel-2")
+        val note = FakeData.timeline[0]
+        val holder = ChannelStateHolder(
+            repository = fakeRepository(
+                channelsResult = ChannelsRepositoryResult.Success(listOf(first, second)),
+                timelineResult = ChannelTimelineRepositoryResult.Success(listOf(note)),
+                updateResultProvider = { _, _ -> updateResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshChannels()
+        advanceUntilIdle()
+        holder.updateSelectedChannel(ChannelDraft(name = "改名频道"))
+        runCurrent()
+
+        assertTrue(holder.state.value.isMutatingChannel)
+
+        holder.selectChannel(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedChannel)
+        assertEquals(null, holder.state.value.errorMessage)
+
+        updateResult.complete(ChannelMutationRepositoryResult.Error("频道更新失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMutatingChannel)
+        assertEquals(second, holder.state.value.selectedChannel)
+        assertEquals(null, holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun pendingFollowErrorDoesNotShowOnNewlySelectedChannel() = runTest {
+        val actionResult = CompletableDeferred<ChannelActionRepositoryResult>()
+        val first = sampleChannel("channel-1")
+        val second = sampleChannel("channel-2")
+        val note = FakeData.timeline[0]
+        val holder = ChannelStateHolder(
+            repository = fakeRepository(
+                channelsResult = ChannelsRepositoryResult.Success(listOf(first, second)),
+                timelineResult = ChannelTimelineRepositoryResult.Success(listOf(note)),
+                actionResultProvider = { actionResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshChannels()
+        advanceUntilIdle()
+        holder.toggleFollowSelectedChannel()
+        runCurrent()
+
+        assertTrue(holder.state.value.isChangingFollow)
+
+        holder.selectChannel(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedChannel)
+        assertEquals(null, holder.state.value.errorMessage)
+
+        actionResult.complete(ChannelActionRepositoryResult.Error("关注频道失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isChangingFollow)
+        assertEquals(second, holder.state.value.selectedChannel)
+        assertEquals(null, holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun pendingFavoriteErrorDoesNotShowOnNewlySelectedChannel() = runTest {
+        val actionResult = CompletableDeferred<ChannelActionRepositoryResult>()
+        val first = sampleChannel("channel-1")
+        val second = sampleChannel("channel-2")
+        val note = FakeData.timeline[0]
+        val holder = ChannelStateHolder(
+            repository = fakeRepository(
+                channelsResult = ChannelsRepositoryResult.Success(listOf(first, second)),
+                timelineResult = ChannelTimelineRepositoryResult.Success(listOf(note)),
+                actionResultProvider = { actionResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshChannels()
+        advanceUntilIdle()
+        holder.toggleFavoriteSelectedChannel()
+        runCurrent()
+
+        assertTrue(holder.state.value.isChangingFavorite)
+
+        holder.selectChannel(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedChannel)
+        assertEquals(null, holder.state.value.errorMessage)
+
+        actionResult.complete(ChannelActionRepositoryResult.Error("收藏频道失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isChangingFavorite)
+        assertEquals(second, holder.state.value.selectedChannel)
+        assertEquals(null, holder.state.value.errorMessage)
+    }
+
+    @Test
     fun archiveSelectedChannelRemovesItFromCurrentList() = runTest {
         val first = sampleChannel("channel-1")
         val second = sampleChannel("channel-2")
@@ -433,6 +538,8 @@ class ChannelStateHolderTest {
         onRefreshChannels: (ChannelListKind) -> Unit = {},
         onRefreshTimeline: (String) -> Unit = {},
         refreshChannelsResultProvider: (suspend (ChannelListKind) -> ChannelsRepositoryResult)? = null,
+        actionResultProvider: suspend (String) -> ChannelActionRepositoryResult = { actionResult },
+        updateResultProvider: suspend (String, ChannelDraft) -> ChannelMutationRepositoryResult = { _, _ -> mutationResult },
         archiveResultProvider: suspend (Channel) -> ChannelMutationRepositoryResult = { mutationResult },
     ): ChannelRepository {
         return sequenceRepository(
@@ -444,6 +551,8 @@ class ChannelStateHolderTest {
             onRefreshChannels = onRefreshChannels,
             onRefreshTimeline = onRefreshTimeline,
             refreshChannelsResultProvider = refreshChannelsResultProvider,
+            actionResultProvider = actionResultProvider,
+            updateResultProvider = updateResultProvider,
             archiveResultProvider = archiveResultProvider,
         )
     }
@@ -457,6 +566,8 @@ class ChannelStateHolderTest {
         onRefreshChannels: (ChannelListKind) -> Unit = {},
         onRefreshTimeline: (String) -> Unit = {},
         refreshChannelsResultProvider: (suspend (ChannelListKind) -> ChannelsRepositoryResult)? = null,
+        actionResultProvider: suspend (String) -> ChannelActionRepositoryResult = { actionResult },
+        updateResultProvider: suspend (String, ChannelDraft) -> ChannelMutationRepositoryResult = { _, _ -> mutationResult },
         archiveResultProvider: suspend (Channel) -> ChannelMutationRepositoryResult = { mutationResult },
     ): ChannelRepository {
         var channelResultIndex = 0
@@ -548,19 +659,19 @@ class ChannelStateHolderTest {
             }
 
             override suspend fun followChannel(channelId: String): ChannelActionRepositoryResult {
-                return actionResult
+                return actionResultProvider(channelId)
             }
 
             override suspend fun unfollowChannel(channelId: String): ChannelActionRepositoryResult {
-                return actionResult
+                return actionResultProvider(channelId)
             }
 
             override suspend fun favoriteChannel(channelId: String): ChannelActionRepositoryResult {
-                return actionResult
+                return actionResultProvider(channelId)
             }
 
             override suspend fun unfavoriteChannel(channelId: String): ChannelActionRepositoryResult {
-                return actionResult
+                return actionResultProvider(channelId)
             }
 
             override suspend fun createChannel(draft: ChannelDraft): ChannelMutationRepositoryResult {
@@ -571,7 +682,7 @@ class ChannelStateHolderTest {
                 channelId: String,
                 draft: ChannelDraft,
             ): ChannelMutationRepositoryResult {
-                return mutationResult
+                return updateResultProvider(channelId, draft)
             }
 
             override suspend fun archiveChannel(channel: Channel): ChannelMutationRepositoryResult {

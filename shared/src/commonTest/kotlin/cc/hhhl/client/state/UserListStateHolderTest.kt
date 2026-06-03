@@ -221,6 +221,41 @@ class UserListStateHolderTest {
     }
 
     @Test
+    fun pendingUpdateErrorDoesNotShowOnNewlySelectedList() = runTest {
+        val updateResult = CompletableDeferred<UserListMutationRepositoryResult>()
+        val first = sampleList("list-1")
+        val second = sampleList("list-2")
+        val note = FakeData.timeline[0]
+        val holder = UserListStateHolder(
+            repository = fakeRepository(
+                listsResult = UserListsRepositoryResult.Success(listOf(first, second)),
+                timelineResult = UserListTimelineRepositoryResult.Success(listOf(note)),
+                mutationResultProvider = { updateResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshLists()
+        advanceUntilIdle()
+        holder.updateSelectedList(UserListDraft("同事", true))
+        runCurrent()
+
+        assertTrue(holder.state.value.isMutatingList)
+
+        holder.selectList(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedList)
+        assertEquals(null, holder.state.value.errorMessage)
+
+        updateResult.complete(UserListMutationRepositoryResult.Error("更新失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMutatingList)
+        assertEquals(second, holder.state.value.selectedList)
+        assertEquals(null, holder.state.value.errorMessage)
+    }
+
+    @Test
     fun deleteSelectedListRemovesAndSelectsNext() = runTest {
         val first = sampleList("list-1")
         val second = sampleList("list-2")
@@ -310,6 +345,41 @@ class UserListStateHolderTest {
     }
 
     @Test
+    fun pendingMemberErrorDoesNotShowOnNewlySelectedList() = runTest {
+        val memberResult = CompletableDeferred<UserListActionRepositoryResult>()
+        val first = sampleList("list-1")
+        val second = sampleList("list-2")
+        val note = FakeData.timeline[0]
+        val holder = UserListStateHolder(
+            repository = fakeRepository(
+                listsResult = UserListsRepositoryResult.Success(listOf(first, second)),
+                timelineResult = UserListTimelineRepositoryResult.Success(listOf(note)),
+                memberActionResultProvider = { _, _ -> memberResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshLists()
+        advanceUntilIdle()
+        holder.addUserToSelectedList("user-3")
+        runCurrent()
+
+        assertTrue(holder.state.value.isMutatingMembers)
+
+        holder.selectList(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedList)
+        assertEquals(null, holder.state.value.errorMessage)
+
+        memberResult.complete(UserListActionRepositoryResult.Error("成员更新失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMutatingMembers)
+        assertEquals(second, holder.state.value.selectedList)
+        assertEquals(null, holder.state.value.errorMessage)
+    }
+
+    @Test
     fun removeUserFromSelectedListRemovesMemberLocally() = runTest {
         val selected = sampleList("list-1")
         val calls = mutableListOf<Pair<String, String>>()
@@ -347,6 +417,8 @@ class UserListStateHolderTest {
         onAddUserToList: (String, String) -> Unit = { _, _ -> },
         onRemoveUserFromList: (String, String) -> Unit = { _, _ -> },
         listsResultProvider: (() -> UserListsRepositoryResult)? = null,
+        mutationResultProvider: suspend () -> UserListMutationRepositoryResult = { mutationResult },
+        memberActionResultProvider: suspend (String, String) -> UserListActionRepositoryResult = { _, _ -> actionResult },
         actionResultProvider: suspend (String) -> UserListActionRepositoryResult = { actionResult },
     ): UserListRepository {
         return object : UserListRepository(
@@ -424,7 +496,7 @@ class UserListStateHolderTest {
 
             override suspend fun createList(draft: UserListDraft): UserListMutationRepositoryResult {
                 onCreateList(draft)
-                return mutationResult
+                return mutationResultProvider()
             }
 
             override suspend fun updateList(
@@ -432,7 +504,7 @@ class UserListStateHolderTest {
                 draft: UserListDraft,
             ): UserListMutationRepositoryResult {
                 onUpdateList(listId, draft)
-                return mutationResult
+                return mutationResultProvider()
             }
 
             override suspend fun deleteList(listId: String): UserListActionRepositoryResult {
@@ -445,7 +517,7 @@ class UserListStateHolderTest {
                 userId: String,
             ): UserListActionRepositoryResult {
                 onAddUserToList(listId, userId)
-                return actionResult
+                return memberActionResultProvider(listId, userId)
             }
 
             override suspend fun removeUserFromList(
@@ -453,7 +525,7 @@ class UserListStateHolderTest {
                 userId: String,
             ): UserListActionRepositoryResult {
                 onRemoveUserFromList(listId, userId)
-                return actionResult
+                return memberActionResultProvider(listId, userId)
             }
         }
     }

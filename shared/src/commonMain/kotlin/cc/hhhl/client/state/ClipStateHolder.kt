@@ -297,17 +297,19 @@ class ClipStateHolder(
                         requiresRelogin = false,
                     )
                 }
-                ClipUpdateRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                ClipUpdateRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val updatingSelectedClip = current.selectedClip?.id == clip.id
+                    current.copy(
                         isUpdatingClip = false,
-                        errorMessage = "登录已失效，请重新登录",
+                        errorMessage = if (updatingSelectedClip) "登录已失效，请重新登录" else current.errorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is ClipUpdateRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is ClipUpdateRepositoryResult.Error -> mutableState.update { current ->
+                    val updatingSelectedClip = current.selectedClip?.id == clip.id
+                    current.copy(
                         isUpdatingClip = false,
-                        errorMessage = result.message,
+                        errorMessage = if (updatingSelectedClip) result.message else current.errorMessage,
                         requiresRelogin = false,
                     )
                 }
@@ -523,17 +525,19 @@ class ClipStateHolder(
                     requiresRelogin = false,
                 )
             }
-            ClipActionRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            ClipActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val changingSelectedClip = current.selectedClip?.id == originalClip.id
+                current.copy(
                     isChangingFavorite = false,
-                    errorMessage = "登录已失效，请重新登录",
+                    errorMessage = if (changingSelectedClip) "登录已失效，请重新登录" else current.errorMessage,
                     requiresRelogin = true,
                 )
             }
-            is ClipActionRepositoryResult.Error -> mutableState.update {
-                it.copy(
+            is ClipActionRepositoryResult.Error -> mutableState.update { current ->
+                val changingSelectedClip = current.selectedClip?.id == originalClip.id
+                current.copy(
                     isChangingFavorite = false,
-                    errorMessage = result.message,
+                    errorMessage = if (changingSelectedClip) result.message else current.errorMessage,
                     requiresRelogin = false,
                 )
             }
@@ -560,23 +564,25 @@ class ClipStateHolder(
                         }
                     },
                     selectedClip = updatedSelected ?: current.selectedClip,
-                    notes = current.notes.filterNot { it.id == noteId },
+                    notes = if (selected == null) current.notes else current.notes.filterNot { it.id == noteId },
                     isChangingClipNote = false,
-                    notesErrorMessage = null,
+                    notesErrorMessage = if (selected == null) current.notesErrorMessage else null,
                     requiresRelogin = false,
                 )
             }
-            ClipActionRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            ClipActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val changingSelectedClip = current.selectedClip?.id == clip.id
+                current.copy(
                     isChangingClipNote = false,
-                    notesErrorMessage = "登录已失效，请重新登录",
+                    notesErrorMessage = if (changingSelectedClip) "登录已失效，请重新登录" else current.notesErrorMessage,
                     requiresRelogin = true,
                 )
             }
-            is ClipActionRepositoryResult.Error -> mutableState.update {
-                it.copy(
+            is ClipActionRepositoryResult.Error -> mutableState.update { current ->
+                val changingSelectedClip = current.selectedClip?.id == clip.id
+                current.copy(
                     isChangingClipNote = false,
-                    notesErrorMessage = result.message,
+                    notesErrorMessage = if (changingSelectedClip) result.message else current.notesErrorMessage,
                     requiresRelogin = false,
                 )
             }
@@ -615,17 +621,19 @@ class ClipStateHolder(
                     requiresRelogin = false,
                 )
             }
-            ClipActionRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            ClipActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val changingSelectedClip = current.selectedClip?.id == clip.id
+                current.copy(
                     isChangingClipNote = false,
-                    notesErrorMessage = "登录已失效，请重新登录",
+                    notesErrorMessage = if (changingSelectedClip) "登录已失效，请重新登录" else current.notesErrorMessage,
                     requiresRelogin = true,
                 )
             }
-            is ClipActionRepositoryResult.Error -> mutableState.update {
-                it.copy(
+            is ClipActionRepositoryResult.Error -> mutableState.update { current ->
+                val changingSelectedClip = current.selectedClip?.id == clip.id
+                current.copy(
                     isChangingClipNote = false,
-                    notesErrorMessage = result.message,
+                    notesErrorMessage = if (changingSelectedClip) result.message else current.notesErrorMessage,
                     requiresRelogin = false,
                 )
             }

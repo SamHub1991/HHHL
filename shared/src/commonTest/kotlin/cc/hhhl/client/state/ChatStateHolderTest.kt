@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -1089,6 +1090,111 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun pendingUploadSuccessDoesNotAttachFileAfterRoomSwitch() = runTest {
+        val firstRoom = sampleRoom(id = "room-upload-1")
+        val secondRoom = sampleRoom(id = "room-upload-2")
+        val file = sampleDriveFile()
+        val uploadResult = CompletableDeferred<DriveFileRepositoryResult>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(firstRoom, secondRoom)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(emptyList()),
+            ),
+            driveFileRepository = fakeDriveRepository {
+                uploadResult.await()
+            },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(firstRoom)
+        advanceUntilIdle()
+        holder.uploadMedia(sampleUpload())
+        runCurrent()
+        holder.selectRoom(secondRoom)
+        advanceUntilIdle()
+        uploadResult.complete(DriveFileRepositoryResult.Success(file))
+        advanceUntilIdle()
+
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertFalse(holder.state.value.isUploadingMedia)
+        assertEquals(null, holder.state.value.attachedFile)
+        assertEquals(emptyList(), holder.state.value.attachments)
+        assertEquals(null, holder.state.value.messageErrorMessage)
+    }
+
+    @Test
+    fun queuedUploadDoesNotStartAfterRoomSwitch() = runTest {
+        val firstRoom = sampleRoom(id = "room-upload-queue-1")
+        val secondRoom = sampleRoom(id = "room-upload-queue-2")
+        val firstUploadResult = CompletableDeferred<DriveFileRepositoryResult>()
+        val secondUploadResult = CompletableDeferred<DriveFileRepositoryResult>()
+        var uploadCount = 0
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(firstRoom, secondRoom)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(emptyList()),
+            ),
+            driveFileRepository = fakeDriveRepository {
+                uploadCount += 1
+                if (uploadCount == 1) {
+                    firstUploadResult.await()
+                } else {
+                    secondUploadResult.await()
+                }
+            },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(firstRoom)
+        advanceUntilIdle()
+        holder.uploadMedia(sampleUpload())
+        holder.uploadMedia(sampleUpload().copy(fileName = "second.png"))
+        runCurrent()
+        holder.selectRoom(secondRoom)
+        advanceUntilIdle()
+        firstUploadResult.complete(DriveFileRepositoryResult.Success(sampleDriveFile()))
+        advanceUntilIdle()
+        if (uploadCount > 1) {
+            secondUploadResult.complete(
+                DriveFileRepositoryResult.Success(sampleDriveFile().copy(id = "file-2", name = "second.png")),
+            )
+            advanceUntilIdle()
+        }
+
+        assertEquals(1, uploadCount)
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertFalse(holder.state.value.isUploadingMedia)
+        assertEquals(null, holder.state.value.attachedFile)
+        assertEquals(emptyList(), holder.state.value.attachments)
+    }
+
+    @Test
+    fun removedPendingUploadSuccessDoesNotReattachFile() = runTest {
+        val file = sampleDriveFile()
+        val uploadResult = CompletableDeferred<DriveFileRepositoryResult>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(ChatRepositoryResult.Success(emptyList())),
+            driveFileRepository = fakeDriveRepository {
+                uploadResult.await()
+            },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.uploadMedia(sampleUpload())
+        runCurrent()
+        holder.removeAttachedFile()
+        uploadResult.complete(DriveFileRepositoryResult.Success(file))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isUploadingMedia)
+        assertEquals(null, holder.state.value.attachedFile)
+        assertEquals(emptyList(), holder.state.value.attachments)
+        assertEquals(null, holder.state.value.messageErrorMessage)
+    }
+
+    @Test
     fun sendMessageWithAttachedFilesPassesFileIdsAndClearsAttachment() = runTest {
         val room = sampleRoom()
         val file = sampleDriveFile()
@@ -1246,6 +1352,90 @@ class ChatStateHolderTest {
         assertTrue(deleteCalls.isEmpty())
         assertEquals(listOf(message), holder.state.value.messages)
         assertEquals("这条消息还没有服务器 ID，无法同步删除", holder.state.value.messageErrorMessage)
+    }
+
+    @Test
+    fun pendingDeleteMessageErrorDoesNotShowAfterRoomSwitch() = runTest {
+        val firstRoom = sampleRoom(id = "room-1")
+        val secondRoom = sampleRoom(id = "room-2")
+        val firstMessage = sampleMessage("message-1", roomId = firstRoom.id)
+        val deleteResult = CompletableDeferred<ChatMessageRepositoryResult>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(firstRoom, secondRoom)),
+                refreshMessagesResultForRequest = { roomId ->
+                    if (roomId == firstRoom.id) {
+                        ChatMessageRepositoryResult.Success(listOf(firstMessage))
+                    } else {
+                        ChatMessageRepositoryResult.Success(emptyList())
+                    }
+                },
+                deleteMessageResultProvider = { _, _, _ -> deleteResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(firstRoom)
+        advanceUntilIdle()
+        holder.deleteMessage(firstMessage.id)
+        runCurrent()
+
+        assertTrue(holder.state.value.pendingMessageDeleteIds.contains(firstMessage.id))
+
+        holder.selectRoom(secondRoom)
+        advanceUntilIdle()
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals(null, holder.state.value.messageErrorMessage)
+
+        deleteResult.complete(ChatMessageRepositoryResult.Error("删除消息失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.pendingMessageDeleteIds.contains(firstMessage.id))
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals(null, holder.state.value.messageErrorMessage)
+    }
+
+    @Test
+    fun pendingReactionErrorDoesNotShowAfterRoomSwitch() = runTest {
+        val firstRoom = sampleRoom(id = "room-1")
+        val secondRoom = sampleRoom(id = "room-2")
+        val firstMessage = sampleMessage("message-1", roomId = firstRoom.id)
+        val reactionResult = CompletableDeferred<ChatMessageRepositoryResult>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(firstRoom, secondRoom)),
+                refreshMessagesResultForRequest = { roomId ->
+                    if (roomId == firstRoom.id) {
+                        ChatMessageRepositoryResult.Success(listOf(firstMessage))
+                    } else {
+                        ChatMessageRepositoryResult.Success(emptyList())
+                    }
+                },
+                reactResultProvider = { _, _ -> reactionResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(firstRoom)
+        advanceUntilIdle()
+        holder.reactToMessage(firstMessage.id, "❤️")
+        runCurrent()
+
+        assertTrue(holder.state.value.pendingMessageReactionIds.contains(firstMessage.id))
+
+        holder.selectRoom(secondRoom)
+        advanceUntilIdle()
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals(null, holder.state.value.messageErrorMessage)
+
+        reactionResult.complete(ChatMessageRepositoryResult.Error("反应失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.pendingMessageReactionIds.contains(firstMessage.id))
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals(null, holder.state.value.messageErrorMessage)
     }
 
     @Test
@@ -2590,6 +2780,36 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun pendingUpdateSelectedRoomManagementDoesNotReselectRoomAfterSwitch() = runTest {
+        val firstRoom = sampleRoom(id = "room-editing").copy(canManage = true, messageRetentionDays = null)
+        val secondRoom = sampleRoom(id = "room-other")
+        val updatedFirstRoom = firstRoom.copy(messageRetentionDays = 30)
+        val pendingUpdate = CompletableDeferred<ChatRoomMutationRepositoryResult>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(firstRoom, secondRoom)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(emptyList()),
+                updateRoomManagementResultProvider = { _, _ -> pendingUpdate.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(firstRoom)
+        advanceUntilIdle()
+        holder.updateSelectedRoomManagement(30)
+        runCurrent()
+        holder.selectRoom(secondRoom)
+        advanceUntilIdle()
+        pendingUpdate.complete(ChatRoomMutationRepositoryResult.RoomSaved(updatedFirstRoom))
+        advanceUntilIdle()
+
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals(30, holder.state.value.rooms.first { it.id == firstRoom.id }.messageRetentionDays)
+        assertFalse(holder.state.value.isManagingRoom)
+        assertEquals("管理设置已更新", holder.state.value.roomManagementMessage)
+    }
+    @Test
     fun clearSelectedRoomMessagesClearsCurrentMessagesAndRoomMarkers() = runTest {
         val room = sampleRoom(
             id = "room-owned",
@@ -2907,6 +3127,12 @@ class ChatStateHolderTest {
         createRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomSaved(sampleRoom()),
         updateRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomSaved(sampleRoom()),
         updateRoomManagementResult: ChatRoomMutationRepositoryResult = updateRoomResult,
+        updateRoomResultProvider: suspend (String, String?, String?, String?) -> ChatRoomMutationRepositoryResult = { _, _, _, _ ->
+            updateRoomResult
+        },
+        updateRoomManagementResultProvider: suspend (String, Int?) -> ChatRoomMutationRepositoryResult = { _, _ ->
+            updateRoomManagementResult
+        },
         leaveRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomRemoved("room-1"),
         deleteRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomRemoved("room-1"),
         muteRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomMuted("room-1", true),
@@ -2931,6 +3157,10 @@ class ChatStateHolderTest {
         userConversationResultProvider: (() -> ChatUserConversationRepositoryResult)? = null,
         searchMessagesResultProvider: (() -> ChatMessageRepositoryResult)? = null,
         searchMessagesResultForRequest: (suspend (String, String?, String?, String?) -> ChatMessageRepositoryResult)? = null,
+        reactResultProvider: suspend (String, String) -> ChatMessageRepositoryResult = { _, _ -> reactResult },
+        deleteMessageResultProvider: suspend (String, String?, String?) -> ChatMessageRepositoryResult = { _, _, _ ->
+            deleteMessageResult
+        },
         showRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomSaved(sampleRoom()),
         joinRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.ActionCompleted("已加入聊天室"),
         onShowRoom: (String) -> Unit = {},
@@ -3212,14 +3442,14 @@ class ChatStateHolderTest {
                 description: String?,
                 joinMode: String?,
             ): ChatRoomMutationRepositoryResult {
-                return updateRoomResult
+                return updateRoomResultProvider(roomId, name, description, joinMode)
             }
 
             override suspend fun updateRoomManagement(
                 roomId: String,
                 messageRetentionDays: Int?,
             ): ChatRoomMutationRepositoryResult {
-                return updateRoomManagementResult
+                return updateRoomManagementResultProvider(roomId, messageRetentionDays)
             }
 
             override suspend fun deleteAllRoomMessages(roomId: String): ChatRoomMutationRepositoryResult {
@@ -3258,14 +3488,14 @@ class ChatStateHolderTest {
                 messageId: String,
                 reaction: String,
             ): ChatMessageRepositoryResult {
-                return reactResult
+                return reactResultProvider(messageId, reaction)
             }
 
             override suspend fun unreactToMessage(
                 messageId: String,
                 reaction: String,
             ): ChatMessageRepositoryResult {
-                return reactResult
+                return reactResultProvider(messageId, reaction)
             }
 
             override suspend fun deleteMessage(
@@ -3274,7 +3504,7 @@ class ChatStateHolderTest {
                 userId: String?,
             ): ChatMessageRepositoryResult {
                 onDelete(messageId)
-                return deleteMessageResult
+                return deleteMessageResultProvider(messageId, roomId, userId)
             }
 
             override suspend fun refreshMembers(roomId: String): ChatRoomMemberRepositoryResult {
@@ -3318,7 +3548,7 @@ class ChatStateHolderTest {
         return fakeDriveRepository { result }
     }
 
-    private fun fakeDriveRepository(resultProvider: () -> DriveFileRepositoryResult): DriveFileRepository {
+    private fun fakeDriveRepository(resultProvider: suspend () -> DriveFileRepositoryResult): DriveFileRepository {
         return object : DriveFileRepository(
             tokenProvider = { "token-123" },
             api = object : cc.hhhl.client.api.DriveFileApi {

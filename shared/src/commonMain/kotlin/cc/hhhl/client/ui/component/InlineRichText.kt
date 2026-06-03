@@ -3,6 +3,7 @@ package cc.hhhl.client.ui.component
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -680,12 +682,14 @@ private fun InlineCodeBlock(
     style: TextStyle,
 ) {
     val colors = LocalHhhlColors.current
+    val scrollState = rememberScrollState()
     Text(
         text = text,
         color = colors.textSecondary,
         style = style.copy(fontFamily = FontFamily.Monospace),
         modifier = Modifier
             .fillMaxWidth()
+            .horizontalScroll(scrollState)
             .clip(RoundedCornerShape(6.dp))
             .background(colors.surfaceElevated.copy(alpha = 0.82f))
             .border(1.dp, colors.border.copy(alpha = 0.42f), RoundedCornerShape(6.dp))

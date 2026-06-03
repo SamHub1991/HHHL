@@ -328,17 +328,19 @@ class ChannelStateHolder(
                         requiresRelogin = false,
                     )
                 }
-                ChannelMutationRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                ChannelMutationRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val updatingSelectedChannel = current.selectedChannel?.id == channel.id
+                    current.copy(
                         isMutatingChannel = false,
-                        errorMessage = "登录已失效，请重新登录",
+                        errorMessage = if (updatingSelectedChannel) "登录已失效，请重新登录" else current.errorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is ChannelMutationRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is ChannelMutationRepositoryResult.Error -> mutableState.update { current ->
+                    val updatingSelectedChannel = current.selectedChannel?.id == channel.id
+                    current.copy(
                         isMutatingChannel = false,
-                        errorMessage = result.message,
+                        errorMessage = if (updatingSelectedChannel) result.message else current.errorMessage,
                         requiresRelogin = false,
                     )
                 }
@@ -507,17 +509,19 @@ class ChannelStateHolder(
                     requiresRelogin = false,
                 )
             }
-            ChannelActionRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            ChannelActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val changingSelectedChannel = current.selectedChannel?.id == originalChannel.id
+                current.copy(
                     isChangingFollow = false,
-                    errorMessage = "登录已失效，请重新登录",
+                    errorMessage = if (changingSelectedChannel) "登录已失效，请重新登录" else current.errorMessage,
                     requiresRelogin = true,
                 )
             }
-            is ChannelActionRepositoryResult.Error -> mutableState.update {
-                it.copy(
+            is ChannelActionRepositoryResult.Error -> mutableState.update { current ->
+                val changingSelectedChannel = current.selectedChannel?.id == originalChannel.id
+                current.copy(
                     isChangingFollow = false,
-                    errorMessage = result.message,
+                    errorMessage = if (changingSelectedChannel) result.message else current.errorMessage,
                     requiresRelogin = false,
                 )
             }
@@ -547,17 +551,19 @@ class ChannelStateHolder(
                     requiresRelogin = false,
                 )
             }
-            ChannelActionRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            ChannelActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val changingSelectedChannel = current.selectedChannel?.id == originalChannel.id
+                current.copy(
                     isChangingFavorite = false,
-                    errorMessage = "登录已失效，请重新登录",
+                    errorMessage = if (changingSelectedChannel) "登录已失效，请重新登录" else current.errorMessage,
                     requiresRelogin = true,
                 )
             }
-            is ChannelActionRepositoryResult.Error -> mutableState.update {
-                it.copy(
+            is ChannelActionRepositoryResult.Error -> mutableState.update { current ->
+                val changingSelectedChannel = current.selectedChannel?.id == originalChannel.id
+                current.copy(
                     isChangingFavorite = false,
-                    errorMessage = result.message,
+                    errorMessage = if (changingSelectedChannel) result.message else current.errorMessage,
                     requiresRelogin = false,
                 )
             }
