@@ -39,6 +39,16 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.7.3",
+            title = "HHHL 0.7.3 更新内容",
+            summary = "这版作为 0.7 系列 patch 包，继续同步当前稳定修复和发布包。当前 debug 已先安装到模拟器验证。",
+            highlights = listOf(
+                "同步 0.7.2 已完成的帖子详情、私聊消息和频道刷新竞态修复到新的 patch 版本。",
+                "保持 AI 配置、自动化、未读状态和更新日志入口等近期修复在当前发布包中可用。",
+                "发布前已先构建并安装 Debug 版本到模拟器，再继续生成 Release 包。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.7.2",
             title = "HHHL 0.7.2 更新内容",
             summary = "这版集中修复多个页面切换和后台结果回写的稳定性问题，减少旧请求覆盖当前界面的情况。",
