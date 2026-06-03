@@ -39,6 +39,17 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.7.4",
+            title = "HHHL 0.7.4 更新内容",
+            summary = "这版继续修复页面切换后旧请求回写当前界面的竞态问题，减少旧操作结果污染新打开内容。",
+            highlights = listOf(
+                "修复闪念编辑保存、网盘新建/删除文件夹、图库更新等后台结果返回较慢时，可能覆盖当前打开内容的问题。",
+                "修复闪念、页面和图库详情点赞失败后，旧详情页错误提示可能显示到新详情页的问题。",
+                "修复删除当前正在查看的网盘文件夹后，路径已回退但列表仍保留被删除文件夹内容的问题。",
+                "补充对应竞态回归测试，并已先安装 Debug 包到模拟器验证。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.7.3",
             title = "HHHL 0.7.3 更新内容",
             summary = "这版作为 0.7 系列 patch 包，继续同步当前稳定修复和发布包。当前 debug 已先安装到模拟器验证。",

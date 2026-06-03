@@ -376,17 +376,23 @@ class PageStateHolder(
                     requiresRelogin = false,
                 )
             }
-            PageActionRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            PageActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val changingSelectedPage = current.selectedPage?.id == originalPage.id
+                current.copy(
                     isChangingLike = false,
-                    detailErrorMessage = "登录已失效，请重新登录",
+                    detailErrorMessage = if (changingSelectedPage) {
+                        "登录已失效，请重新登录"
+                    } else {
+                        current.detailErrorMessage
+                    },
                     requiresRelogin = true,
                 )
             }
-            is PageActionRepositoryResult.Error -> mutableState.update {
-                it.copy(
+            is PageActionRepositoryResult.Error -> mutableState.update { current ->
+                val changingSelectedPage = current.selectedPage?.id == originalPage.id
+                current.copy(
                     isChangingLike = false,
-                    detailErrorMessage = result.message,
+                    detailErrorMessage = if (changingSelectedPage) result.message else current.detailErrorMessage,
                     requiresRelogin = false,
                 )
             }

@@ -599,6 +599,37 @@ class DriveFilesStateHolderTest {
     }
 
     @Test
+    fun pendingCreateFolderDoesNotAppearAfterChangingFolder() = runTest {
+        val createResult = CompletableDeferred<DriveManagementRepositoryResult>()
+        val folder = sampleFolder("folder-1")
+        val createdInRoot = sampleFolder("folder-new").copy(name = "新文件夹")
+        val holder = DriveFilesStateHolder(
+            repository = fakeRepository(
+                refreshResult = DriveFilesRepositoryResult.Success(emptyList()),
+                refreshFoldersResult = DriveFoldersRepositoryResult.Success(emptyList()),
+                createFolderResultProvider = { createResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.createFolder("新文件夹")
+        runCurrent()
+        assertTrue(holder.state.value.isManaging)
+
+        holder.openFolder(folder)
+        advanceUntilIdle()
+        assertEquals(folder.id, holder.state.value.folderId)
+        assertEquals(emptyList(), holder.state.value.folders)
+
+        createResult.complete(DriveManagementRepositoryResult.FolderCreated(createdInRoot))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isManaging)
+        assertEquals(folder.id, holder.state.value.folderId)
+        assertEquals(emptyList(), holder.state.value.folders)
+    }
+
+    @Test
     fun updateFolderReplacesItemInList() = runTest {
         val existing = sampleFolder("folder-1")
         val updated = existing.copy(name = "改名文件夹")
@@ -660,6 +691,50 @@ class DriveFilesStateHolderTest {
         advanceUntilIdle()
 
         assertEquals(listOf(second), holder.state.value.folders)
+    }
+
+    @Test
+    fun pendingDeleteFolderClearsContentsWhenDeletedFolderIsOpened() = runTest {
+        val deleteResult = CompletableDeferred<DriveManagementRepositoryResult>()
+        val folder = sampleFolder("folder-1")
+        val childFile = sampleFile("file-child")
+        var currentFilesFolderId: String? = null
+        val holder = DriveFilesStateHolder(
+            repository = fakeRepository(
+                refreshResult = DriveFilesRepositoryResult.Success(emptyList()),
+                refreshFoldersResult = DriveFoldersRepositoryResult.Success(listOf(folder)),
+                refreshResultProvider = {
+                    if (currentFilesFolderId == folder.id) {
+                        DriveFilesRepositoryResult.Success(listOf(childFile))
+                    } else {
+                        DriveFilesRepositoryResult.Success(emptyList())
+                    }
+                },
+                onRefresh = { folderId, _, _ -> currentFilesFolderId = folderId },
+                deleteFolderResultProvider = { deleteResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.deleteFolder(folder.id)
+        runCurrent()
+        assertTrue(holder.state.value.isManaging)
+
+        holder.openFolder(folder)
+        advanceUntilIdle()
+        assertEquals(folder.id, holder.state.value.folderId)
+        assertEquals(listOf(childFile), holder.state.value.files)
+
+        deleteResult.complete(DriveManagementRepositoryResult.FolderDeleted(folder.id))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isManaging)
+        assertEquals(null, holder.state.value.folderId)
+        assertEquals(emptyList(), holder.state.value.folderPath)
+        assertEquals(emptyList(), holder.state.value.files)
+        assertEquals(emptyList(), holder.state.value.folders)
     }
 
     @Test
@@ -860,6 +935,8 @@ class DriveFilesStateHolderTest {
         loadMoreResultProvider: suspend () -> DriveFilesRepositoryResult = { loadMoreResult },
         loadMoreFoldersResultProvider: suspend () -> DriveFoldersRepositoryResult = { loadMoreFoldersResult },
         uploadResultProvider: suspend () -> DriveFileRepositoryResult = { uploadResult },
+        createFolderResultProvider: suspend () -> DriveManagementRepositoryResult = { createFolderResult },
+        deleteFolderResultProvider: suspend () -> DriveManagementRepositoryResult = { deleteFolderResult },
         fileDetailsResultProvider: suspend (String) -> DriveFileDetailsRepositoryResult = { fileDetailsResult },
     ): DriveFileRepository {
         return object : DriveFileRepository(
@@ -986,7 +1063,7 @@ class DriveFilesStateHolderTest {
                 name: String,
                 parentId: String?,
             ): DriveManagementRepositoryResult {
-                return createFolderResult
+                return createFolderResultProvider()
             }
 
             override suspend fun updateFolder(
@@ -998,7 +1075,7 @@ class DriveFilesStateHolderTest {
             }
 
             override suspend fun deleteFolder(folderId: String): DriveManagementRepositoryResult {
-                return deleteFolderResult
+                return deleteFolderResultProvider()
             }
 
             override suspend fun loadFileDetails(fileId: String): DriveFileDetailsRepositoryResult {

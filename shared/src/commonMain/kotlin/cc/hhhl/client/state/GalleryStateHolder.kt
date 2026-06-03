@@ -177,7 +177,7 @@ class GalleryStateHolder(
         }
 
         scope.launch {
-            applyMutationResult(repository.createPost(draft), closeDetail = false)
+            applyMutationResult(repository.createPost(draft), closeDetail = false, targetPostId = null)
         }
     }
 
@@ -189,7 +189,7 @@ class GalleryStateHolder(
         }
 
         scope.launch {
-            applyMutationResult(repository.updatePost(post.id, draft), closeDetail = false)
+            applyMutationResult(repository.updatePost(post.id, draft), closeDetail = false, targetPostId = post.id)
         }
     }
 
@@ -299,17 +299,23 @@ class GalleryStateHolder(
                     requiresRelogin = false,
                 )
             }
-            GalleryActionRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            GalleryActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val changingSelectedPost = current.selectedPost?.id == originalPost.id
+                current.copy(
                     isChangingLike = false,
-                    detailErrorMessage = "登录已失效，请重新登录",
+                    detailErrorMessage = if (changingSelectedPost) {
+                        "登录已失效，请重新登录"
+                    } else {
+                        current.detailErrorMessage
+                    },
                     requiresRelogin = true,
                 )
             }
-            is GalleryActionRepositoryResult.Error -> mutableState.update {
-                it.copy(
+            is GalleryActionRepositoryResult.Error -> mutableState.update { current ->
+                val changingSelectedPost = current.selectedPost?.id == originalPost.id
+                current.copy(
                     isChangingLike = false,
-                    detailErrorMessage = result.message,
+                    detailErrorMessage = if (changingSelectedPost) result.message else current.detailErrorMessage,
                     requiresRelogin = false,
                 )
             }
@@ -319,10 +325,12 @@ class GalleryStateHolder(
     private fun applyMutationResult(
         result: GalleryMutationRepositoryResult,
         closeDetail: Boolean,
+        targetPostId: String?,
     ) {
         when (result) {
             is GalleryMutationRepositoryResult.Success -> mutableState.update { current ->
                 val existing = current.posts.any { it.id == result.post.id }
+                val mutatingSelectedPost = targetPostId != null && current.selectedPost?.id == targetPostId
                 current.copy(
                     posts = if (existing) {
                         current.posts.map { if (it.id == result.post.id) result.post else it }
@@ -335,23 +343,41 @@ class GalleryStateHolder(
                     },
                     isMutatingPost = false,
                     errorMessage = null,
-                    detailErrorMessage = null,
+                    detailErrorMessage = if (mutatingSelectedPost || current.selectedPost == null) {
+                        null
+                    } else {
+                        current.detailErrorMessage
+                    },
                     requiresRelogin = false,
                 )
             }
-            GalleryMutationRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            GalleryMutationRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val mutatingSelectedPost = targetPostId != null && current.selectedPost?.id == targetPostId
+                current.copy(
                     isMutatingPost = false,
-                    detailErrorMessage = "登录已失效，请重新登录",
-                    errorMessage = if (it.selectedPost == null) "登录已失效，请重新登录" else it.errorMessage,
+                    detailErrorMessage = if (mutatingSelectedPost) {
+                        "登录已失效，请重新登录"
+                    } else {
+                        current.detailErrorMessage
+                    },
+                    errorMessage = if (targetPostId == null && current.selectedPost == null) {
+                        "登录已失效，请重新登录"
+                    } else {
+                        current.errorMessage
+                    },
                     requiresRelogin = true,
                 )
             }
-            is GalleryMutationRepositoryResult.Error -> mutableState.update {
-                it.copy(
+            is GalleryMutationRepositoryResult.Error -> mutableState.update { current ->
+                val mutatingSelectedPost = targetPostId != null && current.selectedPost?.id == targetPostId
+                current.copy(
                     isMutatingPost = false,
-                    detailErrorMessage = if (it.selectedPost != null) result.message else it.detailErrorMessage,
-                    errorMessage = if (it.selectedPost == null) result.message else it.errorMessage,
+                    detailErrorMessage = if (mutatingSelectedPost) result.message else current.detailErrorMessage,
+                    errorMessage = if (targetPostId == null && current.selectedPost == null) {
+                        result.message
+                    } else {
+                        current.errorMessage
+                    },
                     requiresRelogin = false,
                 )
             }

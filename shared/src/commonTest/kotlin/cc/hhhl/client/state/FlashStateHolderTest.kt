@@ -215,6 +215,43 @@ class FlashStateHolderTest {
     }
 
     @Test
+    fun pendingLikeErrorDoesNotShowOnNewlyOpenedFlash() = runTest {
+        val likeResult = CompletableDeferred<FlashActionRepositoryResult>()
+        val first = sampleFlash("flash-1")
+        val second = sampleFlash("flash-2")
+        val holder = FlashStateHolder(
+            repository = fakeRepository(
+                flashesResult = FlashesRepositoryResult.Success(listOf(first, second)),
+                flashResultProvider = { flashId ->
+                    FlashRepositoryResult.Success(if (flashId == first.id) first else second)
+                },
+                actionResultProvider = { likeResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshFlashes()
+        advanceUntilIdle()
+        holder.openFlash(first.id)
+        advanceUntilIdle()
+        holder.toggleLikeSelectedFlash()
+        runCurrent()
+        assertTrue(holder.state.value.isChangingLike)
+
+        holder.openFlash(second.id)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedFlash)
+        assertEquals(null, holder.state.value.detailErrorMessage)
+
+        likeResult.complete(FlashActionRepositoryResult.Error("点赞失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isChangingLike)
+        assertEquals(second, holder.state.value.selectedFlash)
+        assertEquals(null, holder.state.value.detailErrorMessage)
+    }
+
+    @Test
     fun saveCreateDraftAddsFlashAndSelectsMine() = runTest {
         val created = sampleFlash("flash-new")
         val calls = mutableListOf<FlashDraft>()
@@ -238,6 +275,52 @@ class FlashStateHolderTest {
         assertEquals(created, holder.state.value.selectedFlash)
         assertEquals(listOf(created), holder.state.value.flashes)
         assertEquals(null, holder.state.value.draftMode)
+    }
+
+    @Test
+    fun pendingEditSaveDoesNotOverwriteFlashOpenedAfterCancel() = runTest {
+        val saveResult = CompletableDeferred<FlashRepositoryResult>()
+        val first = sampleFlash("flash-1")
+        val updatedFirst = first.copy(title = "已保存的 Play")
+        val second = sampleFlash("flash-2")
+        var updateRequested = false
+        val holder = FlashStateHolder(
+            repository = fakeRepository(
+                flashesResult = FlashesRepositoryResult.Success(listOf(first, second)),
+                flashResultProvider = { flashId ->
+                    when {
+                        flashId == first.id && updateRequested -> saveResult.await()
+                        flashId == first.id -> FlashRepositoryResult.Success(first)
+                        flashId == second.id -> FlashRepositoryResult.Success(second)
+                        else -> FlashRepositoryResult.Success(updatedFirst)
+                    }
+                },
+                onUpdateFlash = { _, _ -> updateRequested = true },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshFlashes()
+        advanceUntilIdle()
+        holder.openFlash(first.id)
+        advanceUntilIdle()
+        holder.startEditingSelectedFlash()
+        holder.updateDraft(holder.state.value.draft.copy(title = updatedFirst.title))
+        holder.saveDraft()
+        runCurrent()
+        assertTrue(holder.state.value.isSavingDraft)
+
+        holder.cancelDraft()
+        holder.openFlash(second.id)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedFlash)
+
+        saveResult.complete(FlashRepositoryResult.Success(updatedFirst))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isSavingDraft)
+        assertEquals(null, holder.state.value.draftMode)
+        assertEquals(second, holder.state.value.selectedFlash)
     }
 
     @Test
@@ -315,6 +398,7 @@ class FlashStateHolderTest {
         onUpdateFlash: (String, FlashDraft) -> Unit = { _, _ -> },
         onDeleteFlash: (String) -> Unit = {},
         flashResultProvider: suspend (String) -> FlashRepositoryResult = { flashResult },
+        actionResultProvider: suspend (String) -> FlashActionRepositoryResult = { actionResult },
         deleteActionResultProvider: suspend (String) -> FlashActionRepositoryResult = { actionResult },
     ): FlashRepository {
         return sequenceRepository(
@@ -329,6 +413,7 @@ class FlashStateHolderTest {
             onUpdateFlash = onUpdateFlash,
             onDeleteFlash = onDeleteFlash,
             flashResultProvider = flashResultProvider,
+            actionResultProvider = actionResultProvider,
             deleteActionResultProvider = deleteActionResultProvider,
         )
     }
@@ -345,6 +430,7 @@ class FlashStateHolderTest {
         onUpdateFlash: (String, FlashDraft) -> Unit = { _, _ -> },
         onDeleteFlash: (String) -> Unit = {},
         flashResultProvider: suspend (String) -> FlashRepositoryResult = { flashResult },
+        actionResultProvider: suspend (String) -> FlashActionRepositoryResult = { actionResult },
         deleteActionResultProvider: suspend (String) -> FlashActionRepositoryResult = { actionResult },
     ): FlashRepository {
         var flashResultIndex = 0
@@ -419,12 +505,12 @@ class FlashStateHolderTest {
 
             override suspend fun likeFlash(flashId: String): FlashActionRepositoryResult {
                 onLikeFlash(flashId)
-                return actionResult
+                return actionResultProvider(flashId)
             }
 
             override suspend fun unlikeFlash(flashId: String): FlashActionRepositoryResult {
                 onUnlikeFlash(flashId)
-                return actionResult
+                return actionResultProvider(flashId)
             }
 
             override suspend fun createFlash(draft: FlashDraft): FlashRepositoryResult {

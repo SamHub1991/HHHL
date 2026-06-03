@@ -216,6 +216,43 @@ class GalleryStateHolderTest {
     }
 
     @Test
+    fun pendingLikeErrorDoesNotShowOnNewlyOpenedPost() = runTest {
+        val likeResult = CompletableDeferred<GalleryActionRepositoryResult>()
+        val first = sampleGalleryPost("gallery-1")
+        val second = sampleGalleryPost("gallery-2")
+        val holder = GalleryStateHolder(
+            repository = fakeRepository(
+                postsResult = GalleryPostsRepositoryResult.Success(listOf(first, second)),
+                postResultProvider = { postId ->
+                    GalleryPostRepositoryResult.Success(if (postId == first.id) first else second)
+                },
+                actionResultProvider = { likeResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshPosts()
+        advanceUntilIdle()
+        holder.openPost(first.id)
+        advanceUntilIdle()
+        holder.toggleLikeSelectedPost()
+        runCurrent()
+        assertTrue(holder.state.value.isChangingLike)
+
+        holder.openPost(second.id)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedPost)
+        assertEquals(null, holder.state.value.detailErrorMessage)
+
+        likeResult.complete(GalleryActionRepositoryResult.Error("点赞失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isChangingLike)
+        assertEquals(second, holder.state.value.selectedPost)
+        assertEquals(null, holder.state.value.detailErrorMessage)
+    }
+
+    @Test
     fun createUpdateAndDeleteMutateStoredPosts() = runTest {
         val original = sampleGalleryPost("gallery-1")
         val updated = original.copy(title = "更新后的图")
@@ -289,6 +326,43 @@ class GalleryStateHolderTest {
         assertEquals(listOf(second), holder.state.value.posts)
     }
 
+    @Test
+    fun pendingUpdateErrorDoesNotShowOnNewlyOpenedPost() = runTest {
+        val updateResult = CompletableDeferred<GalleryMutationRepositoryResult>()
+        val first = sampleGalleryPost("gallery-1")
+        val second = sampleGalleryPost("gallery-2")
+        val holder = GalleryStateHolder(
+            repository = fakeRepository(
+                postsResult = GalleryPostsRepositoryResult.Success(listOf(first, second)),
+                postResultProvider = { postId ->
+                    GalleryPostRepositoryResult.Success(if (postId == first.id) first else second)
+                },
+                mutationResultProvider = { updateResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshPosts()
+        advanceUntilIdle()
+        holder.openPost(first.id)
+        advanceUntilIdle()
+        holder.updateSelectedPost(GalleryPostDraft(title = "更新", fileIds = first.fileIds))
+        runCurrent()
+        assertTrue(holder.state.value.isMutatingPost)
+
+        holder.openPost(second.id)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedPost)
+        assertEquals(null, holder.state.value.detailErrorMessage)
+
+        updateResult.complete(GalleryMutationRepositoryResult.Error("保存失败"))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMutatingPost)
+        assertEquals(second, holder.state.value.selectedPost)
+        assertEquals(null, holder.state.value.detailErrorMessage)
+    }
+
     private fun fakeRepository(
         postsResult: GalleryPostsRepositoryResult,
         postResult: GalleryPostRepositoryResult = GalleryPostRepositoryResult.Success(sampleGalleryPost("gallery-1")),
@@ -299,7 +373,11 @@ class GalleryStateHolderTest {
         onUnlikePost: (String) -> Unit = {},
         onDeletePost: (String) -> Unit = {},
         postResultProvider: suspend (String) -> GalleryPostRepositoryResult = { postResult },
+        actionResultProvider: suspend (String) -> GalleryActionRepositoryResult = { actionResult },
         deleteActionResultProvider: suspend (String) -> GalleryActionRepositoryResult = { actionResult },
+        mutationResultProvider: suspend (String) -> GalleryMutationRepositoryResult = {
+            GalleryMutationRepositoryResult.Success(sampleGalleryPost(it))
+        },
     ): GalleryRepository {
         return sequenceRepository(
             postsResults = listOf(postsResult),
@@ -311,7 +389,9 @@ class GalleryStateHolderTest {
             onUnlikePost = onUnlikePost,
             onDeletePost = onDeletePost,
             postResultProvider = postResultProvider,
+            actionResultProvider = actionResultProvider,
             deleteActionResultProvider = deleteActionResultProvider,
+            mutationResultProvider = mutationResultProvider,
         )
     }
 
@@ -325,7 +405,11 @@ class GalleryStateHolderTest {
         onUnlikePost: (String) -> Unit = {},
         onDeletePost: (String) -> Unit = {},
         postResultProvider: suspend (String) -> GalleryPostRepositoryResult = { postResult },
+        actionResultProvider: suspend (String) -> GalleryActionRepositoryResult = { actionResult },
         deleteActionResultProvider: suspend (String) -> GalleryActionRepositoryResult = { actionResult },
+        mutationResultProvider: suspend (String) -> GalleryMutationRepositoryResult = {
+            GalleryMutationRepositoryResult.Success(sampleGalleryPost(it))
+        },
     ): GalleryRepository {
         var postResultIndex = 0
         return object : GalleryRepository(
@@ -398,12 +482,23 @@ class GalleryStateHolderTest {
 
             override suspend fun likePost(postId: String): GalleryActionRepositoryResult {
                 onLikePost(postId)
-                return actionResult
+                return actionResultProvider(postId)
             }
 
             override suspend fun unlikePost(postId: String): GalleryActionRepositoryResult {
                 onUnlikePost(postId)
-                return actionResult
+                return actionResultProvider(postId)
+            }
+
+            override suspend fun createPost(draft: GalleryPostDraft): GalleryMutationRepositoryResult {
+                return mutationResultProvider("create")
+            }
+
+            override suspend fun updatePost(
+                postId: String,
+                draft: GalleryPostDraft,
+            ): GalleryMutationRepositoryResult {
+                return mutationResultProvider(postId)
             }
 
             override suspend fun deletePost(postId: String): GalleryActionRepositoryResult {

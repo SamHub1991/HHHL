@@ -663,8 +663,13 @@ class DriveFilesStateHolder(
                 )
             }
             is DriveManagementRepositoryResult.FolderCreated -> mutableState.update {
+                val folders = if (result.folder.parentId == it.folderId) {
+                    it.folders.prependDistinctBy(result.folder) { folder -> folder.id }
+                } else {
+                    it.folders
+                }
                 it.copy(
-                    folders = it.folders.prependDistinctBy(result.folder) { folder -> folder.id },
+                    folders = folders,
                     isManaging = false,
                     errorMessage = null,
                     requiresRelogin = false,
@@ -684,11 +689,25 @@ class DriveFilesStateHolder(
                 )
             }
             is DriveManagementRepositoryResult.FolderDeleted -> mutableState.update {
-                val nextPath = it.folderPath.filterNot { folder -> folder.id == result.folderId }
+                val deletedInCurrentPath = it.folderPath.any { folder -> folder.id == result.folderId }
+                val nextPath = if (deletedInCurrentPath) {
+                    it.folderPath.takeWhile { folder -> folder.id != result.folderId }
+                } else {
+                    it.folderPath
+                }
                 it.copy(
-                    folders = it.folders.filterNot { folder -> folder.id == result.folderId },
+                    files = if (deletedInCurrentPath) emptyList() else it.files,
+                    folders = if (deletedInCurrentPath) {
+                        emptyList()
+                    } else {
+                        it.folders.filterNot { folder -> folder.id == result.folderId }
+                    },
                     folderPath = nextPath,
-                    folderId = if (it.folderId == result.folderId) nextPath.lastOrNull()?.id else it.folderId,
+                    folderId = if (deletedInCurrentPath) nextPath.lastOrNull()?.id else it.folderId,
+                    selectedFile = if (deletedInCurrentPath) null else it.selectedFile,
+                    selectedFileDetails = if (deletedInCurrentPath) null else it.selectedFileDetails,
+                    isLoadingFileDetails = false,
+                    fileDetailsErrorMessage = null,
                     isManaging = false,
                     errorMessage = null,
                     requiresRelogin = false,

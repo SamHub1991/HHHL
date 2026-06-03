@@ -46,6 +46,7 @@ class FlashStateHolder(
     val state: StateFlow<FlashUiState> = mutableState
     private var flashesRequestId = 0
     private var detailRequestId = 0
+    private var saveRequestId = 0
 
     fun refreshFlashes(kind: FlashListKind = state.value.selectedKind) {
         if (state.value.isLoadingFlashes) return
@@ -151,6 +152,7 @@ class FlashStateHolder(
 
     fun closeDetail() {
         detailRequestId += 1
+        saveRequestId += 1
         mutableState.update {
             it.copy(
                 selectedFlash = null,
@@ -165,6 +167,7 @@ class FlashStateHolder(
     }
 
     fun startCreatingFlash() {
+        saveRequestId += 1
         mutableState.update {
             it.copy(
                 draftMode = FlashDraftMode.Create,
@@ -178,6 +181,7 @@ class FlashStateHolder(
 
     fun startEditingSelectedFlash() {
         val flash = state.value.selectedFlash ?: return
+        saveRequestId += 1
         mutableState.update {
             it.copy(
                 draftMode = FlashDraftMode.Edit,
@@ -200,6 +204,7 @@ class FlashStateHolder(
     }
 
     fun cancelDraft() {
+        saveRequestId += 1
         mutableState.update {
             it.copy(
                 draftMode = null,
@@ -215,6 +220,7 @@ class FlashStateHolder(
         val current = state.value
         val mode = current.draftMode ?: return
         if (current.isSavingDraft) return
+        val requestId = ++saveRequestId
 
         mutableState.update {
             it.copy(isSavingDraft = true, draftErrorMessage = null, requiresRelogin = false)
@@ -228,7 +234,7 @@ class FlashStateHolder(
                     repository.updateFlash(flashId, current.draft)
                 }
             }
-            applySaveResult(mode, result)
+            applySaveResult(requestId, mode, result)
         }
     }
 
@@ -330,17 +336,23 @@ class FlashStateHolder(
                     requiresRelogin = false,
                 )
             }
-            FlashActionRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            FlashActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val changingSelectedFlash = current.selectedFlash?.id == originalFlash.id
+                current.copy(
                     isChangingLike = false,
-                    detailErrorMessage = "登录已失效，请重新登录",
+                    detailErrorMessage = if (changingSelectedFlash) {
+                        "登录已失效，请重新登录"
+                    } else {
+                        current.detailErrorMessage
+                    },
                     requiresRelogin = true,
                 )
             }
-            is FlashActionRepositoryResult.Error -> mutableState.update {
-                it.copy(
+            is FlashActionRepositoryResult.Error -> mutableState.update { current ->
+                val changingSelectedFlash = current.selectedFlash?.id == originalFlash.id
+                current.copy(
                     isChangingLike = false,
-                    detailErrorMessage = result.message,
+                    detailErrorMessage = if (changingSelectedFlash) result.message else current.detailErrorMessage,
                     requiresRelogin = false,
                 )
             }
@@ -348,11 +360,13 @@ class FlashStateHolder(
     }
 
     private fun applySaveResult(
+        requestId: Int,
         mode: FlashDraftMode,
         result: FlashRepositoryResult,
     ) {
         when (result) {
             is FlashRepositoryResult.Success -> mutableState.update { current ->
+                if (requestId != saveRequestId) return@update current
                 val updatedFlashes = when (mode) {
                     FlashDraftMode.Create -> listOf(result.flash) + current.flashes.filterNot { it.id == result.flash.id }
                     FlashDraftMode.Edit -> current.flashes.map { flash ->
@@ -372,6 +386,7 @@ class FlashStateHolder(
                 )
             }
             FlashRepositoryResult.Unauthorized -> mutableState.update {
+                if (requestId != saveRequestId) return@update it
                 it.copy(
                     isSavingDraft = false,
                     draftErrorMessage = "登录已失效，请重新登录",
@@ -379,6 +394,7 @@ class FlashStateHolder(
                 )
             }
             is FlashRepositoryResult.Error -> mutableState.update {
+                if (requestId != saveRequestId) return@update it
                 it.copy(
                     isSavingDraft = false,
                     draftErrorMessage = result.message,
