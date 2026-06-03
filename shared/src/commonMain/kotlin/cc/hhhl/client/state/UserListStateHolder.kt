@@ -272,30 +272,33 @@ class UserListStateHolder(
             when (val result = repository.deleteList(list.id)) {
                 UserListActionRepositoryResult.Success -> mutableState.update { current ->
                     val remaining = current.lists.filterNot { it.id == list.id }
+                    val deletedSelectedList = current.selectedList?.id == list.id
                     current.copy(
                         lists = remaining,
-                        selectedList = remaining.firstOrNull(),
-                        notes = emptyList(),
+                        selectedList = if (deletedSelectedList) remaining.firstOrNull() else current.selectedList,
+                        notes = if (deletedSelectedList) emptyList() else current.notes,
                         isMutatingList = false,
-                        isLoadingTimeline = false,
-                        isLoadingMore = false,
-                        endReached = false,
-                        errorMessage = null,
-                        timelineErrorMessage = null,
+                        isLoadingTimeline = if (deletedSelectedList) false else current.isLoadingTimeline,
+                        isLoadingMore = if (deletedSelectedList) false else current.isLoadingMore,
+                        endReached = if (deletedSelectedList) false else current.endReached,
+                        errorMessage = if (deletedSelectedList) null else current.errorMessage,
+                        timelineErrorMessage = if (deletedSelectedList) null else current.timelineErrorMessage,
                         requiresRelogin = false,
                     )
                 }
-                UserListActionRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                UserListActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val deletingSelectedList = current.selectedList?.id == list.id
+                    current.copy(
                         isMutatingList = false,
-                        errorMessage = "登录已失效，请重新登录",
+                        errorMessage = if (deletingSelectedList) "登录已失效，请重新登录" else current.errorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is UserListActionRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is UserListActionRepositoryResult.Error -> mutableState.update { current ->
+                    val deletingSelectedList = current.selectedList?.id == list.id
+                    current.copy(
                         isMutatingList = false,
-                        errorMessage = result.message,
+                        errorMessage = if (deletingSelectedList) result.message else current.errorMessage,
                         requiresRelogin = false,
                     )
                 }

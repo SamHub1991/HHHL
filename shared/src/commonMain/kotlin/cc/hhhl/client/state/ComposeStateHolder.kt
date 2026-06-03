@@ -62,6 +62,7 @@ class ComposeStateHolder(
     private var draftSessionId = 0
     private var visibleUserResolveRequestId = 0
     private var scheduledNotesRequestId = 0
+    private var scheduledEditRequestId = 0
     private var editDraftBaseline: ComposeDraft? = null
     private var editAttachedFilesBaseline: List<DriveFile> = emptyList()
 
@@ -766,6 +767,9 @@ class ComposeStateHolder(
     fun editScheduledNote(note: ComposeScheduledNote) {
         val cleanNoteId = note.id.trim()
         if (cleanNoteId.isEmpty() || state.value.deletingScheduledNoteIds.contains(cleanNoteId)) return
+        val requestId = ++scheduledEditRequestId
+        val draftSnapshot = state.value.draft
+        val draftSessionSnapshot = draftSessionId
         mutableState.update {
             it.copy(
                 deletingScheduledNoteIds = it.deletingScheduledNoteIds + cleanNoteId,
@@ -776,37 +780,55 @@ class ComposeStateHolder(
         scope.launch {
             when (val result = repository.deleteScheduledNote(cleanNoteId)) {
                 ComposeScheduleDeleteRepositoryResult.Success -> {
-                    val nextDraft = note.toDraft(
-                        canPublicNote = state.value.canPublicNote,
-                        canScheduleNotes = state.value.canScheduleNotes,
-                    )
-                    mutableState.update {
-                        it.copy(
-                            draft = nextDraft,
-                            attachedFiles = note.attachedFiles,
-                            scheduledNotes = it.scheduledNotes.filterNot { scheduledNote -> scheduledNote.id == cleanNoteId },
-                            deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
-                            updatingFileIds = emptySet(),
-                            errorMessage = null,
-                            createdNoteId = null,
-                            completedDraft = null,
-                            requiresRelogin = false,
+                    val current = state.value
+                    val shouldRestoreDraft = requestId == scheduledEditRequestId &&
+                        draftSessionSnapshot == draftSessionId &&
+                        current.draft == draftSnapshot
+                    if (shouldRestoreDraft) {
+                        val nextDraft = note.toDraft(
+                            canPublicNote = current.canPublicNote,
+                            canScheduleNotes = current.canScheduleNotes,
                         )
+                        invalidateDraftSession()
+                        mutableState.update {
+                            it.copy(
+                                draft = nextDraft,
+                                attachedFiles = note.attachedFiles,
+                                scheduledNotes = it.scheduledNotes.filterNot { scheduledNote -> scheduledNote.id == cleanNoteId },
+                                deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
+                                updatingFileIds = emptySet(),
+                                isUploadingMedia = false,
+                                errorMessage = null,
+                                createdNoteId = null,
+                                completedDraft = null,
+                                requiresRelogin = false,
+                            )
+                        }
+                        persistDraft(nextDraft)
+                    } else {
+                        mutableState.update {
+                            it.copy(
+                                scheduledNotes = it.scheduledNotes.filterNot { scheduledNote -> scheduledNote.id == cleanNoteId },
+                                deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
+                                requiresRelogin = false,
+                            )
+                        }
                     }
-                    persistDraft(nextDraft)
                 }
                 ComposeScheduleDeleteRepositoryResult.Unauthorized -> mutableState.update {
+                    val isCurrentRequest = requestId == scheduledEditRequestId
                     it.copy(
                         deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
-                        errorMessage = "登录已失效，请重新登录",
-                        requiresRelogin = true,
+                        errorMessage = if (isCurrentRequest) "登录已失效，请重新登录" else it.errorMessage,
+                        requiresRelogin = if (isCurrentRequest) true else it.requiresRelogin,
                     )
                 }
                 is ComposeScheduleDeleteRepositoryResult.Error -> mutableState.update {
+                    val isCurrentRequest = requestId == scheduledEditRequestId
                     it.copy(
                         deletingScheduledNoteIds = it.deletingScheduledNoteIds - cleanNoteId,
-                        errorMessage = result.message,
-                        requiresRelogin = false,
+                        errorMessage = if (isCurrentRequest) result.message else it.errorMessage,
+                        requiresRelogin = if (isCurrentRequest) false else it.requiresRelogin,
                     )
                 }
             }

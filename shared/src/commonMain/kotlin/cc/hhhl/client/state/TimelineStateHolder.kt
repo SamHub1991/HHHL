@@ -40,6 +40,7 @@ class TimelineStateHolder(
     private val mutableState = MutableStateFlow(TimelineUiState())
     val state: StateFlow<TimelineUiState> = mutableState
     private var quietRefreshingKinds: Set<TimelineKind> = emptySet()
+    private var timelineRequestIds: Map<TimelineKind, Int> = TimelineKind.entries.associateWith { 0 }
 
     fun select(kind: TimelineKind) {
         mutableState.update { it.copy(selectedKind = kind, requiresRelogin = false) }
@@ -53,12 +54,14 @@ class TimelineStateHolder(
         val tab = state.value.tabs.getValue(kind)
         if (tab.isLoading) return
         val previousFirstNoteId = tab.notes.firstOrNull()?.id
+        val requestId = nextTimelineRequestId(kind)
 
         mutableState.update { current ->
             current.copy(
                 requiresRelogin = false,
                 tabs = current.tabs + (kind to current.tabs.getValue(kind).copy(
                     isLoading = true,
+                    isLoadingMore = false,
                     endReached = false,
                     errorMessage = null,
                 )),
@@ -72,6 +75,7 @@ class TimelineStateHolder(
                 loadingMore = false,
                 result = repository.refresh(kind),
                 previousFirstNoteId = previousFirstNoteId,
+                requestId = requestId,
             )
         }
     }
@@ -107,11 +111,13 @@ class TimelineStateHolder(
             )
         }
 
+        val requestId = nextTimelineRequestId(kind)
         scope.launch {
             applyResult(
                 kind = kind,
                 loadingMore = true,
                 result = repository.loadMore(kind, tab.notes),
+                requestId = requestId,
             )
         }
     }
@@ -140,7 +146,9 @@ class TimelineStateHolder(
         loadingMore: Boolean,
         result: TimelineRepositoryResult,
         previousFirstNoteId: String? = null,
+        requestId: Int,
     ) {
+        if (!isCurrentTimelineRequest(kind, requestId)) return
         when (result) {
             is TimelineRepositoryResult.Success -> {
                 applySuccessfulNotes(
@@ -176,6 +184,19 @@ class TimelineStateHolder(
                 )
             }
         }
+    }
+
+    private fun nextTimelineRequestId(kind: TimelineKind): Int {
+        val requestId = timelineRequestIds.getValue(kind) + 1
+        timelineRequestIds = timelineRequestIds + (kind to requestId)
+        return requestId
+    }
+
+    private fun isCurrentTimelineRequest(
+        kind: TimelineKind,
+        requestId: Int,
+    ): Boolean {
+        return timelineRequestIds.getValue(kind) == requestId
     }
 
     private suspend fun restoreCached(kind: TimelineKind) {

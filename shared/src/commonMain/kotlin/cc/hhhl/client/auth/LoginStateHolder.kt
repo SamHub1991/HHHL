@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 
 data class LoginUiState(
@@ -29,6 +31,8 @@ class LoginStateHolder(
 ) {
     private val mutableState = MutableStateFlow(LoginUiState())
     val state: StateFlow<LoginUiState> = mutableState
+    private var authRequestId = 0
+    private val accountSaveMutex = Mutex()
 
     fun startBrowserLogin(openUrl: (String) -> Unit) {
         if (state.value.isLoading) return
@@ -84,6 +88,7 @@ class LoginStateHolder(
             return
         }
 
+        val requestId = nextAuthRequestId()
         mutableState.update {
             it.copy(
                 isLoading = true,
@@ -93,14 +98,17 @@ class LoginStateHolder(
         }
 
         scope.launch {
-            when (val result = authenticator.checkSession(session)) {
+            val result = authenticator.checkSession(session)
+            if (!isCurrentAuthRequest(requestId)) return@launch
+            when (result) {
                 is AuthResult.Success -> {
                     val updatedAccounts = upsertCurrentAccount(
                         accounts = state.value.accounts,
                         token = result.token,
                         user = result.user,
                     )
-                    val saveError = saveAccounts(updatedAccounts)
+                    val saveError = saveAccounts(updatedAccounts, requestId)
+                    if (!isCurrentAuthRequest(requestId)) return@launch
                     mutableState.update {
                         it.copy(
                             isLoading = false,
@@ -116,7 +124,8 @@ class LoginStateHolder(
                     }
                 }
                 AuthResult.InvalidToken -> {
-                    removeCurrentAccount()
+                    removeCurrentAccount(requestId)
+                    if (!isCurrentAuthRequest(requestId)) return@launch
                     mutableState.update {
                         it.copy(
                             isLoading = false,
@@ -171,6 +180,7 @@ class LoginStateHolder(
             return
         }
 
+        val requestId = nextAuthRequestId()
         mutableState.update {
             it.copy(
                 isLoading = true,
@@ -181,14 +191,17 @@ class LoginStateHolder(
         }
 
         scope.launch {
-            when (val result = authenticator.signInWithPassword(cleanUsername, password, cleanToken)) {
+            val result = authenticator.signInWithPassword(cleanUsername, password, cleanToken)
+            if (!isCurrentAuthRequest(requestId)) return@launch
+            when (result) {
                 is PasswordLoginResult.Success -> {
                     val updatedAccounts = upsertCurrentAccount(
                         accounts = state.value.accounts,
                         token = result.token,
                         user = result.user,
                     )
-                    val saveError = saveAccounts(updatedAccounts)
+                    val saveError = saveAccounts(updatedAccounts, requestId)
+                    if (!isCurrentAuthRequest(requestId)) return@launch
                     mutableState.update {
                         it.copy(
                             isLoading = false,
@@ -249,6 +262,7 @@ class LoginStateHolder(
         val current = state.value
         if (current.isLoading || current.user != null) return
 
+        val requestId = nextAuthRequestId()
         mutableState.update {
             it.copy(
                 isLoading = true,
@@ -260,6 +274,7 @@ class LoginStateHolder(
         scope.launch {
             val accounts = runCatching { normalizeAccounts(tokenStore.readAccountSessions()) }
                 .getOrElse { error ->
+                    if (!isCurrentAuthRequest(requestId)) return@launch
                     mutableState.update {
                         it.copy(
                             isLoading = false,
@@ -269,6 +284,7 @@ class LoginStateHolder(
                     }
                     return@launch
                 }
+            if (!isCurrentAuthRequest(requestId)) return@launch
 
             if (accounts.isEmpty()) {
                 mutableState.update {
@@ -294,14 +310,17 @@ class LoginStateHolder(
                 }
                 return@launch
             }
-            when (val result = authenticator.verifyToken(currentAccount.token)) {
+            val result = authenticator.verifyToken(currentAccount.token)
+            if (!isCurrentAuthRequest(requestId)) return@launch
+            when (result) {
                 is AuthResult.Success -> {
                     val updatedAccounts = upsertCurrentAccount(
                         accounts = accounts,
                         token = result.token,
                         user = result.user,
                     )
-                    saveAccounts(updatedAccounts)
+                    saveAccounts(updatedAccounts, requestId)
+                    if (!isCurrentAuthRequest(requestId)) return@launch
                     mutableState.update {
                         it.copy(
                             isLoading = false,
@@ -316,8 +335,10 @@ class LoginStateHolder(
                 }
                 AuthResult.InvalidToken -> {
                     val remainingAccounts = accounts.filterNot { it.id == currentAccount.id }
-                    saveAccounts(normalizeAccounts(remainingAccounts))
+                    saveAccounts(normalizeAccounts(remainingAccounts), requestId)
+                    if (!isCurrentAuthRequest(requestId)) return@launch
                     onAccountRemoved(currentAccount.id)
+                    if (!isCurrentAuthRequest(requestId)) return@launch
                     mutableState.update {
                         it.copy(
                             isLoading = false,
@@ -349,6 +370,7 @@ class LoginStateHolder(
     }
 
     fun logout() {
+        invalidateAuthRequests()
         scope.launch {
             val removedAccountId = state.value.currentAccountId
             val remainingAccounts = normalizeAccounts(
@@ -372,6 +394,7 @@ class LoginStateHolder(
     fun switchAccount(accountId: String) {
         val target = state.value.accounts.firstOrNull { it.id == accountId } ?: return
         if (target.id == state.value.currentAccountId && state.value.user != null) return
+        val requestId = nextAuthRequestId()
 
         val updatedAccounts = state.value.accounts.map {
             it.copy(
@@ -395,17 +418,22 @@ class LoginStateHolder(
         }
 
         scope.launch {
-            saveAccounts(updatedAccounts)
+            if (!isCurrentAuthRequest(requestId)) return@launch
+            saveAccounts(updatedAccounts, requestId)
+            if (!isCurrentAuthRequest(requestId)) return@launch
             if (target.user != null) return@launch
 
-            when (val result = authenticator.verifyToken(target.token)) {
+            val result = authenticator.verifyToken(target.token)
+            if (!isCurrentAuthRequest(requestId)) return@launch
+            when (result) {
                 is AuthResult.Success -> {
                     val verifiedAccounts = upsertCurrentAccount(
                         accounts = state.value.accounts,
                         token = result.token,
                         user = result.user,
                     )
-                    saveAccounts(verifiedAccounts)
+                    saveAccounts(verifiedAccounts, requestId)
+                    if (!isCurrentAuthRequest(requestId)) return@launch
                     mutableState.update {
                         it.copy(
                             isLoading = false,
@@ -418,7 +446,7 @@ class LoginStateHolder(
                         )
                     }
                 }
-                AuthResult.InvalidToken -> removeAccount(target.id, "登录已失效，请重新登录")
+                AuthResult.InvalidToken -> removeAccount(target.id, "登录已失效，请重新登录", requestId)
                 is AuthResult.NetworkError -> mutableState.update {
                     it.copy(
                         isLoading = false,
@@ -454,13 +482,16 @@ class LoginStateHolder(
             lastUsed = nowProvider(),
             current = false,
         )
+        val requestId = nextAuthRequestId()
 
         scope.launch {
             val updatedAccounts = normalizeAccounts(
                 state.value.accounts.filterNot { it.id == accountId || it.token == cleanToken } + importedAccount,
                 preferredCurrentId = state.value.currentAccountId,
             )
-            val saveError = saveAccounts(updatedAccounts)
+            if (!isCurrentAuthRequest(requestId)) return@launch
+            val saveError = saveAccounts(updatedAccounts, requestId)
+            if (!isCurrentAuthRequest(requestId)) return@launch
             mutableState.update {
                 it.copy(
                     accounts = updatedAccounts,
@@ -472,16 +503,23 @@ class LoginStateHolder(
     }
 
     fun removeAccount(accountId: String) {
+        invalidateAuthRequests()
         scope.launch {
             removeAccount(accountId, null)
         }
     }
 
-    private suspend fun removeAccount(accountId: String, errorMessage: String?) {
+    private suspend fun removeAccount(
+        accountId: String,
+        errorMessage: String?,
+        requestId: Int? = null,
+    ) {
         val wasCurrent = state.value.currentAccountId == accountId
         val remainingAccounts = normalizeAccounts(state.value.accounts.filterNot { it.id == accountId })
         saveAccounts(remainingAccounts)
+        if (requestId != null && !isCurrentAuthRequest(requestId)) return
         onAccountRemoved(accountId)
+        if (requestId != null && !isCurrentAuthRequest(requestId)) return
         val current = remainingAccounts.currentAccount()
         mutableState.update {
             if (wasCurrent) {
@@ -504,25 +542,52 @@ class LoginStateHolder(
         }
     }
 
-    private suspend fun removeCurrentAccount() {
+    private suspend fun removeCurrentAccount(requestId: Int? = null) {
         val currentId = state.value.currentAccountId
         if (currentId == null) {
-            clearStoredToken()
+            clearStoredToken(requestId)
+            if (requestId != null && !isCurrentAuthRequest(requestId)) return
         } else {
-            removeAccount(currentId, null)
+            removeAccount(currentId, null, requestId)
         }
     }
 
-    private suspend fun saveAccounts(accounts: List<AccountSession>): String? {
-        return runCatching { tokenStore.saveAccountSessions(accounts) }
+    private suspend fun saveAccounts(
+        accounts: List<AccountSession>,
+        requestId: Int? = null,
+    ): String? {
+        return runCatching {
+            accountSaveMutex.withLock {
+                if (requestId != null && !isCurrentAuthRequest(requestId)) return null
+                tokenStore.saveAccountSessions(accounts)
+            }
+        }
             .fold(
                 onSuccess = { null },
                 onFailure = { "登录成功，但无法保存登录状态：${it.message ?: "未知错误"}" },
             )
     }
 
-    private suspend fun clearStoredToken() {
-        runCatching { tokenStore.clearAccountSessions() }
+    private suspend fun clearStoredToken(requestId: Int? = null) {
+        runCatching {
+            accountSaveMutex.withLock {
+                if (requestId != null && !isCurrentAuthRequest(requestId)) return
+                tokenStore.clearAccountSessions()
+            }
+        }
+    }
+
+    private fun nextAuthRequestId(): Int {
+        authRequestId += 1
+        return authRequestId
+    }
+
+    private fun invalidateAuthRequests() {
+        authRequestId += 1
+    }
+
+    private fun isCurrentAuthRequest(requestId: Int): Boolean {
+        return requestId == authRequestId
     }
 
     private fun upsertCurrentAccount(

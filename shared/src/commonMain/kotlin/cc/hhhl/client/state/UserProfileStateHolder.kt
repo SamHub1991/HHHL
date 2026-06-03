@@ -46,10 +46,17 @@ class UserProfileStateHolder(
     val state: StateFlow<UserProfileUiState> = mutableState
     private var profileLoadRequestId = 0
     private var notesRequestId = 0
+    private var profileMutationRequestId = 0
+    private var relationshipActionRequestId = 0
 
     fun load(clearContent: Boolean = false) {
         if (!clearContent && state.value.isLoading) return
         val requestId = nextProfileLoadRequestId()
+        if (clearContent) {
+            nextNotesRequestId()
+            profileMutationRequestId += 1
+            relationshipActionRequestId += 1
+        }
 
         mutableState.update {
             it.copy(
@@ -57,7 +64,11 @@ class UserProfileStateHolder(
                 relationship = if (clearContent) null else it.relationship,
                 notes = if (clearContent) emptyList() else it.notes,
                 isLoading = true,
+                isLoadingNotes = if (clearContent) false else it.isLoadingNotes,
+                isLoadingMoreNotes = if (clearContent) false else it.isLoadingMoreNotes,
                 isRelationshipLoading = false,
+                isRelationshipChanging = if (clearContent) false else it.isRelationshipChanging,
+                isProfileSaving = if (clearContent) false else it.isProfileSaving,
                 errorMessage = null,
                 profileEditErrorMessage = null,
                 notesErrorMessage = null,
@@ -163,6 +174,7 @@ class UserProfileStateHolder(
         val currentUser = state.value.user
         val cleanName = name.trim()
         val cleanDescription = description.trim()
+        val mutationRequestId = profileMutationRequestId + 1
         if (
             currentUser != null &&
             cleanName == currentUser.displayName.trim() &&
@@ -187,9 +199,14 @@ class UserProfileStateHolder(
                 requiresRelogin = false,
             )
         }
+        profileMutationRequestId = mutationRequestId
 
         scope.launch {
-            applyProfileUpdateResult(repository.updateProfile(cleanName, cleanDescription))
+            applyProfileUpdateResult(
+                requestId = mutationRequestId,
+                originalUserId = currentUser?.id,
+                result = repository.updateProfile(cleanName, cleanDescription),
+            )
         }
     }
 
@@ -197,6 +214,7 @@ class UserProfileStateHolder(
         val driveRepository = driveFileRepository ?: return
         val currentUser = state.value.user ?: return
         if (state.value.isProfileSaving) return
+        val mutationRequestId = ++profileMutationRequestId
 
         mutableState.update {
             it.copy(
@@ -211,8 +229,11 @@ class UserProfileStateHolder(
         scope.launch {
             when (val uploadResult = driveRepository.upload(upload)) {
                 is DriveFileRepositoryResult.Success -> {
+                    if (!isCurrentProfileMutation(mutationRequestId, currentUser.id)) return@launch
                     applyProfileUpdateResult(
-                        repository.updateBanner(
+                        requestId = mutationRequestId,
+                        originalUserId = currentUser.id,
+                        result = repository.updateBanner(
                             name = currentUser.displayName,
                             description = currentUser.bio,
                             bannerId = uploadResult.file.id,
@@ -220,6 +241,7 @@ class UserProfileStateHolder(
                     )
                 }
                 DriveFileRepositoryResult.Unauthorized -> mutableState.update {
+                    if (!isCurrentProfileMutation(mutationRequestId, currentUser.id)) return@update it
                     it.copy(
                         isProfileSaving = false,
                         profileEditErrorMessage = "登录已失效，请重新登录",
@@ -227,6 +249,7 @@ class UserProfileStateHolder(
                     )
                 }
                 is DriveFileRepositoryResult.ValidationError -> mutableState.update {
+                    if (!isCurrentProfileMutation(mutationRequestId, currentUser.id)) return@update it
                     it.copy(
                         isProfileSaving = false,
                         profileEditErrorMessage = uploadResult.message,
@@ -234,6 +257,7 @@ class UserProfileStateHolder(
                     )
                 }
                 is DriveFileRepositoryResult.Error -> mutableState.update {
+                    if (!isCurrentProfileMutation(mutationRequestId, currentUser.id)) return@update it
                     it.copy(
                         isProfileSaving = false,
                         profileEditErrorMessage = uploadResult.message,
@@ -264,6 +288,7 @@ class UserProfileStateHolder(
         val relationshipRepository = relationshipRepository ?: return
         val user = state.value.user ?: return
         if (state.value.isRelationshipChanging) return
+        val requestId = ++relationshipActionRequestId
 
         mutableState.update {
             it.copy(isRelationshipChanging = true, errorMessage = null, message = null, requiresRelogin = false)
@@ -275,7 +300,7 @@ class UserProfileStateHolder(
             } else {
                 relationshipRepository.follow(user.id)
             }
-            applyRelationshipResult(user, result)
+            applyRelationshipResult(requestId, user, result)
         }
     }
 
@@ -284,6 +309,7 @@ class UserProfileStateHolder(
         val user = state.value.user ?: return
         val relationship = state.value.relationship ?: UserRelationship(userId = user.id)
         if (state.value.isRelationshipChanging) return
+        val requestId = ++relationshipActionRequestId
 
         mutableState.update {
             it.copy(isRelationshipChanging = true, errorMessage = null, message = null, requiresRelogin = false)
@@ -295,7 +321,7 @@ class UserProfileStateHolder(
             } else {
                 relationshipRepository.mute(user.id)
             }
-            applyMuteResult(user.id, relationship, result)
+            applyMuteResult(requestId, user.id, relationship, result)
         }
     }
 
@@ -304,6 +330,7 @@ class UserProfileStateHolder(
         val user = state.value.user ?: return
         val relationship = state.value.relationship ?: UserRelationship(userId = user.id)
         if (state.value.isRelationshipChanging) return
+        val requestId = ++relationshipActionRequestId
 
         mutableState.update {
             it.copy(isRelationshipChanging = true, errorMessage = null, message = null, requiresRelogin = false)
@@ -315,7 +342,7 @@ class UserProfileStateHolder(
             } else {
                 relationshipRepository.block(user.id)
             }
-            applyBlockResult(user, relationship, result)
+            applyBlockResult(requestId, user, relationship, result)
         }
     }
 
@@ -323,13 +350,14 @@ class UserProfileStateHolder(
         val relationshipRepository = relationshipRepository ?: return
         val user = state.value.user ?: return
         if (state.value.isRelationshipChanging) return
+        val requestId = ++relationshipActionRequestId
 
         mutableState.update {
             it.copy(isRelationshipChanging = true, errorMessage = null, message = null, requiresRelogin = false)
         }
 
         scope.launch {
-            applyReportResult(relationshipRepository.reportUser(user.id))
+            applyReportResult(requestId, user.id, relationshipRepository.reportUser(user.id))
         }
     }
 
@@ -397,10 +425,11 @@ class UserProfileStateHolder(
     }
 
     private fun applyRelationshipResult(
+        requestId: Int,
         originalUser: User,
         result: UserRelationshipRepositoryResult,
     ) {
-        if (state.value.user?.id != originalUser.id) return
+        if (!isCurrentRelationshipAction(requestId, originalUser.id)) return
         when (result) {
             UserRelationshipRepositoryResult.Success -> mutableState.update { current ->
                 val currentUser = current.user ?: originalUser
@@ -444,9 +473,14 @@ class UserProfileStateHolder(
         }
     }
 
-    private fun applyProfileUpdateResult(result: UserProfileRepositoryResult) {
+    private fun applyProfileUpdateResult(
+        requestId: Int,
+        originalUserId: String?,
+        result: UserProfileRepositoryResult,
+    ) {
         when (result) {
             is UserProfileRepositoryResult.Success -> mutableState.update { current ->
+                if (!isCurrentProfileMutation(requestId, originalUserId)) return@update current
                 current.copy(
                     user = mergeProfileUpdate(current.user, result.user),
                     isProfileSaving = false,
@@ -457,6 +491,7 @@ class UserProfileStateHolder(
                 )
             }
             UserProfileRepositoryResult.Unauthorized -> mutableState.update {
+                if (!isCurrentProfileMutation(requestId, originalUserId)) return@update it
                 it.copy(
                     isProfileSaving = false,
                     profileEditErrorMessage = "登录已失效，请重新登录",
@@ -464,6 +499,7 @@ class UserProfileStateHolder(
                 )
             }
             is UserProfileRepositoryResult.Error -> mutableState.update {
+                if (!isCurrentProfileMutation(requestId, originalUserId)) return@update it
                 it.copy(
                     isProfileSaving = false,
                     profileEditErrorMessage = result.message,
@@ -522,11 +558,12 @@ class UserProfileStateHolder(
     }
 
     private fun applyMuteResult(
+        requestId: Int,
         userId: String,
         originalRelationship: UserRelationship,
         result: UserRelationshipRepositoryResult,
     ) {
-        if (state.value.user?.id != userId) return
+        if (!isCurrentRelationshipAction(requestId, userId)) return
         when (result) {
             UserRelationshipRepositoryResult.Success -> mutableState.update { current ->
                 val currentRelationship = current.relationship ?: originalRelationship
@@ -566,11 +603,12 @@ class UserProfileStateHolder(
     }
 
     private fun applyBlockResult(
+        requestId: Int,
         originalUser: User,
         originalRelationship: UserRelationship,
         result: UserRelationshipRepositoryResult,
     ) {
-        if (state.value.user?.id != originalUser.id) return
+        if (!isCurrentRelationshipAction(requestId, originalUser.id)) return
         when (result) {
             UserRelationshipRepositoryResult.Success -> mutableState.update { current ->
                 val currentUser = current.user ?: originalUser
@@ -620,7 +658,12 @@ class UserProfileStateHolder(
         }
     }
 
-    private fun applyReportResult(result: UserRelationshipRepositoryResult) {
+    private fun applyReportResult(
+        requestId: Int,
+        userId: String,
+        result: UserRelationshipRepositoryResult,
+    ) {
+        if (!isCurrentRelationshipAction(requestId, userId)) return
         when (result) {
             UserRelationshipRepositoryResult.Success -> mutableState.update {
                 it.copy(
@@ -648,6 +691,21 @@ class UserProfileStateHolder(
                 it.copy(isRelationshipChanging = false, requiresRelogin = false)
             }
         }
+    }
+
+    private fun isCurrentProfileMutation(
+        requestId: Int,
+        originalUserId: String?,
+    ): Boolean {
+        if (requestId != profileMutationRequestId) return false
+        return originalUserId == null || state.value.user?.id == originalUserId
+    }
+
+    private fun isCurrentRelationshipAction(
+        requestId: Int,
+        userId: String,
+    ): Boolean {
+        return requestId == relationshipActionRequestId && state.value.user?.id == userId
     }
 
     private fun nextProfileLoadRequestId(): Int {

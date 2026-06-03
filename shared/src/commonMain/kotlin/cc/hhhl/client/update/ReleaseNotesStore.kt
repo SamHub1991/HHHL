@@ -39,6 +39,18 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.7.2",
+            title = "HHHL 0.7.2 更新内容",
+            summary = "这版集中修复多个页面切换和后台结果回写的稳定性问题，减少旧请求覆盖当前界面的情况。",
+            highlights = listOf(
+                "修复帖子详情页在切走又切回同一帖子后，旧翻译、回复、反应用户、编辑记录等异步结果可能覆盖新状态的问题。",
+                "修复私聊会话切换后，旧消息加载请求返回时可能把当前私聊消息列表覆盖成旧内容的问题。",
+                "修复频道列表刷新过程中手动切换频道后，刷新结果回来又把选中频道切回旧频道的问题。",
+                "优化多处登录、未读、特别关心、AI 配置和自动化状态恢复逻辑，降低重新打开应用后的状态回退概率。",
+                "补充相关竞态回归测试，并通过共享模块单测和 Android Debug 构建验证。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.7.1",
             title = "HHHL 0.7.1 更新内容",
             summary = "这版修复远程 AI 调用和助手误触发问题，并补齐聊天室完整公告入口。",

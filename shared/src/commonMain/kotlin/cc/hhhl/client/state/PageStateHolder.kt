@@ -260,27 +260,30 @@ class PageStateHolder(
         scope.launch {
             when (val result = repository.deletePage(page.id)) {
                 PageActionRepositoryResult.Success -> mutableState.update { current ->
+                    val deletedSelectedPage = current.selectedPage?.id == page.id
                     current.copy(
                         pages = current.pages.filterNot { it.id == page.id },
-                        selectedPage = null,
-                        editingPageId = null,
-                        editingDraft = null,
+                        selectedPage = current.selectedPage?.takeIf { it.id != page.id },
+                        editingPageId = current.editingPageId?.takeIf { it != page.id },
+                        editingDraft = if (current.editingPageId == page.id) null else current.editingDraft,
                         isDeletingPage = false,
-                        detailErrorMessage = null,
+                        detailErrorMessage = if (deletedSelectedPage) null else current.detailErrorMessage,
                         requiresRelogin = false,
                     )
                 }
-                PageActionRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                PageActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val deletingSelectedPage = current.selectedPage?.id == page.id
+                    current.copy(
                         isDeletingPage = false,
-                        detailErrorMessage = "登录已失效，请重新登录",
+                        detailErrorMessage = if (deletingSelectedPage) "登录已失效，请重新登录" else current.detailErrorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is PageActionRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is PageActionRepositoryResult.Error -> mutableState.update { current ->
+                    val deletingSelectedPage = current.selectedPage?.id == page.id
+                    current.copy(
                         isDeletingPage = false,
-                        detailErrorMessage = result.message,
+                        detailErrorMessage = if (deletingSelectedPage) result.message else current.detailErrorMessage,
                         requiresRelogin = false,
                     )
                 }

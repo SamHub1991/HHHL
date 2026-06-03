@@ -52,6 +52,8 @@ class AdminStateHolder(
     private var overviewRequestId = 0
     private var userSearchRequestId = 0
     private var userRolesRequestId = 0
+    private var announcementDraftRevision = 0
+    private var announcementMutationRequestId = 0
 
     fun refresh() {
         if (state.value.isLoading) return
@@ -241,6 +243,7 @@ class AdminStateHolder(
     }
 
     fun updateAnnouncementDraft(title: String, text: String) {
+        announcementDraftRevision += 1
         mutableState.update {
             it.copy(
                 announcementTitleDraft = title,
@@ -252,6 +255,7 @@ class AdminStateHolder(
     }
 
     fun editAnnouncement(announcement: AdminAnnouncementSummary) {
+        announcementDraftRevision += 1
         mutableState.update {
             it.copy(
                 editingAnnouncementId = announcement.id,
@@ -264,6 +268,7 @@ class AdminStateHolder(
     }
 
     fun cancelAnnouncementEdit() {
+        announcementDraftRevision += 1
         mutableState.update {
             it.copy(
                 editingAnnouncementId = null,
@@ -287,37 +292,51 @@ class AdminStateHolder(
             return
         }
 
+        val requestId = ++announcementMutationRequestId
+        val draftRevision = announcementDraftRevision
+        val editingId = current.editingAnnouncementId
+        val title = current.announcementTitleDraft
+        val text = current.announcementTextDraft
         scope.launch {
-            val editingId = current.editingAnnouncementId
             if (editingId != null) {
                 when (
                     val result = repository.updateAnnouncement(
                         announcementId = editingId,
-                        title = current.announcementTitleDraft,
-                        text = current.announcementTextDraft,
+                        title = title,
+                        text = text,
                     )
                 ) {
                     is AdminRepositoryResult.Success -> mutableState.update {
+                        val isCurrentDraft = isCurrentAnnouncementDraftMutation(
+                            requestId = requestId,
+                            draftRevision = draftRevision,
+                            editingId = editingId,
+                            title = title,
+                            text = text,
+                        )
                         it.copy(
                             announcements = it.announcements.map { announcement ->
                                 if (announcement.id == editingId) {
                                     announcement.copy(
-                                        title = current.announcementTitleDraft.trim(),
-                                        text = current.announcementTextDraft.trim(),
+                                        title = title.trim(),
+                                        text = text.trim(),
                                     )
                                 } else {
                                     announcement
                                 }
                             },
-                            announcementTitleDraft = "",
-                            announcementTextDraft = "",
-                            editingAnnouncementId = null,
-                            actionMessage = "公告已更新",
+                            announcementTitleDraft = if (isCurrentDraft) "" else it.announcementTitleDraft,
+                            announcementTextDraft = if (isCurrentDraft) "" else it.announcementTextDraft,
+                            editingAnnouncementId = if (isCurrentDraft) null else it.editingAnnouncementId,
+                            actionMessage = if (isCurrentDraft) "公告已更新" else it.actionMessage,
                             isPermissionDenied = false,
                             requiresRelogin = false,
                         )
                     }
                     AdminRepositoryResult.Unauthorized -> mutableState.update {
+                        if (!isCurrentAnnouncementDraftMutation(requestId, draftRevision, editingId, title, text)) {
+                            return@update it
+                        }
                         it.copy(
                             isPermissionDenied = false,
                             errorMessage = "登录已失效，请重新登录",
@@ -325,6 +344,9 @@ class AdminStateHolder(
                         )
                     }
                     is AdminRepositoryResult.Error -> mutableState.update {
+                        if (!isCurrentAnnouncementDraftMutation(requestId, draftRevision, editingId, title, text)) {
+                            return@update it
+                        }
                         it.copy(
                             isPermissionDenied = result.isPermissionDenied,
                             errorMessage = if (result.isPermissionDenied) result.message else it.errorMessage,
@@ -338,22 +360,32 @@ class AdminStateHolder(
 
             when (
                 val result = repository.createAnnouncement(
-                    title = current.announcementTitleDraft,
-                    text = current.announcementTextDraft,
+                    title = title,
+                    text = text,
                 )
             ) {
                 is AdminRepositoryResult.Success -> mutableState.update {
+                    val isCurrentDraft = isCurrentAnnouncementDraftMutation(
+                        requestId = requestId,
+                        draftRevision = draftRevision,
+                        editingId = null,
+                        title = title,
+                        text = text,
+                    )
                     it.copy(
                         announcements = listOfNotNull(result.value) + it.announcements,
-                        announcementTitleDraft = "",
-                        announcementTextDraft = "",
-                        editingAnnouncementId = null,
-                        actionMessage = "公告已创建",
+                        announcementTitleDraft = if (isCurrentDraft) "" else it.announcementTitleDraft,
+                        announcementTextDraft = if (isCurrentDraft) "" else it.announcementTextDraft,
+                        editingAnnouncementId = if (isCurrentDraft) null else it.editingAnnouncementId,
+                        actionMessage = if (isCurrentDraft) "公告已创建" else it.actionMessage,
                         isPermissionDenied = false,
                         requiresRelogin = false,
                     )
                 }
                 AdminRepositoryResult.Unauthorized -> mutableState.update {
+                    if (!isCurrentAnnouncementDraftMutation(requestId, draftRevision, null, title, text)) {
+                        return@update it
+                    }
                     it.copy(
                         isPermissionDenied = false,
                         errorMessage = "登录已失效，请重新登录",
@@ -361,6 +393,9 @@ class AdminStateHolder(
                     )
                 }
                 is AdminRepositoryResult.Error -> mutableState.update {
+                    if (!isCurrentAnnouncementDraftMutation(requestId, draftRevision, null, title, text)) {
+                        return@update it
+                    }
                     it.copy(
                         isPermissionDenied = result.isPermissionDenied,
                         errorMessage = if (result.isPermissionDenied) result.message else it.errorMessage,
@@ -370,6 +405,21 @@ class AdminStateHolder(
                 }
             }
         }
+    }
+
+    private fun isCurrentAnnouncementDraftMutation(
+        requestId: Int,
+        draftRevision: Int,
+        editingId: String?,
+        title: String,
+        text: String,
+    ): Boolean {
+        val current = state.value
+        return requestId == announcementMutationRequestId &&
+            draftRevision == announcementDraftRevision &&
+            current.editingAnnouncementId == editingId &&
+            current.announcementTitleDraft == title &&
+            current.announcementTextDraft == text
     }
 
     fun deleteAnnouncement(announcementId: String) {

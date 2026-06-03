@@ -64,6 +64,7 @@ class RelationshipManagementStateHolder(
     private val mutableState = MutableStateFlow(RelationshipManagementUiState())
     val state: StateFlow<RelationshipManagementUiState> = mutableState
     private var listRequestId = 0
+    private var mutationRequestId = 0
 
     fun updateSpecialCareUsers(entries: List<UserRelationshipListEntry>) {
         mutableState.update {
@@ -89,6 +90,7 @@ class RelationshipManagementStateHolder(
                 selectedTab = tab,
                 isLoading = if (tab == RelationshipManagementTab.SpecialCare) false else it.isLoading,
                 isLoadingMore = if (tab == RelationshipManagementTab.SpecialCare) false else it.isLoadingMore,
+                isMutating = if (tab == it.selectedTab) it.isMutating else false,
                 errorMessage = null,
                 message = null,
                 requiresRelogin = false,
@@ -202,6 +204,7 @@ class RelationshipManagementStateHolder(
         val cleanUserId = userId.trim()
         if (cleanUserId.isEmpty() || state.value.isMutating) return
         val tab = state.value.selectedTab
+        val requestId = ++mutationRequestId
         mutableState.update {
             it.copy(
                 isMutating = true,
@@ -217,12 +220,14 @@ class RelationshipManagementStateHolder(
                 RelationshipManagementTab.Muted -> repository.unmute(cleanUserId)
                 RelationshipManagementTab.RenoteMuted -> repository.updateFollowing(cleanUserId)
             }
-            applyMutationResult(tab, cleanUserId, result)
+            applyMutationResult(requestId, tab, cleanUserId, result)
         }
     }
 
     fun updateAllFollowing() {
         if (state.value.isMutating) return
+        val tab = state.value.selectedTab
+        val requestId = ++mutationRequestId
         mutableState.update {
             it.copy(
                 isMutating = true,
@@ -234,6 +239,7 @@ class RelationshipManagementStateHolder(
         scope.launch {
             when (val result = repository.updateAllFollowing()) {
                 UserRelationshipRepositoryResult.Success -> mutableState.update {
+                    if (requestId != mutationRequestId || it.selectedTab != tab) return@update it
                     it.copy(
                         isMutating = false,
                         message = "已提交刷新全部关注",
@@ -241,6 +247,7 @@ class RelationshipManagementStateHolder(
                     )
                 }
                 UserRelationshipRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != mutationRequestId || it.selectedTab != tab) return@update it
                     it.copy(
                         isMutating = false,
                         errorMessage = "登录已失效，请重新登录",
@@ -248,6 +255,7 @@ class RelationshipManagementStateHolder(
                     )
                 }
                 is UserRelationshipRepositoryResult.Error -> mutableState.update {
+                    if (requestId != mutationRequestId || it.selectedTab != tab) return@update it
                     it.copy(
                         isMutating = false,
                         errorMessage = result.message,
@@ -255,6 +263,7 @@ class RelationshipManagementStateHolder(
                     )
                 }
                 is UserRelationshipRepositoryResult.RelationLoaded -> mutableState.update {
+                    if (requestId != mutationRequestId || it.selectedTab != tab) return@update it
                     it.copy(
                         isMutating = false,
                         message = "已同步关注关系",
@@ -332,40 +341,44 @@ class RelationshipManagementStateHolder(
     }
 
     private fun applyMutationResult(
+        requestId: Int,
         tab: RelationshipManagementTab,
         userId: String,
         result: UserRelationshipRepositoryResult,
     ) {
+        if (requestId != mutationRequestId) return
         when (result) {
-            UserRelationshipRepositoryResult.Success -> mutableState.update {
+            UserRelationshipRepositoryResult.Success -> mutableState.update { current ->
+                val isCurrentTab = current.selectedTab == tab
                 when (tab) {
-                    RelationshipManagementTab.SpecialCare -> it.copy(
-                        specialCareUsers = it.specialCareUsers.filterNot { entry -> entry.user.id == userId },
-                        isMutating = false,
-                        message = "已取消特别关心",
-                        requiresRelogin = false,
+                    RelationshipManagementTab.SpecialCare -> current.copy(
+                        specialCareUsers = current.specialCareUsers.filterNot { entry -> entry.user.id == userId },
+                        isMutating = if (isCurrentTab) false else current.isMutating,
+                        message = if (isCurrentTab) "已取消特别关心" else current.message,
+                        requiresRelogin = if (isCurrentTab) false else current.requiresRelogin,
                     )
-                    RelationshipManagementTab.Blocked -> it.copy(
-                        blockedUsers = it.blockedUsers.filterNot { entry -> entry.user.id == userId },
-                        isMutating = false,
-                        message = "已取消屏蔽",
-                        requiresRelogin = false,
+                    RelationshipManagementTab.Blocked -> current.copy(
+                        blockedUsers = current.blockedUsers.filterNot { entry -> entry.user.id == userId },
+                        isMutating = if (isCurrentTab) false else current.isMutating,
+                        message = if (isCurrentTab) "已取消屏蔽" else current.message,
+                        requiresRelogin = if (isCurrentTab) false else current.requiresRelogin,
                     )
-                    RelationshipManagementTab.Muted -> it.copy(
-                        mutedUsers = it.mutedUsers.filterNot { entry -> entry.user.id == userId },
-                        isMutating = false,
-                        message = "已取消静音",
-                        requiresRelogin = false,
+                    RelationshipManagementTab.Muted -> current.copy(
+                        mutedUsers = current.mutedUsers.filterNot { entry -> entry.user.id == userId },
+                        isMutating = if (isCurrentTab) false else current.isMutating,
+                        message = if (isCurrentTab) "已取消静音" else current.message,
+                        requiresRelogin = if (isCurrentTab) false else current.requiresRelogin,
                     )
-                    RelationshipManagementTab.RenoteMuted -> it.copy(
-                        renoteMutedUsers = it.renoteMutedUsers.filterNot { entry -> entry.user.id == userId },
-                        isMutating = false,
-                        message = "已刷新关注关系",
-                        requiresRelogin = false,
+                    RelationshipManagementTab.RenoteMuted -> current.copy(
+                        renoteMutedUsers = current.renoteMutedUsers.filterNot { entry -> entry.user.id == userId },
+                        isMutating = if (isCurrentTab) false else current.isMutating,
+                        message = if (isCurrentTab) "已刷新关注关系" else current.message,
+                        requiresRelogin = if (isCurrentTab) false else current.requiresRelogin,
                     )
                 }
             }
             UserRelationshipRepositoryResult.Unauthorized -> mutableState.update {
+                if (it.selectedTab != tab) return@update it
                 it.copy(
                     isMutating = false,
                     errorMessage = "登录已失效，请重新登录",
@@ -373,6 +386,7 @@ class RelationshipManagementStateHolder(
                 )
             }
             is UserRelationshipRepositoryResult.Error -> mutableState.update {
+                if (it.selectedTab != tab) return@update it
                 it.copy(
                     isMutating = false,
                     errorMessage = result.message,
@@ -380,6 +394,7 @@ class RelationshipManagementStateHolder(
                 )
             }
             is UserRelationshipRepositoryResult.RelationLoaded -> mutableState.update {
+                if (it.selectedTab != tab) return@update it
                 it.copy(isMutating = false, requiresRelogin = false)
             }
         }

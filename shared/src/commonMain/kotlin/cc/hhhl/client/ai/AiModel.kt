@@ -257,6 +257,7 @@ fun AiSettings.settingsForTask(kind: AiTaskKind): AiSettings {
     if (kind != AiTaskKind.AutomationRuleDraft || !automationRuleDraftModel.enabled) return this
     val automationModel = automationRuleDraftModel
     return copy(
+        serviceMode = AiServiceMode.LocalOnly,
         provider = automationModel.provider,
         baseUrl = automationModel.baseUrl,
         apiKey = automationModel.apiKey,

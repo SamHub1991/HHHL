@@ -203,25 +203,28 @@ class GalleryStateHolder(
         scope.launch {
             when (val result = repository.deletePost(post.id)) {
                 GalleryActionRepositoryResult.Success -> mutableState.update { current ->
+                    val deletedSelectedPost = current.selectedPost?.id == post.id
                     current.copy(
                         posts = current.posts.filterNot { it.id == post.id },
-                        selectedPost = null,
+                        selectedPost = current.selectedPost?.takeIf { it.id != post.id },
                         isMutatingPost = false,
-                        detailErrorMessage = null,
+                        detailErrorMessage = if (deletedSelectedPost) null else current.detailErrorMessage,
                         requiresRelogin = false,
                     )
                 }
-                GalleryActionRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                GalleryActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val deletingSelectedPost = current.selectedPost?.id == post.id
+                    current.copy(
                         isMutatingPost = false,
-                        detailErrorMessage = "登录已失效，请重新登录",
+                        detailErrorMessage = if (deletingSelectedPost) "登录已失效，请重新登录" else current.detailErrorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is GalleryActionRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is GalleryActionRepositoryResult.Error -> mutableState.update { current ->
+                    val deletingSelectedPost = current.selectedPost?.id == post.id
+                    current.copy(
                         isMutatingPost = false,
-                        detailErrorMessage = result.message,
+                        detailErrorMessage = if (deletingSelectedPost) result.message else current.detailErrorMessage,
                         requiresRelogin = false,
                     )
                 }

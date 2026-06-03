@@ -271,30 +271,33 @@ class AntennaStateHolder(
             when (val result = repository.deleteAntenna(antenna.id)) {
                 AntennaActionRepositoryResult.Success -> mutableState.update { current ->
                     val remaining = current.antennas.filterNot { it.id == antenna.id }
+                    val deletedSelectedAntenna = current.selectedAntenna?.id == antenna.id
                     current.copy(
                         antennas = remaining,
-                        selectedAntenna = remaining.firstOrNull(),
-                        notes = emptyList(),
+                        selectedAntenna = if (deletedSelectedAntenna) remaining.firstOrNull() else current.selectedAntenna,
+                        notes = if (deletedSelectedAntenna) emptyList() else current.notes,
                         isMutatingAntenna = false,
-                        isLoadingNotes = false,
-                        isLoadingMore = false,
-                        endReached = false,
-                        errorMessage = null,
-                        notesErrorMessage = null,
+                        isLoadingNotes = if (deletedSelectedAntenna) false else current.isLoadingNotes,
+                        isLoadingMore = if (deletedSelectedAntenna) false else current.isLoadingMore,
+                        endReached = if (deletedSelectedAntenna) false else current.endReached,
+                        errorMessage = if (deletedSelectedAntenna) null else current.errorMessage,
+                        notesErrorMessage = if (deletedSelectedAntenna) null else current.notesErrorMessage,
                         requiresRelogin = false,
                     )
                 }
-                AntennaActionRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                AntennaActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val deletingSelectedAntenna = current.selectedAntenna?.id == antenna.id
+                    current.copy(
                         isMutatingAntenna = false,
-                        errorMessage = "登录已失效，请重新登录",
+                        errorMessage = if (deletingSelectedAntenna) "登录已失效，请重新登录" else current.errorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is AntennaActionRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is AntennaActionRepositoryResult.Error -> mutableState.update { current ->
+                    val deletingSelectedAntenna = current.selectedAntenna?.id == antenna.id
+                    current.copy(
                         isMutatingAntenna = false,
-                        errorMessage = result.message,
+                        errorMessage = if (deletingSelectedAntenna) result.message else current.errorMessage,
                         requiresRelogin = false,
                     )
                 }

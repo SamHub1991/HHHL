@@ -385,6 +385,211 @@ class AutomationStateHolderTest {
     }
 
     @Test
+    fun fullyFailedRiskyActionDoesNotConsumeCooldownForRetry() = runTest {
+        val executor = object : AutomationActionExecutor {
+            var shouldFail = true
+            var calls = 0
+
+            override suspend fun execute(
+                action: AutomationAction,
+                event: AutomationEvent,
+                title: String,
+                body: String,
+            ): AutomationActionExecutionResult {
+                calls += 1
+                return if (shouldFail) {
+                    AutomationActionExecutionResult(false, "network failed")
+                } else {
+                    AutomationActionExecutionResult(true, "sent")
+                }
+            }
+        }
+        val holder = AutomationStateHolder(
+            store = MemoryAutomationStore(
+                AutomationSnapshot(
+                    rules = listOf(
+                        AutomationRule(
+                            id = "rule-risky-retry",
+                            name = "Risky retry",
+                            trigger = AutomationTrigger.ChatMessage,
+                            cooldownSeconds = 30,
+                            actions = listOf(
+                                AutomationAction(
+                                    id = "action-reply",
+                                    type = AutomationActionType.ReplyToChat,
+                                    bodyTemplate = "{{message.text}}",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            accountId = "account-1",
+            executor = executor,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+        val event = AutomationEvent(
+            id = "event-risky-retry",
+            trigger = AutomationTrigger.ChatMessage,
+            chatMessageId = "message-risky-retry",
+            roomId = "room-1",
+            messageText = "retry me",
+        )
+
+        holder.emit(event)
+        advanceUntilIdle()
+        executor.shouldFail = false
+        holder.emit(event)
+        advanceUntilIdle()
+
+        assertEquals(2, executor.calls)
+        assertEquals(true, holder.state.value.logs.first().success)
+    }
+
+    @Test
+    fun fullyFailedActionDoesNotConsumeBurstLimitForNextEvent() = runTest {
+        val executor = object : AutomationActionExecutor {
+            var shouldFail = true
+            var calls = 0
+
+            override suspend fun execute(
+                action: AutomationAction,
+                event: AutomationEvent,
+                title: String,
+                body: String,
+            ): AutomationActionExecutionResult {
+                calls += 1
+                return if (shouldFail) {
+                    AutomationActionExecutionResult(false, "receiver failed")
+                } else {
+                    AutomationActionExecutionResult(true, "webhook sent")
+                }
+            }
+        }
+        val holder = AutomationStateHolder(
+            store = MemoryAutomationStore(
+                AutomationSnapshot(
+                    rules = listOf(
+                        AutomationRule(
+                            id = "rule-burst-retry",
+                            name = "Burst retry",
+                            trigger = AutomationTrigger.ChatMessage,
+                            maxExecutionsPer30Seconds = 1,
+                            actions = listOf(
+                                AutomationAction(
+                                    id = "action-webhook",
+                                    type = AutomationActionType.Webhook,
+                                    targetId = "hook-target",
+                                    bodyTemplate = "{{message.text}}",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            accountId = "account-1",
+            executor = executor,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.emit(
+            AutomationEvent(
+                id = "event-burst-fail",
+                trigger = AutomationTrigger.ChatMessage,
+                chatMessageId = "message-burst-fail",
+                messageText = "first",
+            ),
+        )
+        advanceUntilIdle()
+        executor.shouldFail = false
+        holder.emit(
+            AutomationEvent(
+                id = "event-burst-success",
+                trigger = AutomationTrigger.ChatMessage,
+                chatMessageId = "message-burst-success",
+                messageText = "second",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(2, executor.calls)
+        assertEquals(true, holder.state.value.logs.first().success)
+    }
+
+    @Test
+    fun partialFailedRuleKeepsDedupeAfterSuccessfulAction() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-partial",
+                        name = "Partial writes",
+                        trigger = AutomationTrigger.ChatMessage,
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-success",
+                                type = AutomationActionType.Webhook,
+                                targetId = "hook-success",
+                            ),
+                            AutomationAction(
+                                id = "action-fail",
+                                type = AutomationActionType.Webhook,
+                                targetId = "hook-fail",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val executor = object : AutomationActionExecutor {
+            var successfulCalls = 0
+            var failedCalls = 0
+
+            override suspend fun execute(
+                action: AutomationAction,
+                event: AutomationEvent,
+                title: String,
+                body: String,
+            ): AutomationActionExecutionResult {
+                return if (action.id == "action-success") {
+                    successfulCalls += 1
+                    AutomationActionExecutionResult(true, "sent")
+                } else {
+                    failedCalls += 1
+                    AutomationActionExecutionResult(false, "receiver failed")
+                }
+            }
+        }
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            executor = executor,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+        val event = AutomationEvent(
+            id = "chat-message:message-partial",
+            trigger = AutomationTrigger.ChatMessage,
+            chatMessageId = "message-partial",
+            messageText = "same text",
+        )
+
+        holder.emit(event)
+        advanceUntilIdle()
+        holder.emit(event)
+        advanceUntilIdle()
+
+        assertEquals(1, executor.successfulCalls)
+        assertEquals(1, executor.failedCalls)
+        assertEquals(1, store.lastSnapshot.executedEvents.size)
+        assertEquals("chat-message:message-partial", store.lastSnapshot.executedEvents.single().eventKey)
+        assertEquals(2, store.lastSnapshot.logs.size)
+        assertTrue(holder.state.value.debugRecords.first().reason.contains("去重"))
+    }
+
+    @Test
     fun sameTextDifferentChatMessagesAreNotDeduped() = runTest {
         val store = MemoryAutomationStore(
             AutomationSnapshot(
@@ -1050,6 +1255,74 @@ class AutomationStateHolderTest {
         assertEquals("测试聊天室", variables.getValue("room.name").jsonPrimitive.content)
         val authHeaders = payload.getValue("attachmentAuthHeaders").jsonObject
         assertEquals("Bearer token-123", authHeaders.getValue("Authorization").jsonPrimitive.content)
+    }
+
+    @Test
+    fun webhookPayloadDoesNotLeakAttachmentAuthHeadersToPrivateLanByDefault() = runTest {
+        val payload = webhookPayloadForAttachmentTarget("http://192.168.1.23:3000/hook")
+
+        val authHeaders = payload.getValue("attachmentAuthHeaders").jsonObject
+        assertEquals(0, authHeaders.size)
+    }
+
+    @Test
+    fun webhookPayloadAllowsAttachmentAuthHeadersToPrivateLanWithExplicitOptIn() = runTest {
+        val payload = webhookPayloadForAttachmentTarget("http://192.168.1.23:3000/hook?hhhlAttachmentAuth=1")
+
+        val authHeaders = payload.getValue("attachmentAuthHeaders").jsonObject
+        assertEquals("Bearer token-123", authHeaders.getValue("Authorization").jsonPrimitive.content)
+    }
+
+    private suspend fun webhookPayloadForAttachmentTarget(targetId: String): kotlinx.serialization.json.JsonObject {
+        var webhookBody = ""
+        val executor = AppAutomationActionExecutor(
+            chatRepository = cc.hhhl.client.repository.ChatRepository(tokenProvider = { "token" }),
+            notificationRepository = cc.hhhl.client.repository.NotificationRepository(tokenProvider = { "token" }),
+            attachmentAuthHeaderProvider = { mapOf("Authorization" to "Bearer token-123") },
+            httpClient = HttpClient(
+                MockEngine { request ->
+                    webhookBody = (request.body as TextContent).text
+                    respond("""{"ok":true}""", HttpStatusCode.OK)
+                },
+            ) {
+                install(ContentNegotiation) { json() }
+            },
+        )
+
+        val result = executor.execute(
+            action = AutomationAction(
+                id = "action-webhook",
+                type = AutomationActionType.Webhook,
+                targetId = targetId,
+                titleTemplate = "附件消息",
+                bodyTemplate = "{{message.text}}",
+            ),
+            event = AutomationEvent(
+                id = "event-attachment",
+                trigger = AutomationTrigger.ChatMessage,
+                chatMessageId = "message-attachment",
+                sourceKind = "room",
+                senderName = "Alice",
+                senderUsername = "alice",
+                roomId = "room-1",
+                roomName = "测试聊天室",
+                messageText = "看图",
+                messageType = "text,file,image",
+                attachments = listOf(
+                    AutomationAttachment(
+                        id = "file-image",
+                        name = "demo.png",
+                        type = "image/png",
+                        url = "https://example.com/demo.png",
+                    ),
+                ),
+            ),
+            title = "附件消息",
+            body = "看图",
+        )
+
+        assertTrue(result.success)
+        return Json.parseToJsonElement(webhookBody).jsonObject
     }
 
     @Test

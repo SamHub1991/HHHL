@@ -394,28 +394,31 @@ class FlashStateHolder(
     ) {
         when (result) {
             FlashActionRepositoryResult.Success -> mutableState.update { current ->
+                val deletedSelectedFlash = current.selectedFlash?.id == flashId
                 current.copy(
                     flashes = current.flashes.filterNot { it.id == flashId },
-                    selectedFlash = null,
+                    selectedFlash = current.selectedFlash?.takeIf { it.id != flashId },
                     isDeletingFlash = false,
-                    detailErrorMessage = null,
-                    draftMode = null,
-                    draft = FlashDraft(),
-                    draftErrorMessage = null,
+                    detailErrorMessage = if (deletedSelectedFlash) null else current.detailErrorMessage,
+                    draftMode = if (deletedSelectedFlash) null else current.draftMode,
+                    draft = if (deletedSelectedFlash) FlashDraft() else current.draft,
+                    draftErrorMessage = if (deletedSelectedFlash) null else current.draftErrorMessage,
                     requiresRelogin = false,
                 )
             }
-            FlashActionRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            FlashActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                val deletingSelectedFlash = current.selectedFlash?.id == flashId
+                current.copy(
                     isDeletingFlash = false,
-                    detailErrorMessage = "登录已失效，请重新登录",
+                    detailErrorMessage = if (deletingSelectedFlash) "登录已失效，请重新登录" else current.detailErrorMessage,
                     requiresRelogin = true,
                 )
             }
-            is FlashActionRepositoryResult.Error -> mutableState.update {
-                it.copy(
+            is FlashActionRepositoryResult.Error -> mutableState.update { current ->
+                val deletingSelectedFlash = current.selectedFlash?.id == flashId
+                current.copy(
                     isDeletingFlash = false,
-                    detailErrorMessage = result.message,
+                    detailErrorMessage = if (deletingSelectedFlash) result.message else current.detailErrorMessage,
                     requiresRelogin = false,
                 )
             }

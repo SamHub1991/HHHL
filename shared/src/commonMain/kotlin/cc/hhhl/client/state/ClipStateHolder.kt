@@ -332,31 +332,33 @@ class ClipStateHolder(
             when (val result = repository.deleteClip(clip.id)) {
                 ClipActionRepositoryResult.Success -> mutableState.update { current ->
                     val remaining = current.clips.filterNot { it.id == clip.id }
-                    val nextSelected = remaining.firstOrNull()
+                    val deletedSelectedClip = current.selectedClip?.id == clip.id
                     current.copy(
                         clips = remaining,
-                        selectedClip = nextSelected,
-                        notes = emptyList(),
+                        selectedClip = if (deletedSelectedClip) remaining.firstOrNull() else current.selectedClip,
+                        notes = if (deletedSelectedClip) emptyList() else current.notes,
                         isDeletingClip = false,
-                        isLoadingNotes = false,
-                        isLoadingMore = false,
-                        endReached = false,
-                        errorMessage = null,
-                        notesErrorMessage = null,
+                        isLoadingNotes = if (deletedSelectedClip) false else current.isLoadingNotes,
+                        isLoadingMore = if (deletedSelectedClip) false else current.isLoadingMore,
+                        endReached = if (deletedSelectedClip) false else current.endReached,
+                        errorMessage = if (deletedSelectedClip) null else current.errorMessage,
+                        notesErrorMessage = if (deletedSelectedClip) null else current.notesErrorMessage,
                         requiresRelogin = false,
                     )
                 }
-                ClipActionRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                ClipActionRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val deletingSelectedClip = current.selectedClip?.id == clip.id
+                    current.copy(
                         isDeletingClip = false,
-                        errorMessage = "登录已失效，请重新登录",
+                        errorMessage = if (deletingSelectedClip) "登录已失效，请重新登录" else current.errorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is ClipActionRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is ClipActionRepositoryResult.Error -> mutableState.update { current ->
+                    val deletingSelectedClip = current.selectedClip?.id == clip.id
+                    current.copy(
                         isDeletingClip = false,
-                        errorMessage = result.message,
+                        errorMessage = if (deletingSelectedClip) result.message else current.errorMessage,
                         requiresRelogin = false,
                     )
                 }

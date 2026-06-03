@@ -15,9 +15,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -366,6 +368,42 @@ class ClipStateHolderTest {
     }
 
     @Test
+    fun pendingDeleteDoesNotClearNewlySelectedClip() = runTest {
+        val deleteResult = CompletableDeferred<ClipActionRepositoryResult>()
+        val first = sampleClip("clip-1")
+        val second = sampleClip("clip-2")
+        val note = FakeData.timeline[0]
+        val holder = ClipStateHolder(
+            repository = fakeRepository(
+                clipsResult = ClipsRepositoryResult.Success(listOf(first, second)),
+                notesResult = ClipNotesRepositoryResult.Success(listOf(note)),
+                deleteActionResultProvider = { deleteResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshClips()
+        advanceUntilIdle()
+        holder.deleteSelectedClip()
+        runCurrent()
+
+        assertTrue(holder.state.value.isDeletingClip)
+
+        holder.selectClip(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedClip)
+        assertEquals(listOf(note), holder.state.value.notes)
+
+        deleteResult.complete(ClipActionRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isDeletingClip)
+        assertEquals(listOf(second), holder.state.value.clips)
+        assertEquals(second, holder.state.value.selectedClip)
+        assertEquals(listOf(note), holder.state.value.notes)
+    }
+
+    @Test
     fun applyNoteMutationClearsReloginAfterUnauthorized() = runTest {
         val clip = sampleClip("clip-1")
         val note = FakeData.timeline[0]
@@ -406,6 +444,7 @@ class ClipStateHolderTest {
         onCreateClip: (String, String, Boolean) -> Unit = { _, _, _ -> },
         onUpdateClip: (String, String, String, Boolean) -> Unit = { _, _, _, _ -> },
         onDeleteClip: (String) -> Unit = {},
+        deleteActionResultProvider: suspend (String) -> ClipActionRepositoryResult = { actionResult },
     ): ClipRepository {
         return sequenceRepository(
             clipsResults = listOf(clipsResult),
@@ -421,6 +460,7 @@ class ClipStateHolderTest {
             onCreateClip = onCreateClip,
             onUpdateClip = onUpdateClip,
             onDeleteClip = onDeleteClip,
+            deleteActionResultProvider = deleteActionResultProvider,
         )
     }
 
@@ -438,6 +478,7 @@ class ClipStateHolderTest {
         onCreateClip: (String, String, Boolean) -> Unit = { _, _, _ -> },
         onUpdateClip: (String, String, String, Boolean) -> Unit = { _, _, _, _ -> },
         onDeleteClip: (String) -> Unit = {},
+        deleteActionResultProvider: suspend (String) -> ClipActionRepositoryResult = { actionResult },
     ): ClipRepository {
         var clipResultIndex = 0
         return object : ClipRepository(
@@ -587,7 +628,7 @@ class ClipStateHolderTest {
 
             override suspend fun deleteClip(clipId: String): ClipActionRepositoryResult {
                 onDeleteClip(clipId)
-                return actionResult
+                return deleteActionResultProvider(clipId)
             }
         }
     }

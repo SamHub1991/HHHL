@@ -96,16 +96,48 @@ class RelationshipManagementStateHolderTest {
         assertEquals(emptyList(), holder.state.value.mutedUsers)
     }
 
+    @Test
+    fun pendingRemoveDoesNotWriteOldTabMessageAfterSwitch() = runTest {
+        val mutedEntry = relationshipEntry("mute-2", "user-muted")
+        val blockedEntry = relationshipEntry("block-1", "user-blocked")
+        val pendingMutation = CompletableDeferred<UserRelationshipRepositoryResult>()
+        val holder = holder(
+            mutedResult = UserRelationshipListRepositoryResult.Success(listOf(mutedEntry), true),
+            blockedResult = UserRelationshipListRepositoryResult.Success(listOf(blockedEntry), true),
+            mutationResultProvider = { pendingMutation.await() },
+        )
+
+        holder.selectTab(RelationshipManagementTab.Muted)
+        holder.removeRelationship("user-muted")
+        assertEquals(true, holder.state.value.isMutating)
+
+        holder.selectTab(RelationshipManagementTab.Blocked)
+        assertEquals(false, holder.state.value.isMutating)
+        pendingMutation.complete(UserRelationshipRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertEquals(RelationshipManagementTab.Blocked, holder.state.value.selectedTab)
+        assertEquals(listOf(blockedEntry), holder.state.value.blockedUsers)
+        assertEquals(emptyList(), holder.state.value.mutedUsers)
+        assertEquals(null, holder.state.value.message)
+    }
+
     private fun TestScope.holder(
         mutedResult: UserRelationshipListRepositoryResult = UserRelationshipListRepositoryResult.Success(emptyList(), true),
+        blockedResult: UserRelationshipListRepositoryResult = UserRelationshipListRepositoryResult.Success(emptyList(), true),
         mutationResult: UserRelationshipRepositoryResult = UserRelationshipRepositoryResult.Success,
+        mutationResultProvider: suspend () -> UserRelationshipRepositoryResult = { mutationResult },
     ): RelationshipManagementStateHolder {
         val repository = object : UserRelationshipRepository(tokenProvider = { "token" }) {
+            override suspend fun loadBlockedUsers(
+                currentEntries: List<UserRelationshipListEntry>,
+            ): UserRelationshipListRepositoryResult = blockedResult
+
             override suspend fun loadMutedUsers(
                 currentEntries: List<UserRelationshipListEntry>,
             ): UserRelationshipListRepositoryResult = mutedResult
 
-            override suspend fun unmute(userId: String): UserRelationshipRepositoryResult = mutationResult
+            override suspend fun unmute(userId: String): UserRelationshipRepositoryResult = mutationResultProvider()
         }
         return RelationshipManagementStateHolder(
             repository = repository,
@@ -115,14 +147,20 @@ class RelationshipManagementStateHolderTest {
 
     private fun TestScope.holder(
         mutedResult: CompletableDeferred<UserRelationshipListRepositoryResult>,
+        blockedResult: UserRelationshipListRepositoryResult = UserRelationshipListRepositoryResult.Success(emptyList(), true),
         mutationResult: UserRelationshipRepositoryResult = UserRelationshipRepositoryResult.Success,
+        mutationResultProvider: suspend () -> UserRelationshipRepositoryResult = { mutationResult },
     ): RelationshipManagementStateHolder {
         val repository = object : UserRelationshipRepository(tokenProvider = { "token" }) {
+            override suspend fun loadBlockedUsers(
+                currentEntries: List<UserRelationshipListEntry>,
+            ): UserRelationshipListRepositoryResult = blockedResult
+
             override suspend fun loadMutedUsers(
                 currentEntries: List<UserRelationshipListEntry>,
             ): UserRelationshipListRepositoryResult = mutedResult.await()
 
-            override suspend fun unmute(userId: String): UserRelationshipRepositoryResult = mutationResult
+            override suspend fun unmute(userId: String): UserRelationshipRepositoryResult = mutationResultProvider()
         }
         return RelationshipManagementStateHolder(
             repository = repository,

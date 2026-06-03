@@ -416,6 +416,45 @@ class SettingsStateHolderTest {
     }
 
     @Test
+    fun pendingManagementActionDoesNotReopenClosedSection() = runTest {
+        val pendingMutation = CompletableDeferred<SettingsManagementMutationRepositoryResult>()
+        var loadCount = 0
+        val repository = object : SettingsRepository() {
+            override suspend fun loadManagementSection(key: SettingsManagementSectionKey): SettingsManagementRepositoryResult {
+                loadCount += 1
+                return SettingsManagementRepositoryResult.Success(
+                    SettingsManagementSection(
+                        key = key,
+                        title = "访问令牌",
+                        items = listOf(SettingsManagementItem(id = "token-1", title = "Desktop app")),
+                    ),
+                )
+            }
+
+            override suspend fun revokeApiToken(tokenId: String): SettingsManagementMutationRepositoryResult {
+                return pendingMutation.await()
+            }
+        }
+        val holder = SettingsStateHolder(repository = repository, scope = this)
+
+        holder.openManagement(SettingsManagementSectionKey.ApiTokens)
+        advanceUntilIdle()
+        holder.performManagementAction(SettingsManagementAction.RevokeToken, "token-1")
+        runCurrent()
+        assertTrue(holder.state.value.isManagementMutating)
+
+        holder.closeManagement()
+        pendingMutation.complete(SettingsManagementMutationRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertEquals(null, holder.state.value.openedManagementKey)
+        assertEquals(null, holder.state.value.managementSection)
+        assertFalse(holder.state.value.isManagementMutating)
+        assertEquals(null, holder.state.value.managementMessage)
+        assertEquals(1, loadCount)
+    }
+
+    @Test
     fun deleteWebhookRefreshesSectionAndKeepsSuccessMessage() = runTest {
         var deletedWebhookId: String? = null
         var loadCount = 0
@@ -570,6 +609,51 @@ class SettingsStateHolderTest {
         assertEquals(input, createdInput)
         assertEquals(1, holder.state.value.managementSection?.items?.size)
         assertEquals("Webhook 已创建", holder.state.value.managementMessage)
+    }
+
+    @Test
+    fun pendingCreateWebhookDoesNotRefreshOldSectionAfterSwitch() = runTest {
+        val pendingMutation = CompletableDeferred<SettingsManagementMutationRepositoryResult>()
+        val loadedKeys = mutableListOf<SettingsManagementSectionKey>()
+        val repository = object : SettingsRepository() {
+            override suspend fun loadManagementSection(key: SettingsManagementSectionKey): SettingsManagementRepositoryResult {
+                loadedKeys += key
+                return SettingsManagementRepositoryResult.Success(
+                    SettingsManagementSection(
+                        key = key,
+                        title = if (key == SettingsManagementSectionKey.Webhooks) "Webhook" else "访问令牌",
+                        items = emptyList(),
+                    ),
+                )
+            }
+
+            override suspend fun createWebhook(input: SettingsWebhookCreateInput): SettingsManagementMutationRepositoryResult {
+                return pendingMutation.await()
+            }
+        }
+        val holder = SettingsStateHolder(repository = repository, scope = this)
+        val input = SettingsWebhookCreateInput(
+            name = "Deploy",
+            url = "hook-url",
+            events = listOf("note", "reply"),
+        )
+
+        holder.openManagement(SettingsManagementSectionKey.Webhooks)
+        advanceUntilIdle()
+        holder.createWebhook(input)
+        runCurrent()
+        assertTrue(holder.state.value.isManagementMutating)
+
+        holder.openManagement(SettingsManagementSectionKey.ApiTokens)
+        advanceUntilIdle()
+        pendingMutation.complete(SettingsManagementMutationRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertEquals(SettingsManagementSectionKey.ApiTokens, holder.state.value.openedManagementKey)
+        assertEquals("访问令牌", holder.state.value.managementSection?.title)
+        assertFalse(holder.state.value.isManagementMutating)
+        assertEquals(null, holder.state.value.managementMessage)
+        assertEquals(listOf(SettingsManagementSectionKey.Webhooks, SettingsManagementSectionKey.ApiTokens), loadedKeys)
     }
 
     @Test

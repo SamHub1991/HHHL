@@ -657,12 +657,42 @@ class DiscoverStateHolderTest {
         assertEquals(null, holder.state.value.selectedFederationInstance)
     }
 
+    @Test
+    fun closingFederationDetailDuringActionDoesNotReopenDetail() = runTest {
+        val pendingAction = CompletableDeferred<DiscoverRepositoryResult>()
+        val instance = sampleFederationInstance("one")
+        val holder = DiscoverStateHolder(
+            repository = fakeRepository(
+                searchResult = DiscoverRepositoryResult.FederationSuccess(listOf(instance)),
+                federationActionProvider = { pendingAction.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateCapabilities(canSearchNotes = true, canTrend = true, canViewFederation = true)
+        holder.selectMode(DiscoverSearchMode.Federation)
+        advanceUntilIdle()
+        holder.openFederationInstance(instance)
+        advanceUntilIdle()
+        holder.toggleFederationSilence(instance.host)
+        assertEquals(instance.host, holder.state.value.federationActionHost)
+
+        holder.closeFederationInstance()
+        pendingAction.complete(DiscoverRepositoryResult.FederationActionSuccess)
+        advanceUntilIdle()
+
+        assertEquals(null, holder.state.value.selectedFederationInstance)
+        assertEquals(null, holder.state.value.federationDetailMessage)
+        assertEquals(true, holder.state.value.federationInstances.single().isSilenced)
+    }
+
     private fun fakeRepository(
         searchResult: DiscoverRepositoryResult,
         loadMoreResult: DiscoverRepositoryResult = searchResult,
         discoverySectionsResult: DiscoverRepositoryResult = DiscoverRepositoryResult.DiscoverySectionsSuccess(DiscoverySections()),
         searchTrendsResult: DiscoverRepositoryResult = DiscoverRepositoryResult.SearchTrendsSuccess(NoteSearchTrends()),
         recommendedResult: DiscoverRepositoryResult = DiscoverRepositoryResult.RecommendedTimelineSuccess(emptyList()),
+        federationActionProvider: suspend () -> DiscoverRepositoryResult = { searchResult },
         onLoadMore: (String?) -> Unit = {},
         onRecommendedLoad: (cc.hhhl.client.api.DiscoverRecommendedTimelineOptions) -> Unit = {},
         onFeedback: (String, DiscoverRecommendationFeedbackEvent) -> Unit = { _, _ -> },
@@ -679,6 +709,7 @@ class DiscoverStateHolderTest {
         discoverySectionsProvider = { discoverySectionsResult },
         searchTrendsProvider = { searchTrendsResult },
         recommendedProvider = { recommendedResult },
+        federationActionProvider = federationActionProvider,
         onLoadMore = onLoadMore,
         onRecommendedLoad = onRecommendedLoad,
         onFeedback = onFeedback,
@@ -697,6 +728,7 @@ class DiscoverStateHolderTest {
         discoverySectionsProvider: suspend () -> DiscoverRepositoryResult = { DiscoverRepositoryResult.DiscoverySectionsSuccess(DiscoverySections()) },
         searchTrendsProvider: suspend () -> DiscoverRepositoryResult = { DiscoverRepositoryResult.SearchTrendsSuccess(NoteSearchTrends()) },
         recommendedProvider: suspend () -> DiscoverRepositoryResult = { DiscoverRepositoryResult.RecommendedTimelineSuccess(emptyList()) },
+        federationActionProvider: suspend () -> DiscoverRepositoryResult = searchProvider,
         onLoadMore: (String?) -> Unit = {},
         onRecommendedLoad: (cc.hhhl.client.api.DiscoverRecommendedTimelineOptions) -> Unit = {},
         onFeedback: (String, DiscoverRecommendationFeedbackEvent) -> Unit = { _, _ -> },
@@ -885,7 +917,7 @@ class DiscoverStateHolderTest {
                 isSilenced: Boolean,
                 isSuspended: Boolean,
             ): DiscoverRepositoryResult {
-                return searchProvider()
+                return federationActionProvider()
             }
         }
     }

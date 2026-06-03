@@ -80,6 +80,32 @@ fun rootRouteFor(route: AppRoute): RootRoute {
     }
 }
 
+data class AiAssistantReviewPageTarget(
+    val rootRoute: RootRoute,
+    val route: AppRoute,
+)
+
+fun aiAssistantReviewPageTarget(
+    currentRoute: AppRoute,
+    sourceRoute: AppRoute?,
+    sourceRootRoute: RootRoute?,
+): AiAssistantReviewPageTarget {
+    val targetRoute = if (currentRoute == AppRoute.AiAssistant) {
+        sourceRoute ?: AppRoute.Chat
+    } else {
+        currentRoute
+    }
+    val targetRootRoute = if (currentRoute == AppRoute.AiAssistant && sourceRoute == targetRoute) {
+        sourceRootRoute ?: rootRouteFor(targetRoute)
+    } else {
+        rootRouteFor(targetRoute)
+    }
+    return AiAssistantReviewPageTarget(
+        rootRoute = targetRootRoute,
+        route = targetRoute,
+    )
+}
+
 sealed interface AppRoute {
     data object Timeline : AppRoute
     data object Discover : AppRoute

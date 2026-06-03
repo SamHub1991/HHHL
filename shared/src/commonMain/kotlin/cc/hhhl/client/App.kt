@@ -238,6 +238,7 @@ import cc.hhhl.client.navigation.AppRoute
 import cc.hhhl.client.navigation.MentionNavigationTarget
 import cc.hhhl.client.navigation.RootRoute
 import cc.hhhl.client.navigation.SiteLinkNavigationTarget
+import cc.hhhl.client.navigation.aiAssistantReviewPageTarget
 import cc.hhhl.client.navigation.mentionNavigationTarget
 import cc.hhhl.client.navigation.rootRouteFor
 import cc.hhhl.client.navigation.siteLinkNavigationTarget
@@ -294,6 +295,7 @@ import cc.hhhl.client.ui.screen.AiAssistantActionPayload
 import cc.hhhl.client.ui.screen.AiAssistantAutoApprovalSettings
 import cc.hhhl.client.ui.screen.AiSettingsScreen
 import cc.hhhl.client.ui.screen.aiAssistantActionPayload
+import cc.hhhl.client.ui.screen.aiAssistantOutgoingDraftText
 import cc.hhhl.client.ui.screen.aiAssistantStructuredReply
 import cc.hhhl.client.ui.screen.aiAssistantSuggestedActions
 import cc.hhhl.client.ui.screen.canAutoApprove
@@ -1054,6 +1056,13 @@ private data class AiAssistantSendStart(
     val memoryText: String,
 )
 
+internal fun aiAssistantReplyRequestIsCurrent(
+    requestGeneration: Long,
+    currentGeneration: Long,
+): Boolean {
+    return requestGeneration == currentGeneration
+}
+
 private fun prepareAiAssistantSend(
     prompt: String,
     attachments: List<DriveFile>,
@@ -1199,7 +1208,7 @@ private fun startAiAssistantAttachmentUpload(
     }
 }
 
-private fun startAiAssistantReply(
+internal fun startAiAssistantReply(
     prompt: String,
     attachments: List<DriveFile>,
     currentAttachments: List<DriveFile>,
@@ -1211,6 +1220,8 @@ private fun startAiAssistantReply(
     aiStateHolder: AiStateHolder,
     scope: CoroutineScope,
     contextTextProvider: () -> String,
+    requestGeneration: Long,
+    isRequestCurrent: (Long) -> Boolean,
     onToast: (String) -> Unit,
     onMessagesChanged: (List<AiAssistantMessage>) -> Unit,
     onPendingPromptChanged: (String?) -> Unit,
@@ -1251,6 +1262,7 @@ private fun startAiAssistantReply(
                 fileContext = prepared.attachmentContext,
             ),
         )
+        if (!isRequestCurrent(requestGeneration)) return@launch
         val (nextMessages, actions) = completeAiAssistantMessage(
             messages = prepared.messages,
             pendingMessageId = prepared.pendingMessageId,
@@ -1342,6 +1354,80 @@ internal fun String.aiAssistantTargetsCurrentChatRoom(): Boolean {
         Regex("^(取消静音|解除静音)(聊天室|房间|群聊|群|聊天|会话|对话)$"),
         Regex("^(取消静音|解除静音)(吧|下|一下)?$"),
     ).any { regex -> regex.matches(compact) }
+}
+
+internal fun String.aiAssistantCleanTarget(): String {
+    return trim()
+        .trim('@', '＠', ' ', '：', ':', '，', ',', '。', '.', '；', ';', '"', '\'', '“', '”', '‘', '’')
+        .lowercase()
+}
+
+internal fun aiAssistantFuzzyTargetMatches(
+    name: String,
+    target: String,
+): Boolean {
+    val cleanName = name.aiAssistantCleanTarget()
+    val cleanTarget = target.aiAssistantCleanTarget()
+    if (cleanName.isBlank() || cleanTarget.isBlank() || cleanName == cleanTarget) return false
+    if (!cleanName.isAiAssistantUsableFuzzyTarget() || !cleanTarget.isAiAssistantUsableFuzzyTarget()) {
+        return false
+    }
+    return cleanName.contains(cleanTarget) || cleanTarget.contains(cleanName)
+}
+
+internal fun User.aiAssistantAcct(): String {
+    val cleanUsername = username.trim().trim('@')
+    val cleanHost = host?.trim().orEmpty()
+    return if (cleanHost.isNotBlank() && !cleanUsername.contains("@")) {
+        "$cleanUsername@$cleanHost"
+    } else {
+        cleanUsername
+    }
+}
+
+internal fun User.aiAssistantMention(): String {
+    val acct = aiAssistantAcct()
+    return if (acct.isNotBlank()) "@$acct" else displayName.trim()
+}
+
+internal fun User.aiAssistantMatchesTarget(target: String, fuzzy: Boolean = false): Boolean {
+    val clean = target.aiAssistantCleanTarget()
+    if (clean.isBlank()) return false
+    val names = listOf(
+        id,
+        username,
+        displayName,
+        aiAssistantAcct(),
+        "@${aiAssistantAcct()}",
+        "@${username.trim().trim('@')}",
+    )
+        .map { it.aiAssistantCleanTarget() }
+        .filter { it.isNotBlank() }
+    return if (fuzzy) {
+        names.any { name -> aiAssistantFuzzyTargetMatches(name, clean) }
+    } else {
+        clean in names
+    }
+}
+
+internal fun Iterable<User>.aiAssistantMatchingUsers(
+    target: String,
+    fuzzy: Boolean = false,
+): List<User> {
+    return filter { user -> user.aiAssistantMatchesTarget(target, fuzzy = fuzzy) }
+        .distinctBy { it.id }
+}
+
+private fun String.isAiAssistantUsableFuzzyTarget(): Boolean {
+    val cjkCount = count { it.isAiAssistantCjk() }
+    val otherCount = count { it.isLetterOrDigit() && !it.isAiAssistantCjk() }
+    return cjkCount >= 2 || otherCount >= 3
+}
+
+private fun Char.isAiAssistantCjk(): Boolean {
+    return this in '\u3400'..'\u4DBF' ||
+        this in '\u4E00'..'\u9FFF' ||
+        this in '\uF900'..'\uFAFF'
 }
 
 private fun String.containsRoomIdentifier(room: ChatRoom): Boolean {
@@ -3261,6 +3347,7 @@ private fun MainShell(
     var aiAssistantAttachments by remember(currentAccountId) { mutableStateOf<List<DriveFile>>(emptyList()) }
     var aiAssistantAttachmentUploading by remember(currentAccountId) { mutableStateOf(false) }
     var aiAssistantPendingPrompt by remember(currentAccountId) { mutableStateOf<String?>(null) }
+    var aiAssistantConversationGeneration by remember(currentAccountId) { mutableStateOf(0L) }
     var pendingAiAssistantComposeDraft by remember(currentAccountId) { mutableStateOf<String?>(null) }
     var viewedUserId by remember { mutableStateOf<String?>(null) }
     var authInvalidDialogOpen by remember { mutableStateOf(false) }
@@ -3740,7 +3827,8 @@ private fun MainShell(
         }
     }
 
-    LaunchedEffect(specialCareState.userIds) {
+    LaunchedEffect(specialCareState.userIds, specialCareState.isRestored) {
+        if (!specialCareState.isRestored) return@LaunchedEffect
         chatStateHolder.updateSpecialCareUsers(specialCareState.userIds)
         notificationStateHolder.updateSpecialCareUsers(specialCareState.userIds)
         onSpecialCareUsersChanged(specialCareState.userIds)
@@ -5601,6 +5689,13 @@ private fun MainShell(
             aiStateHolder = aiStateHolder,
             scope = appScope,
             contextTextProvider = ::aiAssistantContextText,
+            requestGeneration = aiAssistantConversationGeneration,
+            isRequestCurrent = { requestGeneration ->
+                aiAssistantReplyRequestIsCurrent(
+                    requestGeneration = requestGeneration,
+                    currentGeneration = aiAssistantConversationGeneration,
+                )
+            },
             onToast = { noteActionToast = it },
             onMessagesChanged = { aiAssistantMessages = it },
             onPendingPromptChanged = { aiAssistantPendingPrompt = it },
@@ -5627,6 +5722,7 @@ private fun MainShell(
     }
 
     fun clearAiAssistantConversation() {
+        aiAssistantConversationGeneration += 1
         aiAssistantMessages = emptyList()
         aiAssistantDraft = ""
         aiAssistantAttachments = emptyList()
@@ -6300,60 +6396,17 @@ private fun MainShell(
         return AiAssistantActionExecutionResult(true, "已删除当前帖子")
     }
 
-    fun User.aiAssistantAcct(): String {
-        val cleanUsername = username.trim().trim('@')
-        val cleanHost = host?.trim().orEmpty()
-        return if (cleanHost.isNotBlank() && !cleanUsername.contains("@")) {
-            "$cleanUsername@$cleanHost"
-        } else {
-            cleanUsername
-        }
-    }
-
-    fun User.aiAssistantMention(): String {
-        val acct = aiAssistantAcct()
-        return if (acct.isNotBlank()) "@$acct" else displayName.trim()
-    }
-
-    fun String.aiAssistantCleanTarget(): String {
-        return trim()
-            .trim('@', '＠', ' ', '：', ':', '，', ',', '。', '.', '；', ';', '"', '\'', '“', '”', '‘', '’')
-            .lowercase()
-    }
-
-    fun User.aiAssistantMatchesTarget(target: String, fuzzy: Boolean = false): Boolean {
-        val clean = target.aiAssistantCleanTarget()
-        if (clean.isBlank()) return false
-        val names = listOf(
-            id,
-            username,
-            displayName,
-            aiAssistantAcct(),
-            "@${aiAssistantAcct()}",
-            "@${username.trim().trim('@')}",
-        )
-            .map { it.aiAssistantCleanTarget() }
-            .filter { it.isNotBlank() }
-        return if (fuzzy) {
-            names.any { name -> name.contains(clean) || clean.contains(name) }
-        } else {
-            clean in names
-        }
-    }
-
     fun resolveKnownAiAssistantUser(target: String): User? {
         val clean = target.aiAssistantCleanTarget()
         if (clean.isBlank()) return null
         val users = automationKnownUsers()
-        val exact = users.filter { user -> user.aiAssistantMatchesTarget(clean, fuzzy = false) }
-            .distinctBy { it.id }
+        val exact = users.aiAssistantMatchingUsers(clean, fuzzy = false)
         if (exact.size == 1) return exact.single()
         if (exact.size > 1) {
             noteActionToast = "找到多个叫“$target”的用户，请说完整用户名或 @acct"
             return null
         }
-        val fuzzy = users.filter { user -> user.aiAssistantMatchesTarget(clean, fuzzy = true) }
-            .distinctBy { it.id }
+        val fuzzy = users.aiAssistantMatchingUsers(clean, fuzzy = true)
         return when (fuzzy.size) {
             0 -> null
             1 -> fuzzy.single()
@@ -6369,12 +6422,15 @@ private fun MainShell(
         if (cleanTarget.isBlank()) return null
         resolveKnownAiAssistantUser(cleanTarget)?.let { return it }
         val searched = searchAutomationUsers(cleanTarget)
-        val exact = searched.filter { user -> user.aiAssistantMatchesTarget(cleanTarget, fuzzy = false) }
-            .distinctBy { it.id }
-        val candidates = if (exact.isNotEmpty()) exact else searched.distinctBy { it.id }
+        val exact = searched.aiAssistantMatchingUsers(cleanTarget, fuzzy = false)
+        val candidates = if (exact.isNotEmpty()) {
+            exact
+        } else {
+            searched.aiAssistantMatchingUsers(cleanTarget, fuzzy = true)
+        }
         return when (candidates.size) {
             0 -> {
-                noteActionToast = "找不到用户：$cleanTarget"
+                noteActionToast = "找不到明确用户：$cleanTarget，请说完整用户名或 @acct"
                 null
             }
             1 -> candidates.single()
@@ -6403,7 +6459,7 @@ private fun MainShell(
         val nameValue = name.aiAssistantCleanTarget()
         return clean == idValue ||
             clean == nameValue ||
-            (nameValue.length >= 2 && (nameValue.contains(clean) || clean.contains(nameValue)))
+            aiAssistantFuzzyTargetMatches(nameValue, clean)
     }
 
     fun resolveKnownAiAssistantRoom(target: String): ChatRoom? {
@@ -6452,7 +6508,7 @@ private fun MainShell(
         val nameValue = name.aiAssistantCleanTarget()
         return clean == idValue ||
             clean == nameValue ||
-            (nameValue.length >= 2 && (nameValue.contains(clean) || clean.contains(nameValue)))
+            aiAssistantFuzzyTargetMatches(nameValue, clean)
     }
 
     suspend fun resolveAiAssistantChannel(target: String): Channel? {
@@ -6767,29 +6823,35 @@ private fun MainShell(
                         route = AppRoute.Chat
                         noteActionToast = "聊天消息正在发送，稍后再试"
                         executed = false
-                    } else if (currentChatState.messageDraft.isBlank() && payload.body.isNotBlank()) {
-                        startAiAssistantAsyncAction(action.id)
-                        pendingAiAssistantChatSendAction = PendingAiAssistantObservedAction(action.id)
-                        chatStateHolder.updateMessageDraft(payload.body)
-                        appScope.launch {
-                            delay(100L)
-                            chatStateHolder.sendMessage()
-                        }
-                        rootRoute = RootRoute.Chat
-                        route = AppRoute.Chat
-                        noteActionToast = "已填入并发送 AI 聊天草稿"
-                    } else if (currentChatState.messageDraft.isBlank()) {
-                        rootRoute = RootRoute.Chat
-                        route = AppRoute.Chat
-                        noteActionToast = "聊天输入框没有可发送的草稿"
-                        executed = false
                     } else {
-                        startAiAssistantAsyncAction(action.id)
-                        pendingAiAssistantChatSendAction = PendingAiAssistantObservedAction(action.id)
-                        chatStateHolder.sendMessage()
-                        rootRoute = RootRoute.Chat
-                        route = AppRoute.Chat
-                        noteActionToast = "已发送当前聊天草稿"
+                        val outgoingDraft = aiAssistantOutgoingDraftText(currentChatState.messageDraft, payload.body)
+                        val shouldUsePayloadBody = payload.body.isNotBlank() &&
+                            currentChatState.messageDraft.trim() != outgoingDraft
+                        if (outgoingDraft.isBlank()) {
+                            rootRoute = RootRoute.Chat
+                            route = AppRoute.Chat
+                            noteActionToast = "聊天输入框没有可发送的草稿"
+                            executed = false
+                        } else {
+                            startAiAssistantAsyncAction(action.id)
+                            pendingAiAssistantChatSendAction = PendingAiAssistantObservedAction(action.id)
+                            if (shouldUsePayloadBody) {
+                                chatStateHolder.updateMessageDraft(outgoingDraft)
+                                appScope.launch {
+                                    delay(100L)
+                                    chatStateHolder.sendMessage()
+                                }
+                            } else {
+                                chatStateHolder.sendMessage()
+                            }
+                            rootRoute = RootRoute.Chat
+                            route = AppRoute.Chat
+                            noteActionToast = if (shouldUsePayloadBody) {
+                                "已填入并发送 AI 聊天草稿"
+                            } else {
+                                "已发送当前聊天草稿"
+                            }
+                        }
                     }
                 }
             }
@@ -6820,23 +6882,31 @@ private fun MainShell(
                     if (composeState.isSending || composeState.isResolvingVisibleUsers) {
                         noteActionToast = "发帖正在提交，稍后再试"
                         executed = false
-                    } else if (composeState.draft.text.isBlank() && payload.body.isNotBlank()) {
-                        startAiAssistantAsyncAction(action.id)
-                        pendingAiAssistantComposeSendAction = PendingAiAssistantObservedAction(action.id)
-                        composeStateHolder.updateText(payload.body)
-                        appScope.launch {
-                            delay(100L)
-                            composeStateHolder.send()
-                        }
-                        noteActionToast = "已填入并请求发布 AI 草稿"
-                    } else if (composeState.draft.text.isBlank()) {
-                        noteActionToast = "发帖框没有可发布的草稿"
-                        executed = false
                     } else {
-                        startAiAssistantAsyncAction(action.id)
-                        pendingAiAssistantComposeSendAction = PendingAiAssistantObservedAction(action.id)
-                        composeStateHolder.send()
-                        noteActionToast = "已请求发布当前发帖草稿"
+                        val outgoingDraft = aiAssistantOutgoingDraftText(composeState.draft.text, payload.body)
+                        val shouldUsePayloadBody = payload.body.isNotBlank() &&
+                            composeState.draft.text.trim() != outgoingDraft
+                        if (outgoingDraft.isBlank()) {
+                            noteActionToast = "发帖框没有可发布的草稿"
+                            executed = false
+                        } else {
+                            startAiAssistantAsyncAction(action.id)
+                            pendingAiAssistantComposeSendAction = PendingAiAssistantObservedAction(action.id)
+                            if (shouldUsePayloadBody) {
+                                composeStateHolder.updateText(outgoingDraft)
+                                appScope.launch {
+                                    delay(100L)
+                                    composeStateHolder.send()
+                                }
+                            } else {
+                                composeStateHolder.send()
+                            }
+                            noteActionToast = if (shouldUsePayloadBody) {
+                                "已填入并请求发布 AI 草稿"
+                            } else {
+                                "已请求发布当前发帖草稿"
+                            }
+                        }
                     }
                 }
             }
@@ -6908,47 +6978,51 @@ private fun MainShell(
                 }
             }
             AiAssistantActionKind.FavoriteCurrentNote -> executed = executeAiAssistantCurrentNoteAction(
-                    actionName = "收藏",
-                    payload = action.payload,
-                    execute = ::favoriteAiAssistantNote,
-                )
+                actionName = "收藏",
+                payload = action.payload,
+                execute = ::favoriteAiAssistantNote,
+            )
             AiAssistantActionKind.UnfavoriteCurrentNote -> executed = executeAiAssistantCurrentNoteAction(
-                    actionName = "取消收藏",
-                    payload = action.payload,
-                    execute = ::unfavoriteAiAssistantNote,
-                )
+                actionName = "取消收藏",
+                payload = action.payload,
+                execute = ::unfavoriteAiAssistantNote,
+            )
             AiAssistantActionKind.ReactCurrentNote -> executed = executeAiAssistantCurrentNoteAction(
-                    actionName = "点赞",
-                    payload = action.payload,
-                    execute = ::reactAiAssistantNote,
-                )
+                actionName = "点赞",
+                payload = action.payload,
+                execute = ::reactAiAssistantNote,
+            )
             AiAssistantActionKind.DeleteReactionCurrentNote -> executed = executeAiAssistantCurrentNoteAction(
-                    actionName = "取消点赞",
-                    payload = action.payload,
-                    execute = ::deleteReactionAiAssistantNote,
-                )
+                actionName = "取消点赞",
+                payload = action.payload,
+                execute = ::deleteReactionAiAssistantNote,
+            )
             AiAssistantActionKind.RenoteCurrentNote -> executed = executeAiAssistantCurrentNoteAction(
-                    actionName = "转发",
-                    payload = action.payload,
-                    execute = ::renoteAiAssistantNote,
-                )
+                actionName = "转发",
+                payload = action.payload,
+                execute = ::renoteAiAssistantNote,
+            )
             AiAssistantActionKind.DeleteCurrentNote -> executed = executeAiAssistantCurrentNoteAction(
-                    actionName = "删除",
-                    payload = action.payload,
-                    openAfterAction = false,
-                    execute = ::deleteAiAssistantNote,
-                )
+                actionName = "删除",
+                payload = action.payload,
+                openAfterAction = false,
+                execute = ::deleteAiAssistantNote,
+            )
             AiAssistantActionKind.ReviewCurrentPageAction -> {
-                val targetRoute = aiAssistantEffectiveRoute()
-                rootRoute = aiAssistantEffectiveRootRoute(targetRoute)
-                route = targetRoute
-                noteActionToast = "已执行需确认动作：切到当前相关页面"
+                val target = aiAssistantReviewPageTarget(
+                    currentRoute = route,
+                    sourceRoute = aiAssistantSourceRoute,
+                    sourceRootRoute = aiAssistantSourceRootRoute,
+                )
+                rootRoute = target.rootRoute
+                route = target.route
+                noteActionToast = "请在当前页面手动确认具体控件，助手不会静默点击未知写操作"
             }
             AiAssistantActionKind.AddMutedWord -> addAiResultMutedWord(action.payload)
             AiAssistantActionKind.CopyChecklist -> copyAiResultChecklist(action.payload)
             AiAssistantActionKind.OpenWebSearch -> openUrl(aiAssistantSearchUrl(action.payload))
             AiAssistantActionKind.SaveMemory -> {
-                val memory = action.payload.trim().take(240)
+                val memory = action.payload.trim()
                 if (memory.isNotBlank()) {
                     aiStateHolder.updateSettings(
                         aiState.settings.copy(
@@ -7023,86 +7097,26 @@ private fun MainShell(
     }
 
     fun requestWorkspaceActionPlan() {
-        val settings = aiState.settings
-        val allowSensitiveUpload = settings.uploadSensitiveContentAllowed
-        val timelineNotes = if (settings.readTimelineAllowed) {
-            timelineState.tabs[timelineState.selectedKind]?.notes.orEmpty().take(25)
+        val prompt = "根据当前工作区上下文给我一个可执行计划；涉及发送、发布、删除、清空、外部搜索等写操作时只列出待确认动作，不要假装已经执行。"
+        if (route == AppRoute.AiAssistant) {
+            requestAiAssistantReply(prompt, emptyList())
         } else {
-            emptyList()
+            requestAiTask(
+                kind = AiTaskKind.WorkspaceActionPlan,
+                input = AiTaskInput(
+                    title = "全局行动计划",
+                    prompt = prompt,
+                    automationEventText = aiAssistantContextText(),
+                ),
+                toast = "AI 已开始生成全局行动计划",
+            )
         }
-        val notificationContexts = if (settings.readNotificationsAllowed) {
-            notificationState.notifications.take(30).toAiNotificationContexts()
-        } else {
-            emptyList()
+    }
+
+    LaunchedEffect(aiAssistantMessages.size) {
+        if (route == AppRoute.AiAssistant && aiAssistantMessages.isEmpty() && aiAssistantPendingPrompt == null) {
+            requestWorkspaceActionPlan()
         }
-        val canReadSelectedChat = settings.readChatAllowed &&
-            (chatState.selectedUserConversation == null || settings.readPrivateChatAllowed)
-        val chatContexts = if (canReadSelectedChat) {
-            chatState.messages.takeLast(40).map { message ->
-                message.copy(text = chatMessageBodyText(message))
-            }.toAiChatMessageContexts()
-        } else {
-            emptyList()
-        }
-        val automationText = if (settings.automationAllowed) {
-            buildString {
-                appendLine("自动化：${automationState.rules.size} 条规则，启用 ${automationState.enabledRuleCount} 条")
-                automationState.logs.take(8).forEach { log ->
-                    appendLine("- ${log.eventLabel} · ${log.actionLabel} · ${if (log.success) "成功" else "失败"}：${log.message}")
-                }
-            }
-        } else {
-            "自动化上下文未授权"
-        }
-        val contextText = buildString {
-            appendLine("当前账号：${accountUser?.displayName?.ifBlank { accountUser.username } ?: "未登录"}")
-            appendLine("当前页面：${routeLabel(route)}")
-            appendLine("权限：帖子=${settings.readTimelineAllowed}，通知=${settings.readNotificationsAllowed}，聊天=${settings.readChatAllowed}，私聊=${settings.readPrivateChatAllowed}，草稿=${settings.readDraftsAllowed}，自动化=${settings.automationAllowed}，工具=${settings.toolsAllowed}")
-            appendLine("后台：${if (settings.backgroundAllowed) "可继续处理" else "已关闭"}${if (settings.wifiOnlyBackground) " · 仅 Wi-Fi" else ""}")
-            appendLine("今日用量：${aiState.usedDailyRequests}/${settings.dailyRequestLimit}，剩余 ${aiState.remainingDailyRequests}")
-            if (composeState.draft.text.isNotBlank() && settings.readDraftsAllowed) {
-                appendLine()
-                appendLine("当前草稿：")
-                appendLine(composeState.draft.text.take(1_200))
-            }
-            if (timelineNotes.isNotEmpty()) {
-                appendLine()
-                appendLine("当前时间线：${timelineState.selectedKind.label}")
-                timelineNotes.toAiPostContexts(allowSensitiveUpload).forEachIndexed { index, note ->
-                    appendLine("${index + 1}. ${note.author} @${note.username}：${note.text}")
-                    if (note.stats.isNotBlank()) appendLine("   ${note.stats}")
-                }
-            }
-            if (notificationContexts.isNotEmpty()) {
-                appendLine()
-                appendLine("当前通知：${notificationState.selectedFilter.label} · 未读 ${notificationState.unreadCount}")
-                notificationContexts.forEachIndexed { index, item ->
-                    appendLine("${index + 1}. ${item.type} · ${item.actor}：${item.text}")
-                    if (item.notePreviewText.isNotBlank()) appendLine("   ${item.notePreviewText}")
-                }
-            }
-            if (chatContexts.isNotEmpty()) {
-                appendLine()
-                appendLine("当前聊天：${selectedChatTitle(chatState)}")
-                chatContexts.forEach { message ->
-                    appendLine("${message.sender}: ${message.text}")
-                }
-            } else if (chatState.selectedUserConversation != null && settings.readChatAllowed && !settings.readPrivateChatAllowed) {
-                appendLine()
-                appendLine("当前私聊未上传：私聊读取权限未开启")
-            }
-            appendLine()
-            appendLine(automationText)
-        }
-        requestAiTask(
-            kind = AiTaskKind.WorkspaceActionPlan,
-            input = AiTaskInput(
-                title = "全局行动计划",
-                prompt = "从当前 HHHL 状态里找出最值得我下一步处理、回复、@ 人、整理和自动化的事情。",
-                automationEventText = contextText,
-            ),
-            toast = "AI 已开始生成全局行动计划",
-        )
     }
     val onRenoteNote: (String) -> Unit = { noteId ->
         applyNoteMutation(NoteLocalMutation.Renote(noteId))

@@ -9,6 +9,7 @@ import cc.hhhl.client.repository.UserSocialRepository
 import cc.hhhl.client.repository.UserSocialRepositoryResult
 import cc.hhhl.client.repository.UserRelationshipRepository
 import cc.hhhl.client.repository.UserRelationshipRepositoryResult
+import kotlinx.coroutines.CompletableDeferred
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -16,6 +17,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -137,6 +139,65 @@ class UserSocialStateHolderTest {
         assertEquals("已提交举报", holder.state.value.message)
     }
 
+    @Test
+    fun pendingReportDoesNotWriteMessageAfterSocialContextSwitch() = runTest {
+        val first = UserSocialItem("rel-1", FakeData.me.copy(id = "user-2"))
+        val second = UserSocialItem("rel-2", FakeData.me.copy(id = "user-3"))
+        val pending = CompletableDeferred<UserRelationshipRepositoryResult>()
+        val holder = UserSocialStateHolder(
+            repository = sequenceRepository(
+                UserSocialRepositoryResult.Success(listOf(first)),
+                UserSocialRepositoryResult.Success(listOf(second)),
+            ),
+            relationshipRepository = fakeRelationshipRepository(resultProvider = { pending.await() }),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.load("owner-1", UserSocialKind.Followers, "Owner 1")
+        advanceUntilIdle()
+        holder.reportUser("user-2")
+        runCurrent()
+        assertTrue(holder.state.value.isRelationshipChanging)
+
+        holder.load("owner-2", UserSocialKind.Followers, "Owner 2")
+        assertFalse(holder.state.value.isRelationshipChanging)
+        pending.complete(UserRelationshipRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertEquals("owner-2", holder.state.value.userId)
+        assertEquals(listOf(second), holder.state.value.items)
+        assertEquals(null, holder.state.value.message)
+    }
+
+    @Test
+    fun pendingUnfollowDoesNotRemoveItemAfterSocialContextSwitch() = runTest {
+        val first = UserSocialItem("rel-1", FakeData.me.copy(id = "user-2"))
+        val second = UserSocialItem("rel-2", FakeData.me.copy(id = "user-2", username = "new-page-user"))
+        val pending = CompletableDeferred<UserRelationshipRepositoryResult>()
+        val holder = UserSocialStateHolder(
+            repository = sequenceRepository(
+                UserSocialRepositoryResult.Success(listOf(first)),
+                UserSocialRepositoryResult.Success(listOf(second)),
+            ),
+            relationshipRepository = fakeRelationshipRepository(resultProvider = { pending.await() }),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.load("owner-1", UserSocialKind.Following, "Owner 1")
+        advanceUntilIdle()
+        holder.unfollow("user-2")
+        runCurrent()
+        assertTrue(holder.state.value.isRelationshipChanging)
+
+        holder.load("owner-2", UserSocialKind.Following, "Owner 2")
+        pending.complete(UserRelationshipRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertEquals("owner-2", holder.state.value.userId)
+        assertEquals(listOf(second), holder.state.value.items)
+        assertEquals(null, holder.state.value.message)
+    }
+
     private fun fakeRepository(
         refreshResult: UserSocialRepositoryResult,
         loadMoreResult: UserSocialRepositoryResult = refreshResult,
@@ -207,18 +268,19 @@ class UserSocialStateHolderTest {
 
     private fun fakeRelationshipRepository(
         result: UserRelationshipRepositoryResult = UserRelationshipRepositoryResult.Success,
+        resultProvider: suspend () -> UserRelationshipRepositoryResult = { result },
     ): UserRelationshipRepository {
         return object : UserRelationshipRepository(tokenProvider = { "token-123" }) {
-            override suspend fun unfollow(userId: String): UserRelationshipRepositoryResult = result
+            override suspend fun unfollow(userId: String): UserRelationshipRepositoryResult = resultProvider()
 
-            override suspend fun mute(userId: String): UserRelationshipRepositoryResult = result
+            override suspend fun mute(userId: String): UserRelationshipRepositoryResult = resultProvider()
 
-            override suspend fun block(userId: String): UserRelationshipRepositoryResult = result
+            override suspend fun block(userId: String): UserRelationshipRepositoryResult = resultProvider()
 
             override suspend fun reportUser(
                 userId: String,
                 comment: String,
-            ): UserRelationshipRepositoryResult = result
+            ): UserRelationshipRepositoryResult = resultProvider()
         }
     }
 }

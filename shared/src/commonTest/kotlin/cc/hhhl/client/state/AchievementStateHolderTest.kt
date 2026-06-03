@@ -92,10 +92,44 @@ class AchievementStateHolderTest {
         assertEquals(listOf(achievement), holder.state.value.achievements)
     }
 
+    @Test
+    fun failedClaimMilestoneCanBeRetried() = runTest {
+        val achievement = sampleAchievement("viewAchievements3min")
+        val claimResults = ArrayDeque(
+            listOf(
+                AchievementClaimRepositoryResult.Error("网络超时"),
+                AchievementClaimRepositoryResult.Success,
+            ),
+        )
+        val claimedNames = mutableListOf<String>()
+        val holder = AchievementStateHolder(
+            repository = fakeRepository(
+                refreshResult = AchievementRepositoryResult.Success(listOf(achievement)),
+                claimProvider = { claimResults.removeFirst() },
+                onClaim = { claimedNames.add(it) },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.claimViewAchievementsMilestone()
+        advanceUntilIdle()
+
+        assertEquals(listOf("viewAchievements3min"), claimedNames)
+        assertEquals("成就领取失败：网络超时", holder.state.value.errorMessage)
+
+        holder.claimViewAchievementsMilestone()
+        advanceUntilIdle()
+
+        assertEquals(listOf("viewAchievements3min", "viewAchievements3min"), claimedNames)
+        assertEquals(listOf(achievement), holder.state.value.achievements)
+        assertEquals(null, holder.state.value.errorMessage)
+    }
+
     private fun fakeRepository(
         refreshResult: AchievementRepositoryResult = AchievementRepositoryResult.Success(emptyList()),
         claimResult: AchievementClaimRepositoryResult = AchievementClaimRepositoryResult.Success,
         refreshProvider: suspend () -> AchievementRepositoryResult = { refreshResult },
+        claimProvider: suspend () -> AchievementClaimRepositoryResult = { claimResult },
         onClaim: (String) -> Unit = {},
     ): AchievementRepository {
         return object : AchievementRepository(
@@ -117,7 +151,7 @@ class AchievementStateHolderTest {
 
             override suspend fun claim(name: String): AchievementClaimRepositoryResult {
                 onClaim(name)
-                return claimResult
+                return claimProvider()
             }
         }
     }

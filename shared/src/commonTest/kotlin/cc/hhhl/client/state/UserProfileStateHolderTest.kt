@@ -150,6 +150,38 @@ class UserProfileStateHolderTest {
     }
 
     @Test
+    fun clearContentLoadClearsPendingLoadMoreNotesState() = runTest {
+        val firstUser = FakeData.me.copy(id = "remote-a", displayName = "Remote A")
+        val secondUser = FakeData.me.copy(id = "remote-b", displayName = "Remote B")
+        val firstNote = FakeData.timeline[0].copy(id = "note-a")
+        val pendingMore = CompletableDeferred<UserNotesRepositoryResult>()
+        val holder = UserProfileStateHolder(
+            repository = sequenceRepository(
+                UserProfileRepositoryResult.Success(firstUser),
+                UserProfileRepositoryResult.Success(secondUser),
+            ),
+            notesRepository = fakeNotesRepository(
+                refreshResult = UserNotesRepositoryResult.Success(listOf(firstNote)),
+                loadMoreResultProvider = { pendingMore.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.load()
+        advanceUntilIdle()
+        holder.loadMoreNotes()
+        assertTrue(holder.state.value.isLoadingMoreNotes)
+
+        holder.load(clearContent = true)
+        assertFalse(holder.state.value.isLoadingMoreNotes)
+        pendingMore.complete(UserNotesRepositoryResult.Success(listOf(firstNote, FakeData.timeline[1])))
+        advanceUntilIdle()
+
+        assertEquals(secondUser, holder.state.value.user)
+        assertFalse(holder.state.value.isLoadingMoreNotes)
+    }
+
+    @Test
     fun applyNoteMutationUpdatesProfileNotes() = runTest {
         val note = FakeData.timeline[0]
         val holder = UserProfileStateHolder(
@@ -265,6 +297,38 @@ class UserProfileStateHolderTest {
 
         assertEquals(false, holder.state.value.user?.isFollowing)
         assertEquals(3, holder.state.value.user?.followersCount)
+    }
+
+    @Test
+    fun pendingReportDoesNotWriteMessageAfterProfileSwitch() = runTest {
+        val firstUser = FakeData.me.copy(id = "remote-a", displayName = "Remote A")
+        val secondUser = FakeData.me.copy(id = "remote-b", displayName = "Remote B")
+        val pendingReport = CompletableDeferred<UserRelationshipRepositoryResult>()
+        val holder = UserProfileStateHolder(
+            repository = sequenceRepository(
+                UserProfileRepositoryResult.Success(firstUser),
+                UserProfileRepositoryResult.Success(secondUser),
+            ),
+            relationshipRepository = fakeRelationshipRepository(
+                result = UserRelationshipRepositoryResult.Success,
+                actionResultProvider = { pendingReport.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.load()
+        advanceUntilIdle()
+        holder.reportUser()
+        assertTrue(holder.state.value.isRelationshipChanging)
+
+        holder.load(clearContent = true)
+        assertFalse(holder.state.value.isRelationshipChanging)
+        pendingReport.complete(UserRelationshipRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertEquals(secondUser, holder.state.value.user)
+        assertFalse(holder.state.value.isRelationshipChanging)
+        assertEquals(null, holder.state.value.message)
     }
 
     @Test
@@ -393,9 +457,43 @@ class UserProfileStateHolderTest {
         assertEquals("资料没有变化", holder.state.value.message)
     }
 
+    @Test
+    fun pendingProfileUpdateDoesNotOverwriteAfterClearContentLoad() = runTest {
+        val firstUser = FakeData.me.copy(id = "remote-a", displayName = "Remote A", bio = "old")
+        val secondUser = FakeData.me.copy(id = "remote-b", displayName = "Remote B", bio = "second")
+        val pendingUpdate = CompletableDeferred<UserProfileRepositoryResult>()
+        val holder = UserProfileStateHolder(
+            repository = sequenceRepository(
+                UserProfileRepositoryResult.Success(firstUser),
+                UserProfileRepositoryResult.Success(secondUser),
+                updateResultProvider = { pendingUpdate.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.load()
+        advanceUntilIdle()
+        holder.updateProfile("Remote A updated", "new")
+        assertTrue(holder.state.value.isProfileSaving)
+
+        holder.load(clearContent = true)
+        assertFalse(holder.state.value.isProfileSaving)
+        pendingUpdate.complete(
+            UserProfileRepositoryResult.Success(
+                firstUser.copy(displayName = "Remote A updated", bio = "new"),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(secondUser, holder.state.value.user)
+        assertFalse(holder.state.value.isProfileSaving)
+        assertEquals(null, holder.state.value.message)
+    }
+
     private fun fakeRepository(
         result: UserProfileRepositoryResult,
         updateResult: UserProfileRepositoryResult = result,
+        updateResultProvider: suspend () -> UserProfileRepositoryResult = { updateResult },
         onUpdate: () -> Unit = {},
     ): UserProfileRepository {
         return object : UserProfileRepository(
@@ -417,13 +515,14 @@ class UserProfileStateHolderTest {
                 description: String,
             ): UserProfileRepositoryResult {
                 onUpdate()
-                return updateResult
+                return updateResultProvider()
             }
         }
     }
 
     private fun sequenceRepository(
         vararg results: UserProfileRepositoryResult,
+        updateResultProvider: suspend () -> UserProfileRepositoryResult = { results.last() },
     ): UserProfileRepository {
         var index = 0
         return object : UserProfileRepository(
@@ -440,6 +539,13 @@ class UserProfileStateHolderTest {
                 val result = results[index.coerceAtMost(results.lastIndex)]
                 index += 1
                 return result
+            }
+
+            override suspend fun updateProfile(
+                name: String,
+                description: String,
+            ): UserProfileRepositoryResult {
+                return updateResultProvider()
             }
         }
     }
@@ -469,6 +575,7 @@ class UserProfileStateHolderTest {
     private fun fakeNotesRepository(
         refreshResult: UserNotesRepositoryResult,
         loadMoreResult: UserNotesRepositoryResult = refreshResult,
+        loadMoreResultProvider: suspend () -> UserNotesRepositoryResult = { loadMoreResult },
         onRefresh: () -> Unit = {},
     ): UserNotesRepository {
         return object : UserNotesRepository(
@@ -489,7 +596,7 @@ class UserProfileStateHolderTest {
             }
 
             override suspend fun loadMore(currentNotes: List<Note>): UserNotesRepositoryResult {
-                return loadMoreResult
+                return loadMoreResultProvider()
             }
         }
     }
@@ -499,6 +606,7 @@ class UserProfileStateHolderTest {
         relationResult: UserRelationshipRepositoryResult = UserRelationshipRepositoryResult.RelationLoaded(
             UserRelationship(userId = "remote-1"),
         ),
+        actionResultProvider: suspend () -> UserRelationshipRepositoryResult = { result },
     ): UserRelationshipRepository {
         return object : UserRelationshipRepository(
             tokenProvider = { "token-123" },
@@ -587,27 +695,34 @@ class UserProfileStateHolderTest {
             }
 
             override suspend fun follow(userId: String, withReplies: Boolean?): UserRelationshipRepositoryResult {
-                return result
+                return actionResultProvider()
             }
 
             override suspend fun unfollow(userId: String): UserRelationshipRepositoryResult {
-                return result
+                return actionResultProvider()
             }
 
             override suspend fun mute(userId: String): UserRelationshipRepositoryResult {
-                return result
+                return actionResultProvider()
             }
 
             override suspend fun unmute(userId: String): UserRelationshipRepositoryResult {
-                return result
+                return actionResultProvider()
             }
 
             override suspend fun block(userId: String): UserRelationshipRepositoryResult {
-                return result
+                return actionResultProvider()
             }
 
             override suspend fun unblock(userId: String): UserRelationshipRepositoryResult {
-                return result
+                return actionResultProvider()
+            }
+
+            override suspend fun reportUser(
+                userId: String,
+                comment: String,
+            ): UserRelationshipRepositoryResult {
+                return actionResultProvider()
             }
         }
     }

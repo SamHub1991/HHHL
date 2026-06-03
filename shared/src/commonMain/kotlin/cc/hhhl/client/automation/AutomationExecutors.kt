@@ -629,18 +629,31 @@ private fun channelLink(targetId: String, event: AutomationEvent): String? {
 }
 
 private fun String.canReceiveAttachmentAuthHeaders(): Boolean {
-    val clean = trim().lowercase()
-    val host = clean
+    val clean = trim()
+    val lower = clean.lowercase()
+    val host = lower
         .removePrefix("http://")
         .removePrefix("https://")
         .substringBefore('/')
         .substringBefore(':')
+    val explicitLocalAttachmentAuth = lower.substringAfter('?', "")
+        .split('&')
+        .any { parameter ->
+            parameter == "hhhlattachmentauth=1" ||
+                parameter == "hhhl_attachment_auth=1" ||
+                parameter == "attachmentauth=1" ||
+                parameter == "attachment_auth=1"
+        }
     return host == "localhost" ||
         host == "127.0.0.1" ||
         host == "10.0.2.2" ||
-        host.startsWith("10.") ||
-        host.startsWith("192.168.") ||
-        private172HostPattern.matches(host)
+        (explicitLocalAttachmentAuth && host.isPrivateNetworkHost())
+}
+
+private fun String.isPrivateNetworkHost(): Boolean {
+    return startsWith("10.") ||
+        startsWith("192.168.") ||
+        private172HostPattern.matches(this)
 }
 
 private fun Map<String, String>.cleanAttachmentAuthHeaders(): Map<String, String> {

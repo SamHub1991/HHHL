@@ -286,6 +286,43 @@ class PageStateHolderTest {
         assertEquals(emptyList(), holder.state.value.pages)
     }
 
+    @Test
+    fun pendingDeleteDoesNotClearNewlyOpenedPage() = runTest {
+        val deleteResult = CompletableDeferred<PageActionRepositoryResult>()
+        val first = samplePage("page-1")
+        val second = samplePage("page-2")
+        val holder = PageStateHolder(
+            repository = fakeRepository(
+                pagesResult = PagesRepositoryResult.Success(listOf(first, second)),
+                pageResultProvider = { pageId ->
+                    PageRepositoryResult.Success(if (pageId == first.id) first else second)
+                },
+                deleteActionResultProvider = { deleteResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshPages()
+        advanceUntilIdle()
+        holder.openPage(first.id)
+        advanceUntilIdle()
+        holder.deleteSelectedPage()
+        runCurrent()
+
+        assertTrue(holder.state.value.isDeletingPage)
+
+        holder.openPage(second.id)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedPage)
+
+        deleteResult.complete(PageActionRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isDeletingPage)
+        assertEquals(second, holder.state.value.selectedPage)
+        assertEquals(listOf(second), holder.state.value.pages)
+    }
+
     private fun fakeRepository(
         pagesResult: PagesRepositoryResult,
         pageResult: PageRepositoryResult = PageRepositoryResult.Success(samplePage("page-1")),
@@ -294,7 +331,9 @@ class PageStateHolderTest {
         onShowPage: (String) -> Unit = {},
         onLikePage: (String) -> Unit = {},
         onUnlikePage: (String) -> Unit = {},
+        onDeletePage: (String) -> Unit = {},
         pageResultProvider: suspend (String) -> PageRepositoryResult = { pageResult },
+        deleteActionResultProvider: suspend (String) -> PageActionRepositoryResult = { actionResult },
     ): PageRepository {
         return sequenceRepository(
             pagesResults = listOf(pagesResult),
@@ -304,7 +343,9 @@ class PageStateHolderTest {
             onShowPage = onShowPage,
             onLikePage = onLikePage,
             onUnlikePage = onUnlikePage,
+            onDeletePage = onDeletePage,
             pageResultProvider = pageResultProvider,
+            deleteActionResultProvider = deleteActionResultProvider,
         )
     }
 
@@ -316,7 +357,9 @@ class PageStateHolderTest {
         onShowPage: (String) -> Unit = {},
         onLikePage: (String) -> Unit = {},
         onUnlikePage: (String) -> Unit = {},
+        onDeletePage: (String) -> Unit = {},
         pageResultProvider: suspend (String) -> PageRepositoryResult = { pageResult },
+        deleteActionResultProvider: suspend (String) -> PageActionRepositoryResult = { actionResult },
     ): PageRepository {
         var pageResultIndex = 0
         return object : PageRepository(
@@ -425,7 +468,8 @@ class PageStateHolderTest {
             }
 
             override suspend fun deletePage(pageId: String): PageActionRepositoryResult {
-                return actionResult
+                onDeletePage(pageId)
+                return deleteActionResultProvider(pageId)
             }
         }
     }

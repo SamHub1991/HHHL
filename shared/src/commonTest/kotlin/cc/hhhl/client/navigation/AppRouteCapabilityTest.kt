@@ -45,4 +45,40 @@ class AppRouteCapabilityTest {
         assertEquals(RootRoute.Profile, rootRouteFor(AppRoute.AutomationLogs))
         assertEquals(RootRoute.Chat, rootRouteFor(AppRoute.AiAssistant))
     }
+
+    @Test
+    fun aiAssistantReviewPageTargetReturnsToSourceRoute() {
+        val target = aiAssistantReviewPageTarget(
+            currentRoute = AppRoute.AiAssistant,
+            sourceRoute = AppRoute.NoteDetail("note-1"),
+            sourceRootRoute = RootRoute.Timeline,
+        )
+
+        assertEquals(RootRoute.Timeline, target.rootRoute)
+        assertEquals(AppRoute.NoteDetail("note-1"), target.route)
+    }
+
+    @Test
+    fun aiAssistantReviewPageTargetPreservesSourceRootRouteForCompose() {
+        val target = aiAssistantReviewPageTarget(
+            currentRoute = AppRoute.AiAssistant,
+            sourceRoute = AppRoute.Compose(channelId = "channel-1"),
+            sourceRootRoute = RootRoute.Discover,
+        )
+
+        assertEquals(RootRoute.Discover, target.rootRoute)
+        assertEquals(AppRoute.Compose(channelId = "channel-1"), target.route)
+    }
+
+    @Test
+    fun aiAssistantReviewPageTargetFallsBackToChatWithoutSource() {
+        val target = aiAssistantReviewPageTarget(
+            currentRoute = AppRoute.AiAssistant,
+            sourceRoute = null,
+            sourceRootRoute = null,
+        )
+
+        assertEquals(RootRoute.Chat, target.rootRoute)
+        assertEquals(AppRoute.Chat, target.route)
+    }
 }

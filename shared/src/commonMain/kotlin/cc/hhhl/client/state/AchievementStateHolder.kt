@@ -51,15 +51,26 @@ class AchievementStateHolder(
         viewAchievementClaimRequested = true
 
         scope.launch {
-            when (repository.claim("viewAchievements3min")) {
+            when (val result = repository.claim("viewAchievements3min")) {
                 AchievementClaimRepositoryResult.Success -> refresh(force = true)
-                AchievementClaimRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
-                        errorMessage = "登录已失效，请重新登录",
-                        requiresRelogin = true,
-                    )
+                AchievementClaimRepositoryResult.Unauthorized -> {
+                    viewAchievementClaimRequested = false
+                    mutableState.update {
+                        it.copy(
+                            errorMessage = "登录已失效，请重新登录",
+                            requiresRelogin = true,
+                        )
+                    }
                 }
-                is AchievementClaimRepositoryResult.Error -> Unit
+                is AchievementClaimRepositoryResult.Error -> {
+                    viewAchievementClaimRequested = false
+                    mutableState.update {
+                        it.copy(
+                            errorMessage = "成就领取失败：${result.message}",
+                            requiresRelogin = false,
+                        )
+                    }
+                }
             }
         }
     }

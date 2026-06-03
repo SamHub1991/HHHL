@@ -515,6 +515,7 @@ class SettingsStateHolder(
         val launchScope = scope ?: return
         val key = state.value.openedManagementKey ?: return
         if (state.value.isManagementMutating) return
+        val requestId = managementRequestId
 
         mutableState.update {
             it.copy(
@@ -529,9 +530,11 @@ class SettingsStateHolder(
             if (action == SettingsManagementAction.LoginSharedAccess) {
                 when (val result = repository.loginSharedAccess(itemId)) {
                     is SettingsSharedAccessLoginRepositoryResult.Success -> {
+                        if (!isCurrentManagementRequest(requestId, key)) return@launch
                         onSharedAccessLogin(result.token, result.userId)
                         val successMessage = "共享访问已导入，正在切换账号"
                         mutableState.update {
+                            if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                             it.copy(
                                 isManagementMutating = false,
                                 managementMessage = successMessage,
@@ -541,6 +544,7 @@ class SettingsStateHolder(
                         openManagement(key, preserveMessage = successMessage)
                     }
                     SettingsSharedAccessLoginRepositoryResult.Unauthorized -> mutableState.update {
+                        if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                         it.copy(
                             isManagementMutating = false,
                             managementMessage = "登录已失效，请重新登录",
@@ -548,6 +552,7 @@ class SettingsStateHolder(
                         ).withGroups()
                     }
                     is SettingsSharedAccessLoginRepositoryResult.Error -> mutableState.update {
+                        if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                         it.copy(
                             isManagementMutating = false,
                             managementMessage = result.message,
@@ -571,6 +576,7 @@ class SettingsStateHolder(
             }
             when (result) {
                 SettingsManagementMutationRepositoryResult.Success -> {
+                    if (!isCurrentManagementRequest(requestId, key)) return@launch
                     val successMessage = when (action) {
                         SettingsManagementAction.RevokeToken -> "操作已完成"
                         SettingsManagementAction.CreateInvite -> "邀请码已创建"
@@ -583,6 +589,7 @@ class SettingsStateHolder(
                         SettingsManagementAction.DeleteWebhook -> "Webhook 已删除"
                     }
                     mutableState.update {
+                        if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                         it.copy(
                             isManagementMutating = false,
                             managementMessage = successMessage,
@@ -592,6 +599,7 @@ class SettingsStateHolder(
                     openManagement(key, preserveMessage = successMessage)
                 }
                 SettingsManagementMutationRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                     it.copy(
                         isManagementMutating = false,
                         managementMessage = "登录已失效，请重新登录",
@@ -599,6 +607,7 @@ class SettingsStateHolder(
                     ).withGroups()
                 }
                 is SettingsManagementMutationRepositoryResult.Error -> mutableState.update {
+                    if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                     it.copy(
                         isManagementMutating = false,
                         managementMessage = result.message,
@@ -616,6 +625,7 @@ class SettingsStateHolder(
         val launchScope = scope ?: return
         val key = state.value.openedManagementKey ?: return
         if (key != SettingsManagementSectionKey.Webhooks || state.value.isManagementMutating) return
+        val requestId = managementRequestId
 
         mutableState.update {
             it.copy(
@@ -630,8 +640,10 @@ class SettingsStateHolder(
         launchScope.launch {
             when (val result = repository.updateWebhook(webhookId, input)) {
                 SettingsManagementMutationRepositoryResult.Success -> {
+                    if (!isCurrentManagementRequest(requestId, key)) return@launch
                     val successMessage = "Webhook 已更新"
                     mutableState.update {
+                        if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                         it.copy(
                             isManagementMutating = false,
                             managementMessage = successMessage,
@@ -641,6 +653,7 @@ class SettingsStateHolder(
                     openManagement(key, preserveMessage = successMessage)
                 }
                 SettingsManagementMutationRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                     it.copy(
                         isManagementMutating = false,
                         managementMessage = "登录已失效，请重新登录",
@@ -648,6 +661,7 @@ class SettingsStateHolder(
                     ).withGroups()
                 }
                 is SettingsManagementMutationRepositoryResult.Error -> mutableState.update {
+                    if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                     it.copy(
                         isManagementMutating = false,
                         managementMessage = result.message,
@@ -662,6 +676,7 @@ class SettingsStateHolder(
         val launchScope = scope ?: return
         val key = state.value.openedManagementKey ?: return
         if (key != SettingsManagementSectionKey.Webhooks || state.value.isManagementMutating) return
+        val requestId = managementRequestId
 
         mutableState.update {
             it.copy(
@@ -676,8 +691,10 @@ class SettingsStateHolder(
         launchScope.launch {
             when (val result = repository.createWebhook(input)) {
                 SettingsManagementMutationRepositoryResult.Success -> {
+                    if (!isCurrentManagementRequest(requestId, key)) return@launch
                     val successMessage = "Webhook 已创建"
                     mutableState.update {
+                        if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                         it.copy(
                             isManagementMutating = false,
                             managementMessage = successMessage,
@@ -687,6 +704,7 @@ class SettingsStateHolder(
                     openManagement(key, preserveMessage = successMessage)
                 }
                 SettingsManagementMutationRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                     it.copy(
                         isManagementMutating = false,
                         managementMessage = "登录已失效，请重新登录",
@@ -694,6 +712,7 @@ class SettingsStateHolder(
                     ).withGroups()
                 }
                 is SettingsManagementMutationRepositoryResult.Error -> mutableState.update {
+                    if (requestId != managementRequestId || it.openedManagementKey != key) return@update it
                     it.copy(
                         isManagementMutating = false,
                         managementMessage = result.message,
@@ -702,6 +721,14 @@ class SettingsStateHolder(
                 }
             }
         }
+    }
+
+    private fun isCurrentManagementRequest(
+        requestId: Int,
+        key: SettingsManagementSectionKey,
+    ): Boolean {
+        val current = state.value
+        return requestId == managementRequestId && current.openedManagementKey == key
     }
 
     private fun updateFilters(transform: (FilterSettings) -> FilterSettings) {

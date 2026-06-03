@@ -165,8 +165,44 @@ class ChatStateHolder(
     private var hasUserConversationSnapshot: Boolean = false
     private var hiddenUserConversationLatestMessageIds: Map<String, String?> = emptyMap()
     private var specialCareRoomLatestMessageIds: Map<String, String> = emptyMap()
+    private var roomMessageRequestGenerations: Map<String, Int> = emptyMap()
+    private var userMessageRequestGenerations: Map<String, Int> = emptyMap()
 
     private fun currentAccountId(): String? = accountIdProvider()?.trim()?.takeIf { it.isNotEmpty() }
+
+    private fun roomMessageRequestGeneration(roomId: String): Int {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isEmpty()) return 0
+        return roomMessageRequestGenerations[cleanRoomId] ?: 0
+    }
+
+    private fun bumpRoomMessageRequestGeneration(roomId: String) {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isEmpty()) return
+        val nextGeneration = (roomMessageRequestGenerations[cleanRoomId] ?: 0) + 1
+        roomMessageRequestGenerations = roomMessageRequestGenerations + (cleanRoomId to nextGeneration)
+    }
+
+    private fun matchesRoomMessageRequestGeneration(roomId: String, requestGeneration: Int?): Boolean {
+        return requestGeneration == null || roomMessageRequestGeneration(roomId) == requestGeneration
+    }
+
+    private fun userMessageRequestGeneration(userId: String): Int {
+        val cleanUserId = userId.trim()
+        if (cleanUserId.isEmpty()) return 0
+        return userMessageRequestGenerations[cleanUserId] ?: 0
+    }
+
+    private fun bumpUserMessageRequestGeneration(userId: String) {
+        val cleanUserId = userId.trim()
+        if (cleanUserId.isEmpty()) return
+        val nextGeneration = (userMessageRequestGenerations[cleanUserId] ?: 0) + 1
+        userMessageRequestGenerations = userMessageRequestGenerations + (cleanUserId to nextGeneration)
+    }
+
+    private fun matchesUserMessageRequestGeneration(userId: String, requestGeneration: Int?): Boolean {
+        return requestGeneration == null || userMessageRequestGeneration(userId) == requestGeneration
+    }
 
     private fun localUnreadSnapshot(): ChatUnreadSnapshot {
         return currentAccountId()?.let(unreadStore::load) ?: ChatUnreadSnapshot()
@@ -296,6 +332,18 @@ class ChatStateHolder(
     fun dismissRoomManagementMessage() {
         if (state.value.roomManagementMessage == null) return
         mutableState.update { it.copy(roomManagementMessage = null) }
+    }
+
+    private fun rejectUnavailableChatManagement() {
+        mutableState.update {
+            it.copy(
+                isManagingRoom = false,
+                roomManagementMessage = "实例未启用聊天",
+                errorMessage = "实例未启用聊天",
+                messageErrorMessage = "实例未启用聊天",
+                requiresRelogin = false,
+            )
+        }
     }
 
     fun dismissStreamingErrorMessage() {
@@ -520,6 +568,8 @@ class ChatStateHolder(
                 messageSearchResults = emptyList(),
                 messageSearchQuery = "",
                 messageSearchServerUntilId = null,
+                chatUserSearchQuery = "",
+                chatUserSearchResults = emptyList(),
                 members = emptyList(),
                 selectedRoomUnreadCount = room.unreadCount.coerceAtLeast(0),
                 selectedUserUnreadCount = 0,
@@ -532,6 +582,7 @@ class ChatStateHolder(
                 isLoadingOlderMessages = false,
                 isSearchingMessages = false,
                 isLoadingMoreMessageSearch = false,
+                isSearchingChatUsers = false,
                 isLoadingMembers = false,
                 isLoadingMoreMembers = false,
                 isSendingMessage = false,
@@ -543,6 +594,7 @@ class ChatStateHolder(
                 isUploadingMedia = false,
                 messageErrorMessage = null,
                 messageSearchErrorMessage = null,
+                chatUserSearchErrorMessage = null,
                 memberErrorMessage = null,
                 streamingErrorMessage = null,
                 requiresRelogin = false,
@@ -659,6 +711,7 @@ class ChatStateHolder(
         }
 
         hiddenUserConversationLatestMessageIds = hiddenUserConversationLatestMessageIds - conversation.user.id
+        bumpUserMessageRequestGeneration(conversation.user.id)
         mutableState.update {
             it.copy(
                 userConversations = it.userConversations
@@ -672,6 +725,8 @@ class ChatStateHolder(
                 messageSearchResults = emptyList(),
                 messageSearchQuery = "",
                 messageSearchServerUntilId = null,
+                chatUserSearchQuery = "",
+                chatUserSearchResults = emptyList(),
                 members = emptyList(),
                 selectedRoomUnreadCount = 0,
                 selectedUserUnreadCount = conversation.unreadCount.coerceAtLeast(0),
@@ -684,6 +739,7 @@ class ChatStateHolder(
                 isLoadingOlderMessages = false,
                 isSearchingMessages = false,
                 isLoadingMoreMessageSearch = false,
+                isSearchingChatUsers = false,
                 isLoadingMembers = false,
                 isLoadingMoreMembers = false,
                 isSendingMessage = false,
@@ -695,6 +751,7 @@ class ChatStateHolder(
                 isUploadingMedia = false,
                 messageErrorMessage = null,
                 messageSearchErrorMessage = null,
+                chatUserSearchErrorMessage = null,
                 memberErrorMessage = null,
                 streamingErrorMessage = null,
                 requiresRelogin = false,
@@ -822,19 +879,23 @@ class ChatStateHolder(
     }
 
     private fun restoreCachedRoomMessages(roomId: String) {
+        val requestGeneration = roomMessageRequestGeneration(roomId)
         scope.launch {
             applyCachedRoomMessageResult(
                 roomId = roomId,
                 result = repository.restoreCachedMessages(roomId),
+                requestGeneration = requestGeneration,
             )
         }
     }
 
     private fun restoreCachedUserMessages(userId: String) {
+        val requestGeneration = userMessageRequestGeneration(userId)
         scope.launch {
             applyCachedUserMessageResult(
                 userId = userId,
                 result = repository.restoreCachedUserMessages(userId),
+                requestGeneration = requestGeneration,
             )
         }
     }
@@ -947,14 +1008,18 @@ class ChatStateHolder(
         scope.launch {
             try {
                 if (roomId != null) {
+                    val requestGeneration = roomMessageRequestGeneration(roomId)
                     applyBackgroundRoomMessageRefreshResult(
                         roomId = roomId,
                         result = repository.refreshMessages(roomId),
+                        requestGeneration = requestGeneration,
                     )
                 } else if (userId != null) {
+                    val requestGeneration = userMessageRequestGeneration(userId)
                     applyBackgroundUserMessageRefreshResult(
                         userId = userId,
                         result = repository.refreshUserMessages(userId),
+                        requestGeneration = requestGeneration,
                     )
                 }
             } finally {
@@ -1197,16 +1262,20 @@ class ChatStateHolder(
 
         scope.launch {
             if (room != null) {
+                val requestGeneration = roomMessageRequestGeneration(room.id)
                 applyRoomMessageResult(
                     roomId = room.id,
                     result = repository.refreshMessages(room.id),
                     loadingMore = false,
+                    requestGeneration = requestGeneration,
                 )
             } else if (userConversation != null) {
+                val requestGeneration = userMessageRequestGeneration(userConversation.user.id)
                 applyUserMessageResult(
                     userId = userConversation.user.id,
                     result = repository.refreshUserMessages(userConversation.user.id),
                     loadingMore = false,
+                    requestGeneration = requestGeneration,
                 )
             }
         }
@@ -1236,16 +1305,20 @@ class ChatStateHolder(
 
         scope.launch {
             if (room != null) {
+                val requestGeneration = roomMessageRequestGeneration(room.id)
                 applyRoomMessageResult(
                     roomId = room.id,
                     result = repository.loadMoreMessages(room.id, current.messages),
                     loadingMore = true,
+                    requestGeneration = requestGeneration,
                 )
             } else if (userConversation != null) {
+                val requestGeneration = userMessageRequestGeneration(userConversation.user.id)
                 applyUserMessageResult(
                     userId = userConversation.user.id,
                     result = repository.loadMoreUserMessages(userConversation.user.id, current.messages),
                     loadingMore = true,
+                    requestGeneration = requestGeneration,
                 )
             }
         }
@@ -1346,6 +1419,8 @@ class ChatStateHolder(
         }
         val current = state.value
         if (current.isSearchingChatUsers && current.chatUserSearchQuery == cleanQuery) return
+        val roomId = current.selectedRoom?.id
+        val userId = current.selectedUserConversation?.user?.id
 
         mutableState.update {
             it.copy(
@@ -1366,7 +1441,7 @@ class ChatStateHolder(
             } catch (error: Throwable) {
                 DiscoverRepositoryResult.Error(error.message ?: "搜索用户失败")
             }
-            applyChatUserSearchResult(cleanQuery, result)
+            applyChatUserSearchResult(cleanQuery, roomId, userId, result)
         }
     }
 
@@ -1499,7 +1574,11 @@ class ChatStateHolder(
         description: String,
         joinMode: String = "inviteOnly",
     ) {
-        if (!state.value.chatAvailable || state.value.isManagingRoom) return
+        if (!state.value.chatAvailable) {
+            rejectUnavailableChatManagement()
+            return
+        }
+        if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(
                 isManagingRoom = true,
@@ -1519,7 +1598,11 @@ class ChatStateHolder(
     }
 
     fun joinInvitedRoom(invitation: ChatRoomInvitation) {
-        if (!state.value.chatAvailable || state.value.isManagingRoom) return
+        if (!state.value.chatAvailable) {
+            rejectUnavailableChatManagement()
+            return
+        }
+        if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
         }
@@ -1533,7 +1616,11 @@ class ChatStateHolder(
     }
 
     fun ignoreRoomInvitation(roomId: String) {
-        if (!state.value.chatAvailable || state.value.isManagingRoom) return
+        if (!state.value.chatAvailable) {
+            rejectUnavailableChatManagement()
+            return
+        }
+        if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
         }
@@ -1552,6 +1639,10 @@ class ChatStateHolder(
         joinMode: String,
     ) {
         val room = state.value.selectedRoom ?: return
+        if (!state.value.chatAvailable) {
+            rejectUnavailableChatManagement()
+            return
+        }
         if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(
@@ -1574,6 +1665,10 @@ class ChatStateHolder(
 
     fun updateSelectedRoomManagement(messageRetentionDays: Int?) {
         val room = state.value.selectedRoom ?: return
+        if (!state.value.chatAvailable) {
+            rejectUnavailableChatManagement()
+            return
+        }
         if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(
@@ -1596,6 +1691,10 @@ class ChatStateHolder(
 
     fun inviteSelectedRoomMember(userId: String) {
         val room = state.value.selectedRoom ?: return
+        if (!state.value.chatAvailable) {
+            rejectUnavailableChatManagement()
+            return
+        }
         if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(
@@ -1622,6 +1721,10 @@ class ChatStateHolder(
     fun leaveRoom(roomId: String) {
         val cleanRoomId = roomId.trim()
         if (cleanRoomId.isEmpty()) return
+        if (!state.value.chatAvailable) {
+            rejectUnavailableChatManagement()
+            return
+        }
         if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
@@ -1648,6 +1751,10 @@ class ChatStateHolder(
     fun clearRoomMessages(roomId: String) {
         val cleanRoomId = roomId.trim()
         if (cleanRoomId.isEmpty()) return
+        if (!state.value.chatAvailable) {
+            rejectUnavailableChatManagement()
+            return
+        }
         if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, messageErrorMessage = null, requiresRelogin = false)
@@ -1664,6 +1771,10 @@ class ChatStateHolder(
     fun deleteRoom(roomId: String) {
         val cleanRoomId = roomId.trim()
         if (cleanRoomId.isEmpty()) return
+        if (!state.value.chatAvailable) {
+            rejectUnavailableChatManagement()
+            return
+        }
         if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
@@ -1685,6 +1796,10 @@ class ChatStateHolder(
     fun muteRoom(roomId: String, muted: Boolean) {
         val cleanRoomId = roomId.trim()
         if (cleanRoomId.isEmpty()) return
+        if (!state.value.chatAvailable) {
+            rejectUnavailableChatManagement()
+            return
+        }
         if (state.value.isManagingRoom) return
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
@@ -2170,7 +2285,23 @@ class ChatStateHolder(
             var next = current.copy(isLoadingRoomExtras = false)
             when (ownedResult) {
                 is ChatRepositoryResult.Success -> {
-                    val ownedRooms = ownedResult.rooms
+                    val localUnread = localUnreadSnapshot()
+                    val ownedRooms = ownedResult.rooms.mergeRoomUnreadCounts(
+                        previous = current.ownedRooms,
+                        selectedRoomId = current.selectedRoom?.id,
+                        localUnreadCounts = localUnread.roomCounts,
+                        localReadMarkers = localUnread.roomReadMarkers,
+                        persistUnread = { counts ->
+                            saveLocalUnreadSnapshot(
+                                localUnread.copy(
+                                    roomCounts = counts,
+                                    pinnedRoomIds = current.pinnedRoomIds,
+                                    pinnedUserIds = current.pinnedUserConversationIds,
+                                    roomGroups = current.roomGroups,
+                                ),
+                            )
+                        },
+                    )
                     next = next.copy(
                         ownedRooms = ownedRooms,
                         rooms = next.rooms
@@ -2399,7 +2530,9 @@ class ChatStateHolder(
         roomId: String,
         result: ChatMessageRepositoryResult,
         loadingMore: Boolean,
+        requestGeneration: Int? = null,
     ) {
+        if (!matchesRoomMessageRequestGeneration(roomId, requestGeneration)) return
         when (result) {
             is ChatMessageRepositoryResult.Success -> {
                 val latestReadMarker = if (loadingMore) {
@@ -2502,7 +2635,9 @@ class ChatStateHolder(
     private fun applyCachedRoomMessageResult(
         roomId: String,
         result: ChatMessageRepositoryResult,
+        requestGeneration: Int,
     ) {
+        if (!matchesRoomMessageRequestGeneration(roomId, requestGeneration)) return
         if (result !is ChatMessageRepositoryResult.Success || result.messages.isEmpty()) return
         mutableState.update {
             if (
@@ -2525,7 +2660,9 @@ class ChatStateHolder(
         userId: String,
         result: ChatMessageRepositoryResult,
         loadingMore: Boolean,
+        requestGeneration: Int? = null,
     ) {
+        if (!matchesUserMessageRequestGeneration(userId, requestGeneration)) return
         when (result) {
             is ChatMessageRepositoryResult.Success -> {
                 val latestReadMarker = if (loadingMore) {
@@ -2629,7 +2766,9 @@ class ChatStateHolder(
     private fun applyCachedUserMessageResult(
         userId: String,
         result: ChatMessageRepositoryResult,
+        requestGeneration: Int,
     ) {
+        if (!matchesUserMessageRequestGeneration(userId, requestGeneration)) return
         if (result !is ChatMessageRepositoryResult.Success || result.messages.isEmpty()) return
         mutableState.update {
             if (
@@ -2655,14 +2794,18 @@ class ChatStateHolder(
         result: ChatMessageRepositoryResult,
         loadingMore: Boolean,
     ) {
+        fun ChatUiState.matchesMessageSearchRequest(): Boolean {
+            val sameConversation = if (roomId != null) {
+                selectedRoom?.id == roomId
+            } else {
+                selectedUserConversation?.user?.id == userId
+            }
+            return sameConversation && messageSearchQuery == query
+        }
+
         when (result) {
             is ChatMessageRepositoryResult.Success -> mutableState.update { current ->
-                val sameConversation = if (roomId != null) {
-                    current.selectedRoom?.id == roomId
-                } else {
-                    current.selectedUserConversation?.user?.id == userId
-                }
-                if (!sameConversation || current.messageSearchQuery != query) return@update current
+                if (!current.matchesMessageSearchRequest()) return@update current
                 current.copy(
                     messageSearchResults = result.messages.ensureChronologicalMessages(),
                     messageSearchServerUntilId = result.nextUntilId,
@@ -2673,19 +2816,21 @@ class ChatStateHolder(
                     requiresRelogin = false,
                 )
             }
-            ChatMessageRepositoryResult.Unauthorized -> mutableState.update {
-                it.copy(
+            ChatMessageRepositoryResult.Unauthorized -> mutableState.update { current ->
+                if (!current.matchesMessageSearchRequest()) return@update current
+                current.copy(
                     isSearchingMessages = false,
                     isLoadingMoreMessageSearch = false,
                     messageSearchErrorMessage = "登录已失效，请重新登录",
                     requiresRelogin = true,
                 )
             }
-            is ChatMessageRepositoryResult.Error -> mutableState.update {
-                it.copy(
-                    isSearchingMessages = if (loadingMore) it.isSearchingMessages else false,
+            is ChatMessageRepositoryResult.Error -> mutableState.update { current ->
+                if (!current.matchesMessageSearchRequest()) return@update current
+                current.copy(
+                    isSearchingMessages = if (loadingMore) current.isSearchingMessages else false,
                     isLoadingMoreMessageSearch = false,
-                    messageSearchServerUntilId = if (loadingMore) it.messageSearchServerUntilId else null,
+                    messageSearchServerUntilId = if (loadingMore) current.messageSearchServerUntilId else null,
                     messageSearchErrorMessage = result.message,
                     requiresRelogin = false,
                 )
@@ -2693,8 +2838,9 @@ class ChatStateHolder(
             is ChatMessageRepositoryResult.Created,
             is ChatMessageRepositoryResult.Deleted,
             ChatMessageRepositoryResult.ReactionUpdated,
-                -> mutableState.update {
-                it.copy(
+                -> mutableState.update { current ->
+                if (!current.matchesMessageSearchRequest()) return@update current
+                current.copy(
                     isSearchingMessages = false,
                     isLoadingMoreMessageSearch = false,
                 )
@@ -2704,11 +2850,19 @@ class ChatStateHolder(
 
     private fun applyChatUserSearchResult(
         query: String,
+        roomId: String?,
+        userId: String?,
         result: DiscoverRepositoryResult,
     ) {
+        fun ChatUiState.matchesChatUserSearchRequest(): Boolean {
+            return chatUserSearchQuery == query &&
+                selectedRoom?.id == roomId &&
+                selectedUserConversation?.user?.id == userId
+        }
+
         when (result) {
             is DiscoverRepositoryResult.UserSuccess -> mutableState.update { current ->
-                if (current.chatUserSearchQuery != query) return@update current
+                if (!current.matchesChatUserSearchRequest()) return@update current
                 current.copy(
                     chatUserSearchResults = result.users.distinctBy { user -> user.id }.take(CHAT_USER_SEARCH_RESULT_LIMIT),
                     isSearchingChatUsers = false,
@@ -2717,7 +2871,7 @@ class ChatStateHolder(
                 )
             }
             DiscoverRepositoryResult.Unauthorized -> mutableState.update { current ->
-                if (current.chatUserSearchQuery != query) return@update current
+                if (!current.matchesChatUserSearchRequest()) return@update current
                 current.copy(
                     isSearchingChatUsers = false,
                     chatUserSearchErrorMessage = "登录已失效，请重新登录",
@@ -2725,7 +2879,7 @@ class ChatStateHolder(
                 )
             }
             is DiscoverRepositoryResult.Error -> mutableState.update { current ->
-                if (current.chatUserSearchQuery != query) return@update current
+                if (!current.matchesChatUserSearchRequest()) return@update current
                 current.copy(
                     isSearchingChatUsers = false,
                     chatUserSearchErrorMessage = result.message,
@@ -2750,7 +2904,7 @@ class ChatStateHolder(
             is DiscoverRepositoryResult.RecommendedTimelineSuccess,
             DiscoverRepositoryResult.FederationActionSuccess,
                 -> mutableState.update { current ->
-                if (current.chatUserSearchQuery != query) return@update current
+                if (!current.matchesChatUserSearchRequest()) return@update current
                 current.copy(
                     isSearchingChatUsers = false,
                     chatUserSearchErrorMessage = "用户搜索返回了无法识别的结果",
@@ -2763,7 +2917,9 @@ class ChatStateHolder(
     private fun applyBackgroundRoomMessageRefreshResult(
         roomId: String,
         result: ChatMessageRepositoryResult,
+        requestGeneration: Int,
     ) {
+        if (!matchesRoomMessageRequestGeneration(roomId, requestGeneration)) return
         when (result) {
             is ChatMessageRepositoryResult.Success -> {
                 val latestReadMarker = result.messages.ensureChronologicalMessages().lastOrNull()?.unreadMarker().orEmpty()
@@ -2824,7 +2980,9 @@ class ChatStateHolder(
     private fun applyBackgroundUserMessageRefreshResult(
         userId: String,
         result: ChatMessageRepositoryResult,
+        requestGeneration: Int,
     ) {
+        if (!matchesUserMessageRequestGeneration(userId, requestGeneration)) return
         when (result) {
             is ChatMessageRepositoryResult.Success -> {
                 val latestReadMarker = result.messages.ensureChronologicalMessages().lastOrNull()?.unreadMarker().orEmpty()
@@ -2986,12 +3144,23 @@ class ChatStateHolder(
             }
             is ChatRoomMutationRepositoryResult.RoomMessagesCleared -> {
                 clearLocalRoomUnread(result.roomId)
+                bumpRoomMessageRequestGeneration(result.roomId)
                 mutableState.update {
+                    val clearedSelectedRoom = it.selectedRoom?.id == result.roomId
                     it.copy(
-                        messages = if (it.selectedRoom?.id == result.roomId) emptyList() else it.messages,
-                        messageSearchResults = if (it.selectedRoom?.id == result.roomId) emptyList() else it.messageSearchResults,
-                        selectedRoomUnreadCount = if (it.selectedRoom?.id == result.roomId) 0 else it.selectedRoomUnreadCount,
-                        unreadJumpMessageId = if (it.selectedRoom?.id == result.roomId) null else it.unreadJumpMessageId,
+                        messages = if (clearedSelectedRoom) emptyList() else it.messages,
+                        messageSearchResults = if (clearedSelectedRoom) emptyList() else it.messageSearchResults,
+                        messageSearchQuery = if (clearedSelectedRoom) "" else it.messageSearchQuery,
+                        messageSearchServerUntilId = if (clearedSelectedRoom) null else it.messageSearchServerUntilId,
+                        messageSearchEndReached = if (clearedSelectedRoom) true else it.messageSearchEndReached,
+                        isLoadingMessages = if (clearedSelectedRoom) false else it.isLoadingMessages,
+                        isLoadingOlderMessages = if (clearedSelectedRoom) false else it.isLoadingOlderMessages,
+                        messagesEndReached = if (clearedSelectedRoom) true else it.messagesEndReached,
+                        isSearchingMessages = if (clearedSelectedRoom) false else it.isSearchingMessages,
+                        isLoadingMoreMessageSearch = if (clearedSelectedRoom) false else it.isLoadingMoreMessageSearch,
+                        messageSearchErrorMessage = if (clearedSelectedRoom) null else it.messageSearchErrorMessage,
+                        selectedRoomUnreadCount = if (clearedSelectedRoom) 0 else it.selectedRoomUnreadCount,
+                        unreadJumpMessageId = if (clearedSelectedRoom) null else it.unreadJumpMessageId,
                         rooms = it.rooms.map { room ->
                             if (room.id == result.roomId) {
                                 room.copy(unreadCount = 0, latestMessageAtLabel = "", latestMessageMarker = "")

@@ -273,6 +273,34 @@ class AnnouncementStateHolderTest {
     }
 
     @Test
+    fun exitManagementInvalidatesPendingCreateAnnouncement() = runTest {
+        val pending = CompletableDeferred<AnnouncementMutationRepositoryResult>()
+        val created = sampleAnnouncement("admin-created")
+        val holder = AnnouncementStateHolder(
+            repository = fakeRepository(
+                adminListResult = AnnouncementsRepositoryResult.Success(emptyList()),
+                createHandler = { pending.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.enterManagement()
+        advanceUntilIdle()
+        holder.createAnnouncement(AnnouncementDraft("Admin", "Text"))
+        runCurrent()
+        assertTrue(holder.state.value.isMutatingAnnouncement)
+
+        holder.exitManagement()
+        pending.complete(AnnouncementMutationRepositoryResult.Success(created))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isManaging)
+        assertFalse(holder.state.value.isMutatingAnnouncement)
+        assertEquals(emptyList(), holder.state.value.announcements)
+        assertEquals(null, holder.state.value.adminActionMessage)
+    }
+
+    @Test
     fun enteringManagementInvalidatesPendingPublicRefresh() = runTest {
         val pending = CompletableDeferred<AnnouncementsRepositoryResult>()
         val publicAnnouncement = sampleAnnouncement("public-1")
@@ -312,6 +340,9 @@ class AnnouncementStateHolderTest {
         listHandler: suspend () -> AnnouncementsRepositoryResult = { listResult },
         adminListHandler: suspend () -> AnnouncementsRepositoryResult = { adminListResult },
         showHandler: suspend (String) -> AnnouncementRepositoryResult = { showResult },
+        createHandler: suspend (AnnouncementDraft) -> AnnouncementMutationRepositoryResult = { createResult },
+        updateHandler: suspend (String, AnnouncementDraft) -> AnnouncementMutationRepositoryResult = { _, _ -> updateResult },
+        deleteHandler: suspend (String) -> AnnouncementDeleteRepositoryResult = { deleteResult },
     ): AnnouncementRepository {
         return object : AnnouncementRepository(
             tokenProvider = { "token-123" },
@@ -386,18 +417,18 @@ class AnnouncementStateHolderTest {
             override suspend fun markRead(announcementId: String): AnnouncementReadRepositoryResult = readResult
 
             override suspend fun createAnnouncement(draft: AnnouncementDraft): AnnouncementMutationRepositoryResult {
-                return createResult
+                return createHandler(draft)
             }
 
             override suspend fun updateAnnouncement(
                 announcementId: String,
                 draft: AnnouncementDraft,
             ): AnnouncementMutationRepositoryResult {
-                return updateResult
+                return updateHandler(announcementId, draft)
             }
 
             override suspend fun deleteAnnouncement(announcementId: String): AnnouncementDeleteRepositoryResult {
-                return deleteResult
+                return deleteHandler(announcementId)
             }
         }
     }

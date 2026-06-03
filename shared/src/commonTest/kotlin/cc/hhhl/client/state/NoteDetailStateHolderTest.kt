@@ -10,6 +10,7 @@ import cc.hhhl.client.repository.NoteDetailRepository
 import cc.hhhl.client.repository.NoteDetailRepositoryResult
 import cc.hhhl.client.repository.NoteRepliesRepository
 import cc.hhhl.client.repository.NoteRepliesRepositoryResult
+import cc.hhhl.client.repository.NoteTranslationRepositoryResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -108,6 +109,36 @@ class NoteDetailStateHolderTest {
         assertEquals("note-2", holder.state.value.noteId)
         assertFalse(holder.state.value.isLoadingMoreReplies)
         assertEquals(listOf(firstReply), holder.state.value.replies)
+    }
+
+    @Test
+    fun staleTranslationCannotOverwriteAfterReturningToSameNote() = runTest {
+        val firstTranslation = CompletableDeferred<NoteTranslationRepositoryResult>()
+        val secondTranslation = CompletableDeferred<NoteTranslationRepositoryResult>()
+        val holder = NoteDetailStateHolder(
+            repository = translationSequenceRepository(firstTranslation, secondTranslation),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.load("note-1")
+        advanceUntilIdle()
+        holder.translate()
+        advanceUntilIdle()
+
+        holder.load("note-2")
+        advanceUntilIdle()
+        holder.load("note-1")
+        advanceUntilIdle()
+        holder.translate()
+        secondTranslation.complete(NoteTranslationRepositoryResult.Success(textTranslation("fresh translation")))
+        advanceUntilIdle()
+
+        assertEquals("fresh translation", holder.state.value.translation?.text)
+
+        firstTranslation.complete(NoteTranslationRepositoryResult.Success(textTranslation("stale translation")))
+        advanceUntilIdle()
+
+        assertEquals("fresh translation", holder.state.value.translation?.text)
     }
 
     @Test
@@ -272,6 +303,37 @@ class NoteDetailStateHolderTest {
             }
         }
     }
+
+    private fun translationSequenceRepository(
+        vararg results: CompletableDeferred<NoteTranslationRepositoryResult>,
+    ): NoteDetailRepository {
+        var translationIndex = 0
+        return object : NoteDetailRepository(
+            tokenProvider = { "token-123" },
+            api = object : NoteDetailApi {
+                override suspend fun loadNote(
+                    token: String,
+                    noteId: String,
+                ): NoteDetailLoadResult = NoteDetailLoadResult.Success(FakeData.timeline[0].copy(id = noteId))
+            },
+        ) {
+            override suspend fun load(noteId: String): NoteDetailRepositoryResult {
+                return NoteDetailRepositoryResult.Success(FakeData.timeline[0].copy(id = noteId))
+            }
+
+            override suspend fun translate(noteId: String): NoteTranslationRepositoryResult {
+                val result = results[translationIndex.coerceAtMost(results.lastIndex)]
+                translationIndex += 1
+                return result.await()
+            }
+        }
+    }
+
+    private fun textTranslation(text: String) = cc.hhhl.client.model.NoteTranslation(
+        sourceLang = "ja",
+        targetLang = "zh",
+        text = text,
+    )
 
     private fun fakeRepliesRepository(
         refreshResult: NoteRepliesRepositoryResult,

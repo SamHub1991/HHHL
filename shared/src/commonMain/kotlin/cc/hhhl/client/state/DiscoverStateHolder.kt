@@ -137,6 +137,7 @@ class DiscoverStateHolder(
     private var discoveryHomeRequestId = 0
     private var searchTrendsRequestId = 0
     private var recommendedTimelineRequestId = 0
+    private var federationActionRequestId = 0
     private val recommendedImpressionNoteIds = mutableSetOf<String>()
 
     fun refreshPinnedUsersQuietly(force: Boolean = false) {
@@ -1452,6 +1453,7 @@ class DiscoverStateHolder(
         isSuspended: Boolean,
     ) {
         if (state.value.federationActionHost != null) return
+        val requestId = ++federationActionRequestId
         mutableState.update {
             it.copy(
                 federationActionHost = host,
@@ -1464,41 +1466,54 @@ class DiscoverStateHolder(
         scope.launch {
             when (val result = repository.updateFederationInstance(host, isSilenced, isSuspended)) {
                 DiscoverRepositoryResult.FederationActionSuccess -> {
-                    val current = state.value.findFederationInstance(host)
-                    val updated = current?.copy(
-                        isSilenced = isSilenced,
-                        isSuspended = isSuspended,
-                        isBlocked = if (isSuspended) current.isBlocked else false,
-                    )
-                    mutableState.update {
-                        it.copy(
+                    mutableState.update { currentState ->
+                        if (requestId != federationActionRequestId) return@update currentState
+                        val current = currentState.findFederationInstance(host)
+                        val updated = current?.copy(
+                            isSilenced = isSilenced,
+                            isSuspended = isSuspended,
+                            isBlocked = if (isSuspended) current.isBlocked else false,
+                        )
+                        val isSelectedHost = currentState.selectedFederationInstance?.host == host
+                        currentState.copy(
                             federationInstances = if (updated == null) {
-                                it.federationInstances
+                                currentState.federationInstances
                             } else {
-                                it.federationInstances.replaceFederationInstance(updated)
+                                currentState.federationInstances.replaceFederationInstance(updated)
                             },
-                            selectedFederationInstance = updated ?: it.selectedFederationInstance,
-                            federationActionHost = null,
-                            federationDetailMessage = "联邦设置已更新",
-                            requiresRelogin = false,
+                            selectedFederationInstance = if (isSelectedHost) {
+                                updated ?: currentState.selectedFederationInstance
+                            } else {
+                                currentState.selectedFederationInstance
+                            },
+                            federationActionHost = if (currentState.federationActionHost == host) null else currentState.federationActionHost,
+                            federationDetailMessage = if (isSelectedHost) "联邦设置已更新" else currentState.federationDetailMessage,
+                            requiresRelogin = if (isSelectedHost) false else currentState.requiresRelogin,
                         )
                     }
                 }
                 DiscoverRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != federationActionRequestId) return@update it
+                    val isSelectedHost = it.selectedFederationInstance?.host == host
                     it.copy(
-                        federationActionHost = null,
-                        federationDetailMessage = "登录已失效，请重新登录",
+                        federationActionHost = if (it.federationActionHost == host) null else it.federationActionHost,
+                        federationDetailMessage = if (isSelectedHost) "登录已失效，请重新登录" else it.federationDetailMessage,
                         requiresRelogin = true,
                     )
                 }
                 is DiscoverRepositoryResult.Error -> mutableState.update {
+                    if (requestId != federationActionRequestId) return@update it
+                    val isSelectedHost = it.selectedFederationInstance?.host == host
                     it.copy(
-                        federationActionHost = null,
-                        federationDetailMessage = result.message,
-                        requiresRelogin = false,
+                        federationActionHost = if (it.federationActionHost == host) null else it.federationActionHost,
+                        federationDetailMessage = if (isSelectedHost) result.message else it.federationDetailMessage,
+                        requiresRelogin = if (isSelectedHost) false else it.requiresRelogin,
                     )
                 }
-                else -> mutableState.update { it.copy(federationActionHost = null) }
+                else -> mutableState.update {
+                    if (requestId != federationActionRequestId) return@update it
+                    it.copy(federationActionHost = if (it.federationActionHost == host) null else it.federationActionHost)
+                }
             }
         }
     }

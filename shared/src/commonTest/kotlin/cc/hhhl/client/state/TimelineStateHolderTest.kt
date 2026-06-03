@@ -13,6 +13,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -209,6 +210,38 @@ class TimelineStateHolderTest {
     }
 
     @Test
+    fun refreshInvalidatesPendingLoadMoreForSameTimeline() = runTest {
+        val first = FakeData.timeline[0].copy(id = "first")
+        val staleMore = FakeData.timeline[1].copy(id = "stale-more")
+        val fresh = FakeData.timeline[2].copy(id = "fresh")
+        val pendingLoadMore = CompletableDeferred<TimelineRepositoryResult>()
+        val holder = TimelineStateHolder(
+            repository = loadMoreRaceRepository(
+                firstRefresh = TimelineRepositoryResult.Success(listOf(first)),
+                secondRefresh = TimelineRepositoryResult.Success(listOf(fresh)),
+                loadMoreResult = pendingLoadMore,
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh(TimelineKind.Home)
+        advanceUntilIdle()
+        holder.loadMore(TimelineKind.Home)
+        runCurrent()
+        assertTrue(holder.state.value.tabs.getValue(TimelineKind.Home).isLoadingMore)
+
+        holder.refresh(TimelineKind.Home)
+        assertFalse(holder.state.value.tabs.getValue(TimelineKind.Home).isLoadingMore)
+        pendingLoadMore.complete(TimelineRepositoryResult.Success(listOf(first, staleMore)))
+        advanceUntilIdle()
+
+        val tab = holder.state.value.tabs.getValue(TimelineKind.Home)
+        assertFalse(tab.isLoading)
+        assertFalse(tab.isLoadingMore)
+        assertEquals(listOf("fresh"), tab.notes.map { it.id })
+    }
+
+    @Test
     fun refreshQuietlyMarksNewNotesAbovePreviousReadPosition() = runTest {
         val oldNote = FakeData.timeline[0].copy(id = "old-note")
         val newNote = FakeData.timeline[1].copy(id = "new-note")
@@ -347,6 +380,57 @@ class TimelineStateHolderTest {
                 currentNotes: List<cc.hhhl.client.model.Note>,
             ): TimelineRepositoryResult {
                 return refreshResult
+            }
+        }
+    }
+
+    private fun loadMoreRaceRepository(
+        firstRefresh: TimelineRepositoryResult,
+        secondRefresh: TimelineRepositoryResult,
+        loadMoreResult: CompletableDeferred<TimelineRepositoryResult>,
+    ): TimelineRepository {
+        var refreshCount = 0
+        return object : TimelineRepository(
+            tokenProvider = { "token-123" },
+            api = object : cc.hhhl.client.api.TimelineApi {
+                override suspend fun loadTimeline(
+                    kind: TimelineKind,
+                    token: String,
+                    limit: Int,
+                    untilId: String?,
+                ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
+
+                override suspend fun loadMentions(
+                    token: String,
+                    limit: Int,
+                    untilId: String?,
+                ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
+
+                override suspend fun loadPollRecommendations(
+                    token: String,
+                    limit: Int,
+                    offset: Int,
+                    excludeChannels: Boolean,
+                    local: Boolean?,
+                    expired: Boolean,
+                ): TimelineLoadResult = TimelineLoadResult.Success(emptyList())
+            },
+        ) {
+            override suspend fun restore(kind: TimelineKind): TimelineRepositoryResult {
+                return TimelineRepositoryResult.Success(emptyList())
+            }
+
+            override suspend fun refresh(kind: TimelineKind): TimelineRepositoryResult {
+                val result = if (refreshCount == 0) firstRefresh else secondRefresh
+                refreshCount += 1
+                return result
+            }
+
+            override suspend fun loadMore(
+                kind: TimelineKind,
+                currentNotes: List<Note>,
+            ): TimelineRepositoryResult {
+                return loadMoreResult.await()
             }
         }
     }

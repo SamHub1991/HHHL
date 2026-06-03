@@ -301,10 +301,15 @@ class DriveFilesStateHolder(
     }
 
     fun selectTypeFilter(typeFilter: DriveFileTypeFilter) {
-        mutableState.update {
-            it.copy(
+        mutableState.update { current ->
+            val selectedFile = current.selectedFile?.takeIf { file -> file.matchesTypeFilter(typeFilter) }
+            current.copy(
                 typeFilter = typeFilter,
-                selectedFile = it.selectedFile?.takeIf { file -> file.matchesTypeFilter(typeFilter) },
+                selectedFile = selectedFile,
+                selectedFileDetails = current.selectedFileDetails
+                    ?.takeIf { details -> selectedFile?.id == details.file.id && details.file.matchesTypeFilter(typeFilter) },
+                isLoadingFileDetails = if (selectedFile == null) false else current.isLoadingFileDetails,
+                fileDetailsErrorMessage = if (selectedFile == null) null else current.fileDetailsErrorMessage,
                 errorMessage = null,
                 requiresRelogin = false,
             )

@@ -266,6 +266,43 @@ class FlashStateHolderTest {
         assertEquals(null, holder.state.value.selectedFlash)
     }
 
+    @Test
+    fun pendingDeleteDoesNotClearNewlyOpenedFlash() = runTest {
+        val deleteResult = CompletableDeferred<FlashActionRepositoryResult>()
+        val first = sampleFlash("flash-1")
+        val second = sampleFlash("flash-2")
+        val holder = FlashStateHolder(
+            repository = fakeRepository(
+                flashesResult = FlashesRepositoryResult.Success(listOf(first, second)),
+                flashResultProvider = { flashId ->
+                    FlashRepositoryResult.Success(if (flashId == first.id) first else second)
+                },
+                deleteActionResultProvider = { deleteResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshFlashes()
+        advanceUntilIdle()
+        holder.openFlash(first.id)
+        advanceUntilIdle()
+        holder.deleteSelectedFlash()
+        runCurrent()
+
+        assertTrue(holder.state.value.isDeletingFlash)
+
+        holder.openFlash(second.id)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedFlash)
+
+        deleteResult.complete(FlashActionRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isDeletingFlash)
+        assertEquals(second, holder.state.value.selectedFlash)
+        assertEquals(listOf(second), holder.state.value.flashes)
+    }
+
     private fun fakeRepository(
         flashesResult: FlashesRepositoryResult,
         flashResult: FlashRepositoryResult = FlashRepositoryResult.Success(sampleFlash("flash-1")),
@@ -278,6 +315,7 @@ class FlashStateHolderTest {
         onUpdateFlash: (String, FlashDraft) -> Unit = { _, _ -> },
         onDeleteFlash: (String) -> Unit = {},
         flashResultProvider: suspend (String) -> FlashRepositoryResult = { flashResult },
+        deleteActionResultProvider: suspend (String) -> FlashActionRepositoryResult = { actionResult },
     ): FlashRepository {
         return sequenceRepository(
             flashesResults = listOf(flashesResult),
@@ -291,6 +329,7 @@ class FlashStateHolderTest {
             onUpdateFlash = onUpdateFlash,
             onDeleteFlash = onDeleteFlash,
             flashResultProvider = flashResultProvider,
+            deleteActionResultProvider = deleteActionResultProvider,
         )
     }
 
@@ -306,6 +345,7 @@ class FlashStateHolderTest {
         onUpdateFlash: (String, FlashDraft) -> Unit = { _, _ -> },
         onDeleteFlash: (String) -> Unit = {},
         flashResultProvider: suspend (String) -> FlashRepositoryResult = { flashResult },
+        deleteActionResultProvider: suspend (String) -> FlashActionRepositoryResult = { actionResult },
     ): FlashRepository {
         var flashResultIndex = 0
         return object : FlashRepository(
@@ -402,7 +442,7 @@ class FlashStateHolderTest {
 
             override suspend fun deleteFlash(flashId: String): FlashActionRepositoryResult {
                 onDeleteFlash(flashId)
-                return actionResult
+                return deleteActionResultProvider(flashId)
             }
         }
     }

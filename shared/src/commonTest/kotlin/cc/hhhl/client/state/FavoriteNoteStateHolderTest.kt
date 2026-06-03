@@ -1,5 +1,7 @@
 package cc.hhhl.client.state
 
+import cc.hhhl.client.model.ChatMessage
+import cc.hhhl.client.model.User
 import cc.hhhl.client.repository.FavoriteNoteRepository
 import cc.hhhl.client.repository.FavoriteNotesRepositoryResult
 import cc.hhhl.client.repository.sampleFavoriteNote
@@ -7,9 +9,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -151,6 +155,67 @@ class FavoriteNoteStateHolderTest {
         assertEquals(1, holder.state.value.favorites.single().note.reactions.single { it.reaction == "👍" }.count)
     }
 
+    @Test
+    fun localFavoriteMessageChangeInvalidatesPendingRestore() = runTest {
+        val pendingRead = CompletableDeferred<List<FavoriteMessage>>()
+        val store = BlockingFavoriteMessageStore(readProvider = { pendingRead.await() })
+        val holder = FavoriteNoteStateHolder(
+            repository = fakeRepository(FavoriteNotesRepositoryResult.Success(emptyList())),
+            favoriteMessageStore = store,
+            accountIdProvider = { "account-1" },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.restoreFavoriteMessages(force = true)
+        runCurrent()
+        holder.addFavoriteMessage(
+            conversationType = FavoriteMessageConversationType.Room,
+            conversationId = "room-1",
+            conversationTitle = "Room",
+            message = sampleChatMessage("new-message"),
+        )
+
+        pendingRead.complete(listOf(sampleFavoriteMessage("old-message")))
+        advanceUntilIdle()
+
+        assertEquals(listOf("new-message"), holder.state.value.favoriteMessages.map { it.message.id })
+        assertFalse(holder.state.value.isLoadingFavoriteMessages)
+    }
+
+    @Test
+    fun staleFavoriteMessageSaveDoesNotOverwriteNewerSnapshot() = runTest {
+        val firstSaveCanFinish = CompletableDeferred<Unit>()
+        val store = BlockingFavoriteMessageStore(
+            saveGate = { saveIndex -> if (saveIndex == 1) firstSaveCanFinish.await() },
+        )
+        val holder = FavoriteNoteStateHolder(
+            repository = fakeRepository(FavoriteNotesRepositoryResult.Success(emptyList())),
+            favoriteMessageStore = store,
+            accountIdProvider = { "account-1" },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.addFavoriteMessage(
+            conversationType = FavoriteMessageConversationType.Room,
+            conversationId = "room-1",
+            conversationTitle = "Room",
+            message = sampleChatMessage("message-1"),
+        )
+        runCurrent()
+        holder.addFavoriteMessage(
+            conversationType = FavoriteMessageConversationType.Room,
+            conversationId = "room-1",
+            conversationTitle = "Room",
+            message = sampleChatMessage("message-2"),
+        )
+        runCurrent()
+
+        firstSaveCanFinish.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(listOf("message-2", "message-1"), store.savedMessages.map { it.message.id })
+    }
+
     private fun fakeRepository(
         result: FavoriteNotesRepositoryResult,
         loadMoreResult: FavoriteNotesRepositoryResult = result,
@@ -201,5 +266,48 @@ class FavoriteNoteStateHolderTest {
                 return results.last()
             }
         }
+    }
+
+    private class BlockingFavoriteMessageStore(
+        private val readProvider: suspend (String) -> List<FavoriteMessage> = { emptyList() },
+        private val saveGate: suspend (Int) -> Unit = {},
+    ) : FavoriteMessageStore {
+        private var saveCount = 0
+        var savedMessages: List<FavoriteMessage> = emptyList()
+            private set
+
+        override suspend fun read(accountId: String): List<FavoriteMessage> {
+            return readProvider(accountId)
+        }
+
+        override suspend fun save(accountId: String, messages: List<FavoriteMessage>) {
+            saveCount += 1
+            saveGate(saveCount)
+            savedMessages = messages
+        }
+
+        override suspend fun clearAccount(accountId: String) = Unit
+    }
+
+    private fun sampleFavoriteMessage(messageId: String): FavoriteMessage {
+        return FavoriteMessage(
+            id = favoriteMessageId("account-1", FavoriteMessageConversationType.Room, "room-1", messageId),
+            accountId = "account-1",
+            conversationType = FavoriteMessageConversationType.Room,
+            conversationId = "room-1",
+            conversationTitle = "Room",
+            message = sampleChatMessage(messageId),
+            savedAtEpochMillis = 1,
+        )
+    }
+
+    private fun sampleChatMessage(messageId: String): ChatMessage {
+        return ChatMessage(
+            id = messageId,
+            roomId = "room-1",
+            fromUser = User("user-1", "Alice", "alice", "A"),
+            text = messageId,
+            createdAtLabel = "now",
+        )
     }
 }

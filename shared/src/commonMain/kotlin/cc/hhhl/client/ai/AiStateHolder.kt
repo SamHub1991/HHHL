@@ -17,6 +17,7 @@ class AiStateHolder(
     private val mutableState = MutableStateFlow(AiUiState())
     val state: StateFlow<AiUiState> = mutableState
     private var nextLocalId = 0
+    private var connectionTestRequestId = 0
 
     fun restore() {
         val snapshot = runCatching { store.read(cleanAccountId()) }.getOrDefault(AiSnapshot())
@@ -38,9 +39,11 @@ class AiStateHolder(
     }
 
     fun updateSettings(settings: AiSettings) {
+        connectionTestRequestId += 1
         mutableState.update {
             it.copy(
                 settings = settings.cleaned(),
+                isTestingConnection = false,
                 message = "AI 设置已保存",
                 errorMessage = null,
             )
@@ -65,18 +68,22 @@ class AiStateHolder(
 
     fun testConnection() {
         if (state.value.isTestingConnection) return
+        val requestId = ++connectionTestRequestId
+        val settings = state.value.settings.copy(enabled = true).cleaned()
         mutableState.update { it.copy(isTestingConnection = true, errorMessage = null, message = "正在测试 AI 连接") }
         scope.launch {
-            val settings = state.value.settings.copy(enabled = true)
             val prompt = AiPromptBuilder.build(settings, AiTaskKind.ConnectionTest, AiTaskInput())
             when (val result = repository.complete(settings, prompt, model = settings.modelForTask(AiTaskKind.ConnectionTest))) {
                 is AiRepositoryResult.Success -> mutableState.update {
+                    if (!isCurrentConnectionTest(requestId, settings)) return@update it
                     it.copy(isTestingConnection = false, message = "AI 连接正常：${result.text.take(40)}", errorMessage = null)
                 }
                 AiRepositoryResult.Unauthorized -> mutableState.update {
+                    if (!isCurrentConnectionTest(requestId, settings)) return@update it
                     it.copy(isTestingConnection = false, message = null, errorMessage = "AI API Key 无效或权限不足")
                 }
                 is AiRepositoryResult.Error -> mutableState.update {
+                    if (!isCurrentConnectionTest(requestId, settings)) return@update it
                     it.copy(isTestingConnection = false, message = null, errorMessage = result.message)
                 }
             }
@@ -342,6 +349,13 @@ class AiStateHolder(
     private fun nextId(prefix: String): String {
         nextLocalId += 1
         return "$prefix-${nowMillis()}-$nextLocalId"
+    }
+
+    private fun isCurrentConnectionTest(
+        requestId: Int,
+        settings: AiSettings,
+    ): Boolean {
+        return requestId == connectionTestRequestId && state.value.settings.copy(enabled = true).cleaned() == settings
     }
 
     private fun nowMillis(): Long = Clock.System.now().toEpochMilliseconds()

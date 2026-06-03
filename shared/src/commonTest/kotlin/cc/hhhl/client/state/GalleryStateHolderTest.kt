@@ -252,6 +252,43 @@ class GalleryStateHolderTest {
         assertEquals(listOf(created), holder.state.value.posts)
     }
 
+    @Test
+    fun pendingDeleteDoesNotClearNewlyOpenedPost() = runTest {
+        val deleteResult = CompletableDeferred<GalleryActionRepositoryResult>()
+        val first = sampleGalleryPost("gallery-1")
+        val second = sampleGalleryPost("gallery-2")
+        val holder = GalleryStateHolder(
+            repository = fakeRepository(
+                postsResult = GalleryPostsRepositoryResult.Success(listOf(first, second)),
+                postResultProvider = { postId ->
+                    GalleryPostRepositoryResult.Success(if (postId == first.id) first else second)
+                },
+                deleteActionResultProvider = { deleteResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshPosts()
+        advanceUntilIdle()
+        holder.openPost(first.id)
+        advanceUntilIdle()
+        holder.deleteSelectedPost()
+        runCurrent()
+
+        assertTrue(holder.state.value.isMutatingPost)
+
+        holder.openPost(second.id)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedPost)
+
+        deleteResult.complete(GalleryActionRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMutatingPost)
+        assertEquals(second, holder.state.value.selectedPost)
+        assertEquals(listOf(second), holder.state.value.posts)
+    }
+
     private fun fakeRepository(
         postsResult: GalleryPostsRepositoryResult,
         postResult: GalleryPostRepositoryResult = GalleryPostRepositoryResult.Success(sampleGalleryPost("gallery-1")),
@@ -260,7 +297,9 @@ class GalleryStateHolderTest {
         onShowPost: (String) -> Unit = {},
         onLikePost: (String) -> Unit = {},
         onUnlikePost: (String) -> Unit = {},
+        onDeletePost: (String) -> Unit = {},
         postResultProvider: suspend (String) -> GalleryPostRepositoryResult = { postResult },
+        deleteActionResultProvider: suspend (String) -> GalleryActionRepositoryResult = { actionResult },
     ): GalleryRepository {
         return sequenceRepository(
             postsResults = listOf(postsResult),
@@ -270,7 +309,9 @@ class GalleryStateHolderTest {
             onShowPost = onShowPost,
             onLikePost = onLikePost,
             onUnlikePost = onUnlikePost,
+            onDeletePost = onDeletePost,
             postResultProvider = postResultProvider,
+            deleteActionResultProvider = deleteActionResultProvider,
         )
     }
 
@@ -282,7 +323,9 @@ class GalleryStateHolderTest {
         onShowPost: (String) -> Unit = {},
         onLikePost: (String) -> Unit = {},
         onUnlikePost: (String) -> Unit = {},
+        onDeletePost: (String) -> Unit = {},
         postResultProvider: suspend (String) -> GalleryPostRepositoryResult = { postResult },
+        deleteActionResultProvider: suspend (String) -> GalleryActionRepositoryResult = { actionResult },
     ): GalleryRepository {
         var postResultIndex = 0
         return object : GalleryRepository(
@@ -361,6 +404,11 @@ class GalleryStateHolderTest {
             override suspend fun unlikePost(postId: String): GalleryActionRepositoryResult {
                 onUnlikePost(postId)
                 return actionResult
+            }
+
+            override suspend fun deletePost(postId: String): GalleryActionRepositoryResult {
+                onDeletePost(postId)
+                return deleteActionResultProvider(postId)
             }
         }
     }

@@ -510,8 +510,10 @@ class NotificationStateHolder(
     }
 
     fun updateSpecialCareUsers(userIds: Set<String>) {
-        specialCareUserIds = userIds.cleanUserIds()
-        syncRemoteSpecialCareNotifications()
+        val cleanUserIds = userIds.cleanUserIds()
+        if (specialCareUserIds == cleanUserIds) return
+        specialCareUserIds = cleanUserIds
+        syncRemoteSpecialCareNotifications(pruneExisting = true)
     }
 
     private fun applyResult(
@@ -663,10 +665,17 @@ class NotificationStateHolder(
         )
     }
 
-    private fun syncRemoteSpecialCareNotifications(updateState: Boolean = true) {
-        if (specialCareUserIds.isEmpty() || remoteNotifications.isEmpty()) return
+    private fun syncRemoteSpecialCareNotifications(
+        updateState: Boolean = true,
+        pruneExisting: Boolean = false,
+    ) {
+        val currentSpecialCareNotifications = if (pruneExisting) {
+            specialCareNotifications.filter { notification -> notification.actor.id in specialCareUserIds }
+        } else {
+            specialCareNotifications
+        }
         val syncedNotifications = mergeRemoteSpecialCareNotifications(
-            current = specialCareNotifications,
+            current = currentSpecialCareNotifications,
             remote = remoteNotifications,
             specialCareUserIds = specialCareUserIds,
             limit = MAX_LOCAL_SPECIAL_CARE_NOTIFICATIONS,

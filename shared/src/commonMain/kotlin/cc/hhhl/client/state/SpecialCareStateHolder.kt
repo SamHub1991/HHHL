@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.update
 
 data class SpecialCareUiState(
     val userIds: Set<String> = emptySet(),
+    val isRestored: Boolean = false,
 )
 
 interface SpecialCareStore {
@@ -41,7 +42,7 @@ class SpecialCareStateHolder(
         val restoredUserIds = runCatching { store.loadUserIds(accountId).cleanUserIds() }
             .getOrDefault(emptySet())
 
-        mutableState.update { it.copy(userIds = restoredUserIds) }
+        mutableState.update { it.copy(userIds = restoredUserIds, isRestored = true) }
     }
 
     fun isSpecialCare(userId: String): Boolean {
@@ -58,7 +59,7 @@ class SpecialCareStateHolder(
             state.value.userIds + cleanUserId
         }
         runCatching { store.saveUserIds(accountId, nextUserIds) }
-        mutableState.update { it.copy(userIds = nextUserIds) }
+        mutableState.update { it.copy(userIds = nextUserIds, isRestored = true) }
         return cleanUserId in nextUserIds
     }
 

@@ -602,6 +602,51 @@ class NotificationStateHolderTest {
     }
 
     @Test
+    fun updateSpecialCareUsersRemovesNotificationsForUntrackedUsers() = runTest {
+        val first = FakeData.notifications[0].copy(id = "special-removed", createdAtEpochMillis = 1_000L)
+        val second = FakeData.notifications[1].copy(id = "special-kept", createdAtEpochMillis = 2_000L)
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(NotificationRepositoryResult.Success(listOf(first, second))),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateSpecialCareUsers(setOf(first.actor.id, second.actor.id))
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFilter(NotificationFilter.SpecialCare)
+
+        assertEquals(listOf("special-kept", "special-removed"), holder.state.value.notifications.map { it.id })
+
+        holder.updateSpecialCareUsers(setOf(second.actor.id))
+
+        assertEquals(listOf("special-kept"), holder.state.value.notifications.map { it.id })
+        assertEquals(1, holder.state.value.specialCareNotificationCount)
+        assertEquals(1, holder.state.value.specialCareUnreadCount)
+        assertEquals(2, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun updateSpecialCareUsersClearsSpecialCareNotificationsWhenNoUsersRemain() = runTest {
+        val first = FakeData.notifications[0].copy(id = "special-cleared")
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(NotificationRepositoryResult.Success(listOf(first))),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateSpecialCareUsers(setOf(first.actor.id))
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFilter(NotificationFilter.SpecialCare)
+
+        holder.updateSpecialCareUsers(emptySet())
+
+        assertEquals(emptyList(), holder.state.value.notifications)
+        assertEquals(0, holder.state.value.specialCareNotificationCount)
+        assertEquals(0, holder.state.value.specialCareUnreadCount)
+        assertEquals(1, holder.state.value.unreadCount)
+    }
+
+    @Test
     fun mergeRemoteSpecialCareNotificationsKeepsExistingLocalItemsAndMarksRemoteItems() {
         val specialCareUser = FakeData.notifications[0].actor
         val remote = FakeData.notifications[0].copy(id = "remote-special-3", actor = specialCareUser)

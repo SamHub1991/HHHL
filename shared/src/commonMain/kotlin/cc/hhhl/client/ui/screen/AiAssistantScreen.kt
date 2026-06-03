@@ -528,9 +528,7 @@ private fun AiAssistantMessageBubble(
     onRejectAction: (String) -> Unit,
     onOpenAttachmentUrl: (String) -> Unit,
 ) {
-    val colors = LocalHhhlColors.current
     val isUser = message.role == AiAssistantRole.User
-    val isFailed = message.status == AiAssistantMessageStatus.Failed
     var streamingFrame by remember(message.id) { mutableStateOf(0) }
     LaunchedEffect(message.id, message.status) {
         if (message.status != AiAssistantMessageStatus.Sending) return@LaunchedEffect
@@ -539,29 +537,69 @@ private fun AiAssistantMessageBubble(
             streamingFrame = (streamingFrame + 1) % AI_ASSISTANT_STREAMING_FRAMES
         }
     }
-    val displayText = if (message.status == AiAssistantMessageStatus.Sending) {
-        aiAssistantStreamingText(streamingFrame)
+    val displayParts = if (message.status == AiAssistantMessageStatus.Sending) {
+        aiAssistantStreamingBubbles(streamingFrame)
     } else {
-        message.text
+        aiAssistantDisplayBubbles(message.text)
     }
     val alignment = if (isUser) Arrangement.End else Arrangement.Start
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = alignment,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .widthIn(max = 560.dp)
-                .clip(RoundedCornerShape(13.dp))
-                .background(aiAssistantBubbleColor(message, colors.buttonSelectedBackground, colors.inputBackground, colors.danger))
-                .border(
-                    width = 1.dp,
-                    color = if (isFailed) colors.danger.copy(alpha = 0.26f) else colors.border.copy(alpha = 0.26f),
-                    shape = RoundedCornerShape(13.dp),
+        displayParts.forEachIndexed { index, part ->
+            val isLastPart = index == displayParts.lastIndex
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = alignment,
+            ) {
+                AiAssistantMessageBubbleSurface(
+                    message = message,
+                    text = part,
+                    showHeader = index == 0,
+                    showAttachments = isLastPart,
+                    showRetry = isLastPart,
+                    showActions = isLastPart,
+                    onRetry = onRetry,
+                    onApproveAction = onApproveAction,
+                    onRejectAction = onRejectAction,
+                    onOpenAttachmentUrl = onOpenAttachmentUrl,
                 )
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiAssistantMessageBubbleSurface(
+    message: AiAssistantMessage,
+    text: String,
+    showHeader: Boolean,
+    showAttachments: Boolean,
+    showRetry: Boolean,
+    showActions: Boolean,
+    onRetry: (String, List<DriveFile>) -> Unit,
+    onApproveAction: (String) -> Unit,
+    onRejectAction: (String) -> Unit,
+    onOpenAttachmentUrl: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val isUser = message.role == AiAssistantRole.User
+    val isFailed = message.status == AiAssistantMessageStatus.Failed
+    Column(
+        modifier = Modifier
+            .widthIn(max = 560.dp)
+            .clip(RoundedCornerShape(13.dp))
+            .background(aiAssistantBubbleColor(message, colors.buttonSelectedBackground, colors.inputBackground, colors.danger))
+            .border(
+                width = 1.dp,
+                color = if (isFailed) colors.danger.copy(alpha = 0.26f) else colors.border.copy(alpha = 0.26f),
+                shape = RoundedCornerShape(13.dp),
+            )
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (showHeader) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -588,25 +626,27 @@ private fun AiAssistantMessageBubble(
                     )
                 }
             }
-            InlineRichText(
-                text = displayText,
-                color = if (isFailed) colors.danger else colors.textPrimary,
-                style = MaterialTheme.typography.bodyMedium,
+        }
+        InlineRichText(
+            text = text,
+            color = if (isFailed) colors.danger else colors.textPrimary,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (showAttachments && message.attachments.isNotEmpty()) {
+            AiAssistantAttachmentGrid(
+                attachments = message.attachments,
+                onRemoveAttachment = null,
+                onOpenAttachmentUrl = onOpenAttachmentUrl,
             )
-            if (message.attachments.isNotEmpty()) {
-                AiAssistantAttachmentGrid(
-                    attachments = message.attachments,
-                    onRemoveAttachment = null,
-                    onOpenAttachmentUrl = onOpenAttachmentUrl,
-                )
-            }
-            if (isFailed && message.retryPrompt.isNotBlank()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    HhhlTextButton(onClick = { onRetry(message.retryPrompt, message.retryAttachments) }) {
-                        Text("重试")
-                    }
+        }
+        if (showRetry && isFailed && message.retryPrompt.isNotBlank()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HhhlTextButton(onClick = { onRetry(message.retryPrompt, message.retryAttachments) }) {
+                    Text("重试")
                 }
             }
+        }
+        if (showActions) {
             message.actions.forEach { action ->
                 AiAssistantActionCard(
                     action = action,
@@ -880,15 +920,23 @@ private fun aiAssistantBubbleColor(
 }
 
 private const val AI_ASSISTANT_STREAMING_FRAMES = 4
+private const val AI_ASSISTANT_MAX_DISPLAY_BUBBLES = 6
 
 fun aiAssistantStreamingText(frame: Int): String {
+    return aiAssistantStreamingBubbles(frame).joinToString("\n\n")
+}
+
+fun aiAssistantStreamingBubbles(frame: Int): List<String> {
     val phase = when (frame.floorMod(AI_ASSISTANT_STREAMING_FRAMES)) {
         0 -> "正在读取当前上下文"
         1 -> "正在匹配可用工具"
         2 -> "正在生成回复草稿"
         else -> "正在准备需确认动作"
     }
-    return "$phase${".".repeat(frame.floorMod(AI_ASSISTANT_STREAMING_FRAMES))}\n▌"
+    return listOf(
+        "$phase${".".repeat(frame.floorMod(AI_ASSISTANT_STREAMING_FRAMES))}",
+        "▌",
+    )
 }
 
 private fun Int.floorMod(mod: Int): Int {
@@ -1069,6 +1117,25 @@ data class AiAssistantStructuredPayload(
             .filter { it.isNotBlank() }
             .joinToString("\n")
     }
+
+    fun actionIntentText(): String {
+        return listOf(
+            targetRoom,
+            targetUser,
+            mentions.joinToString("\n"),
+            channel,
+            visibility,
+            contentWarning,
+            localOnly,
+            searchQuery,
+            automationGoal,
+            mutedWord,
+            memory,
+            checklist,
+        )
+            .filter { it.isNotBlank() }
+            .joinToString("\n")
+    }
 }
 
 data class AiAssistantActionPayload(
@@ -1111,7 +1178,62 @@ private val AiAssistantDraftWrapperRegex = Regex(
 private val AiAssistantFenceRegex = Regex("""```(?:([A-Za-z0-9_-]+)\s*)?([\s\S]*?)```""")
 private val AiAssistantQuotedWholeRegex = Regex("^[\\s`\"'“”‘’「」『』]+([\\s\\S]*?)[\\s`\"'“”‘’「」『』]+$")
 private val AiAssistantPayloadFenceRegex = Regex("""```hhhl-assistant-payload\s*([\s\S]*?)```""", RegexOption.IGNORE_CASE)
+private val AiAssistantOpenPayloadFenceRegex = Regex("""```hhhl-assistant-payload\s*([\s\S]*)$""", RegexOption.IGNORE_CASE)
+private val AiAssistantOpenJsonFenceRegex = Regex("""```json\s*([\s\S]*)$""", RegexOption.IGNORE_CASE)
 private val AiAssistantPayloadLineRegex = Regex("""(?m)^hhhlAssistant\.payload\s*[:：]\s*(\{[\s\S]*\})\s*$""", RegexOption.IGNORE_CASE)
+private val AiAssistantLoosePayloadLineRegex = Regex("""(?m)^\s*(?:payload|actionPayload|动作参数|操作参数)\s*[:：]\s*(\{[\s\S]*\})\s*$""", RegexOption.IGNORE_CASE)
+private val AiAssistantDisplayLabelLineRegex = Regex("""^\s*(?:visibleText|displayText|answer|reply|message|回复|回答|说明)\s*[:：]\s*(.*)$""", RegexOption.IGNORE_CASE)
+private const val AiAssistantExplicitActionVerbPattern =
+    "打开|进入|创建|新建|生成|设计|发送|发布|删除|清空|退出|刷新|检查|搜索|保存|添加|复制|填入|发帖|执行|继续|确认|批准|标记|清除|启用|禁用|关闭|静音|取消静音|点赞|收藏|转发|关注|屏蔽|拉黑"
+private val AiAssistantDiscussionPromptRegex = Regex(
+    "你能做什么|有什么功能|介绍.*(?:功能|能力)|(?:怎么|如何)使用|使用说明|你会什么|普通聊天|闲聊|能力介绍|功能介绍|^\\s*(?:解释|说明|介绍|讲讲|分析|什么是|为什么|为何|如何|怎么|请问|问一下|咨询一下|我想了解|想了解|你觉得|怎么看|聊聊|讨论)|是什么|是啥|什么意思|有什么用|用来干嘛|怎么回事|有什么风险|风险|危险吗|安全吗|后果|影响|原理|逻辑|流程|用法|例子|案例|区别|会不会|是不是|是否",
+    RegexOption.IGNORE_CASE,
+)
+private val AiAssistantDiscussionRequestPrefixRegex = Regex(
+    "^\\s*(?:帮我|请\\s*(?:帮我)?|麻烦\\s*(?:帮我)?)\\s*(?:解释|说明|介绍|讲讲|分析|评价|判断)",
+    RegexOption.IGNORE_CASE,
+)
+private val AiAssistantBugDiscussionRegex = Regex(
+    "有问题|不对|异常|报错|错误|\\bbug\\b|误触发|没反应|显示.*(?:问题|异常|错误|不对)|渲染.*(?:问题|异常|错误|不对)|格式.*(?:问题|异常|错误|不对)",
+    RegexOption.IGNORE_CASE,
+)
+private val AiAssistantStrongActionPrefixRegex = Regex(
+    "^\\s*(?:" +
+        "(?:直接|马上|立刻|现在)\\s*(?:$AiAssistantExplicitActionVerbPattern)|" +
+        "(?:帮我|替我|给我|为我)\\s*(?:$AiAssistantExplicitActionVerbPattern)|" +
+        "请\\s*(?:帮我|替我|给我|为我|你)?\\s*(?:$AiAssistantExplicitActionVerbPattern)|" +
+        "麻烦\\s*(?:帮我|替我|给我|为我|你)?\\s*(?:$AiAssistantExplicitActionVerbPattern)|" +
+        "(?:请问|问一下)?\\s*(?:能不能|可以|可不可以|能否|是否可以|可否)\\s*(?:帮我|替我|给我|为我)\\s*(?:$AiAssistantExplicitActionVerbPattern)" +
+        ")",
+    RegexOption.IGNORE_CASE,
+)
+private val AiAssistantActionContinuationPromptRegex = Regex(
+    "^\\s*(?:执行|继续|确认|批准|同意|可以|好的?|行|嗯|开始|去做|照做|就这样|按这个来|apply|confirm|ok)\\s*[。.!！]?$",
+    RegexOption.IGNORE_CASE,
+)
+private val AiAssistantNegatedActionIntentRegex = Regex("不会|不能|不要|别|无需|不需要|不应|不该|不会直接|不能直接|不要直接|不建议|避免|只是说明|仅说明", RegexOption.IGNORE_CASE)
+private val AiAssistantJsonDisplayKeys = listOf(
+    "visibleText",
+    "displayText",
+    "answer",
+    "reply",
+    "message",
+    "text",
+    "content",
+    "summary",
+    "说明",
+    "回复",
+)
+private val AiAssistantJsonDisplayOnlyKeys = setOf(
+    "visibleText",
+    "displayText",
+    "answer",
+    "reply",
+    "message",
+    "summary",
+    "说明",
+    "回复",
+)
 
 fun aiAssistantSuggestedActions(
     prompt: String,
@@ -1121,6 +1243,7 @@ fun aiAssistantSuggestedActions(
     val cleanPrompt = prompt.trim()
     val structuredReply = aiAssistantStructuredReply(reply)
     val cleanReply = structuredReply.visibleText.trim()
+    if (cleanPrompt.isAiAssistantPlainDiscussionPrompt()) return emptyList()
     val payload = structuredReply.payload.copy(
         targetRoom = structuredReply.payload.targetRoom.ifBlank {
             aiAssistantTargetRoomCandidate(cleanPrompt)
@@ -1135,7 +1258,10 @@ fun aiAssistantSuggestedActions(
             aiAssistantTargetChannelCandidate(cleanPrompt)
         },
     )
-    val source = listOf(cleanPrompt, cleanReply, payload.intentText())
+    val replyActionSource = cleanReply.takeIf {
+        cleanPrompt.isAiAssistantActionContinuationPrompt() && !cleanReply.hasAiAssistantNegatedActionIntent()
+    }.orEmpty()
+    val source = listOf(cleanPrompt, replyActionSource, payload.actionIntentText())
         .filter { it.isNotBlank() }
         .joinToString("\n")
     val actions = mutableListOf<AiAssistantActionProposal>()
@@ -1566,40 +1692,291 @@ fun aiAssistantSuggestedActions(
 fun aiAssistantStructuredReply(text: String): AiAssistantStructuredReply {
     val raw = text.trim()
     if (raw.isBlank()) return AiAssistantStructuredReply(visibleText = "")
-    val fenceMatch = AiAssistantPayloadFenceRegex.find(raw)
-    val lineMatch = if (fenceMatch == null) AiAssistantPayloadLineRegex.find(raw) else null
-    val jsonText = fenceMatch?.groupValues?.getOrNull(1)
-        ?: lineMatch?.groupValues?.getOrNull(1)
-    val visibleText = when {
-        fenceMatch != null -> raw.removeRange(fenceMatch.range).trim()
-        lineMatch != null -> raw.removeRange(lineMatch.range).trim()
-        else -> raw
+    aiAssistantJsonReply(raw)?.let { return it }
+
+    var payload = AiAssistantStructuredPayload()
+    val visibleCandidates = mutableListOf<String>()
+    val hiddenRanges = mutableListOf<IntRange>()
+
+    fun hide(range: IntRange) {
+        if (hiddenRanges.none { it.first <= range.last && range.first <= it.last }) {
+            hiddenRanges += range
+        }
+    }
+
+    fun collectPayload(jsonText: String, range: IntRange) {
+        aiAssistantPayloadFromJson(jsonText)?.takeIf { it.hasAny }?.let { parsed ->
+            payload = payload.mergeAiAssistantPayload(parsed)
+            hide(range)
+        }
+    }
+
+    fun collectStructuredJson(jsonText: String, range: IntRange) {
+        aiAssistantJsonReply(jsonText)?.let { parsed ->
+            payload = payload.mergeAiAssistantPayload(parsed.payload)
+            parsed.visibleText.trim().takeIf { it.isNotBlank() }?.let(visibleCandidates::add)
+            hide(range)
+        }
+    }
+
+    AiAssistantPayloadFenceRegex.findAll(raw).forEach { match ->
+        collectPayload(match.groupValues.getOrNull(1).orEmpty(), match.range)
+    }
+    if (hiddenRanges.isEmpty()) {
+        AiAssistantOpenPayloadFenceRegex.find(raw)?.let { match ->
+            collectPayload(match.groupValues.getOrNull(1).orEmpty(), match.range)
+        }
+    }
+    sequenceOf(AiAssistantPayloadLineRegex, AiAssistantLoosePayloadLineRegex).forEach { regex ->
+        regex.find(raw)?.let { match ->
+            collectPayload(match.groupValues.getOrNull(1).orEmpty(), match.range)
+        }
+    }
+    AiAssistantFenceRegex.findAll(raw).forEach { match ->
+        val language = match.groupValues.getOrNull(1).orEmpty()
+        if (language.equals("hhhl-assistant-payload", ignoreCase = true)) return@forEach
+        val body = match.groupValues.getOrNull(2).orEmpty().trim()
+        if (language.equals("json", ignoreCase = true) || (language.isBlank() && body.aiAssistantLooksLikeJson())) {
+            collectStructuredJson(body, match.range)
+        }
+    }
+    AiAssistantOpenJsonFenceRegex.find(raw)?.let { match ->
+        collectStructuredJson(match.groupValues.getOrNull(1).orEmpty().trim(), match.range)
+    }
+
+    val visibleText = raw
+        .removeAiAssistantRanges(hiddenRanges)
+        .aiAssistantNormalizeDisplayText()
+    val structuredVisible = visibleCandidates
+        .map { it.aiAssistantNormalizeDisplayText() }
+        .filter { it.isNotBlank() && it != visibleText }
+        .distinct()
+        .joinToString("\n\n")
+    val finalVisible = when {
+        visibleText.isNotBlank() && structuredVisible.isNotBlank() -> "$visibleText\n\n$structuredVisible"
+        visibleText.isNotBlank() -> visibleText
+        structuredVisible.isNotBlank() -> structuredVisible
+        payload.body.isNotBlank() -> payload.body
+        else -> raw.aiAssistantNormalizeDisplayText()
     }
     return AiAssistantStructuredReply(
-        visibleText = visibleText,
-        payload = jsonText?.let(::aiAssistantPayloadFromJson).takeIf { it?.hasAny == true }
-            ?: AiAssistantStructuredPayload(),
+        visibleText = finalVisible,
+        payload = payload,
     )
+}
+
+fun aiAssistantDisplayBubbles(text: String): List<String> {
+    val visible = aiAssistantStructuredReply(text).visibleText
+        .replace("\r\n", "\n")
+        .trim()
+    if (visible.isBlank()) return listOf("")
+    val blocks = visible.aiAssistantSplitDisplayBlocks()
+    if (blocks.size <= AI_ASSISTANT_MAX_DISPLAY_BUBBLES) return blocks
+    return blocks.take(AI_ASSISTANT_MAX_DISPLAY_BUBBLES - 1) +
+        blocks.drop(AI_ASSISTANT_MAX_DISPLAY_BUBBLES - 1).joinToString("\n\n")
+}
+
+private fun aiAssistantJsonReply(raw: String): AiAssistantStructuredReply? {
+    val jsonText = raw.aiAssistantWholeJsonText() ?: return null
+    val root = runCatching { AiAssistantJson.parseToJsonElement(jsonText) }.getOrNull()
+        ?: return null
+    val payload = aiAssistantPayloadFromJson(jsonText).takeIf { it?.hasAny == true }
+        ?: AiAssistantStructuredPayload()
+    val visible = root.aiAssistantJsonVisibleText()
+        .ifBlank { payload.body }
+        .trim()
+    if (visible.isBlank() && !payload.hasAny) return null
+    return AiAssistantStructuredReply(
+        visibleText = visible.ifBlank { raw },
+        payload = payload,
+    )
+}
+
+private fun String.aiAssistantWholeJsonText(): String? {
+    val clean = trim()
+    if (clean.aiAssistantLooksLikeJson()) return clean
+    val fence = AiAssistantFenceRegex.matchEntire(clean) ?: return null
+    val language = fence.groupValues.getOrNull(1).orEmpty()
+    val body = fence.groupValues.getOrNull(2).orEmpty().trim()
+    return body.takeIf {
+        language.equals("json", ignoreCase = true) && it.aiAssistantLooksLikeJson()
+    }
+}
+
+private fun String.aiAssistantLooksLikeJson(): Boolean {
+    val clean = trim()
+    return (clean.startsWith("{") && clean.endsWith("}")) ||
+        (clean.startsWith("[") && clean.endsWith("]"))
+}
+
+private fun JsonElement.aiAssistantJsonVisibleText(depth: Int = 0): String {
+    if (depth > 5) return ""
+    return when (this) {
+        is JsonArray -> map { item -> item.aiAssistantJsonVisibleText(depth + 1) }
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+            .ifBlank { toDisplayText() }
+        is JsonObject -> aiAssistantJsonVisibleText(depth)
+        else -> ""
+    }
+}
+
+private fun JsonObject.aiAssistantJsonVisibleText(depth: Int = 0): String {
+    AiAssistantJsonDisplayKeys.forEach { key ->
+        this[key]?.toDisplayText()?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+    }
+    val payload = this["payload"] as? JsonObject
+    if (payload != null) {
+        AiAssistantJsonDisplayKeys.forEach { key ->
+            payload[key]?.toDisplayText()?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+    }
+    val data = this["data"] as? JsonObject
+    if (data != null) {
+        AiAssistantJsonDisplayKeys.forEach { key ->
+            data[key]?.toDisplayText()?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+    }
+    listOf("choices", "output", "messages", "items", "result", "response", "data", "payload").forEach { key ->
+        this[key]?.aiAssistantJsonVisibleText(depth + 1)?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+    }
+    values.forEach { child ->
+        child.aiAssistantJsonVisibleText(depth + 1).trim().takeIf { it.isNotBlank() }?.let { return it }
+    }
+    return ""
+}
+
+private fun String.aiAssistantSplitDisplayBlocks(): List<String> {
+    val blocks = mutableListOf<String>()
+    val current = StringBuilder()
+    var inFence = false
+
+    fun flush() {
+        val block = current.toString().trim()
+        if (block.isNotBlank()) blocks += block
+        current.clear()
+    }
+
+    lineSequence().forEach { line ->
+        val trimmed = line.trimStart()
+        val fenceLine = trimmed.startsWith("```")
+        if (!inFence && line.isBlank()) {
+            flush()
+            return@forEach
+        }
+        if (current.isNotEmpty()) current.append('\n')
+        current.append(line)
+        if (fenceLine) inFence = !inFence
+    }
+    flush()
+    return blocks.ifEmpty { listOf(trim()) }
+}
+
+private fun String.isAiAssistantPlainDiscussionPrompt(): Boolean {
+    val clean = trim()
+    if (clean.isBlank()) return false
+    if (AiAssistantStrongActionPrefixRegex.containsMatchIn(clean)) return false
+    return AiAssistantBugDiscussionRegex.containsMatchIn(clean) ||
+        AiAssistantDiscussionRequestPrefixRegex.containsMatchIn(clean) ||
+        AiAssistantDiscussionPromptRegex.containsMatchIn(clean)
+}
+
+private fun String.isAiAssistantActionContinuationPrompt(): Boolean {
+    return AiAssistantActionContinuationPromptRegex.matches(trim())
+}
+
+private fun String.hasAiAssistantNegatedActionIntent(): Boolean {
+    return AiAssistantNegatedActionIntentRegex.containsMatchIn(this)
 }
 
 private fun aiAssistantPayloadFromJson(jsonText: String): AiAssistantStructuredPayload? {
     val root = runCatching { AiAssistantJson.parseToJsonElement(jsonText.trim()) }.getOrNull()
         ?: return null
+    val payloadRoot = (root as? JsonObject)?.aiAssistantPayloadRoot() ?: root
     return AiAssistantStructuredPayload(
-        body = root.structuredValue(AiAssistantPayloadField.Body),
-        targetRoom = root.structuredValue(AiAssistantPayloadField.TargetRoom),
-        targetUser = root.structuredValue(AiAssistantPayloadField.TargetUser),
-        mentions = root.structuredList(AiAssistantPayloadField.Mentions),
-        channel = root.structuredValue(AiAssistantPayloadField.Channel),
-        visibility = root.structuredValue(AiAssistantPayloadField.Visibility),
-        contentWarning = root.structuredValue(AiAssistantPayloadField.ContentWarning),
-        localOnly = root.structuredValue(AiAssistantPayloadField.LocalOnly),
-        searchQuery = root.structuredValue(AiAssistantPayloadField.SearchQuery),
-        automationGoal = root.structuredValue(AiAssistantPayloadField.AutomationGoal),
-        mutedWord = root.structuredValue(AiAssistantPayloadField.MutedWord),
-        memory = root.structuredValue(AiAssistantPayloadField.Memory),
-        checklist = root.structuredValue(AiAssistantPayloadField.Checklist),
+        body = payloadRoot.structuredValue(AiAssistantPayloadField.Body),
+        targetRoom = payloadRoot.structuredValue(AiAssistantPayloadField.TargetRoom),
+        targetUser = payloadRoot.structuredValue(AiAssistantPayloadField.TargetUser),
+        mentions = payloadRoot.structuredList(AiAssistantPayloadField.Mentions),
+        channel = payloadRoot.structuredValue(AiAssistantPayloadField.Channel),
+        visibility = payloadRoot.structuredValue(AiAssistantPayloadField.Visibility),
+        contentWarning = payloadRoot.structuredValue(AiAssistantPayloadField.ContentWarning),
+        localOnly = payloadRoot.structuredValue(AiAssistantPayloadField.LocalOnly),
+        searchQuery = payloadRoot.structuredValue(AiAssistantPayloadField.SearchQuery),
+        automationGoal = payloadRoot.structuredValue(AiAssistantPayloadField.AutomationGoal),
+        mutedWord = payloadRoot.structuredValue(AiAssistantPayloadField.MutedWord),
+        memory = payloadRoot.structuredValue(AiAssistantPayloadField.Memory),
+        checklist = payloadRoot.structuredValue(AiAssistantPayloadField.Checklist),
     )
+}
+
+private fun JsonObject.aiAssistantPayloadRoot(): JsonObject {
+    val hasWrapperShape = this["payload"] is JsonObject ||
+        this["data"] is JsonObject ||
+        AiAssistantJsonDisplayKeys.any { key -> this[key] != null }
+    if (!hasWrapperShape) return this
+    return JsonObject(
+        entries.filterNot { (key, _) ->
+            key in AiAssistantJsonDisplayOnlyKeys
+        }.associate { it.key to it.value },
+    )
+}
+
+private fun AiAssistantStructuredPayload.mergeAiAssistantPayload(next: AiAssistantStructuredPayload): AiAssistantStructuredPayload {
+    return AiAssistantStructuredPayload(
+        body = body.ifBlank { next.body },
+        targetRoom = targetRoom.ifBlank { next.targetRoom },
+        targetUser = targetUser.ifBlank { next.targetUser },
+        mentions = (mentions + next.mentions).map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+        channel = channel.ifBlank { next.channel },
+        visibility = visibility.ifBlank { next.visibility },
+        contentWarning = contentWarning.ifBlank { next.contentWarning },
+        localOnly = localOnly.ifBlank { next.localOnly },
+        searchQuery = searchQuery.ifBlank { next.searchQuery },
+        automationGoal = automationGoal.ifBlank { next.automationGoal },
+        mutedWord = mutedWord.ifBlank { next.mutedWord },
+        memory = memory.ifBlank { next.memory },
+        checklist = checklist.ifBlank { next.checklist },
+    )
+}
+
+private fun String.removeAiAssistantRanges(ranges: List<IntRange>): String {
+    return ranges
+        .distinctBy { it.first to it.last }
+        .sortedByDescending { it.first }
+        .fold(this) { current, range ->
+            if (range.first < 0 || range.last >= current.length || range.first > range.last) {
+                current
+            } else {
+                current.removeRange(range)
+            }
+        }
+}
+
+private fun String.aiAssistantNormalizeDisplayText(): String {
+    val clean = replace("\r\n", "\n")
+        .replace('\r', '\n')
+        .trim()
+    if (clean.isBlank()) return ""
+    val lines = clean.lines()
+        .map { line ->
+            AiAssistantDisplayLabelLineRegex.matchEntire(line)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.takeIf { it.isNotBlank() }
+                ?: line
+        }
+        .dropWhile { it.isBlank() }
+        .dropLastWhile { it.isBlank() }
+    return lines.joinToString("\n")
+        .replace(Regex("\n{3,}"), "\n\n")
+        .aiAssistantCloseDanglingFence()
+        .trim()
+}
+
+private fun String.aiAssistantCloseDanglingFence(): String {
+    val fenceCount = lineSequence().count { line -> line.trimStart().startsWith("```") }
+    return if (fenceCount % 2 == 0) this else "$this\n```"
 }
 
 private fun JsonElement.structuredValue(field: AiAssistantPayloadField): String {
@@ -1607,12 +1984,13 @@ private fun JsonElement.structuredValue(field: AiAssistantPayloadField): String 
     fun collect(element: JsonElement) {
         when (element) {
             is JsonObject -> {
+                element["payload"]?.let(::collect)
+                element["data"]?.let(::collect)
                 field.keys.forEach { key ->
                     element[key]?.let { values += it.toStructuredText() }
                 }
-                element["payload"]?.let(::collect)
-                element["data"]?.let(::collect)
             }
+            is JsonArray -> element.forEach(::collect)
             else -> Unit
         }
     }
@@ -1630,12 +2008,13 @@ private fun JsonElement.structuredList(field: AiAssistantPayloadField): List<Str
     fun collect(element: JsonElement) {
         when (element) {
             is JsonObject -> {
+                element["payload"]?.let(::collect)
+                element["data"]?.let(::collect)
                 field.keys.forEach { key ->
                     element[key]?.let { values += it.toStructuredListValues() }
                 }
-                element["payload"]?.let(::collect)
-                element["data"]?.let(::collect)
             }
+            is JsonArray -> element.forEach(::collect)
             else -> Unit
         }
     }
@@ -1666,20 +2045,31 @@ private fun JsonElement.toStructuredText(): String {
     }
 }
 
+private fun JsonElement.toDisplayText(): String {
+    return when (this) {
+        is JsonPrimitive -> jsonPrimitive.contentOrNull.orEmpty()
+        is JsonArray -> map { it.toDisplayText().trim() }
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+        is JsonObject -> values.joinToString("\n\n") { it.toDisplayText() }
+    }
+}
+
 fun aiAssistantActionPayload(raw: String): AiAssistantActionPayload {
     val clean = raw.trim()
     if (clean.isBlank()) return AiAssistantActionPayload()
     val root = runCatching { AiAssistantJson.parseToJsonElement(clean) as? JsonObject }.getOrNull()
         ?: return AiAssistantActionPayload(body = clean)
+    val payloadRoot = root.aiAssistantPayloadRoot()
     return AiAssistantActionPayload(
-        body = root.structuredValue(AiAssistantPayloadField.Body),
-        targetRoom = root.structuredValue(AiAssistantPayloadField.TargetRoom),
-        targetUser = root.structuredValue(AiAssistantPayloadField.TargetUser),
-        mentions = root.structuredList(AiAssistantPayloadField.Mentions),
-        channel = root.structuredValue(AiAssistantPayloadField.Channel),
-        visibility = root.structuredValue(AiAssistantPayloadField.Visibility),
-        contentWarning = root.structuredValue(AiAssistantPayloadField.ContentWarning),
-        localOnly = root.structuredValue(AiAssistantPayloadField.LocalOnly),
+        body = payloadRoot.structuredValue(AiAssistantPayloadField.Body),
+        targetRoom = payloadRoot.structuredValue(AiAssistantPayloadField.TargetRoom),
+        targetUser = payloadRoot.structuredValue(AiAssistantPayloadField.TargetUser),
+        mentions = payloadRoot.structuredList(AiAssistantPayloadField.Mentions),
+        channel = payloadRoot.structuredValue(AiAssistantPayloadField.Channel),
+        visibility = payloadRoot.structuredValue(AiAssistantPayloadField.Visibility),
+        contentWarning = payloadRoot.structuredValue(AiAssistantPayloadField.ContentWarning),
+        localOnly = payloadRoot.structuredValue(AiAssistantPayloadField.LocalOnly),
     )
 }
 
@@ -1713,6 +2103,14 @@ fun aiAssistantActionPayloadText(
         put("cw", JsonPrimitive(actionPayload.contentWarning))
         put("localOnly", JsonPrimitive(actionPayload.localOnly))
     }.toString()
+}
+
+fun aiAssistantOutgoingDraftText(
+    currentDraft: String,
+    payloadBody: String,
+): String {
+    val cleanPayload = payloadBody.trim()
+    return cleanPayload.ifBlank { currentDraft.trim() }
 }
 
 private fun aiAssistantStructuredCandidate(text: String, field: AiAssistantPayloadField): String {

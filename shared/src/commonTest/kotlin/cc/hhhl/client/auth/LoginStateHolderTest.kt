@@ -5,9 +5,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -361,6 +363,86 @@ class LoginStateHolderTest {
     }
 
     @Test
+    fun staleSwitchAccountVerificationDoesNotOverwriteNewerAccount() = runTest {
+        val alice = AuthenticatedUser("u1", "alice", "Alice", null)
+        val bob = AuthenticatedUser("u2", "bob", "Bob", null)
+        val charlie = AuthenticatedUser("u3", "charlie", "Charlie", null)
+        val pendingBobVerification = CompletableDeferred<AuthResult>()
+        val tokenStore = FakeTokenStore(
+            initialAccounts = listOf(
+                AccountSession(accountSessionId(alice), alice, "token-a", lastUsed = 3, current = true),
+                AccountSession(accountSessionId(bob), null, "token-b", lastUsed = 2, current = false),
+                AccountSession(accountSessionId(charlie), charlie, "token-c", lastUsed = 1, current = false),
+            ),
+        )
+        val holder = LoginStateHolder(
+            authenticator = fakeAuthenticator(
+                verifyResultProvider = { token ->
+                    when (token) {
+                        "token-a" -> AuthResult.Success("token-a", alice)
+                        "token-b" -> pendingBobVerification.await()
+                        "token-c" -> AuthResult.Success("token-c", charlie)
+                        else -> AuthResult.InvalidToken
+                    }
+                },
+            ),
+            tokenStore = tokenStore,
+            nowProvider = { 99 },
+            scope = TestScope(testScheduler),
+        )
+        holder.restoreStoredToken()
+        advanceUntilIdle()
+
+        holder.switchAccount(accountSessionId(bob))
+        runCurrent()
+        assertEquals(accountSessionId(bob), holder.state.value.currentAccountId)
+        assertTrue(holder.state.value.isLoading)
+
+        holder.switchAccount(accountSessionId(charlie))
+        advanceUntilIdle()
+        assertEquals(charlie, holder.state.value.user)
+        assertEquals("token-c", holder.state.value.sessionToken)
+
+        pendingBobVerification.complete(AuthResult.Success("token-b", bob))
+        advanceUntilIdle()
+
+        assertEquals(charlie, holder.state.value.user)
+        assertEquals("token-c", holder.state.value.sessionToken)
+        assertEquals(accountSessionId(charlie), holder.state.value.currentAccountId)
+        assertEquals("token-c", tokenStore.token)
+        assertEquals(accountSessionId(charlie), tokenStore.accountSessions?.firstOrNull { it.current }?.id)
+    }
+
+    @Test
+    fun staleRestoreResultDoesNotLogUserBackInAfterLogout() = runTest {
+        val alice = AuthenticatedUser("u1", "alice", "Alice", null)
+        val pendingVerification = CompletableDeferred<AuthResult>()
+        val tokenStore = FakeTokenStore(initialToken = "token-a")
+        val holder = LoginStateHolder(
+            authenticator = fakeAuthenticator(
+                verifyResultProvider = { pendingVerification.await() },
+            ),
+            tokenStore = tokenStore,
+            scope = TestScope(testScheduler),
+        )
+
+        holder.restoreStoredToken()
+        runCurrent()
+        assertTrue(holder.state.value.isLoading)
+
+        holder.logout()
+        advanceUntilIdle()
+        pendingVerification.complete(AuthResult.Success("token-a", alice))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isLoading)
+        assertNull(holder.state.value.user)
+        assertNull(holder.state.value.sessionToken)
+        assertNull(tokenStore.token)
+        assertEquals(emptyList(), tokenStore.accountSessions)
+    }
+
+    @Test
     fun removingCurrentAccountPromotesRemainingAccount() = runTest {
         val alice = AuthenticatedUser("u1", "alice", "Alice", null)
         val bob = AuthenticatedUser("u2", "bob", "Bob", null)
@@ -414,6 +496,7 @@ class LoginStateHolderTest {
     private fun fakeAuthenticator(
         checkResult: AuthResult = AuthResult.InvalidToken,
         verifyResult: AuthResult = AuthResult.InvalidToken,
+        verifyResultProvider: (suspend (String) -> AuthResult)? = null,
         passwordLoginResult: PasswordLoginResult = PasswordLoginResult.ServerError(
             statusCode = 400,
             message = "登录失败",
@@ -435,7 +518,7 @@ class LoginStateHolderTest {
 
             override suspend fun verifyToken(token: String): AuthResult {
                 onVerify(token)
-                return verifyResult
+                return verifyResultProvider?.invoke(token) ?: verifyResult
             }
 
             override suspend fun signInWithPassword(

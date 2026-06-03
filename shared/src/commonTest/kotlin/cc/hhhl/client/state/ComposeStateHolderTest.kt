@@ -1101,6 +1101,73 @@ class ComposeStateHolderTest {
     }
 
     @Test
+    fun pendingScheduledEditDoesNotOverwriteDraftChangedAfterRequest() = runTest {
+        val pending = CompletableDeferred<ComposeScheduleDeleteRepositoryResult>()
+        val store = memoryDraftStore()
+        val holder = ComposeStateHolder(
+            repository = scheduledDeleteRepository { pending.await() },
+            draftStore = store,
+            scope = TestScope(testScheduler),
+        )
+        val scheduledNote = ComposeScheduledNote(
+            id = "note-scheduled-1",
+            text = "scheduled draft",
+            cw = null,
+            scheduledAt = 1_779_800_000_000L,
+            visibility = NoteVisibility.Home,
+        )
+
+        holder.updateCapabilities(canPublicNote = true, canScheduleNotes = true)
+        holder.editScheduledNote(scheduledNote)
+        runCurrent()
+        assertTrue(holder.state.value.deletingScheduledNoteIds.contains("note-scheduled-1"))
+
+        holder.updateText("new draft")
+        pending.complete(ComposeScheduleDeleteRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertEquals("new draft", holder.state.value.draft.text)
+        assertEquals(emptySet(), holder.state.value.deletingScheduledNoteIds)
+        assertEquals("new draft", store.savedDraft?.text)
+    }
+
+    @Test
+    fun editScheduledNoteInvalidatesPendingMediaUploadResult() = runTest {
+        val uploadPending = CompletableDeferred<DriveFileRepositoryResult>()
+        val scheduledFile = sampleDriveFile().copy(id = "scheduled-file")
+        val uploadedFile = sampleDriveFile().copy(id = "uploaded-file")
+        val scheduledNote = ComposeScheduledNote(
+            id = "note-scheduled-1",
+            text = "scheduled draft",
+            cw = null,
+            scheduledAt = 1_779_800_000_000L,
+            visibility = NoteVisibility.Home,
+            fileIds = listOf(scheduledFile.id),
+            attachedFiles = listOf(scheduledFile),
+        )
+        val holder = ComposeStateHolder(
+            repository = scheduledDeleteRepository { ComposeScheduleDeleteRepositoryResult.Success },
+            driveFileRepository = fakeDriveRepository(uploadResultProvider = { uploadPending.await() }),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateCapabilities(canPublicNote = true, canScheduleNotes = true)
+        holder.uploadMedia(sampleUpload())
+        runCurrent()
+        assertTrue(holder.state.value.isUploadingMedia)
+
+        holder.editScheduledNote(scheduledNote)
+        advanceUntilIdle()
+        uploadPending.complete(DriveFileRepositoryResult.Success(uploadedFile))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isUploadingMedia)
+        assertEquals("scheduled draft", holder.state.value.draft.text)
+        assertEquals(listOf("scheduled-file"), holder.state.value.draft.fileIds)
+        assertEquals(listOf(scheduledFile), holder.state.value.attachedFiles)
+    }
+
+    @Test
     fun addPollChoiceAppendsBlankChoiceUpToLimit() {
         val holder = ComposeStateHolder(
             repository = fakeRepository(ComposeRepositoryResult.Success("note-created")),
@@ -1198,6 +1265,19 @@ class ComposeStateHolderTest {
 
         assertEquals(null, holder.state.value.createdNoteId)
         assertEquals(null, holder.state.value.completedDraft)
+    }
+
+    private fun scheduledDeleteRepository(
+        onDelete: suspend (String) -> ComposeScheduleDeleteRepositoryResult,
+    ): ComposeRepository {
+        return object : ComposeRepository(
+            tokenProvider = { "token-123" },
+            api = fakeComposeApi(),
+        ) {
+            override suspend fun deleteScheduledNote(noteId: String): ComposeScheduleDeleteRepositoryResult {
+                return onDelete(noteId)
+            }
+        }
     }
 
     private fun fakeRepository(

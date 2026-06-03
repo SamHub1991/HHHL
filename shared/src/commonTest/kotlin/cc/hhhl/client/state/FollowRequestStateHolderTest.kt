@@ -8,9 +8,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -74,6 +76,37 @@ class FollowRequestStateHolderTest {
     }
 
     @Test
+    fun cancelInvalidatesPendingSentRefreshResult() = runTest {
+        val sent = sampleFollowRequest("sent-1")
+        val pendingSentRefresh = CompletableDeferred<FollowRequestsRepositoryResult>()
+        val pendingCancel = CompletableDeferred<FollowRequestActionRepositoryResult>()
+        val holder = FollowRequestStateHolder(
+            repository = fakeRepository(
+                listResult = FollowRequestsRepositoryResult.Success(emptyList()),
+                sentListProvider = { pendingSentRefresh.await() },
+                cancelProvider = { pendingCancel.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshSent()
+        runCurrent()
+        assertTrue(holder.state.value.isLoadingSent)
+
+        holder.cancel(sent.user.id)
+        runCurrent()
+        pendingCancel.complete(FollowRequestActionRepositoryResult.Success)
+        advanceUntilIdle()
+        assertFalse(holder.state.value.pendingUserIds.contains(sent.user.id))
+
+        pendingSentRefresh.complete(FollowRequestsRepositoryResult.Success(listOf(sent)))
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), holder.state.value.sentRequests)
+        assertFalse(holder.state.value.isLoadingSent)
+    }
+
+    @Test
     fun unauthorizedLoadMarksRelogin() = runTest {
         val holder = FollowRequestStateHolder(
             repository = fakeRepository(
@@ -114,6 +147,8 @@ class FollowRequestStateHolderTest {
     private fun fakeRepository(
         listResult: FollowRequestsRepositoryResult,
         actionResult: FollowRequestActionRepositoryResult = FollowRequestActionRepositoryResult.Success,
+        sentListProvider: suspend () -> FollowRequestsRepositoryResult = { listResult },
+        cancelProvider: suspend (String) -> FollowRequestActionRepositoryResult = { actionResult },
     ): FollowRequestRepository {
         return object : FollowRequestRepository(
             tokenProvider = { "token-123" },
@@ -143,9 +178,13 @@ class FollowRequestStateHolderTest {
         ) {
             override suspend fun refresh(): FollowRequestsRepositoryResult = listResult
 
+            override suspend fun refreshSent(): FollowRequestsRepositoryResult = sentListProvider()
+
             override suspend fun accept(userId: String): FollowRequestActionRepositoryResult = actionResult
 
             override suspend fun reject(userId: String): FollowRequestActionRepositoryResult = actionResult
+
+            override suspend fun cancel(userId: String): FollowRequestActionRepositoryResult = cancelProvider(userId)
         }
     }
 

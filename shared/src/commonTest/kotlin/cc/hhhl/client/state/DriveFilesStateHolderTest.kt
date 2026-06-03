@@ -161,7 +161,37 @@ class DriveFilesStateHolderTest {
         holder.selectTypeFilter(DriveFileTypeFilter.Audio)
 
         assertEquals(null, holder.state.value.selectedFile)
+        assertEquals(null, holder.state.value.selectedFileDetails)
+        assertFalse(holder.state.value.isLoadingFileDetails)
         assertEquals(emptyList(), holder.state.value.visibleFiles)
+    }
+
+    @Test
+    fun changingTypeFilterWhileDetailsLoadClearsPendingSelectionState() = runTest {
+        val image = sampleFile("file-image").copy(type = "image/png")
+        val pendingDetails = CompletableDeferred<DriveFileDetailsRepositoryResult>()
+        val holder = DriveFilesStateHolder(
+            repository = fakeRepository(
+                refreshResult = DriveFilesRepositoryResult.Success(listOf(image)),
+                fileDetailsResultProvider = { pendingDetails.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFile(image)
+        runCurrent()
+        assertTrue(holder.state.value.isLoadingFileDetails)
+
+        holder.selectTypeFilter(DriveFileTypeFilter.Audio)
+        pendingDetails.complete(DriveFileDetailsRepositoryResult.Success(DriveFileDetails(image)))
+        advanceUntilIdle()
+
+        assertEquals(null, holder.state.value.selectedFile)
+        assertEquals(null, holder.state.value.selectedFileDetails)
+        assertFalse(holder.state.value.isLoadingFileDetails)
+        assertEquals(null, holder.state.value.fileDetailsErrorMessage)
     }
 
     @Test
@@ -830,6 +860,7 @@ class DriveFilesStateHolderTest {
         loadMoreResultProvider: suspend () -> DriveFilesRepositoryResult = { loadMoreResult },
         loadMoreFoldersResultProvider: suspend () -> DriveFoldersRepositoryResult = { loadMoreFoldersResult },
         uploadResultProvider: suspend () -> DriveFileRepositoryResult = { uploadResult },
+        fileDetailsResultProvider: suspend (String) -> DriveFileDetailsRepositoryResult = { fileDetailsResult },
     ): DriveFileRepository {
         return object : DriveFileRepository(
             tokenProvider = { "token-123" },
@@ -971,7 +1002,7 @@ class DriveFilesStateHolderTest {
             }
 
             override suspend fun loadFileDetails(fileId: String): DriveFileDetailsRepositoryResult {
-                return fileDetailsResult
+                return fileDetailsResultProvider(fileId)
             }
         }
     }

@@ -42,6 +42,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -351,6 +352,45 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun staleMessageSearchErrorDoesNotOverwriteCurrentSearch() = runTest {
+        val firstRoom = sampleRoom(id = "room-search-1")
+        val secondRoom = sampleRoom(id = "room-search-2")
+        val secondResult = sampleMessage("message-second", roomId = secondRoom.id, text = "新搜索")
+        val releaseFirstSearch = CompletableDeferred<Unit>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(firstRoom, secondRoom)),
+                searchMessagesResultForRequest = { _, roomId, _, _ ->
+                    if (roomId == firstRoom.id) {
+                        releaseFirstSearch.await()
+                        ChatMessageRepositoryResult.Error("旧搜索失败")
+                    } else {
+                        ChatMessageRepositoryResult.Success(listOf(secondResult))
+                    }
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(firstRoom)
+        advanceUntilIdle()
+        holder.searchMessages("旧")
+        advanceUntilIdle()
+        holder.selectRoom(secondRoom)
+        advanceUntilIdle()
+        holder.searchMessages("新")
+        advanceUntilIdle()
+        releaseFirstSearch.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isSearchingMessages)
+        assertEquals("新", holder.state.value.messageSearchQuery)
+        assertEquals(listOf(secondResult), holder.state.value.messageSearchResults)
+        assertEquals(null, holder.state.value.messageSearchErrorMessage)
+    }
+
+    @Test
     fun searchChatUsersStoresRemoteUserResults() = runTest {
         val remoteUser = User("remote-user", "赵远程", "zhao", "赵", host = "remote.example")
         val queries = mutableListOf<String>()
@@ -375,6 +415,53 @@ class ChatStateHolderTest {
         assertFalse(holder.state.value.isSearchingChatUsers)
         assertEquals("赵", holder.state.value.chatUserSearchQuery)
         assertEquals(listOf(remoteUser), holder.state.value.chatUserSearchResults)
+        assertEquals(null, holder.state.value.chatUserSearchErrorMessage)
+    }
+
+    @Test
+    fun staleChatUserSearchResultDoesNotOverwriteAfterRoomChange() = runTest {
+        val firstRoom = sampleRoom(id = "room-user-search-1")
+        val secondRoom = sampleRoom(id = "room-user-search-2")
+        val staleRemoteUser = User("remote-old", "旧用户", "old", "旧", host = "remote.example")
+        val currentRemoteUser = User("remote-current", "当前用户", "current", "当", host = "remote.example")
+        val releaseFirstSearch = CompletableDeferred<Unit>()
+        var searchCallCount = 0
+        val holder = ChatStateHolder(
+            repository = fakeRepository(ChatRepositoryResult.Success(listOf(firstRoom, secondRoom))),
+            discoverRepository = object : DiscoverRepository(tokenProvider = { "token-123" }) {
+                override suspend fun searchUsers(
+                    query: String,
+                    filters: DiscoverAdvancedFilters,
+                ): DiscoverRepositoryResult {
+                    searchCallCount += 1
+                    return if (searchCallCount == 1) {
+                        releaseFirstSearch.await()
+                        DiscoverRepositoryResult.UserSuccess(listOf(staleRemoteUser))
+                    } else {
+                        DiscoverRepositoryResult.UserSuccess(listOf(currentRemoteUser))
+                    }
+                }
+            },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(firstRoom)
+        advanceUntilIdle()
+        holder.searchChatUsers("ls")
+        advanceUntilIdle()
+        holder.selectRoom(secondRoom)
+        advanceUntilIdle()
+        holder.searchChatUsers("ls")
+        advanceUntilIdle()
+        releaseFirstSearch.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(2, searchCallCount)
+        assertFalse(holder.state.value.isSearchingChatUsers)
+        assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
+        assertEquals("ls", holder.state.value.chatUserSearchQuery)
+        assertEquals(listOf(currentRemoteUser), holder.state.value.chatUserSearchResults)
         assertEquals(null, holder.state.value.chatUserSearchErrorMessage)
     }
 
@@ -406,6 +493,47 @@ class ChatStateHolderTest {
 
         assertEquals(secondRoom.id, holder.state.value.selectedRoom?.id)
         assertEquals(listOf(secondRoomMessage), holder.state.value.messages)
+    }
+
+    @Test
+    fun staleUserMessageRefreshDoesNotOverwriteAfterReturningToSameUser() = runTest {
+        val peer = User("user-peer", "Alice", "alice", "A")
+        val otherPeer = User("user-other", "Bob", "bob", "B")
+        val peerConversation = ChatUserConversation(user = peer)
+        val otherConversation = ChatUserConversation(user = otherPeer)
+        val staleResult = CompletableDeferred<ChatMessageRepositoryResult>()
+        val freshResult = CompletableDeferred<ChatMessageRepositoryResult>()
+        var peerRefreshCount = 0
+        val freshMessage = sampleMessage("message-fresh", roomId = "", text = "fresh").copy(fromUser = peer)
+        val staleMessage = sampleMessage("message-stale", roomId = "", text = "stale").copy(fromUser = peer)
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshUserMessagesResultForRequest = { userId ->
+                    if (userId != peer.id) return@fakeRepository ChatMessageRepositoryResult.Success(emptyList())
+                    peerRefreshCount += 1
+                    if (peerRefreshCount == 1) staleResult.await() else freshResult.await()
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectUserConversation(peerConversation)
+        advanceUntilIdle()
+        holder.selectUserConversation(otherConversation)
+        advanceUntilIdle()
+        holder.selectUserConversation(peerConversation)
+        advanceUntilIdle()
+
+        freshResult.complete(ChatMessageRepositoryResult.Success(listOf(freshMessage)))
+        advanceUntilIdle()
+        assertEquals(listOf(freshMessage), holder.state.value.messages)
+
+        staleResult.complete(ChatMessageRepositoryResult.Success(listOf(staleMessage)))
+        advanceUntilIdle()
+
+        assertEquals(listOf(freshMessage), holder.state.value.messages)
     }
 
     @Test
@@ -2297,6 +2425,42 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun refreshRoomExtrasDoesNotRestoreReadUnreadFromOwnedRoomList() = runTest {
+        val readRoom = sampleRoom(
+            id = "room-read-owned",
+            unreadCount = 99,
+            latestMessageAtLabel = "2026-05-25 10:01",
+            latestMessageMarker = "message-1",
+        )
+        val otherRoom = sampleRoom(id = "room-other")
+        val unreadStore = MemoryChatUnreadStore()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(readRoom, otherRoom)),
+                refreshOwnedRoomsResult = ChatRepositoryResult.Success(listOf(readRoom.copy(unreadCount = 99))),
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "account-1" },
+            unreadStore = unreadStore,
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectRoom(readRoom)
+        advanceUntilIdle()
+        holder.selectRoom(otherRoom)
+        advanceUntilIdle()
+
+        holder.refreshRoomExtras()
+        advanceUntilIdle()
+
+        assertEquals(0, holder.state.value.rooms.first { it.id == readRoom.id }.unreadCount)
+        assertEquals(0, holder.state.value.ownedRooms.first { it.id == readRoom.id }.unreadCount)
+        assertEquals("message-1", unreadStore.load("account-1").roomReadMarkers[readRoom.id])
+    }
+
+    @Test
     fun deleteSelectedOwnedRoomRemovesItFromMainAndOwnedRoomLists() = runTest {
         val ownedRoom = sampleRoom(id = "room-owned")
         val deleteCalls = mutableListOf<String>()
@@ -2456,6 +2620,85 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun clearSelectedRoomMessagesPreventsPendingSearchFromRestoringClearedResults() = runTest {
+        val room = sampleRoom(id = "room-clear-search").copy(canManage = true)
+        val message = sampleMessage("message-before-clear", roomId = room.id, text = "needle")
+        val releaseSearch = CompletableDeferred<Unit>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+                searchMessagesResultForRequest = { _, _, _, _ ->
+                    releaseSearch.await()
+                    ChatMessageRepositoryResult.Success(listOf(message))
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.searchMessages("needle")
+        advanceUntilIdle()
+        holder.clearSelectedRoomMessages()
+        advanceUntilIdle()
+        releaseSearch.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), holder.state.value.messages)
+        assertEquals(emptyList(), holder.state.value.messageSearchResults)
+        assertEquals("", holder.state.value.messageSearchQuery)
+        assertFalse(holder.state.value.isSearchingMessages)
+        assertFalse(holder.state.value.isLoadingMoreMessageSearch)
+        assertEquals(true, holder.state.value.messageSearchEndReached)
+        assertEquals(null, holder.state.value.messageSearchErrorMessage)
+        assertEquals("聊天室消息已清空", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
+    fun clearSelectedRoomMessagesPreventsPendingRefreshFromRestoringClearedMessages() = runTest {
+        val room = sampleRoom(id = "room-clear-refresh").copy(canManage = true)
+        val initialMessage = sampleMessage("message-initial", roomId = room.id, text = "before")
+        val staleMessage = sampleMessage("message-stale-refresh", roomId = room.id, text = "stale")
+        val releaseRefresh = CompletableDeferred<Unit>()
+        var refreshCallCount = 0
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResultForRequest = {
+                    refreshCallCount += 1
+                    if (refreshCallCount == 1) {
+                        ChatMessageRepositoryResult.Success(listOf(initialMessage))
+                    } else {
+                        releaseRefresh.await()
+                        ChatMessageRepositoryResult.Success(listOf(staleMessage))
+                    }
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.refreshMessages()
+        advanceUntilIdle()
+        holder.clearSelectedRoomMessages()
+        advanceUntilIdle()
+        releaseRefresh.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(2, refreshCallCount)
+        assertEquals(emptyList(), holder.state.value.messages)
+        assertFalse(holder.state.value.isLoadingMessages)
+        assertFalse(holder.state.value.isLoadingOlderMessages)
+        assertEquals(0, holder.state.value.selectedRoom?.unreadCount)
+        assertEquals("", holder.state.value.selectedRoom?.latestMessageMarker)
+        assertEquals("聊天室消息已清空", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
     fun clearRoomMessagesClearsNonSelectedRoomMarkersById() = runTest {
         val selectedRoom = sampleRoom(id = "room-selected")
         val targetRoom = sampleRoom(
@@ -2549,6 +2792,40 @@ class ChatStateHolderTest {
         assertTrue(holder.state.value.rooms.first { it.id == targetRoom.id }.isMuted)
         assertTrue(holder.state.value.ownedRooms.first { it.id == targetRoom.id }.isMuted)
         assertEquals("聊天室已静音", holder.state.value.roomManagementMessage)
+    }
+
+    @Test
+    fun roomManagementByIdDoesNotCallRepositoryWhenChatUnavailable() = runTest {
+        val deleteCalls = mutableListOf<String>()
+        val clearCalls = mutableListOf<String>()
+        val leaveCalls = mutableListOf<String>()
+        val muteCalls = mutableListOf<Pair<String, Boolean>>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                onDeleteRoom = deleteCalls::add,
+                onClearRoomMessages = clearCalls::add,
+                onLeaveRoom = leaveCalls::add,
+                onMuteRoom = { roomId, muted -> muteCalls += roomId to muted },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = false)
+        holder.deleteRoom("room-target")
+        holder.clearRoomMessages("room-target")
+        holder.leaveRoom("room-target")
+        holder.muteRoom("room-target", true)
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), deleteCalls)
+        assertEquals(emptyList(), clearCalls)
+        assertEquals(emptyList(), leaveCalls)
+        assertEquals(emptyList(), muteCalls)
+        assertFalse(holder.state.value.isManagingRoom)
+        assertEquals("实例未启用聊天", holder.state.value.roomManagementMessage)
+        assertEquals("实例未启用聊天", holder.state.value.errorMessage)
+        assertEquals("实例未启用聊天", holder.state.value.messageErrorMessage)
     }
 
     @Test
@@ -2647,10 +2924,13 @@ class ChatStateHolderTest {
         searchMessagesResult: ChatMessageRepositoryResult = ChatMessageRepositoryResult.Success(emptyList()),
         refreshResultProvider: (() -> ChatRepositoryResult)? = null,
         refreshMessagesResultProvider: (() -> ChatMessageRepositoryResult)? = null,
+        refreshMessagesResultForRequest: (suspend (String) -> ChatMessageRepositoryResult)? = null,
+        refreshUserMessagesResultForRequest: (suspend (String) -> ChatMessageRepositoryResult)? = null,
         refreshMembersResultProvider: (() -> ChatRoomMemberRepositoryResult)? = null,
         refreshOwnedRoomsResultProvider: (() -> ChatRepositoryResult)? = null,
         userConversationResultProvider: (() -> ChatUserConversationRepositoryResult)? = null,
         searchMessagesResultProvider: (() -> ChatMessageRepositoryResult)? = null,
+        searchMessagesResultForRequest: (suspend (String, String?, String?, String?) -> ChatMessageRepositoryResult)? = null,
         showRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.RoomSaved(sampleRoom()),
         joinRoomResult: ChatRoomMutationRepositoryResult = ChatRoomMutationRepositoryResult.ActionCompleted("已加入聊天室"),
         onShowRoom: (String) -> Unit = {},
@@ -2850,6 +3130,9 @@ class ChatStateHolderTest {
 
             override suspend fun refreshMessages(roomId: String): ChatMessageRepositoryResult {
                 onRefreshMessages(roomId)
+                refreshMessagesResultForRequest?.let { provider ->
+                    return provider(roomId)
+                }
                 return refreshMessagesResultProvider?.invoke() ?: refreshMessagesResult
             }
 
@@ -2881,6 +3164,9 @@ class ChatStateHolderTest {
             }
 
             override suspend fun refreshUserMessages(userId: String): ChatMessageRepositoryResult {
+                refreshUserMessagesResultForRequest?.let { provider ->
+                    return provider(userId)
+                }
                 return refreshUserMessagesResult
             }
 
@@ -2900,6 +3186,9 @@ class ChatStateHolderTest {
                 currentConversationMessages: List<ChatMessage>,
             ): ChatMessageRepositoryResult {
                 if (throwOnSearchMessages) throw IllegalStateException("聊天搜索异常")
+                searchMessagesResultForRequest?.let { provider ->
+                    return provider(query, roomId, userId, serverUntilId)
+                }
                 return searchMessagesResultProvider?.invoke() ?: searchMessagesResult
             }
 

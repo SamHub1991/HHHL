@@ -5,9 +5,11 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -407,6 +409,7 @@ class AiStateHolderTest {
         holder.runBlockingTask(AiTaskKind.AutomationRuleDraft, AiTaskInput(prompt = "新规则"))
 
         assertContentEquals(listOf("automation-rule-model"), repository.requestedModels)
+        assertEquals(AiServiceMode.LocalOnly, repository.requestedSettings.single().serviceMode)
         assertEquals(AiProviderPreset.DeepSeek, repository.requestedSettings.single().provider)
         assertEquals("https://automation.example.com/v1", repository.requestedSettings.single().baseUrl)
         assertEquals("automation-", repository.requestedSettings.single().apiKey)
@@ -436,6 +439,39 @@ class AiStateHolderTest {
         advanceUntilIdle()
 
         assertContentEquals(listOf("fast-model"), repository.requestedModels)
+    }
+
+    @Test
+    fun settingsChangeInvalidatesPendingConnectionTestResult() = runTest {
+        val pending = CompletableDeferred<AiRepositoryResult>()
+        val repository = FakeAiRepository { pending.await() }
+        val holder = AiStateHolder(
+            store = MemoryAiStore(
+                AiSnapshot(
+                    settings = AiSettings(
+                        enabled = true,
+                        apiKey = "old-key",
+                        fastModel = "old-fast",
+                    ),
+                ),
+            ),
+            accountId = "account-1",
+            repository = repository,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.testConnection()
+        runCurrent()
+        holder.updateSettings(AiSettings(enabled = true, apiKey = "new-key", fastModel = "new-fast"))
+        pending.complete(AiRepositoryResult.Success("old ok"))
+        advanceUntilIdle()
+
+        assertEquals(false, holder.state.value.isTestingConnection)
+        assertEquals("AI 设置已保存", holder.state.value.message)
+        assertEquals(null, holder.state.value.errorMessage)
+        assertContentEquals(listOf("old-fast"), repository.requestedModels)
+        assertEquals("old-key", repository.requestedSettings.single().apiKey)
     }
 
     @Test
@@ -522,8 +558,10 @@ class AiStateHolderTest {
 }
 
 private class FakeAiRepository(
-    private val result: AiRepositoryResult,
+    private val resultProvider: suspend () -> AiRepositoryResult,
 ) : AiRepository() {
+    constructor(result: AiRepositoryResult) : this({ result })
+
     var lastPrompt: AiPrompt? = null
     val requestedModels = mutableListOf<String>()
     val requestedSettings = mutableListOf<AiSettings>()
@@ -537,7 +575,7 @@ private class FakeAiRepository(
         lastPrompt = prompt
         requestedModels += model
         requestedSettings += settings
-        return result
+        return resultProvider()
     }
 }
 

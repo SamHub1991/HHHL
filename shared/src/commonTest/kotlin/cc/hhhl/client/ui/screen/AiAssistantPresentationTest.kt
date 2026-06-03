@@ -62,6 +62,92 @@ class AiAssistantPresentationTest {
     }
 
     @Test
+    fun capabilityDiscussionDoesNotTriggerMentionedNavigationActions() {
+        val actions = aiAssistantSuggestedActions(
+            prompt = "你能做什么？比如打开通知、创建草稿、搜索这些能力可以介绍下吗",
+            reply = "我可以介绍这些能力，但普通交流不会替你打开页面。",
+            idPrefix = "message-capability",
+        )
+
+        assertTrue(actions.isEmpty())
+    }
+
+    @Test
+    fun discussionAboutDangerousActionDoesNotTriggerDangerousAction() {
+        val actions = aiAssistantSuggestedActions(
+            prompt = "请问删除当前聊天室有什么风险？",
+            reply = "删除聊天室会移除当前聊天室数据，执行前应先确认备份和权限。",
+            idPrefix = "message-danger-discussion",
+        )
+
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.DeleteCurrentChatRoom })
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.ClearCurrentChatRoomMessages })
+    }
+
+    @Test
+    fun bareDangerousVerbDiscussionDoesNotTriggerDangerousAction() {
+        val actions = aiAssistantSuggestedActions(
+            prompt = "删除当前聊天室有什么风险？",
+            reply = "这只是风险说明，不会执行删除。",
+            idPrefix = "message-bare-danger-discussion",
+        )
+
+        assertTrue(actions.isEmpty())
+    }
+
+    @Test
+    fun explicitPoliteDangerousActionStillTriggersDangerousAction() {
+        val actions = aiAssistantSuggestedActions(
+            prompt = "请帮我删除当前聊天室",
+            reply = "会删除当前聊天室，需要确认。",
+            idPrefix = "message-danger-explicit",
+        )
+
+        assertTrue(actions.any { it.kind == AiAssistantActionKind.DeleteCurrentChatRoom })
+    }
+
+    @Test
+    fun explicitQuestionCanStillTriggerNavigationAction() {
+        val actions = aiAssistantSuggestedActions(
+            prompt = "能不能帮我打开通知页",
+            reply = "可以打开通知页。",
+            idPrefix = "message-question-action",
+        )
+
+        assertTrue(actions.any { it.kind == AiAssistantActionKind.OpenNotifications })
+    }
+
+    @Test
+    fun negatedAssistantReplyDoesNotTriggerHighRiskActions() {
+        val actions = aiAssistantSuggestedActions(
+            prompt = "继续聊刚才的问题",
+            reply = "我只是说明风险，不会删除当前聊天室，也不要清空消息或发送草稿。",
+            idPrefix = "message-negated-risk",
+        )
+
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.DeleteCurrentChatRoom })
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.ClearCurrentChatRoomMessages })
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.SendChatDraft })
+    }
+
+    @Test
+    fun structuredBodyTextDoesNotTriggerHighRiskActions() {
+        val actions = aiAssistantSuggestedActions(
+            prompt = "帮我写一条帖子草稿",
+            reply = """
+                可以作为草稿。
+                ```hhhl-assistant-payload
+                {"body":"不要删除当前聊天室，先确认备份。"}
+                ```
+            """.trimIndent(),
+            idPrefix = "message-body-risk-text",
+        )
+
+        assertTrue(actions.any { it.kind == AiAssistantActionKind.FillComposeDraft })
+        assertTrue(actions.none { it.kind == AiAssistantActionKind.DeleteCurrentChatRoom })
+    }
+
+    @Test
     fun suggestedActionsCoverCommonNavigationAndRefreshTools() {
         val actions = aiAssistantSuggestedActions(
             prompt = "打开通知页并刷新当前页面，然后检查更新",
@@ -379,6 +465,130 @@ class AiAssistantPresentationTest {
         assertEquals("抽奖广告", parsed.payload.mutedWord)
         assertEquals("发帖草稿要简短", parsed.payload.memory)
         assertEquals("- 检查规则\n- 模拟触发", parsed.payload.checklist)
+    }
+
+    @Test
+    fun structuredReplyExtractsWholeJsonWrapper() {
+        val parsed = aiAssistantStructuredReply(
+            """{"reply":"可以这样回复。","payload":{"body":"收到，我稍后确认。","targetUser":"张三"}}""",
+        )
+
+        assertEquals("可以这样回复。", parsed.visibleText)
+        assertEquals("收到，我稍后确认。", parsed.payload.body)
+        assertEquals("张三", parsed.payload.targetUser)
+    }
+
+    @Test
+    fun wrapperDisplayReplyIsNotUsedAsActionBody() {
+        val payload = aiAssistantActionPayload(
+            """{"reply":"可以发送这条消息。","payload":{"targetUser":"张三"}}""",
+        )
+
+        assertEquals("", payload.body)
+        assertEquals("张三", payload.targetUser)
+    }
+
+    @Test
+    fun bareTextPayloadStillWorksAsBodyAlias() {
+        val payload = aiAssistantActionPayload(
+            """{"text":"收到，我稍后确认。","targetUser":"张三"}""",
+        )
+
+        assertEquals("收到，我稍后确认。", payload.body)
+        assertEquals("张三", payload.targetUser)
+    }
+
+    @Test
+    fun structuredReplyExtractsFencedJsonWrapper() {
+        val parsed = aiAssistantStructuredReply(
+            """
+                ```json
+                {"message":"整理好了。","data":{"checklist":["检查规则","模拟触发"]}}
+                ```
+            """.trimIndent(),
+        )
+
+        assertEquals("整理好了。", parsed.visibleText)
+        assertEquals("检查规则\n模拟触发", parsed.payload.checklist)
+    }
+
+    @Test
+    fun assistantDisplayBubblesSplitParagraphsAndKeepCodeFence() {
+        val bubbles = aiAssistantDisplayBubbles(
+            """
+                先看这个结论。
+
+                ```json
+                {"ok":true}
+                ```
+
+                然后再确认动作。
+            """.trimIndent(),
+        )
+
+        assertEquals(
+            listOf(
+                "先看这个结论。",
+                "```json\n{\"ok\":true}\n```",
+                "然后再确认动作。",
+            ),
+            bubbles,
+        )
+    }
+
+    @Test
+    fun assistantDisplayBubblesRenderJsonReplyArrayAsSeparateBubbles() {
+        val bubbles = aiAssistantDisplayBubbles(
+            """{"reply":["第一段结论。","第二段建议。"],"payload":{"body":"只作为草稿内容"}}""",
+        )
+
+        assertEquals(listOf("第一段结论。", "第二段建议。"), bubbles)
+    }
+
+    @Test
+    fun assistantDisplayBubblesExtractEmbeddedJsonFenceAndHideProtocol() {
+        val bubbles = aiAssistantDisplayBubbles(
+            """
+                结果如下：
+                ```json
+                {"reply":"第一段。\n\n第二段。","payload":{"body":"草稿正文"}}
+                ```
+            """.trimIndent(),
+        )
+
+        assertEquals(listOf("结果如下：", "第一段。", "第二段。"), bubbles)
+    }
+
+    @Test
+    fun structuredReplyHidesUnclosedPayloadFence() {
+        val parsed = aiAssistantStructuredReply(
+            """
+                可以先作为草稿。
+                ```hhhl-assistant-payload
+                {"body":"今天继续修小助手渲染。","targetRoom":"AGI 讨论"}
+            """.trimIndent(),
+        )
+
+        assertEquals("可以先作为草稿。", parsed.visibleText)
+        assertEquals("今天继续修小助手渲染。", parsed.payload.body)
+        assertEquals("AGI 讨论", parsed.payload.targetRoom)
+    }
+
+    @Test
+    fun bugDiscussionDoesNotTriggerMentionedFeatureActions() {
+        val actions = aiAssistantSuggestedActions(
+            prompt = "通知未读显示 99+ 有问题，公告完整内容格式也不对",
+            reply = "这是界面问题描述，不应该打开通知或公告页面。",
+            idPrefix = "message-ui-bug-discussion",
+        )
+
+        assertTrue(actions.isEmpty())
+    }
+
+    @Test
+    fun outgoingDraftPrefersAssistantPayloadBodyOverCurrentDraft() {
+        assertEquals("AI正文", aiAssistantOutgoingDraftText("旧草稿", " AI正文 "))
+        assertEquals("旧草稿", aiAssistantOutgoingDraftText(" 旧草稿 ", " "))
     }
 
     @Test

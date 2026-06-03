@@ -14,9 +14,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -94,6 +96,46 @@ class ChannelStateHolderTest {
 
         assertEquals(second, holder.state.value.selectedChannel)
         assertEquals(listOf("channel-1", "channel-2"), calls)
+    }
+
+    @Test
+    fun pendingChannelRefreshDoesNotOverwriteNewlySelectedChannel() = runTest {
+        val first = sampleChannel("channel-1")
+        val second = sampleChannel("channel-2")
+        val note = FakeData.timeline[0]
+        val pendingRefresh = CompletableDeferred<ChannelsRepositoryResult>()
+        var refreshCount = 0
+        val holder = ChannelStateHolder(
+            repository = fakeRepository(
+                channelsResult = ChannelsRepositoryResult.Success(listOf(first, second)),
+                timelineResult = ChannelTimelineRepositoryResult.Success(listOf(note)),
+                refreshChannelsResultProvider = {
+                    refreshCount += 1
+                    if (refreshCount == 1) {
+                        ChannelsRepositoryResult.Success(listOf(first, second))
+                    } else {
+                        pendingRefresh.await()
+                    }
+                },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshChannels()
+        advanceUntilIdle()
+        assertEquals(first, holder.state.value.selectedChannel)
+
+        holder.refreshChannels()
+        runCurrent()
+        holder.selectChannel(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedChannel)
+
+        pendingRefresh.complete(ChannelsRepositoryResult.Success(listOf(first, second)))
+        advanceUntilIdle()
+
+        assertEquals(second, holder.state.value.selectedChannel)
+        assertEquals(listOf(note), holder.state.value.notes)
     }
 
     @Test
@@ -346,6 +388,42 @@ class ChannelStateHolderTest {
         assertEquals(emptyList(), holder.state.value.notes)
     }
 
+    @Test
+    fun pendingArchiveDoesNotClearNewlySelectedChannel() = runTest {
+        val archiveResult = CompletableDeferred<ChannelMutationRepositoryResult>()
+        val first = sampleChannel("channel-1")
+        val second = sampleChannel("channel-2")
+        val note = FakeData.timeline[0]
+        val holder = ChannelStateHolder(
+            repository = fakeRepository(
+                channelsResult = ChannelsRepositoryResult.Success(listOf(first, second)),
+                timelineResult = ChannelTimelineRepositoryResult.Success(listOf(note)),
+                archiveResultProvider = { archiveResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshChannels()
+        advanceUntilIdle()
+        holder.archiveSelectedChannel()
+        runCurrent()
+
+        assertTrue(holder.state.value.isMutatingChannel)
+
+        holder.selectChannel(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedChannel)
+        assertEquals(listOf(note), holder.state.value.notes)
+
+        archiveResult.complete(ChannelMutationRepositoryResult.Success(first.copy(isArchived = true)))
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMutatingChannel)
+        assertEquals(listOf(second), holder.state.value.channels)
+        assertEquals(second, holder.state.value.selectedChannel)
+        assertEquals(listOf(note), holder.state.value.notes)
+    }
+
     private fun fakeRepository(
         channelsResult: ChannelsRepositoryResult,
         timelineResult: ChannelTimelineRepositoryResult = ChannelTimelineRepositoryResult.Success(emptyList()),
@@ -354,6 +432,8 @@ class ChannelStateHolderTest {
         mutationResult: ChannelMutationRepositoryResult = ChannelMutationRepositoryResult.Success(sampleChannel("channel-mutated")),
         onRefreshChannels: (ChannelListKind) -> Unit = {},
         onRefreshTimeline: (String) -> Unit = {},
+        refreshChannelsResultProvider: (suspend (ChannelListKind) -> ChannelsRepositoryResult)? = null,
+        archiveResultProvider: suspend (Channel) -> ChannelMutationRepositoryResult = { mutationResult },
     ): ChannelRepository {
         return sequenceRepository(
             channelResults = listOf(channelsResult),
@@ -363,6 +443,8 @@ class ChannelStateHolderTest {
             mutationResult = mutationResult,
             onRefreshChannels = onRefreshChannels,
             onRefreshTimeline = onRefreshTimeline,
+            refreshChannelsResultProvider = refreshChannelsResultProvider,
+            archiveResultProvider = archiveResultProvider,
         )
     }
 
@@ -374,6 +456,8 @@ class ChannelStateHolderTest {
         mutationResult: ChannelMutationRepositoryResult = ChannelMutationRepositoryResult.Success(sampleChannel("channel-mutated")),
         onRefreshChannels: (ChannelListKind) -> Unit = {},
         onRefreshTimeline: (String) -> Unit = {},
+        refreshChannelsResultProvider: (suspend (ChannelListKind) -> ChannelsRepositoryResult)? = null,
+        archiveResultProvider: suspend (Channel) -> ChannelMutationRepositoryResult = { mutationResult },
     ): ChannelRepository {
         var channelResultIndex = 0
         return object : ChannelRepository(
@@ -445,6 +529,7 @@ class ChannelStateHolderTest {
         ) {
             override suspend fun refreshChannels(kind: ChannelListKind): ChannelsRepositoryResult {
                 onRefreshChannels(kind)
+                refreshChannelsResultProvider?.let { provider -> return provider(kind) }
                 val result = channelResults.getOrElse(channelResultIndex) { channelResults.last() }
                 channelResultIndex += 1
                 return result
@@ -490,7 +575,7 @@ class ChannelStateHolderTest {
             }
 
             override suspend fun archiveChannel(channel: Channel): ChannelMutationRepositoryResult {
-                return mutationResult
+                return archiveResultProvider(channel)
             }
         }
     }

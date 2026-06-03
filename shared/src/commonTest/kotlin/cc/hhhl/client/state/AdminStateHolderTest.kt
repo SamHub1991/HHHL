@@ -90,6 +90,67 @@ class AdminStateHolderTest {
     }
 
     @Test
+    fun pendingCreateAnnouncementDoesNotClearDraftChangedAfterRequest() = runTest {
+        val pending = CompletableDeferred<AdminRepositoryResult<AdminAnnouncementSummary?>>()
+        val holder = AdminStateHolder(
+            repository = fakeRepository(
+                createAnnouncementProvider = { _, _ -> pending.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAnnouncementDraft("First title", "First text")
+        holder.createAnnouncement()
+        runCurrent()
+        holder.updateAnnouncementDraft("Second title", "Second text")
+
+        pending.complete(
+            AdminRepositoryResult.Success(
+                sampleAnnouncement().copy(id = "ann-created", title = "First title", text = "First text"),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals("Second title", holder.state.value.announcementTitleDraft)
+        assertEquals("Second text", holder.state.value.announcementTextDraft)
+        assertNull(holder.state.value.editingAnnouncementId)
+        assertNull(holder.state.value.actionMessage)
+        assertTrue(holder.state.value.announcements.any { it.id == "ann-created" })
+    }
+
+    @Test
+    fun pendingUpdateAnnouncementDoesNotClearDifferentEditedDraft() = runTest {
+        val first = sampleAnnouncement().copy(id = "ann-1", title = "First", text = "Old first")
+        val second = sampleAnnouncement().copy(id = "ann-2", title = "Second", text = "Old second")
+        val pending = CompletableDeferred<AdminRepositoryResult<Unit>>()
+        val holder = AdminStateHolder(
+            repository = fakeRepository(
+                overviewResult = AdminRepositoryResult.Success(AdminOverview(announcements = listOf(first, second))),
+                updateAnnouncementProvider = { _, _, _ -> pending.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.editAnnouncement(first)
+        holder.updateAnnouncementDraft("Updated first", "Updated first text")
+        holder.createAnnouncement()
+        runCurrent()
+        holder.editAnnouncement(second)
+        holder.updateAnnouncementDraft("Updated second", "Updated second text")
+
+        pending.complete(AdminRepositoryResult.Success(Unit))
+        advanceUntilIdle()
+
+        assertEquals("ann-2", holder.state.value.editingAnnouncementId)
+        assertEquals("Updated second", holder.state.value.announcementTitleDraft)
+        assertEquals("Updated second text", holder.state.value.announcementTextDraft)
+        assertNull(holder.state.value.actionMessage)
+        assertEquals("Updated first", holder.state.value.announcements.first { it.id == "ann-1" }.title)
+    }
+
+    @Test
     fun cancelEditClearsAnnouncementDraft() = runTest {
         val original = sampleAnnouncement()
         val holder = AdminStateHolder(
@@ -186,6 +247,12 @@ class AdminStateHolderTest {
         userRolesProvider: suspend (String) -> AdminRepositoryResult<List<AdminRoleSummary>> = {
             userRolesResult
         },
+        createAnnouncementProvider: suspend (String, String) -> AdminRepositoryResult<AdminAnnouncementSummary?> = { _, _ ->
+            createAnnouncementResult
+        },
+        updateAnnouncementProvider: suspend (String, String, String) -> AdminRepositoryResult<Unit> = { _, _, _ ->
+            updateAnnouncementResult
+        },
     ): AdminRepository {
         return object : AdminRepository(tokenProvider = { "token-123" }, api = unusedAdminApi()) {
             override suspend fun overview(userQuery: String): AdminRepositoryResult<AdminOverview> = overviewResult
@@ -222,7 +289,7 @@ class AdminStateHolderTest {
                 title: String,
                 text: String,
             ): AdminRepositoryResult<AdminAnnouncementSummary?> {
-                return createAnnouncementResult
+                return createAnnouncementProvider(title, text)
             }
 
             override suspend fun updateAnnouncement(
@@ -230,7 +297,7 @@ class AdminStateHolderTest {
                 title: String,
                 text: String,
             ): AdminRepositoryResult<Unit> {
-                return updateAnnouncementResult
+                return updateAnnouncementProvider(announcementId, title, text)
             }
 
             override suspend fun deleteAnnouncement(announcementId: String): AdminRepositoryResult<Unit> {

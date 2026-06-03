@@ -13,9 +13,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -218,6 +220,42 @@ class AntennaStateHolderTest {
     }
 
     @Test
+    fun pendingDeleteDoesNotClearNewlySelectedAntenna() = runTest {
+        val deleteResult = CompletableDeferred<AntennaActionRepositoryResult>()
+        val first = sampleAntenna("antenna-1")
+        val second = sampleAntenna("antenna-2")
+        val note = FakeData.timeline[0]
+        val holder = AntennaStateHolder(
+            repository = fakeRepository(
+                antennasResult = AntennasRepositoryResult.Success(listOf(first, second)),
+                notesResult = AntennaNotesRepositoryResult.Success(listOf(note)),
+                actionResultProvider = { deleteResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshAntennas()
+        advanceUntilIdle()
+        holder.deleteSelectedAntenna()
+        runCurrent()
+
+        assertTrue(holder.state.value.isMutatingAntenna)
+
+        holder.selectAntenna(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedAntenna)
+        assertEquals(listOf(note), holder.state.value.notes)
+
+        deleteResult.complete(AntennaActionRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMutatingAntenna)
+        assertEquals(listOf(second), holder.state.value.antennas)
+        assertEquals(second, holder.state.value.selectedAntenna)
+        assertEquals(listOf(note), holder.state.value.notes)
+    }
+
+    @Test
     fun applyNoteMutationClearsReloginAfterUnauthorized() = runTest {
         val antenna = sampleAntenna("antenna-1")
         val note = FakeData.timeline[0]
@@ -255,6 +293,7 @@ class AntennaStateHolderTest {
         onUpdateAntenna: (String, AntennaDraft) -> Unit = { _, _ -> },
         onDeleteAntenna: (String) -> Unit = {},
         antennasResultProvider: (() -> AntennasRepositoryResult)? = null,
+        actionResultProvider: suspend (String) -> AntennaActionRepositoryResult = { actionResult },
     ): AntennaRepository {
         return object : AntennaRepository(
             tokenProvider = { "token-123" },
@@ -326,7 +365,7 @@ class AntennaStateHolderTest {
 
             override suspend fun deleteAntenna(antennaId: String): AntennaActionRepositoryResult {
                 onDeleteAntenna(antennaId)
-                return actionResult
+                return actionResultProvider(antennaId)
             }
         }
     }

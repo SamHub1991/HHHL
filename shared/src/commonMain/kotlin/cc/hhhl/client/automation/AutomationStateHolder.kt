@@ -36,6 +36,11 @@ private data class AutomationRuleMatchEvaluation(
     val conditionResults: List<AutomationConditionDebugResult> = emptyList(),
 )
 
+private data class AutomationRuleExecutionOutcome(
+    val allSucceeded: Boolean,
+    val anySucceeded: Boolean,
+)
+
 data class AutomationUiState(
     val rules: List<AutomationRule> = emptyList(),
     val logs: List<AutomationExecutionLog> = emptyList(),
@@ -488,37 +493,49 @@ class AutomationStateHolder(
                 reason = evaluation.reason,
                 conditionResults = evaluation.conditionResults,
             )
+            val previousCooldownMarker = cooldownMarkers[rule.id]
+            val previousExecutionWindow = ruleExecutionWindows[rule.id]
             recentEventRuleKeys = (listOf(transientDedupeKey) + recentEventRuleKeys).take(MAX_RECENT_EVENT_KEYS)
             cooldownMarkers = cooldownMarkers + (rule.id to nowMillis())
             recordRuleExecution(rule)
-            val executedSuccessfully = executeRule(rule, event)
-            if (!executedSuccessfully) {
+            val executionOutcome = executeRule(rule, event)
+            if (!executionOutcome.allSucceeded && !executionOutcome.anySucceeded) {
                 recentEventRuleKeys = recentEventRuleKeys.filterNot { key -> key == transientDedupeKey }
+                restoreRuleExecutionGuards(rule.id, previousCooldownMarker, previousExecutionWindow)
                 executedRecord?.let(::releaseExecutedEvent)
             }
         }
     }
 
-    private suspend fun executeRule(rule: AutomationRule, event: AutomationEvent): Boolean {
+    private suspend fun executeRule(rule: AutomationRule, event: AutomationEvent): AutomationRuleExecutionOutcome {
         val actions = rule.actions.filter { it.enabled }
         if (actions.isEmpty()) {
             addExecutionLog(rule, event, "无动作", "没有启用的动作", success = false)
-            return false
+            return AutomationRuleExecutionOutcome(allSucceeded = false, anySucceeded = false)
         }
         return if (rule.actionMode == AutomationActionMode.Parallel) {
             coroutineScope {
-                actions.map { action -> async { executeAction(rule, action, event) } }.awaitAll().all { success -> success }
+                val results = actions.map { action -> async { executeAction(rule, action, event) } }.awaitAll()
+                AutomationRuleExecutionOutcome(
+                    allSucceeded = results.all { success -> success },
+                    anySucceeded = results.any { success -> success },
+                )
             }
         } else {
             var allSucceeded = true
+            var anySucceeded = false
             for (action in actions) {
                 val success = executeAction(rule, action, event)
+                if (success) anySucceeded = true
                 if (!success) {
                     allSucceeded = false
                     if (action.failurePolicy == AutomationFailurePolicy.Stop) break
                 }
             }
-            allSucceeded
+            AutomationRuleExecutionOutcome(
+                allSucceeded = allSucceeded,
+                anySucceeded = anySucceeded,
+            )
         }
     }
 
@@ -830,6 +847,23 @@ class AutomationStateHolder(
         runCatching { store.releaseExecutedEvent(cleanAccountId(), cleanRecord.key) }
         executedEvents = executedEvents.filter { event -> event.cleaned().key != cleanRecord.key }
         executedEventKeys = executedEvents.mapTo(HashSet()) { it.key }
+    }
+
+    private fun restoreRuleExecutionGuards(
+        ruleId: String,
+        previousCooldownMarker: Long?,
+        previousExecutionWindow: List<Long>?,
+    ) {
+        cooldownMarkers = if (previousCooldownMarker == null) {
+            cooldownMarkers - ruleId
+        } else {
+            cooldownMarkers + (ruleId to previousCooldownMarker)
+        }
+        ruleExecutionWindows = if (previousExecutionWindow == null) {
+            ruleExecutionWindows - ruleId
+        } else {
+            ruleExecutionWindows + (ruleId to previousExecutionWindow)
+        }
     }
 
     private fun recordRuleExecution(rule: AutomationRule) {

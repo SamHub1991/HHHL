@@ -309,6 +309,43 @@ class AiRepositoryTest {
     }
 
     @Test
+    fun automationRuleDraftSettingsUseConfiguredLocalEndpointWithoutRemoteProbe() = runTest {
+        val paths = mutableListOf<String>()
+        val repository = AiRepository(
+            httpClient = aiTestClient { request ->
+                paths += request.url.encodedPath
+                assertEquals("Bearer automation-key", request.headers[HttpHeaders.Authorization])
+                respond(
+                    content = """{"choices":[{"message":{"role":"assistant","content":"草稿完成"}}]}""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+            remoteTokenProvider = { "session-token" },
+            remoteBaseUrlProvider = { "https://dc.hhhl.cc" },
+        )
+        val settings = AiSettings(
+            apiKey = "default-key",
+            automationAllowed = true,
+            automationRuleDraftModel = AiAutomationModelConfig(
+                enabled = true,
+                baseUrl = "https://automation.example.com/v1",
+                apiKey = "automation-key",
+                model = "automation-rule-model",
+            ),
+        ).settingsForTask(AiTaskKind.AutomationRuleDraft)
+
+        val result = repository.complete(
+            settings = settings,
+            prompt = AiPrompt("system", "user", 120),
+            model = settings.modelForTask(AiTaskKind.AutomationRuleDraft),
+        )
+
+        assertEquals(AiRepositoryResult.Success("草稿完成"), result)
+        assertEquals(listOf("/v1/chat/completions"), paths)
+    }
+
+    @Test
     fun serverAiJsonMethodsPostToAllServerEndpointsWithSessionToken() = runTest {
         val calls = mutableListOf<Pair<String, String>>()
         val repository = AiRepository(

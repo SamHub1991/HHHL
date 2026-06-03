@@ -13,9 +13,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -245,6 +247,42 @@ class UserListStateHolderTest {
     }
 
     @Test
+    fun pendingDeleteDoesNotClearNewlySelectedList() = runTest {
+        val deleteResult = CompletableDeferred<UserListActionRepositoryResult>()
+        val first = sampleList("list-1")
+        val second = sampleList("list-2")
+        val note = FakeData.timeline[0]
+        val holder = UserListStateHolder(
+            repository = fakeRepository(
+                listsResult = UserListsRepositoryResult.Success(listOf(first, second)),
+                timelineResult = UserListTimelineRepositoryResult.Success(listOf(note)),
+                actionResultProvider = { deleteResult.await() },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshLists()
+        advanceUntilIdle()
+        holder.deleteSelectedList()
+        runCurrent()
+
+        assertTrue(holder.state.value.isMutatingList)
+
+        holder.selectList(second)
+        advanceUntilIdle()
+        assertEquals(second, holder.state.value.selectedList)
+        assertEquals(listOf(note), holder.state.value.notes)
+
+        deleteResult.complete(UserListActionRepositoryResult.Success)
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isMutatingList)
+        assertEquals(listOf(second), holder.state.value.lists)
+        assertEquals(second, holder.state.value.selectedList)
+        assertEquals(listOf(note), holder.state.value.notes)
+    }
+
+    @Test
     fun addUserToSelectedListAddsMemberLocally() = runTest {
         val selected = sampleList("list-1")
         val calls = mutableListOf<Pair<String, String>>()
@@ -309,6 +347,7 @@ class UserListStateHolderTest {
         onAddUserToList: (String, String) -> Unit = { _, _ -> },
         onRemoveUserFromList: (String, String) -> Unit = { _, _ -> },
         listsResultProvider: (() -> UserListsRepositoryResult)? = null,
+        actionResultProvider: suspend (String) -> UserListActionRepositoryResult = { actionResult },
     ): UserListRepository {
         return object : UserListRepository(
             tokenProvider = { "token-123" },
@@ -398,7 +437,7 @@ class UserListStateHolderTest {
 
             override suspend fun deleteList(listId: String): UserListActionRepositoryResult {
                 onDeleteList(listId)
-                return actionResult
+                return actionResultProvider(listId)
             }
 
             override suspend fun addUserToList(

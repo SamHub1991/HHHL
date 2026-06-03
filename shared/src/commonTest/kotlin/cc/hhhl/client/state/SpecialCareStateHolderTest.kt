@@ -11,6 +11,7 @@ class SpecialCareStateHolderTest {
         val holder = SpecialCareStateHolder()
 
         assertEquals(emptySet(), holder.state.value.userIds)
+        assertFalse(holder.state.value.isRestored)
     }
 
     @Test
@@ -21,6 +22,7 @@ class SpecialCareStateHolderTest {
         holder.restoreStoredSpecialCare()
 
         assertEquals(setOf("user-1", "user-2"), holder.state.value.userIds)
+        assertTrue(holder.state.value.isRestored)
         assertTrue(holder.isSpecialCare("user-1"))
     }
 
@@ -33,6 +35,7 @@ class SpecialCareStateHolderTest {
 
         assertTrue(enabled)
         assertEquals(setOf("user-1"), holder.state.value.userIds)
+        assertTrue(holder.state.value.isRestored)
         assertEquals(setOf("user-1"), store.savedUserIds)
     }
 
@@ -69,6 +72,7 @@ class SpecialCareStateHolderTest {
         holder.restoreStoredSpecialCare()
 
         assertEquals(emptySet(), holder.state.value.userIds)
+        assertTrue(holder.state.value.isRestored)
     }
 
     @Test

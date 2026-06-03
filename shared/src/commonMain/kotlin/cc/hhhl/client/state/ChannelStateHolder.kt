@@ -38,10 +38,12 @@ class ChannelStateHolder(
 ) {
     private val mutableState = MutableStateFlow(ChannelUiState())
     val state: StateFlow<ChannelUiState> = mutableState
+    private var channelsRequestId = 0
     private var timelineRequestId = 0
 
     fun refreshChannels(kind: ChannelListKind = state.value.selectedKind) {
         if (state.value.isLoadingChannels) return
+        val requestId = nextChannelsRequestId()
 
         val previousState = state.value
         val previousSelectedId = if (previousState.selectedKind == kind) {
@@ -66,9 +68,15 @@ class ChannelStateHolder(
         scope.launch {
             when (val result = repository.refreshChannels(kind)) {
                 is ChannelsRepositoryResult.Success -> {
-                    val selected = result.channels.firstOrNull { it.id == previousSelectedId }
-                        ?: result.channels.firstOrNull()
+                    var selectedForTimeline: Channel? = null
+                    var clearTimelineNotes = false
                     mutableState.update {
+                        if (requestId != channelsRequestId || it.selectedKind != kind) return@update it
+                        val selectedId = it.selectedChannel?.id ?: previousSelectedId
+                        val selected = result.channels.firstOrNull { channel -> channel.id == selectedId }
+                            ?: result.channels.firstOrNull()
+                        selectedForTimeline = selected
+                        clearTimelineNotes = it.notes.isEmpty()
                         it.copy(
                             channels = result.channels,
                             selectedChannel = selected,
@@ -78,9 +86,12 @@ class ChannelStateHolder(
                             requiresRelogin = false,
                         )
                     }
-                    selected?.let { channel -> loadTimeline(channel.id, clearNotes = state.value.notes.isEmpty()) }
+                    if (requestId == channelsRequestId && state.value.selectedKind == kind) {
+                        selectedForTimeline?.let { channel -> loadTimeline(channel.id, clearNotes = clearTimelineNotes) }
+                    }
                 }
                 ChannelsRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != channelsRequestId || it.selectedKind != kind) return@update it
                     it.copy(
                         isLoadingChannels = false,
                         errorMessage = "登录已失效，请重新登录",
@@ -88,6 +99,7 @@ class ChannelStateHolder(
                     )
                 }
                 is ChannelsRepositoryResult.Error -> mutableState.update {
+                    if (requestId != channelsRequestId || it.selectedKind != kind) return@update it
                     it.copy(
                         isLoadingChannels = false,
                         errorMessage = result.message,
@@ -351,30 +363,33 @@ class ChannelStateHolder(
             when (val result = repository.archiveChannel(channel)) {
                 is ChannelMutationRepositoryResult.Success -> mutableState.update { current ->
                     val remaining = current.channels.filterNot { it.id == result.channel.id }
+                    val archivedSelectedChannel = current.selectedChannel?.id == result.channel.id
                     current.copy(
                         channels = remaining,
-                        selectedChannel = remaining.firstOrNull(),
-                        notes = emptyList(),
+                        selectedChannel = if (archivedSelectedChannel) remaining.firstOrNull() else current.selectedChannel,
+                        notes = if (archivedSelectedChannel) emptyList() else current.notes,
                         isMutatingChannel = false,
-                        isLoadingTimeline = false,
-                        isLoadingMore = false,
-                        endReached = false,
-                        errorMessage = null,
-                        timelineErrorMessage = null,
+                        isLoadingTimeline = if (archivedSelectedChannel) false else current.isLoadingTimeline,
+                        isLoadingMore = if (archivedSelectedChannel) false else current.isLoadingMore,
+                        endReached = if (archivedSelectedChannel) false else current.endReached,
+                        errorMessage = if (archivedSelectedChannel) null else current.errorMessage,
+                        timelineErrorMessage = if (archivedSelectedChannel) null else current.timelineErrorMessage,
                         requiresRelogin = false,
                     )
                 }
-                ChannelMutationRepositoryResult.Unauthorized -> mutableState.update {
-                    it.copy(
+                ChannelMutationRepositoryResult.Unauthorized -> mutableState.update { current ->
+                    val archivingSelectedChannel = current.selectedChannel?.id == channel.id
+                    current.copy(
                         isMutatingChannel = false,
-                        errorMessage = "登录已失效，请重新登录",
+                        errorMessage = if (archivingSelectedChannel) "登录已失效，请重新登录" else current.errorMessage,
                         requiresRelogin = true,
                     )
                 }
-                is ChannelMutationRepositoryResult.Error -> mutableState.update {
-                    it.copy(
+                is ChannelMutationRepositoryResult.Error -> mutableState.update { current ->
+                    val archivingSelectedChannel = current.selectedChannel?.id == channel.id
+                    current.copy(
                         isMutatingChannel = false,
-                        errorMessage = result.message,
+                        errorMessage = if (archivingSelectedChannel) result.message else current.errorMessage,
                         requiresRelogin = false,
                     )
                 }
@@ -443,6 +458,11 @@ class ChannelStateHolder(
                 )
             }
         }
+    }
+
+    private fun nextChannelsRequestId(): Int {
+        channelsRequestId += 1
+        return channelsRequestId
     }
 
     private fun nextTimelineRequestId(): Int {

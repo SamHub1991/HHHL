@@ -30,6 +30,7 @@ class FollowRequestStateHolder(
     private val mutableState = MutableStateFlow(FollowRequestUiState())
     val state: StateFlow<FollowRequestUiState> = mutableState
     private var listRequestId = 0
+    private var sentListRequestId = 0
 
     fun refresh() {
         if (state.value.isLoading) return
@@ -55,11 +56,12 @@ class FollowRequestStateHolder(
 
     fun refreshSent() {
         if (state.value.isLoadingSent) return
+        val requestId = nextSentListRequestId()
         mutableState.update {
             it.copy(isLoadingSent = true, actionErrorMessage = null, requiresRelogin = false)
         }
         scope.launch {
-            applySentListResult(repository.refreshSent())
+            applySentListResult(repository.refreshSent(), requestId)
         }
     }
 
@@ -144,7 +146,14 @@ class FollowRequestStateHolder(
         }
     }
 
-    private fun applySentListResult(result: FollowRequestsRepositoryResult) {
+    private fun applySentListResult(
+        result: FollowRequestsRepositoryResult,
+        requestId: Int,
+    ) {
+        if (requestId != sentListRequestId) {
+            mutableState.update { it.copy(isLoadingSent = false) }
+            return
+        }
         when (result) {
             is FollowRequestsRepositoryResult.Success -> mutableState.update {
                 it.copy(
@@ -175,12 +184,18 @@ class FollowRequestStateHolder(
         return listRequestId
     }
 
+    private fun nextSentListRequestId(): Int {
+        sentListRequestId += 1
+        return sentListRequestId
+    }
+
     private fun applyActionResult(
         userId: String,
         result: FollowRequestActionRepositoryResult,
     ) {
         when (result) {
             FollowRequestActionRepositoryResult.Success -> mutableState.update {
+                nextSentListRequestId()
                 it.copy(
                     requests = it.requests.filterNot { request -> request.user.id == userId },
                     sentRequests = it.sentRequests.filterNot { request -> request.user.id == userId },

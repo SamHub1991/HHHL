@@ -6,6 +6,7 @@ import cc.hhhl.client.model.Note
 import cc.hhhl.client.repository.FavoriteNoteRepository
 import cc.hhhl.client.repository.FavoriteNotesRepositoryResult
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -34,6 +35,8 @@ class FavoriteNoteStateHolder(
     val state: StateFlow<FavoriteNoteUiState> = mutableState
     private var listRequestId = 0
     private var favoriteMessageRequestId = 0
+    private var favoriteMessageRevision = 0
+    private var favoriteMessageSaveJob: Job? = null
     private var restoredFavoriteMessageAccountId: String? = null
 
     fun refresh() {
@@ -69,10 +72,11 @@ class FavoriteNoteStateHolder(
         if (state.value.isLoadingFavoriteMessages) return
         restoredFavoriteMessageAccountId = accountId
         val requestId = nextFavoriteMessageRequestId()
+        val revision = favoriteMessageRevision
         mutableState.update { it.copy(isLoadingFavoriteMessages = true, favoriteMessage = null) }
         scope.launch {
             val messages = favoriteMessageStore.read(accountId)
-            if (requestId != favoriteMessageRequestId) return@launch
+            if (requestId != favoriteMessageRequestId || revision != favoriteMessageRevision) return@launch
             mutableState.update {
                 it.copy(
                     favoriteMessages = messages,
@@ -112,6 +116,7 @@ class FavoriteNoteStateHolder(
         )
         val nextMessages = (listOf(favorite) + state.value.favoriteMessages.filterNot { it.id == favorite.id })
             .trimmedFavoriteMessages()
+        val revision = nextFavoriteMessageRevision()
         mutableState.update {
             it.copy(
                 favoriteMessages = nextMessages,
@@ -120,19 +125,20 @@ class FavoriteNoteStateHolder(
             )
         }
         restoredFavoriteMessageAccountId = accountId
-        scope.launch { favoriteMessageStore.save(accountId, nextMessages) }
+        saveFavoriteMessages(accountId, nextMessages, revision)
     }
 
     fun removeFavoriteMessage(favoriteId: String) {
         val accountId = accountIdProvider()?.takeIf { it.isNotBlank() } ?: return
         val nextMessages = state.value.favoriteMessages.filterNot { it.id == favoriteId }
+        val revision = nextFavoriteMessageRevision()
         mutableState.update {
             it.copy(
                 favoriteMessages = nextMessages,
                 favoriteMessage = "已取消收藏信息",
             )
         }
-        scope.launch { favoriteMessageStore.save(accountId, nextMessages) }
+        saveFavoriteMessages(accountId, nextMessages, revision)
     }
 
     fun clearFavoriteMessage() {
@@ -217,5 +223,24 @@ class FavoriteNoteStateHolder(
     private fun nextFavoriteMessageRequestId(): Int {
         favoriteMessageRequestId += 1
         return favoriteMessageRequestId
+    }
+
+    private fun nextFavoriteMessageRevision(): Int {
+        favoriteMessageRevision += 1
+        favoriteMessageRequestId += 1
+        return favoriteMessageRevision
+    }
+
+    private fun saveFavoriteMessages(
+        accountId: String,
+        messages: List<FavoriteMessage>,
+        revision: Int,
+    ) {
+        val previousSaveJob = favoriteMessageSaveJob
+        favoriteMessageSaveJob = scope.launch {
+            previousSaveJob?.join()
+            if (revision != favoriteMessageRevision) return@launch
+            favoriteMessageStore.save(accountId, messages)
+        }
     }
 }

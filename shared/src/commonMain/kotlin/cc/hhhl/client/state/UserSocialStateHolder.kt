@@ -34,6 +34,7 @@ class UserSocialStateHolder(
     private val mutableState = MutableStateFlow(UserSocialUiState())
     val state: StateFlow<UserSocialUiState> = mutableState
     private var listRequestId = 0
+    private var relationshipActionRequestId = 0
 
     fun load(
         userId: String,
@@ -42,6 +43,7 @@ class UserSocialStateHolder(
     ) {
         if (state.value.isLoading && state.value.userId == userId && state.value.kind == kind) return
         val requestId = nextListRequestId()
+        relationshipActionRequestId += 1
 
         mutableState.update {
             it.copy(
@@ -149,6 +151,10 @@ class UserSocialStateHolder(
     ) {
         val cleanUserId = userId.trim()
         if (cleanUserId.isEmpty() || state.value.isRelationshipChanging) return
+        val current = state.value
+        val ownerUserId = current.userId ?: return
+        val kind = current.kind
+        val requestId = ++relationshipActionRequestId
 
         mutableState.update {
             it.copy(
@@ -161,6 +167,9 @@ class UserSocialStateHolder(
 
         scope.launch {
             applyRelationshipResult(
+                requestId = requestId,
+                ownerUserId = ownerUserId,
+                kind = kind,
                 userId = cleanUserId,
                 result = action(cleanUserId),
                 successMessage = successMessage,
@@ -228,11 +237,15 @@ class UserSocialStateHolder(
     }
 
     private fun applyRelationshipResult(
+        requestId: Int,
+        ownerUserId: String,
+        kind: UserSocialKind,
         userId: String,
         result: UserRelationshipRepositoryResult,
         successMessage: String,
         removeLocalItem: Boolean,
     ) {
+        if (!isCurrentRelationshipAction(requestId, ownerUserId, kind)) return
         when (result) {
             UserRelationshipRepositoryResult.Success -> mutableState.update {
                 it.copy(
@@ -267,5 +280,14 @@ class UserSocialStateHolder(
                 it.copy(isRelationshipChanging = false, requiresRelogin = false)
             }
         }
+    }
+
+    private fun isCurrentRelationshipAction(
+        requestId: Int,
+        ownerUserId: String,
+        kind: UserSocialKind,
+    ): Boolean {
+        val current = state.value
+        return requestId == relationshipActionRequestId && current.userId == ownerUserId && current.kind == kind
     }
 }

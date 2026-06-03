@@ -413,29 +413,31 @@ private fun MiAuthTokenInput.validate(): String? {
     }
 }
 
+private val miAuthTokenRequestJson = Json { explicitNulls = true }
+
 private fun MiAuthTokenInput.toRequestJsonString(): String {
-    return Json { explicitNulls = true }.encodeToString(
+    return miAuthTokenRequestJson.encodeToString(
         kotlinx.serialization.json.JsonObject.serializer(),
         buildJsonObject {
-    put("session", session?.let(::JsonPrimitive) ?: JsonNull)
-    put(
-        "permission",
-        buildJsonArray {
-            permissions.forEach { add(JsonPrimitive(it)) }
-        },
-    )
-    name?.let { put("name", JsonPrimitive(it)) }
-    description?.let { put("description", JsonPrimitive(it)) }
-    iconUrl?.let { put("iconUrl", JsonPrimitive(it)) }
-    if (grantees.isNotEmpty()) {
-        put(
-            "grantees",
-            buildJsonArray {
-                grantees.forEach { add(JsonPrimitive(it)) }
-            },
-        )
-    }
-    rank?.let { put("rank", JsonPrimitive(it)) }
+            put("session", session?.let(::JsonPrimitive) ?: JsonNull)
+            put(
+                "permission",
+                buildJsonArray {
+                    permissions.forEach { add(JsonPrimitive(it)) }
+                },
+            )
+            name?.let { put("name", JsonPrimitive(it)) }
+            description?.let { put("description", JsonPrimitive(it)) }
+            iconUrl?.let { put("iconUrl", JsonPrimitive(it)) }
+            if (grantees.isNotEmpty()) {
+                put(
+                    "grantees",
+                    buildJsonArray {
+                        grantees.forEach { add(JsonPrimitive(it)) }
+                    },
+                )
+            }
+            rank?.let { put("rank", JsonPrimitive(it)) }
         },
     )
 }
