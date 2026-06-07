@@ -345,6 +345,38 @@ class AiStateHolderTest {
     }
 
     @Test
+    fun automationBridgePassesFileIdsToRepository() = runTest {
+        val repository = FakeAiRepository(AiRepositoryResult.Success("RESULT: YES\n图片里有错误截图"))
+        val holder = AiStateHolder(
+            store = MemoryAiStore(
+                AiSnapshot(
+                    settings = AiSettings(
+                        enabled = true,
+                        apiKey = "key",
+                        fastModel = "fast-model",
+                        automationAllowed = true,
+                    ),
+                ),
+            ),
+            accountId = "account-1",
+            repository = repository,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        val result = holder.evaluateSemanticCondition(
+            prompt = "图片里是否有错误截图",
+            eventText = "事件：聊天消息",
+            fileIds = listOf(" image-file ", "image-file", "", "second-image"),
+            fileContext = "1. error.png · image/png · fileId=image-file",
+        )
+
+        assertTrue(result is AiBridgeResult.Success)
+        assertContentEquals(listOf(listOf("image-file", "second-image")), repository.requestedFileIds)
+        assertTrue(repository.lastPrompt?.user.orEmpty().contains("error.png"))
+    }
+
+    @Test
     fun automationRuleDraftUsesDefaultModelWhenAutomationModelConfigDisabled() = runTest {
         val repository = FakeAiRepository(AiRepositoryResult.Success("OK"))
         val holder = AiStateHolder(
@@ -565,6 +597,7 @@ private class FakeAiRepository(
     var lastPrompt: AiPrompt? = null
     val requestedModels = mutableListOf<String>()
     val requestedSettings = mutableListOf<AiSettings>()
+    val requestedFileIds = mutableListOf<List<String>>()
 
     override suspend fun complete(
         settings: AiSettings,
@@ -575,6 +608,7 @@ private class FakeAiRepository(
         lastPrompt = prompt
         requestedModels += model
         requestedSettings += settings
+        requestedFileIds += fileIds
         return resultProvider()
     }
 }

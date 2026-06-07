@@ -10,23 +10,23 @@ class HhhlTopBarSpecTest {
     fun topBarUsesPolishedCompactHeight() {
         val metrics = hhhlTopBarMetrics()
 
-        assertEquals(44, metrics.containerHeight)
-        assertEquals(10, metrics.horizontalPadding)
-        assertEquals(5, metrics.verticalPadding)
-        assertEquals(18, metrics.panelCornerRadius)
-        assertEquals(3, metrics.panelElevation)
-        assertTrue(metrics.containerHeight <= 48)
+        assertEquals(56, metrics.containerHeight)
+        assertEquals(16, metrics.horizontalPadding)
+        assertEquals(9, metrics.verticalPadding)
+        assertEquals(23, metrics.panelCornerRadius)
+        assertEquals(6, metrics.panelElevation)
+        assertTrue(metrics.containerHeight <= 56)
     }
 
     @Test
     fun topBarKeepsActionTargetsReadableWhileCompact() {
         val metrics = hhhlTopBarMetrics()
 
-        assertEquals(32, metrics.slotMinSize)
-        assertEquals(32, metrics.backButtonSize)
+        assertEquals(42, metrics.slotMinSize)
+        assertEquals(42, metrics.backButtonSize)
         assertTrue(metrics.backButtonSize < metrics.containerHeight)
-        assertTrue(metrics.backIconSize <= 18)
-        assertEquals(13.dp, HhhlIconActionCornerRadius)
+        assertTrue(metrics.backIconSize <= 19)
+        assertEquals(999.dp, HhhlIconActionCornerRadius)
         assertEquals(0.dp, HhhlIconActionIdleElevation)
     }
 }

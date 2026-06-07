@@ -36,14 +36,14 @@ class NotificationsPresentationTest {
     }
 
     @Test
-    fun visibleFiltersExposeEveryNotificationViewInline() {
-        assertEquals(NotificationFilter.entries, notificationVisiblePrimaryFilters())
+    fun visibleFiltersKeepPrimaryNotificationViewsInline() {
+        assertEquals(notificationPrimaryFilters(), notificationVisiblePrimaryFilters())
     }
 
     @Test
     fun notificationFiltersExposeSpecialCareView() {
         assertEquals("特别关心", NotificationFilter.SpecialCare.label)
-        assertEquals(true, NotificationFilter.SpecialCare in notificationVisiblePrimaryFilters())
+        assertEquals(true, NotificationFilter.SpecialCare in notificationOverflowFilters())
     }
 
     @Test

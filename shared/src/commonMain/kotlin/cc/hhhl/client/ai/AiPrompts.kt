@@ -293,17 +293,23 @@ object AiPromptBuilder {
             appendLine()
             appendLine("事件：")
             appendLine(input.automationEventText.ifBlank { input.text })
+            appendAutomationFileContext(input)
         }.trim()
     }
 
     private fun automationActionPrompt(input: AiTaskInput): String {
         return buildString {
             appendLine("根据自动化事件生成一段可直接执行的简短文本，可能会被用于日志、通知、Webhook、聊天回复或帖子回复。只输出正文。")
+            appendLine("如果要让客户端生成新图片，第一行输出 IMAGE_PROMPT: 后接生图提示词。")
+            appendLine("如果要编辑触发消息里的图片附件，第一行输出 IMAGE_EDIT_PROMPT: 后接图生图编辑提示词。")
+            appendLine("生图/改图时优先在标记后输出 JSON：{\"prompt\":\"详细提示词\",\"size\":\"1024x1024|1024x1536|1536x1024|3840x2160|2160x3840\",\"quality\":\"low|medium|high|auto\",\"background\":\"opaque|auto\",\"output_format\":\"png|jpeg|webp\",\"output_compression\":0-100,\"n\":1-10,\"transparent\":true|false,\"caption\":\"可选聊天说明\"}。")
+            appendLine("从用户语义判断参数：透明/抠图/贴纸/图标用 transparent=true 和 png；横图/壁纸可用 1536x1024 或 3840x2160；竖屏/手机壁纸可用 1024x1536 或 2160x3840；头像/正方形用 1024x1024；高清/精细用 high；多张候选提取为 n。")
             appendLine("如果上下文不应该自动回复、自动引用或自动执行，输出 SKIP。")
             if (input.prompt.isNotBlank()) appendLine("要求：${input.prompt}")
             appendLine()
             appendLine("事件：")
             appendLine(input.automationEventText.ifBlank { input.text })
+            appendAutomationFileContext(input)
         }.trim()
     }
 
@@ -346,6 +352,9 @@ object AiPromptBuilder {
             appendLine("聊天消息类型：用 MessageType，值可为 text、file、image、video、audio、reply、quote，多个值用逗号分隔。")
             appendLine("如果用户目标是聊天里“被 @ / 有人 @ 我 / @我时”触发，必须使用 trigger=ChatAttention，并添加条件 {type: AttentionKind, value: Mention, enabled: true}。如果要自动回复聊天，action.type 使用 AiReplyToChat，targetId 留空，replyToEvent 通常设为 true。")
             appendLine("聊天回复/引用提醒分别使用 ChatAttention + AttentionKind=Reply/Quote；聊天特别关心消息使用 ChatAttention + AttentionKind=SpecialCare，或用户明确说特别关心时使用 SpecialCare。")
+            appendLine("聊天里有人要求画图、生成图片、生图、出图时，action.type 用 AiReplyToChat，bodyTemplate 写明：如果对方要求生成新图片，输出 IMAGE_PROMPT: 后接 JSON，字段包含 prompt、size、quality、background、output_format、output_compression、n、transparent、caption；从语义里判断透明图、横竖图、分辨率、高清质量、张数等参数。")
+            appendLine("聊天里有人带图片附件并要求编辑图片、改图、图生图、换背景、加元素、按要求修改图片时，action.type 用 AiReplyToChat，并添加 MessageType=image 条件；bodyTemplate 写明：如果对方要求编辑图片附件，输出 IMAGE_EDIT_PROMPT: 后接同样 JSON 参数。")
+            appendLine("图片回复时客户端会按 action 的 mentionSender、replyToEvent、quoteEvent 发送，所以需要 @ 对方或回复/引用触发消息时仍应在 action 字段设置这些值，不要因为返回图片就省略。")
             appendLine("帖子流/某人发帖/某频道有帖子：使用 trigger=TimelineNote；指定发帖用户用 SenderUserId 或 SenderNameContains；指定频道优先 ChannelId，不知道 ID 用 ChannelNameContains，并加 TimelineKind=Channel；帖子消息类型也用 MessageType，值可含 text、image、file、poll、reply、quote。")
             appendLine("关注、帖子回复、帖子提及、帖子引用等来自通知的事件：使用 trigger=Notification，并添加 NotificationType=Follow/Reply/Mention/Quote/Renote/Reaction 等。不要把聊天 @ 误生成为 Notification。")
             appendLine("failurePolicy 只能是 Continue 或 Stop。")
@@ -422,6 +431,14 @@ object AiPromptBuilder {
             appendLine("全局上下文：")
             appendLine(input.automationEventText.ifBlank { input.text })
         }.trim()
+    }
+
+    private fun StringBuilder.appendAutomationFileContext(input: AiTaskInput) {
+        if (input.fileContext.isBlank()) return
+        appendLine()
+        appendLine("附件：")
+        appendLine(input.fileContext)
+        appendLine("图片附件会由服务器 AI 通过 fileIds 读取；判断或生成文本时需要同时考虑图片内容。")
     }
 }
 

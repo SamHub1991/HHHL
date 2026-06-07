@@ -381,6 +381,34 @@ data class AutomationEvent(
         }.trim()
     }
 
+    fun aiAttachmentFileIds(): List<String> {
+        return attachments
+            .asSequence()
+            .filter { attachment -> attachment.type.startsWith("image/", ignoreCase = true) }
+            .map { attachment -> attachment.id.trim() }
+            .filter { id -> id.isNotBlank() }
+            .distinct()
+            .take(MAX_AUTOMATION_AI_ATTACHMENT_FILE_IDS)
+            .toList()
+    }
+
+    fun aiAttachmentContextText(): String {
+        val imageFileIds = aiAttachmentFileIds().toSet()
+        if (attachments.isEmpty()) return ""
+        return buildString {
+            attachments.forEachIndexed { index, attachment ->
+                val label = attachment.name.ifBlank { attachment.id.ifBlank { "附件" } }
+                append("${index + 1}. $label")
+                if (attachment.type.isNotBlank()) append(" · ${attachment.type}")
+                if (attachment.id.isNotBlank()) append(" · fileId=${attachment.id}")
+                if (attachment.description.isNotBlank()) append(" · 描述=${attachment.description.take(MAX_AUTOMATION_AI_ATTACHMENT_DESCRIPTION)}")
+                if (attachment.isSensitive) append(" · 敏感附件")
+                if (attachment.id in imageFileIds) append(" · 将作为图片传给 AI")
+                appendLine()
+            }
+        }.trim()
+    }
+
     fun snapshot(): AutomationEventSnapshot {
         return AutomationEventSnapshot(
             id = id,
@@ -595,6 +623,8 @@ private fun Note.automationNoteMessageTypes(): List<String> {
 private val automationVariablePattern = Regex("\\{\\{([^}]+)\\}\\}")
 
 private const val DEFAULT_LOCAL_BASE_URL = "https://dc.hhhl.cc"
+private const val MAX_AUTOMATION_AI_ATTACHMENT_FILE_IDS = 16
+private const val MAX_AUTOMATION_AI_ATTACHMENT_DESCRIPTION = 160
 
 private fun String.mentionsAutomationChatUser(user: User?): Boolean {
     val username = user?.username?.trim()?.takeIf { it.isNotEmpty() } ?: return false

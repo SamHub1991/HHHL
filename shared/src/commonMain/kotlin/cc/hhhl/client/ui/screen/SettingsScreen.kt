@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -61,6 +63,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -72,6 +76,7 @@ import cc.hhhl.client.ai.AiProviderPreset
 import cc.hhhl.client.ai.AiServiceMode
 import cc.hhhl.client.ai.AiSettings
 import cc.hhhl.client.ai.AiTaskStatus
+import cc.hhhl.client.ai.DEFAULT_IMAGE_GENERATION_MODEL
 import cc.hhhl.client.ai.DEFAULT_SERVER_AI_BASE_URL
 import cc.hhhl.client.ai.DEFAULT_SERVER_AI_MODEL
 import cc.hhhl.client.ai.defaultChatModelForSettings
@@ -100,7 +105,6 @@ import cc.hhhl.client.ui.component.HhhlAnimatedSegmentedControl
 import cc.hhhl.client.ui.component.HhhlBackButton
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlDropdownMenu
-import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlInlinePanel
 import cc.hhhl.client.ui.component.HhhlDropdownMenuItem
 import cc.hhhl.client.ui.component.HhhlSectionHeader
@@ -111,6 +115,20 @@ import cc.hhhl.client.ui.component.HhhlTopBar
 import cc.hhhl.client.ui.component.ThemePicker
 import cc.hhhl.client.ui.component.TimelineDensityPicker
 import cc.hhhl.client.ui.component.hhhlReadableOnControlColor
+
+internal val SettingsRowVerticalPadding = 11.dp
+internal val SettingsRowContentSpacing = 12.dp
+internal val SettingsRowDetailSpacing = 6.dp
+internal val SettingsCompactInputMinHeight = 40.dp
+internal val SettingsCompactInputHorizontalPadding = 12.dp
+internal val SettingsCompactInputVerticalPadding = 8.dp
+internal val SettingsCompactIconButtonSize = 34.dp
+internal val SettingsCompactIconSize = 18.dp
+internal val SettingsCompactPanelHorizontalPadding = 12.dp
+internal val SettingsCompactPanelVerticalPadding = 10.dp
+internal val SettingsItemIconSize = 32.dp
+internal val SettingsItemIconInnerSize = 17.dp
+internal const val SettingsSwitchScale = 0.82f
 
 @Composable
 fun SettingsScreen(
@@ -189,8 +207,8 @@ fun SettingsScreen(
             if (accounts.isNotEmpty()) {
                 item(key = "account-switch-panel", contentType = "account-switch-panel") {
                     Column(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text(
                             text = "账号",
@@ -314,6 +332,7 @@ private val AiModelConfigurationItemKeys = setOf(
     SettingsItemKey.AiFastModel,
     SettingsItemKey.AiLongContextModel,
     SettingsItemKey.AiVisionModel,
+    SettingsItemKey.AiImageGenerationModel,
     SettingsItemKey.AiEmbeddingModel,
 )
 
@@ -393,8 +412,8 @@ private fun SettingsAiModelConfigurationTabs(
 ) {
     var selectedTab by remember { mutableStateOf(0) }
     HhhlInlinePanel(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
             text = "模型配置",
@@ -405,7 +424,7 @@ private fun SettingsAiModelConfigurationTabs(
             overflow = TextOverflow.Ellipsis,
         )
         HhhlAnimatedSegmentedControl(
-            labels = listOf("远端主配置", "本地兜底", "自动化配置"),
+            labels = listOf("远端", "本地", "生图", "规则"),
             selectedIndex = selectedTab,
             onSelected = { selectedTab = it },
             modifier = Modifier.fillMaxWidth(),
@@ -427,6 +446,11 @@ private fun SettingsAiModelConfigurationTabs(
                 onSettingsChanged = onSettingsChanged,
                 onProviderSelected = onDefaultProviderSelected,
                 onTestConnection = onTestDefaultConnection,
+            )
+            2 -> SettingsAiImageGenerationModelConfigFields(
+                settings = settings,
+                enabled = enabled,
+                onSettingsChanged = onSettingsChanged,
             )
             else -> SettingsAiAutomationModelConfigFields(
                 settings = settings,
@@ -573,6 +597,45 @@ private fun SettingsAiDefaultModelConfigFields(
 }
 
 @Composable
+private fun SettingsAiImageGenerationModelConfigFields(
+    settings: AiSettings,
+    enabled: Boolean,
+    onSettingsChanged: (AiSettings) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "生图和图生图使用独立的 OpenAI 兼容地址与 Key，自动化生成图片时调用这里的模型。",
+            color = LocalHhhlColors.current.textMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        SettingsTextSettingLine(
+            value = settings.imageGenerationBaseUrl,
+            placeholder = "https://api.openai.com/v1",
+            inputLabel = "Base URL",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(imageGenerationBaseUrl = it)) },
+        )
+        SettingsTextSettingLine(
+            value = settings.imageGenerationApiKey,
+            placeholder = "sk-...",
+            inputLabel = "API Key",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(imageGenerationApiKey = it)) },
+        )
+        SettingsTextSettingLine(
+            value = settings.imageGenerationModel,
+            placeholder = DEFAULT_IMAGE_GENERATION_MODEL,
+            inputLabel = "生图模型",
+            enabled = enabled,
+            onValueChange = { onSettingsChanged(settings.copy(imageGenerationModel = it)) },
+            helper = "已实测 $DEFAULT_IMAGE_GENERATION_MODEL 支持文生图和图生图。",
+        )
+    }
+}
+
+@Composable
 private fun SettingsAiAutomationModelConfigFields(
     settings: AiSettings,
     enabled: Boolean,
@@ -675,31 +738,31 @@ private fun SettingsAppUpdatePanel(
     val colors = LocalHhhlColors.current
     val currentVersionText = appVersionName.trim().removePrefix("v").ifBlank { "未知版本" }
     HhhlInlinePanel(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
         emphasized = true,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
-                    .size(32.dp)
-                    .clip(RoundedCornerShape(11.dp))
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(13.dp))
                     .background(colors.buttonSelectedBackground)
-                    .border(1.dp, colors.focusRing.copy(alpha = 0.24f), RoundedCornerShape(11.dp)),
+                    .border(1.dp, colors.focusRing.copy(alpha = 0.24f), RoundedCornerShape(13.dp)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Filled.Sync,
                     contentDescription = null,
                     tint = hhhlReadableOnControlColor(colors.buttonSelectedBackground, colors.accent),
-                    modifier = Modifier.size(17.dp),
+                    modifier = Modifier.size(19.dp),
                 )
             }
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
                     text = "软件更新",
                     color = colors.textPrimary,
@@ -774,21 +837,21 @@ private fun ReleaseNotesTimelineItem(
 ) {
     val colors = LocalHhhlColors.current
     HhhlInlinePanel(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
         emphasized = isCurrent,
-        verticalArrangement = Arrangement.spacedBy(9.dp),
+        verticalArrangement = Arrangement.spacedBy(11.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.Top,
         ) {
             Box(
                 modifier = Modifier
-                    .size(30.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(if (isCurrent) colors.buttonSelectedBackground else colors.inputBackground)
-                    .border(1.dp, colors.focusRing.copy(alpha = 0.22f), RoundedCornerShape(10.dp)),
+                    .border(1.dp, colors.focusRing.copy(alpha = 0.22f), RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -799,7 +862,7 @@ private fun ReleaseNotesTimelineItem(
                     } else {
                         colors.textSecondary
                     },
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(18.dp),
                 )
             }
             Column(
@@ -855,9 +918,9 @@ private fun InstanceOverviewPanel(
 ) {
     val colors = LocalHhhlColors.current
     HhhlInlinePanel(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-        emphasized = true,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+        emphasized = false,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -895,8 +958,8 @@ private fun InstanceOverviewPanel(
             }
         }
         FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
             meta?.stats?.let { stats ->
                 InstanceStatChip("帖子", formatCompactCount(stats.notesCount))
@@ -925,7 +988,7 @@ private fun InstanceStatChip(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
             .background(colors.inputBackground)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1058,14 +1121,14 @@ private fun SettingsRow(
                     else -> Modifier
                 },
             )
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 18.dp, vertical = SettingsRowVerticalPadding),
+        horizontalArrangement = Arrangement.spacedBy(SettingsRowContentSpacing),
         verticalAlignment = Alignment.Top,
     ) {
         SettingsItemIcon(key = item.key, enabled = item.enabled)
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(SettingsRowDetailSpacing),
         ) {
             Text(
                 text = item.label,
@@ -1288,6 +1351,12 @@ private fun SettingsRow(
                     enabled = item.enabled,
                     onValueChange = { onAiSettingsChanged(state.aiSettings.copy(visionModel = it)) },
                 )
+                SettingsItemKey.AiImageGenerationModel -> SettingsTextSettingLine(
+                    value = state.aiSettings.imageGenerationModel,
+                    placeholder = DEFAULT_IMAGE_GENERATION_MODEL,
+                    enabled = item.enabled,
+                    onValueChange = { onAiSettingsChanged(state.aiSettings.copy(imageGenerationModel = it)) },
+                )
                 SettingsItemKey.AiEmbeddingModel -> SettingsTextSettingLine(
                     value = state.aiSettings.embeddingModel,
                     placeholder = "向量模型",
@@ -1490,6 +1559,10 @@ private fun SettingsTextSettingLine(
                 label = inputLabel,
                 enabled = enabled,
                 singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall,
+                minHeight = SettingsCompactInputMinHeight,
+                horizontalPadding = SettingsCompactInputHorizontalPadding,
+                verticalPadding = SettingsCompactInputVerticalPadding,
                 modifier = Modifier.weight(1f),
             )
             trailing?.invoke()
@@ -1853,11 +1926,19 @@ private fun SettingsSwitchLine(
                 color = colors.textMuted,
                 style = MaterialTheme.typography.labelMedium,
             )
-            HhhlSwitch(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-                enabled = enabled,
-            )
+            Box(
+                modifier = Modifier
+                    .width(44.dp)
+                    .height(28.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                HhhlSwitch(
+                    checked = checked,
+                    onCheckedChange = onCheckedChange,
+                    enabled = enabled,
+                    modifier = Modifier.scale(SettingsSwitchScale),
+                )
+            }
         }
         supportingText?.takeIf { it.isNotBlank() }?.let { text ->
             Text(
@@ -1880,12 +1961,26 @@ private fun SettingsListEditor(
     onRemove: (String) -> Unit,
 ) {
     val colors = LocalHhhlColors.current
-    HhhlInlinePanel(
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+    val isDarkSurface = colors.surface.luminance() < 0.2f
+    val shape = RoundedCornerShape(14.dp)
+    val panelContainerColor = colors.surfaceElevated
+        .copy(alpha = if (isDarkSurface) 0.54f else 0.58f)
+        .asSettingsOpaqueOver(colors.pageBackground)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(panelContainerColor)
+            .border(1.dp, colors.border.copy(alpha = if (isDarkSurface) 0.28f else 0.22f), shape)
+            .padding(
+                horizontal = SettingsCompactPanelHorizontalPadding,
+                vertical = SettingsCompactPanelVerticalPadding,
+            ),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HhhlTextInput(
@@ -1894,10 +1989,13 @@ private fun SettingsListEditor(
                 enabled = enabled,
                 placeholder = placeholder,
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium,
+                textStyle = MaterialTheme.typography.bodySmall,
+                minHeight = SettingsCompactInputMinHeight,
+                horizontalPadding = SettingsCompactInputHorizontalPadding,
+                verticalPadding = SettingsCompactInputVerticalPadding,
                 modifier = Modifier.weight(1f),
             )
-            HhhlIconActionButton(
+            SettingsCompactIconButton(
                 icon = Icons.Filled.Add,
                 contentDescription = "添加$placeholder",
                 onClick = onAdd,
@@ -1915,7 +2013,7 @@ private fun SettingsListEditor(
             values.take(6).forEach { value ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -1926,7 +2024,7 @@ private fun SettingsListEditor(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    HhhlIconActionButton(
+                    SettingsCompactIconButton(
                         icon = Icons.Filled.Close,
                         contentDescription = "移除$value",
                         onClick = { onRemove(value) },
@@ -1943,6 +2041,63 @@ private fun SettingsListEditor(
             }
         }
     }
+}
+
+@Composable
+private fun SettingsCompactIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    emphasized: Boolean = false,
+    enabled: Boolean = true,
+) {
+    val colors = LocalHhhlColors.current
+    val isDarkSurface = colors.surface.luminance() < 0.2f
+    val shape = RoundedCornerShape(999.dp)
+    val containerColor = if (enabled && emphasized) {
+        colors.accent.copy(alpha = if (isDarkSurface) 0.09f else 0.07f)
+    } else {
+        Color.Transparent
+    }
+    val borderColor = if (enabled && emphasized) {
+        colors.focusRing.copy(alpha = if (isDarkSurface) 0.22f else 0.16f)
+    } else {
+        Color.Transparent
+    }
+
+    Box(
+        modifier = Modifier
+            .size(SettingsCompactIconButtonSize)
+            .clip(shape)
+            .background(containerColor)
+            .border(1.dp, borderColor, shape)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = when {
+                !enabled -> colors.textMuted.copy(alpha = 0.58f)
+                emphasized -> colors.accent
+                else -> colors.textSecondary
+            },
+            modifier = Modifier.size(SettingsCompactIconSize),
+        )
+    }
+}
+
+private fun Color.asSettingsOpaqueOver(background: Color): Color {
+    val sourceAlpha = alpha.coerceIn(0f, 1f)
+    val backgroundAlpha = background.alpha.coerceIn(0f, 1f)
+    val outputAlpha = sourceAlpha + backgroundAlpha * (1f - sourceAlpha)
+    if (outputAlpha <= 0f) return Color.Transparent
+    return Color(
+        red = (red * sourceAlpha + background.red * backgroundAlpha * (1f - sourceAlpha)) / outputAlpha,
+        green = (green * sourceAlpha + background.green * backgroundAlpha * (1f - sourceAlpha)) / outputAlpha,
+        blue = (blue * sourceAlpha + background.blue * backgroundAlpha * (1f - sourceAlpha)) / outputAlpha,
+        alpha = 1f,
+    )
 }
 
 private fun SettingsItem.checkedValue(state: SettingsUiState): Boolean? {
@@ -1976,7 +2131,7 @@ private fun SettingsItemIcon(
     }
     Box(
         modifier = Modifier
-            .size(32.dp)
+            .size(SettingsItemIconSize)
             .clip(RoundedCornerShape(11.dp))
             .background(containerColor)
             .border(1.dp, borderColor, RoundedCornerShape(11.dp)),
@@ -1986,7 +2141,7 @@ private fun SettingsItemIcon(
             imageVector = settingsItemIcon(key),
             contentDescription = null,
             tint = if (enabled) hhhlReadableOnControlColor(containerColor, colors.accent) else colors.textMuted,
-            modifier = Modifier.size(17.dp),
+            modifier = Modifier.size(SettingsItemIconInnerSize),
         )
     }
 }
@@ -2034,6 +2189,7 @@ private fun settingsItemIcon(key: SettingsItemKey): ImageVector {
         SettingsItemKey.AiFastModel,
         SettingsItemKey.AiLongContextModel,
         SettingsItemKey.AiVisionModel,
+        SettingsItemKey.AiImageGenerationModel,
         SettingsItemKey.AiEmbeddingModel -> Icons.Outlined.ModelTraining
         SettingsItemKey.AiReadPermissions -> Icons.Filled.Visibility
         SettingsItemKey.AiAutomation -> Icons.Filled.AutoAwesome
@@ -2088,7 +2244,7 @@ private fun <T> SettingsDropdownPicker(
             Text(
                 text = selectedLabel,
                 color = colors.textPrimary,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

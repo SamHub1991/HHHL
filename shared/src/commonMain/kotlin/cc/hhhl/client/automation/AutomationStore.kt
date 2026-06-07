@@ -88,7 +88,7 @@ object AutomationStoreCodec {
     fun encode(snapshot: AutomationSnapshot): String {
         return json.encodeToString(
             CachedAutomationEnvelope(
-                rules = snapshot.rules.take(MAX_RULES),
+                rules = snapshot.rules,
                 logs = snapshot.logs.take(MAX_LOGS),
                 debugRecords = snapshot.debugRecords.take(MAX_DEBUG_RECORDS),
                 executedEvents = snapshot.executedEvents.take(MAX_EXECUTED_EVENTS),
@@ -101,7 +101,7 @@ object AutomationStoreCodec {
         return runCatching {
             val envelope = json.decodeFromString<CachedAutomationEnvelope>(payload)
             AutomationSnapshot(
-                rules = envelope.rules.take(MAX_RULES),
+                rules = envelope.rules,
                 logs = envelope.logs.take(MAX_LOGS),
                 debugRecords = envelope.debugRecords.take(MAX_DEBUG_RECORDS),
                 executedEvents = envelope.executedEvents.take(MAX_EXECUTED_EVENTS),
@@ -109,7 +109,6 @@ object AutomationStoreCodec {
         }.getOrDefault(AutomationSnapshot())
     }
 
-    const val MAX_RULES = 80
     const val MAX_LOGS = 160
     const val MAX_DEBUG_RECORDS = 240
     const val MAX_EXECUTED_EVENTS = 2_000

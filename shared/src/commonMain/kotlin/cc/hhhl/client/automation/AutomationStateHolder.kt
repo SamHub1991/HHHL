@@ -692,7 +692,6 @@ class AutomationStateHolder(
         mutableState.update {
             val nextRules = transform(it.rules)
                 .map { rule -> rule.cleaned() }
-                .take(AutomationStoreCodec.MAX_RULES)
             it.copy(
                 rules = nextRules,
                 selectedRuleId = selectedRuleId,
@@ -947,7 +946,12 @@ class AutomationStateHolder(
                 matched = event.noteVisibility.matchesAutomationTokenValue(cleanValue),
                 actualValue = event.noteVisibility,
             )
-            AutomationConditionType.AiSemantic -> when (val result = aiBridge.evaluateSemanticCondition(cleanValue, event.aiContextText())) {
+            AutomationConditionType.AiSemantic -> when (val result = aiBridge.evaluateSemanticCondition(
+                prompt = cleanValue,
+                eventText = event.aiContextText(),
+                fileIds = event.aiAttachmentFileIds(),
+                fileContext = event.aiAttachmentContextText(),
+            )) {
                 is AiBridgeResult.Success -> AutomationConditionMatch(
                     matched = automationAiConditionSatisfied(result.text),
                     actualValue = result.text.take(MAX_DEBUG_AI_RESPONSE_LENGTH),
@@ -1102,8 +1106,8 @@ private fun AutomationRule.cleaned(): AutomationRule {
     val defaulted = withDefaultRiskControls()
     return defaulted.copy(
         name = name.trim().ifBlank { defaultRuleName(trigger) }.take(48),
-        conditions = defaulted.conditions.map { it.cleaned() }.take(12),
-        actions = defaulted.actions.map { it.cleaned() }.take(12),
+        conditions = defaulted.conditions.map { it.cleaned() },
+        actions = defaulted.actions.map { it.cleaned() },
         cooldownSeconds = defaulted.cooldownSeconds.coerceIn(0, 86_400),
         maxExecutionsPer30Seconds = defaulted.maxExecutionsPer30Seconds.coerceIn(0, 60),
     )

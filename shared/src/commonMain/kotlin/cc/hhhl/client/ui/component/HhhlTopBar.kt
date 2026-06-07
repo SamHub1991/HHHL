@@ -1,7 +1,5 @@
 package cc.hhhl.client.ui.component
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,13 +20,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -49,15 +46,15 @@ internal data class HhhlTopBarMetrics(
 )
 
 internal fun hhhlTopBarMetrics(): HhhlTopBarMetrics = HhhlTopBarMetrics(
-    containerHeight = 44,
-    horizontalPadding = 10,
-    verticalPadding = 5,
-    slotMinSize = 32,
-    titleHorizontalPadding = 4,
-    backButtonSize = 32,
-    backIconSize = 17,
-    panelCornerRadius = 18,
-    panelElevation = 3,
+    containerHeight = 56,
+    horizontalPadding = 16,
+    verticalPadding = 9,
+    slotMinSize = 42,
+    titleHorizontalPadding = 8,
+    backButtonSize = 42,
+    backIconSize = 19,
+    panelCornerRadius = 23,
+    panelElevation = 6,
 )
 
 @Composable
@@ -75,16 +72,11 @@ fun HhhlTopBar(
     val shape = RoundedCornerShape(metrics.panelCornerRadius.dp)
     val isDarkSurface = colors.surface.luminance() < 0.2f
     val borderColor = if (isDarkSurface) {
-        colors.focusRing.copy(alpha = 0.36f)
+        colors.focusRing.copy(alpha = 0.30f)
     } else {
-        colors.border.copy(alpha = 0.34f)
+        colors.border.copy(alpha = 0.42f)
     }
-    val containerBrush = Brush.verticalGradient(
-        listOf(
-            colors.topBarBackground.copy(alpha = if (isDarkSurface) 0.92f else 0.96f),
-            colors.topBarBackground.copy(alpha = if (isDarkSurface) 0.82f else 0.88f),
-        ),
-    )
+    val containerColor = colors.topBarBackground.copy(alpha = if (isDarkSurface) 0.96f else 0.98f)
 
     Box(
         modifier = modifier
@@ -106,11 +98,11 @@ fun HhhlTopBar(
                     spotColor = colors.shadow,
                 )
                 .clip(shape)
-                .background(containerBrush)
+                .background(containerColor)
                 .border(1.dp, borderColor, shape)
-                .padding(horizontal = 10.dp),
+                .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Box(
                 modifier = Modifier.widthIn(min = metrics.slotMinSize.dp),
@@ -187,27 +179,15 @@ fun HhhlBackButton(
     val metrics = hhhlTopBarMetrics()
     val colors = LocalHhhlColors.current
     val interactionSource = remember { MutableInteractionSource() }
-    val containerColor by animateColorAsState(
-        targetValue = colors.buttonBackground,
-        animationSpec = tween(durationMillis = 160),
-        label = "back-button-container",
-    )
 
     Box(
         modifier = Modifier
             .size(metrics.backButtonSize.dp)
-            .shadow(
-                elevation = HhhlIconActionIdleElevation,
-                shape = RoundedCornerShape(HhhlIconActionCornerRadius),
-                clip = false,
-                ambientColor = colors.shadow,
-                spotColor = colors.shadow,
-            )
             .clip(RoundedCornerShape(HhhlIconActionCornerRadius))
-            .background(containerColor)
+            .background(Color.Transparent)
             .border(
                 width = 1.dp,
-                color = colors.border.copy(alpha = 0.30f),
+                color = Color.Transparent,
                 shape = RoundedCornerShape(HhhlIconActionCornerRadius),
             )
             .clickable(
@@ -221,7 +201,7 @@ fun HhhlBackButton(
             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
             contentDescription = label,
             modifier = Modifier.size(metrics.backIconSize.dp),
-            tint = hhhlReadableOnControlColor(containerColor, colors.textSecondary),
+            tint = colors.textPrimary,
         )
     }
 }

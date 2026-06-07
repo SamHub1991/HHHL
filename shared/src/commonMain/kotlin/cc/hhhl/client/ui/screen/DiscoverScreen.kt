@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,7 +30,10 @@ import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -556,55 +560,284 @@ private fun DiscoverSearchHeader(
     onOpenAnnouncements: () -> Unit,
 ) {
     val colors = LocalHhhlColors.current
-    val shape = RoundedCornerShape(22.dp)
-    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
-    val containerColor = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.045f)
-    } else {
-        colors.surfaceElevated.copy(alpha = 0.78f)
-    }
-    val borderColor = if (isDarkSurface) {
-        Color.White.copy(alpha = 0.07f)
-    } else {
-        colors.border.copy(alpha = 0.46f)
-    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-            .clip(shape)
-            .background(containerColor)
-            .border(1.dp, borderColor, shape)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .background(colors.pageBackground)
+            .padding(top = 8.dp, bottom = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        if (selectedMode != DiscoverSearchMode.Trends && selectedMode != DiscoverSearchMode.Federation && selectedMode != DiscoverSearchMode.Roles) {
-            DiscoverSearchRow(
-                query = query,
-                selectedMode = selectedMode,
-                isSearching = isSearching,
-                onQueryChanged = onQueryChanged,
-                onSearch = onSearch,
-            )
-        } else {
-            DiscoverPassiveSearchPanel(
-                selectedMode = selectedMode,
-                isSearching = isSearching,
-                onRefresh = onSearch,
-            )
+        DiscoverWeChatTitleBar(
+            actions = discoverSecondaryQuickActions(
+                onOpenPages = onOpenPages,
+                onOpenGallery = onOpenGallery,
+                onOpenFlash = onOpenFlash,
+                onOpenAnnouncements = onOpenAnnouncements,
+            ),
+        )
+        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+            if (selectedMode != DiscoverSearchMode.Trends && selectedMode != DiscoverSearchMode.Federation && selectedMode != DiscoverSearchMode.Roles) {
+                DiscoverSearchRow(
+                    query = query,
+                    selectedMode = selectedMode,
+                    isSearching = isSearching,
+                    onQueryChanged = onQueryChanged,
+                    onSearch = onSearch,
+                )
+            } else {
+                DiscoverPassiveSearchPanel(
+                    selectedMode = selectedMode,
+                    isSearching = isSearching,
+                    onRefresh = onSearch,
+                )
+            }
         }
-        DiscoverModeSelector(
+        DiscoverWeChatEntryGroups(
             selectedMode = selectedMode,
             visibleModes = visibleModes,
             onModeSelected = onModeSelected,
-        )
-        DiscoverQuickActionRow(
             onOpenChannels = onOpenChannels,
             onOpenPages = onOpenPages,
             onOpenGallery = onOpenGallery,
             onOpenFlash = onOpenFlash,
             onOpenAnnouncements = onOpenAnnouncements,
         )
+    }
+}
+
+@Composable
+private fun DiscoverWeChatTitleBar(
+    actions: List<HhhlOverflowMenuAction>,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "发现",
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        HhhlOverflowMenu(
+            actions = actions,
+            label = "发现操作",
+            buttonContainerColor = Color.Transparent,
+            iconTint = colors.textPrimary,
+            buttonWidth = 42.dp,
+            buttonHeight = 42.dp,
+            buttonIconSize = 21.dp,
+            buttonCornerRadius = 999.dp,
+            buttonBorderAlpha = 0f,
+            buttonElevation = 0.dp,
+        )
+    }
+}
+
+@Composable
+private fun DiscoverWeChatEntryGroups(
+    selectedMode: DiscoverSearchMode,
+    visibleModes: List<DiscoverSearchMode>,
+    onModeSelected: (DiscoverSearchMode) -> Unit,
+    onOpenChannels: () -> Unit,
+    onOpenPages: () -> Unit,
+    onOpenGallery: () -> Unit,
+    onOpenFlash: () -> Unit,
+    onOpenAnnouncements: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        DiscoverWeChatEntryGroup {
+            DiscoverSearchMode.entries
+                .filter { mode -> mode in visibleModes && mode in discoverPrimaryWeChatModes() }
+                .forEach { mode ->
+                    DiscoverWeChatModeRow(
+                        mode = mode,
+                        selected = mode == selectedMode,
+                        onClick = { onModeSelected(mode) },
+                    )
+                }
+        }
+        DiscoverWeChatEntryGroup {
+            DiscoverWeChatEntryRow(
+                label = "频道",
+                description = "浏览站内频道和讨论",
+                icon = Icons.Filled.Forum,
+                onClick = onOpenChannels,
+            )
+            DiscoverWeChatEntryRow(
+                label = "页面",
+                description = "查看站点页面与资料",
+                icon = Icons.AutoMirrored.Outlined.Article,
+                onClick = onOpenPages,
+            )
+            DiscoverWeChatEntryRow(
+                label = "图库",
+                description = "图片和媒体内容",
+                icon = Icons.Filled.Image,
+                onClick = onOpenGallery,
+            )
+        }
+        DiscoverWeChatEntryGroup {
+            DiscoverWeChatEntryRow(
+                label = "Play",
+                description = "Flash 与互动内容",
+                icon = Icons.Filled.Apps,
+                onClick = onOpenFlash,
+            )
+            DiscoverWeChatEntryRow(
+                label = "公告",
+                description = "查看站点公告",
+                icon = Icons.Filled.Notifications,
+                onClick = onOpenAnnouncements,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DiscoverWeChatEntryGroup(
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.pageBackground),
+        content = content,
+    )
+}
+
+@Composable
+private fun DiscoverWeChatModeRow(
+    mode: DiscoverSearchMode,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    DiscoverWeChatEntryRow(
+        label = mode.label,
+        description = discoverWeChatModeDescription(mode),
+        icon = discoverWeChatModeIcon(mode),
+        selected = selected,
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun DiscoverWeChatEntryRow(
+    label: String,
+    description: String,
+    icon: ImageVector,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val iconContainer = if (selected) {
+        colors.accentSoft.copy(alpha = 0.82f)
+    } else {
+        colors.inputBackground.copy(alpha = 0.72f)
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 58.dp)
+                .padding(start = 18.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(iconContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (selected) colors.accent else colors.textSecondary,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = label,
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = description,
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                imageVector = Icons.Outlined.ChevronRight,
+                contentDescription = null,
+                tint = colors.textMuted,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 64.dp)
+                .height(1.dp)
+                .background(colors.border.copy(alpha = 0.44f)),
+        )
+    }
+}
+
+private fun discoverPrimaryWeChatModes(): List<DiscoverSearchMode> = listOf(
+    DiscoverSearchMode.Notes,
+    DiscoverSearchMode.Users,
+    DiscoverSearchMode.Hashtags,
+    DiscoverSearchMode.Roles,
+    DiscoverSearchMode.Trends,
+    DiscoverSearchMode.Federation,
+)
+
+private fun discoverWeChatModeDescription(mode: DiscoverSearchMode): String {
+    return when (mode) {
+        DiscoverSearchMode.Notes -> "搜索帖子、话题和关键词"
+        DiscoverSearchMode.Users -> "查找用户和个人主页"
+        DiscoverSearchMode.Hashtags -> "浏览话题和标签"
+        DiscoverSearchMode.Roles -> "查看站点角色"
+        DiscoverSearchMode.Trends -> "同步当前趋势"
+        DiscoverSearchMode.Federation -> "浏览联邦实例"
+    }
+}
+
+private fun discoverWeChatModeIcon(mode: DiscoverSearchMode): ImageVector {
+    return when (mode) {
+        DiscoverSearchMode.Notes -> Icons.Filled.Search
+        DiscoverSearchMode.Users -> Icons.Filled.Person
+        DiscoverSearchMode.Hashtags -> Icons.Filled.Tag
+        DiscoverSearchMode.Roles -> Icons.Filled.AutoAwesome
+        DiscoverSearchMode.Trends -> Icons.Filled.AutoAwesome
+        DiscoverSearchMode.Federation -> Icons.Filled.Apps
     }
 }
 
@@ -1073,18 +1306,23 @@ private fun DiscoverSearchRow(
             placeholder = discoverSearchPlaceholder(selectedMode),
             modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 44.dp),
+                .heightIn(min = 40.dp),
             singleLine = true,
+            minHeight = 40.dp,
+            horizontalPadding = 12.dp,
+            verticalPadding = 8.dp,
             leading = {
                 Icon(
                     imageVector = Icons.Filled.Search,
                     contentDescription = null,
                     tint = colors.textSecondary,
+                    modifier = Modifier.size(18.dp),
                 )
             },
         )
-        HhhlActionChip(
-            label = discoverSearchActionLabel(isSearching),
+        HhhlIconActionButton(
+            icon = Icons.Filled.Search,
+            contentDescription = discoverSearchActionLabel(isSearching),
             emphasized = query.isNotBlank(),
             enabled = !isSearching,
             onClick = onSearch,

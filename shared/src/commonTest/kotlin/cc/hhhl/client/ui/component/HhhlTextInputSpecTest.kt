@@ -7,11 +7,11 @@ import kotlin.test.assertEquals
 class HhhlTextInputSpecTest {
     @Test
     fun textInputUsesSoftModernMetrics() {
-        assertEquals(42.dp, HhhlTextInputSingleLineMinHeight)
-        assertEquals(80.dp, HhhlTextInputMultiLineMinHeight)
-        assertEquals(13.dp, HhhlTextInputCornerRadius)
-        assertEquals(12.dp, HhhlTextInputHorizontalPadding)
-        assertEquals(8.dp, HhhlTextInputVerticalPadding)
+        assertEquals(52.dp, HhhlTextInputSingleLineMinHeight)
+        assertEquals(112.dp, HhhlTextInputMultiLineMinHeight)
+        assertEquals(17.dp, HhhlTextInputCornerRadius)
+        assertEquals(17.dp, HhhlTextInputHorizontalPadding)
+        assertEquals(13.dp, HhhlTextInputVerticalPadding)
     }
 
     @Test

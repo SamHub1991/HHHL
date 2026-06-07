@@ -6,12 +6,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -22,18 +24,27 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,7 +62,6 @@ import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlAnimatedSegmentedControl
-import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
 import cc.hhhl.client.ui.component.HhhlOverflowMenuAction
 import cc.hhhl.client.ui.component.HhhlStatusRow
@@ -59,6 +69,7 @@ import cc.hhhl.client.ui.component.LocalBlockedNoteAuthorIds
 import cc.hhhl.client.ui.component.MediaPreviewSession
 import cc.hhhl.client.ui.component.NoteRow
 import cc.hhhl.client.ui.component.NoteRowDensity
+import cc.hhhl.client.ui.component.hhhlReadableOnControlColor
 import cc.hhhl.client.ui.component.isHiddenByBlockedAuthor
 import kotlinx.coroutines.launch
 
@@ -132,6 +143,17 @@ fun TimelineScreen(
     val indexedTimelineThreadItems = remember(timelineThreadItems) {
         timelineThreadItems.withIndex().toList()
     }
+    var expandedTimelineRootId by remember(visibleSelectedKind) { mutableStateOf<String?>(null) }
+    val timelineListEntries = remember(indexedTimelineThreadItems, expandedTimelineRootId, visibleSelectedKind) {
+        if (visibleSelectedKind == TimelineKind.Home) {
+            timelineAccordionEntries(
+                indexedItems = indexedTimelineThreadItems,
+                expandedRootId = expandedTimelineRootId,
+            )
+        } else {
+            indexedTimelineThreadItems.map { TimelineAccordionEntry.NoteEntry(it) }
+        }
+    }
     val coroutineScope = rememberCoroutineScope()
     val firstUnreadIndex = remember(timelineThreadItems, selectedTabState.firstUnreadNoteId) {
         val markerId = selectedTabState.firstUnreadNoteId
@@ -160,168 +182,199 @@ fun TimelineScreen(
         )
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        if (showTrends) {
-            TimelineTrendSummaryRow(
-                trendCount = trends.size,
-                isRefreshing = isRefreshingTrends,
-                onRefresh = onRefreshTrends,
-                onCompose = onCompose,
-                onSearch = onSearch,
-            )
-        } else {
-            TimelineSummaryRow(
-                selectedKind = visibleSelectedKind,
-                selectedTabState = selectedTabState,
-                onRefresh = { onRefresh(visibleSelectedKind) },
-                aiEnabled = aiEnabled,
-                isAiProcessing = isAiProcessing,
-                onAiDigest = { onAiAction(AiTaskKind.TimelineDigest, visibleSelectedKind, visibleNotes) },
-                onAiReplyOpportunities = {
-                    onAiAction(AiTaskKind.TimelineReplyOpportunities, visibleSelectedKind, visibleNotes)
-                },
-                onAiFilterSuggestions = {
-                    onAiAction(AiTaskKind.TimelineFilterSuggestions, visibleSelectedKind, visibleNotes)
-                },
-                onJumpToNewNotes = if (firstUnreadIndex >= 0) {
-                    {
-                        coroutineScope.launch {
-                            listState.animateScrollToItem(firstUnreadIndex)
-                            onNewNotesMarkerConsumed(visibleSelectedKind)
-                        }
-                    }
-                } else {
-                    null
-                },
-                onCompose = onCompose,
-                onSearch = onSearch,
-            )
-        }
-        TimelineTabStrip(
-            availableKinds = availableKinds,
-            visibleKinds = visibleKinds,
-            selectedKind = visibleSelectedKind,
-            showTrends = showTrends,
-            hasTrendTab = hasTrendTab,
-            onTimelineSelected = onTimelineSelected,
-            onTrendSelected = onTrendSelected,
+    val toolbarActions = if (showTrends) {
+        timelineSummaryActions(
+            isRefreshing = isRefreshingTrends,
+            onSearch = onSearch,
+            onRefresh = onRefreshTrends,
         )
-        HhhlDivider()
-        if (!showTrends && !aiResultText.isNullOrBlank()) {
-            TimelineAiResultPanel(
-                label = aiResultLabel ?: "AI 速览",
-                text = aiResultText,
-                notes = visibleNotes,
-                onCopyAiResult = onCopyAiResult,
-                onAddAiMutedWord = onAddAiMutedWord,
-                onAddAiRelatedNoteToWatchLater = onAddAiRelatedNoteToWatchLater,
-                onOpenAiRelatedNote = onOpenAiRelatedNote,
-                onDismiss = onDismissAiResult,
+    } else {
+        timelineSummaryActions(
+            isRefreshing = selectedTabState.isLoading || selectedTabState.isLoadingMore,
+            onSearch = onSearch,
+            onRefresh = { onRefresh(visibleSelectedKind) },
+            aiEnabled = aiEnabled,
+            aiActionEnabled = aiEnabled && !isAiProcessing && selectedTabState.notes.isNotEmpty(),
+            isAiProcessing = isAiProcessing,
+            onAiDigest = { onAiAction(AiTaskKind.TimelineDigest, visibleSelectedKind, visibleNotes) },
+            onAiReplyOpportunities = {
+                onAiAction(AiTaskKind.TimelineReplyOpportunities, visibleSelectedKind, visibleNotes)
+            },
+            onAiFilterSuggestions = {
+                onAiAction(AiTaskKind.TimelineFilterSuggestions, visibleSelectedKind, visibleNotes)
+            },
+        )
+    }
+    val jumpToNewNotes: (() -> Unit)? = if (!showTrends && firstUnreadIndex >= 0 && selectedTabState.newNoteCount > 0) {
+        {
+            coroutineScope.launch {
+                listState.animateScrollToItem(firstUnreadIndex)
+                onNewNotesMarkerConsumed(visibleSelectedKind)
+            }
+            Unit
+        }
+    } else {
+        null
+    }
+    val screenColors = LocalHhhlColors.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(screenColors.pageBackground),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            TimelineTabStrip(
+                availableKinds = availableKinds,
+                visibleKinds = visibleKinds,
+                selectedKind = visibleSelectedKind,
+                showTrends = showTrends,
+                hasTrendTab = hasTrendTab,
+                toolbarActions = toolbarActions,
+                newNoteCount = selectedTabState.newNoteCount,
+                onJumpToNewNotes = jumpToNewNotes,
+                onTimelineSelected = onTimelineSelected,
+                onTrendSelected = onTrendSelected,
             )
             HhhlDivider()
-        }
-        if (showTrends) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                state = trendListState,
-            ) {
-                if (isRefreshingTrends && trends.isEmpty()) {
-                    item(key = "timeline-trends-loading", contentType = "timeline-status") {
-                        TimelineStatusRow(text = "正在加载趋势...", loading = true)
-                    }
-                }
-                trendErrorMessage?.let { message ->
-                    item(key = "timeline-trends-error", contentType = "timeline-status") {
-                        TimelineStatusRow(
-                            text = message,
-                            actionText = "重试",
-                            onAction = onRefreshTrends,
-                        )
-                    }
-                }
-                if (!isRefreshingTrends && trends.isEmpty() && trendErrorMessage == null) {
-                    item(key = "timeline-trends-empty", contentType = "timeline-status") {
-                        TimelineStatusRow(text = "暂无趋势")
-                    }
-                }
-                items(
-                    items = trends,
-                    key = { "timeline-trend-${it.tag}" },
-                    contentType = { "timeline-trend" },
-                ) { trend ->
-                    TimelineTrendRow(
-                        trend = trend,
-                        onOpenHashtag = onOpenHashtag,
-                    )
-                }
+            if (!showTrends && !aiResultText.isNullOrBlank()) {
+                TimelineAiResultPanel(
+                    label = aiResultLabel ?: "AI 速览",
+                    text = aiResultText,
+                    notes = visibleNotes,
+                    onCopyAiResult = onCopyAiResult,
+                    onAddAiMutedWord = onAddAiMutedWord,
+                    onAddAiRelatedNoteToWatchLater = onAddAiRelatedNoteToWatchLater,
+                    onOpenAiRelatedNote = onOpenAiRelatedNote,
+                    onDismiss = onDismissAiResult,
+                )
+                HhhlDivider()
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                state = listState,
-            ) {
-                if (selectedTabState.isLoading && visibleNotes.isEmpty()) {
-                    item(key = "timeline-notes-loading-${visibleSelectedKind.name}", contentType = "timeline-status") {
-                        TimelineSkeletonList()
+            if (showTrends) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    state = trendListState,
+                    contentPadding = PaddingValues(bottom = 76.dp),
+                ) {
+                    if (isRefreshingTrends && trends.isEmpty()) {
+                        item(key = "timeline-trends-loading", contentType = "timeline-status") {
+                            TimelineStatusRow(text = "正在加载趋势...", loading = true)
+                        }
                     }
-                }
-                selectedTabState.errorMessage?.let { message ->
-                    item(key = "timeline-notes-error-${visibleSelectedKind.name}", contentType = "timeline-status") {
-                        TimelineStatusRow(
-                            text = message,
-                            actionText = "重试",
-                            onAction = { onRefresh(visibleSelectedKind) },
-                        )
+                    trendErrorMessage?.let { message ->
+                        item(key = "timeline-trends-error", contentType = "timeline-status") {
+                            TimelineStatusRow(
+                                text = message,
+                                actionText = "重试",
+                                onAction = onRefreshTrends,
+                            )
+                        }
                     }
-                }
-                if (!selectedTabState.isLoading && visibleNotes.isEmpty() && selectedTabState.errorMessage == null) {
-                    item(key = "timeline-notes-empty-${visibleSelectedKind.name}", contentType = "timeline-status") {
-                        TimelineStatusRow(text = "这里还没有内容")
+                    if (!isRefreshingTrends && trends.isEmpty() && trendErrorMessage == null) {
+                        item(key = "timeline-trends-empty", contentType = "timeline-status") {
+                            TimelineStatusRow(text = "暂无趋势")
+                        }
                     }
-                }
-                items(
-                    items = indexedTimelineThreadItems,
-                    key = { it.value.note.id },
-                    contentType = { "timeline-note" },
-                ) { indexedItem ->
-                    val itemIndex = indexedItem.index
-                    val item = indexedItem.value
-                    if (itemIndex == newContentSeparatorIndex) {
-                        TimelineNewContentDivider(newNoteCount = selectedTabState.newNoteCount)
-                    }
-                    TimelineThreadNoteRow(
-                        item = item,
-                    ) {
-                        NoteRow(
-                            note = item.note,
-                            onClick = onOpenNote,
-                            onOpenUser = onOpenUser,
-                            onReply = onReply,
-                            onRenote = onRenote,
-                            onQuote = onQuote,
-                            onReact = onReact,
-                            onDeleteReaction = onDeleteReaction,
-                            onFavorite = onFavorite,
-                            onAddToClip = onAddToClip,
-                            onDelete = onDelete,
-                            onOpenMedia = onOpenMedia,
-                            onOpenMediaPreview = onOpenMediaPreview,
-                            onOpenMention = onOpenMention,
+                    items(
+                        items = trends,
+                        key = { "timeline-trend-${it.tag}" },
+                        contentType = { "timeline-trend" },
+                    ) { trend ->
+                        TimelineTrendRow(
+                            trend = trend,
                             onOpenHashtag = onOpenHashtag,
-                            onVotePoll = onVotePoll,
-                            reactionOptions = reactionOptions,
-                            recentReactions = recentReactions,
-                            isActionPending = isActionPending(item.note.id),
-                            canDelete = canDeleteAuthor(item.note.author.id),
-                            isSpecialCareAuthor = isSpecialCareAuthor(item.note.author.id),
-                            density = noteRowDensity,
                         )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    state = listState,
+                    contentPadding = PaddingValues(bottom = 76.dp),
+                ) {
+                    if (selectedTabState.isLoading && visibleNotes.isEmpty()) {
+                        item(key = "timeline-notes-loading-${visibleSelectedKind.name}", contentType = "timeline-status") {
+                            TimelineSkeletonList()
+                        }
+                    }
+                    selectedTabState.errorMessage?.let { message ->
+                        item(key = "timeline-notes-error-${visibleSelectedKind.name}", contentType = "timeline-status") {
+                            TimelineStatusRow(
+                                text = message,
+                                actionText = "重试",
+                                onAction = { onRefresh(visibleSelectedKind) },
+                            )
+                        }
+                    }
+                    if (!selectedTabState.isLoading && visibleNotes.isEmpty() && selectedTabState.errorMessage == null) {
+                        item(key = "timeline-notes-empty-${visibleSelectedKind.name}", contentType = "timeline-status") {
+                            TimelineStatusRow(text = "这里还没有内容")
+                        }
+                    }
+                    items(
+                        items = timelineListEntries,
+                        key = { it.key },
+                        contentType = { it.contentType },
+                    ) { entry ->
+                        when (entry) {
+                            is TimelineAccordionEntry.NoteEntry -> {
+                                val indexedItem = entry.indexedItem
+                                val itemIndex = indexedItem.index
+                                val item = indexedItem.value
+                                if (itemIndex == newContentSeparatorIndex) {
+                                    TimelineNewContentDivider(newNoteCount = selectedTabState.newNoteCount)
+                                }
+                                TimelineThreadNoteRow(
+                                    item = item,
+                                ) {
+                                    NoteRow(
+                                        note = item.note,
+                                        onClick = onOpenNote,
+                                        onOpenUser = onOpenUser,
+                                        onReply = onReply,
+                                        onRenote = onRenote,
+                                        onQuote = onQuote,
+                                        onReact = onReact,
+                                        onDeleteReaction = onDeleteReaction,
+                                        onFavorite = onFavorite,
+                                        onAddToClip = onAddToClip,
+                                        onDelete = onDelete,
+                                        onOpenMedia = onOpenMedia,
+                                        onOpenMediaPreview = onOpenMediaPreview,
+                                        onOpenMention = onOpenMention,
+                                        onOpenHashtag = onOpenHashtag,
+                                        onVotePoll = onVotePoll,
+                                        reactionOptions = reactionOptions,
+                                        recentReactions = recentReactions,
+                                        isActionPending = isActionPending(item.note.id),
+                                        canDelete = canDeleteAuthor(item.note.author.id),
+                                        isSpecialCareAuthor = isSpecialCareAuthor(item.note.author.id),
+                                        density = noteRowDensity,
+                                    )
+                                }
+                            }
+                            is TimelineAccordionEntry.ToggleEntry -> {
+                                TimelineAccordionToggleRow(
+                                    replyCount = entry.replyCount,
+                                    expanded = entry.expanded,
+                                    onClick = {
+                                        expandedTimelineRootId = if (entry.expanded) null else entry.rootId
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+        TimelineComposeFab(
+            onCompose = onCompose,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 20.dp, bottom = 20.dp),
+        )
     }
 }
 
@@ -332,30 +385,38 @@ private fun TimelineTabStrip(
     selectedKind: TimelineKind,
     showTrends: Boolean,
     hasTrendTab: Boolean,
+    toolbarActions: List<HhhlOverflowMenuAction>,
+    newNoteCount: Int,
+    onJumpToNewNotes: (() -> Unit)?,
     onTimelineSelected: (TimelineKind) -> Unit,
     onTrendSelected: () -> Unit,
 ) {
-    val overflowActions = timelineOverflowActions(
-        availableKinds = availableKinds,
-        selectedKind = selectedKind,
-        onTimelineSelected = onTimelineSelected,
+    val overflowActions = timelineToolbarActions(
+        toolbarActions = toolbarActions,
+        timelineActions = timelineOverflowActions(
+            availableKinds = availableKinds,
+            selectedKind = selectedKind,
+            onTimelineSelected = onTimelineSelected,
+        ),
     )
     val tabs = buildList {
         addAll(visibleKinds.map { TimelineTabItem(label = it.label, kind = it) })
         if (hasTrendTab) add(TimelineTabItem(label = "趋势", kind = null))
     }
+    val colors = LocalHhhlColors.current
+    val selectedTabIndex = tabs.indexOfFirst { tab ->
+        val isTrend = tab.kind == null
+        if (isTrend) showTrends else !showTrends && selectedKind == tab.kind
+    }.coerceAtLeast(0)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .background(colors.pageBackground)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val selectedTabIndex = tabs.indexOfFirst { tab ->
-            val isTrend = tab.kind == null
-            if (isTrend) showTrends else !showTrends && selectedKind == tab.kind
-        }.coerceAtLeast(0)
         HhhlAnimatedSegmentedControl(
             labels = tabs.map { it.label },
             selectedIndex = selectedTabIndex,
@@ -367,12 +428,29 @@ private fun TimelineTabStrip(
                     onTimelineSelected(kind)
                 }
             },
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f),
+            itemBaseHeight = 32.dp,
         )
+        if (onJumpToNewNotes != null && newNoteCount > 0) {
+            HhhlActionChip(
+                label = "新 $newNoteCount",
+                emphasized = true,
+                onClick = onJumpToNewNotes,
+            )
+        }
         if (overflowActions.isNotEmpty()) {
             HhhlOverflowMenu(
                 actions = overflowActions,
-                label = "更多时间线",
+                label = if (showTrends) "趋势操作" else "时间线操作",
+                buttonContainerColor = Color.Transparent,
+                iconTint = colors.textPrimary,
+                buttonWidth = 42.dp,
+                buttonHeight = 42.dp,
+                buttonIconSize = 21.dp,
+                buttonCornerRadius = 999.dp,
+                buttonBorderAlpha = 0f,
+                buttonElevation = 0.dp,
             )
         }
     }
@@ -384,71 +462,47 @@ private data class TimelineTabItem(
 )
 
 @Composable
-private fun TimelineSummaryRow(
-    selectedKind: TimelineKind,
-    selectedTabState: TimelineTabState,
-    onRefresh: () -> Unit,
-    aiEnabled: Boolean,
-    isAiProcessing: Boolean,
-    onAiDigest: () -> Unit,
-    onAiReplyOpportunities: () -> Unit,
-    onAiFilterSuggestions: () -> Unit,
-    onJumpToNewNotes: (() -> Unit)?,
+private fun TimelineComposeFab(
     onCompose: () -> Unit,
-    onSearch: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = LocalHhhlColors.current
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = when {
-                    selectedTabState.isLoading -> "${selectedKind.label} · 加载中"
-                    selectedTabState.notes.isEmpty() -> "${selectedKind.label} · 暂无内容"
-                    else -> "${selectedKind.label} · ${selectedTabState.notes.size} 条"
-                },
-                color = colors.textMuted,
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+    val shape = RoundedCornerShape(999.dp)
+    val containerColor = colors.accent
+    Box(
+        modifier = modifier
+            .size(42.dp)
+            .shadow(
+                elevation = 7.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = colors.shadow.copy(alpha = 0.36f),
+                spotColor = colors.shadow.copy(alpha = 0.42f),
             )
-            if (onJumpToNewNotes != null && selectedTabState.newNoteCount > 0) {
-                HhhlActionChip(
-                    label = "新 ${selectedTabState.newNoteCount}",
-                    emphasized = true,
-                    onClick = onJumpToNewNotes,
-                )
-            }
-            HhhlIconActionButton(
-                icon = Icons.Filled.Edit,
-                contentDescription = "写帖",
-                emphasized = true,
-                onClick = onCompose,
-            )
-            HhhlOverflowMenu(
-                actions = timelineSummaryActions(
-                    isRefreshing = selectedTabState.isLoading || selectedTabState.isLoadingMore,
-                    onSearch = onSearch,
-                    onRefresh = onRefresh,
-                    aiEnabled = aiEnabled,
-                    aiActionEnabled = aiEnabled && !isAiProcessing && selectedTabState.notes.isNotEmpty(),
-                    isAiProcessing = isAiProcessing,
-                    onAiDigest = onAiDigest,
-                    onAiReplyOpportunities = onAiReplyOpportunities,
-                    onAiFilterSuggestions = onAiFilterSuggestions,
+            .clip(shape)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        containerColor,
+                        containerColor.copy(alpha = 0.82f),
+                    ),
                 ),
-                label = "时间线操作",
             )
-        }
+            .border(
+                width = 1.dp,
+                color = colors.focusRing.copy(alpha = 0.44f),
+                shape = shape,
+            )
+            .clickable(onClick = onCompose)
+            .semantics { contentDescription = "写帖" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Edit,
+            contentDescription = null,
+            tint = hhhlReadableOnControlColor(containerColor, colors.textPrimary),
+            modifier = Modifier.size(19.dp),
+        )
     }
 }
 
@@ -469,7 +523,7 @@ private fun TimelineAiResultPanel(
         onDismiss = onDismiss,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         actions = {
             AiResultCommonActionChips(
                 text = text,
@@ -488,7 +542,7 @@ private fun TimelineNewContentDivider(newNoteCount: Int) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -516,55 +570,6 @@ private fun TimelineNewContentDivider(newNoteCount: Int) {
 }
 
 @Composable
-private fun TimelineTrendSummaryRow(
-    trendCount: Int,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit,
-    onCompose: () -> Unit,
-    onSearch: () -> Unit,
-) {
-    val colors = LocalHhhlColors.current
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = when {
-                    isRefreshing && trendCount == 0 -> "趋势 · 加载中"
-                    else -> "趋势 · $trendCount 个"
-                },
-                color = colors.textMuted,
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            HhhlIconActionButton(
-                icon = Icons.Filled.Edit,
-                contentDescription = "写帖",
-                emphasized = true,
-                onClick = onCompose,
-            )
-            HhhlOverflowMenu(
-                actions = timelineSummaryActions(
-                    isRefreshing = isRefreshing,
-                    onSearch = onSearch,
-                    onRefresh = onRefresh,
-                ),
-                label = "趋势操作",
-            )
-        }
-    }
-}
-
-@Composable
 private fun TimelineTrendRow(
     trend: TrendingHashtag,
     onOpenHashtag: (String) -> Unit,
@@ -574,7 +579,7 @@ private fun TimelineTrendRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onOpenHashtag(trend.tag) }
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -643,6 +648,14 @@ fun timelineSummaryActions(
             ),
         )
     }
+}
+
+fun timelineToolbarActions(
+    toolbarActions: List<HhhlOverflowMenuAction>,
+    timelineActions: List<HhhlOverflowMenuAction>,
+): List<HhhlOverflowMenuAction> = buildList {
+    addAll(toolbarActions)
+    addAll(timelineActions)
 }
 
 fun availableTimelineKinds(capabilities: InstanceCapabilities): List<TimelineKind> {
@@ -717,6 +730,66 @@ data class TimelineThreadItem(
     val depth: Int,
 )
 
+private sealed interface TimelineAccordionEntry {
+    val key: String
+    val contentType: String
+
+    data class NoteEntry(
+        val indexedItem: IndexedValue<TimelineThreadItem>,
+    ) : TimelineAccordionEntry {
+        override val key: String = indexedItem.value.note.id
+        override val contentType: String = "timeline-note"
+    }
+
+    data class ToggleEntry(
+        val rootId: String,
+        val replyCount: Int,
+        val expanded: Boolean,
+    ) : TimelineAccordionEntry {
+        override val key: String = "timeline-thread-toggle-$rootId"
+        override val contentType: String = "timeline-thread-toggle"
+    }
+}
+
+private fun timelineAccordionEntries(
+    indexedItems: List<IndexedValue<TimelineThreadItem>>,
+    expandedRootId: String?,
+): List<TimelineAccordionEntry> = buildList {
+    var index = 0
+    while (index < indexedItems.size) {
+        val root = indexedItems[index]
+        add(TimelineAccordionEntry.NoteEntry(root))
+        if (root.value.depth != 1) {
+            index += 1
+            continue
+        }
+
+        var endExclusive = index + 1
+        while (endExclusive < indexedItems.size && indexedItems[endExclusive].value.depth > 1) {
+            endExclusive += 1
+        }
+        val replyCount = endExclusive - index - 1
+        if (replyCount > 0) {
+            val expanded = root.value.note.id == expandedRootId
+            if (expanded) {
+                for (childIndex in index + 1 until endExclusive) {
+                    add(TimelineAccordionEntry.NoteEntry(indexedItems[childIndex]))
+                }
+            }
+            add(
+                TimelineAccordionEntry.ToggleEntry(
+                    rootId = root.value.note.id,
+                    replyCount = replyCount,
+                    expanded = expanded,
+                ),
+            )
+            index = endExclusive
+        } else {
+            index += 1
+        }
+    }
+}
+
 fun timelineThreadItems(notes: List<Note>): List<TimelineThreadItem> {
     if (notes.isEmpty()) return emptyList()
 
@@ -752,6 +825,36 @@ fun timelineThreadItems(notes: List<Note>): List<TimelineThreadItem> {
     roots.forEach { append(it, 1) }
     notesById.values.forEach { append(it, timelineReplyDepth(it, notesById)) }
     return visible
+}
+
+@Composable
+private fun TimelineAccordionToggleRow(
+    replyCount: Int,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 76.dp, end = 16.dp, top = 4.dp, bottom = 10.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(colors.inputBackground.copy(alpha = 0.54f))
+            .border(1.dp, colors.border.copy(alpha = 0.28f), RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (expanded) "收起回复" else "展开 $replyCount 条回复",
+            color = colors.accent,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 fun timelineReplyDepth(
@@ -888,8 +991,8 @@ private fun TimelineSkeletonRow(compact: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(
             modifier = Modifier

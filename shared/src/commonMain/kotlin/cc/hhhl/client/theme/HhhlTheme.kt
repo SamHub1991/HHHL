@@ -15,9 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
@@ -29,9 +27,9 @@ private val HhhlTypography = Typography().run {
         titleLarge = titleLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.sp),
         titleMedium = titleMedium.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.sp),
         titleSmall = titleSmall.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.sp),
-        bodyLarge = bodyLarge.copy(lineHeight = 22.sp),
-        bodyMedium = bodyMedium.copy(lineHeight = 20.sp),
-        bodySmall = bodySmall.copy(lineHeight = 17.sp),
+        bodyLarge = bodyLarge.copy(lineHeight = 24.sp, letterSpacing = 0.sp),
+        bodyMedium = bodyMedium.copy(lineHeight = 21.sp, letterSpacing = 0.sp),
+        bodySmall = bodySmall.copy(lineHeight = 18.sp, letterSpacing = 0.sp),
         labelLarge = labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.sp),
         labelMedium = labelMedium.copy(fontWeight = FontWeight.Medium, letterSpacing = 0.sp),
         labelSmall = labelSmall.copy(letterSpacing = 0.sp),
@@ -39,9 +37,9 @@ private val HhhlTypography = Typography().run {
 }
 
 private val HhhlShapes = Shapes(
-    small = RoundedCornerShape(10.dp),
-    medium = RoundedCornerShape(14.dp),
-    large = RoundedCornerShape(22.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(24.dp),
 )
 
 data class HhhlColors(
@@ -195,10 +193,10 @@ private fun modernDarkScheme(
 private fun modernLightColors(
     accent: Color = Color(0xFF1D9BF0),
     accentTint: Color = Color(0xFFE7F3FF),
-    pageBackground: Color = Color(0xFFF6F8FA),
+    pageBackground: Color = Color(0xFFF3F6FA),
     surface: Color = Color.White,
     surfaceElevated: Color = Color.White,
-    panelBackground: Color = surface.copy(alpha = 0.88f),
+    panelBackground: Color = surface.copy(alpha = 0.94f),
     textPrimary: Color = Color(0xFF0F1419),
     textSecondary: Color = Color(0xFF53606D),
     lineColor: Color = Color(0xFFE4EAF0),
@@ -226,10 +224,10 @@ private fun modernLightColors(
 private fun modernDarkColors(
     accent: Color = Color(0xFF1D9BF0),
     accentTint: Color = Color(0xFF0D2132),
-    pageBackground: Color = Color.Black,
-    surface: Color = Color(0xFF080A0E),
-    surfaceElevated: Color = Color(0xFF121822),
-    panelBackground: Color = surface.copy(alpha = 0.88f),
+    pageBackground: Color = Color(0xFF05070A),
+    surface: Color = Color(0xFF0B0F14),
+    surfaceElevated: Color = Color(0xFF151B24),
+    panelBackground: Color = surfaceElevated.copy(alpha = 0.92f),
     textPrimary: Color = Color(0xFFE7E9EA),
     textSecondary: Color = Color(0xFF94A1AF),
     lineColor: Color = Color(0xFF232B34),
@@ -298,10 +296,10 @@ private fun buildHhhlColors(
     focusRing = accent.copy(alpha = 0.32f),
     inputBorder = border.copy(alpha = 0.64f),
     inputFocusedBorder = accent.copy(alpha = 0.30f),
-    buttonBackground = accent.copy(alpha = if (pageBackground.luminance() < 0.45f) 0.11f else 0.06f),
-    buttonSelectedBackground = accent.copy(alpha = if (pageBackground.luminance() < 0.45f) 0.20f else 0.14f),
-    chipBackground = accent.copy(alpha = if (pageBackground.luminance() < 0.45f) 0.10f else 0.05f),
-    chipSelectedBackground = accent.copy(alpha = if (pageBackground.luminance() < 0.45f) 0.18f else 0.13f),
+    buttonBackground = surfaceElevated.blendWith(accent, if (pageBackground.luminance() < 0.45f) 0.10f else 0.05f),
+    buttonSelectedBackground = accent.copy(alpha = if (pageBackground.luminance() < 0.45f) 0.24f else 0.16f),
+    chipBackground = surfaceElevated.blendWith(accent, if (pageBackground.luminance() < 0.45f) 0.08f else 0.04f),
+    chipSelectedBackground = accent.copy(alpha = if (pageBackground.luminance() < 0.45f) 0.22f else 0.15f),
     topBarBackground = panelBackground,
     bottomNavBackground = panelBackground,
     bottomNavSelected = accentSoft,
@@ -321,9 +319,9 @@ private fun buildHhhlColors(
     unreadBadge = unreadBadge,
     overlayScrim = Color.Black.copy(alpha = 0.56f),
     shadow = if (pageBackground.luminance() < 0.45f) {
-        Color.Black.copy(alpha = 0.42f)
+        Color.Black.copy(alpha = 0.56f)
     } else {
-        Color.Black.copy(alpha = 0.16f)
+        Color.Black.copy(alpha = 0.18f)
     },
     toastBackground = if (pageBackground.luminance() < 0.45f) {
         Color.White.copy(alpha = 0.92f)
@@ -785,7 +783,7 @@ fun HhhlTheme(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(themeRootBackgroundBrush(extra, effectivePreset.isDarkSurfaceTheme())),
+                    .background(extra.pageBackground),
             ) {
                 if (customTheme.globalBackgroundImageDataUri.isNotBlank()) {
                     AsyncImage(
@@ -944,39 +942,15 @@ internal fun String.toColorOrNull(): Color? {
 @Composable
 internal expect fun ConfigurePlatformSystemBars(colors: HhhlColors)
 
-private fun themeRootBackgroundBrush(
-    colors: HhhlColors,
-    isDarkSurfaceTheme: Boolean,
-): Brush {
-    return if (isDarkSurfaceTheme) {
-        SolidColor(colors.pageBackground)
-    } else {
-        Brush.verticalGradient(
-            colors = listOf(
-                colors.pageBackground,
-                colors.surfaceElevated.copy(alpha = 0.08f),
-                colors.pageBackground,
-            ),
-        )
-    }
-}
-
-private fun HhhlThemePreset.isDarkSurfaceTheme(): Boolean {
-    return when (this) {
-        HhhlThemePreset.Dark,
-        HhhlThemePreset.Dim,
-        HhhlThemePreset.XDarkBlue,
-        HhhlThemePreset.XDarkPurple,
-        HhhlThemePreset.XDarkPink,
-        HhhlThemePreset.XDarkOrange,
-        HhhlThemePreset.AppleDark,
-        HhhlThemePreset.TgNight,
-        HhhlThemePreset.TgAmoled,
-        HhhlThemePreset.OledBlack,
-        HhhlThemePreset.HhhlDarkGreen,
-        -> true
-        else -> false
-    }
+private fun Color.blendWith(other: Color, otherRatio: Float): Color {
+    val ratio = otherRatio.coerceIn(0f, 1f)
+    val selfRatio = 1f - ratio
+    return Color(
+        red = red * selfRatio + other.red * ratio,
+        green = green * selfRatio + other.green * ratio,
+        blue = blue * selfRatio + other.blue * ratio,
+        alpha = alpha * selfRatio + other.alpha * ratio,
+    )
 }
 
 private fun paletteFor(preset: HhhlThemePreset): HhhlPalette {

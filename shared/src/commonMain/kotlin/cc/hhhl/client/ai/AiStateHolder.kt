@@ -61,6 +61,8 @@ class AiStateHolder(
                 fastModel = provider.defaultFastModelForSettings().takeIf { it.isNotBlank() } ?: current.fastModel,
                 longContextModel = provider.defaultLongContextModelForSettings().takeIf { it.isNotBlank() } ?: current.longContextModel,
                 visionModel = provider.defaultVisionModel.takeIf { it.isNotBlank() } ?: current.visionModel,
+                imageGenerationBaseUrl = current.imageGenerationBaseUrl.ifBlank { provider.defaultBaseUrl },
+                imageGenerationModel = current.imageGenerationModel.ifBlank { DEFAULT_IMAGE_GENERATION_MODEL },
                 embeddingModel = provider.defaultEmbeddingModel.takeIf { it.isNotBlank() } ?: current.embeddingModel,
             ),
         )
@@ -190,19 +192,30 @@ class AiStateHolder(
         }
         mutableState.update { it.copy(usage = usageResult.usage) }
         persist()
-        val prompt = AiPromptBuilder.build(taskSettings, kind, input)
+        val compactInput = input.compact(taskSettings.maxInputChars)
+        val prompt = AiPromptBuilder.build(taskSettings, kind, compactInput)
         return repository.complete(
             settings = taskSettings,
             prompt = prompt,
             model = taskSettings.modelForTask(kind),
-            fileIds = input.fileIds,
+            fileIds = compactInput.fileIds,
         )
     }
 
-    override suspend fun evaluateSemanticCondition(prompt: String, eventText: String): AiBridgeResult {
+    override suspend fun evaluateSemanticCondition(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
         return when (val result = runBlockingTask(
             AiTaskKind.AutomationSemanticCondition,
-            AiTaskInput(prompt = prompt, automationEventText = eventText),
+            AiTaskInput(
+                prompt = prompt,
+                automationEventText = eventText,
+                fileIds = fileIds,
+                fileContext = fileContext,
+            ),
         )) {
             is AiRepositoryResult.Success -> AiBridgeResult.Success(result.text)
             AiRepositoryResult.Unauthorized -> AiBridgeResult.Error("AI API Key 无效或权限不足")
@@ -210,14 +223,93 @@ class AiStateHolder(
         }
     }
 
-    override suspend fun generateAutomationText(prompt: String, eventText: String): AiBridgeResult {
+    override suspend fun generateAutomationText(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
         return when (val result = runBlockingTask(
             AiTaskKind.AutomationGeneratedAction,
-            AiTaskInput(prompt = prompt, automationEventText = eventText),
+            AiTaskInput(
+                prompt = prompt,
+                automationEventText = eventText,
+                fileIds = fileIds,
+                fileContext = fileContext,
+            ),
         )) {
             is AiRepositoryResult.Success -> AiBridgeResult.Success(result.text)
             AiRepositoryResult.Unauthorized -> AiBridgeResult.Error("AI API Key 无效或权限不足")
             is AiRepositoryResult.Error -> AiBridgeResult.Error(result.message)
+        }
+    }
+
+    override suspend fun generateAutomationImage(
+        prompt: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        val settings = state.value.settings
+        val validation = settings.imageGenerationValidationError()
+        if (validation != null) return AiBridgeImageResult.Error(validation)
+        val usageResult = state.value.usage.consumeAiRequest(settings)
+        if (usageResult.errorMessage != null) {
+            mutableState.update { it.copy(usage = usageResult.usage, errorMessage = usageResult.errorMessage, message = null) }
+            persist()
+            return AiBridgeImageResult.Error(usageResult.errorMessage)
+        }
+        mutableState.update { it.copy(usage = usageResult.usage) }
+        persist()
+        return when (
+            val result = repository.generateImage(
+                settings = settings,
+                prompt = prompt,
+                model = settings.imageGenerationModel,
+                options = options,
+            )
+        ) {
+            is AiImageGenerationResult.Success -> AiBridgeImageResult.Success(
+                images = result.images,
+            )
+            AiImageGenerationResult.Unauthorized -> AiBridgeImageResult.Error("AI API Key 无效或权限不足")
+            is AiImageGenerationResult.Error -> AiBridgeImageResult.Error(result.message)
+        }
+    }
+
+    override suspend fun editAutomationImage(
+        prompt: String,
+        imageBytes: ByteArray,
+        imageContentType: String,
+        imageFileName: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        val settings = state.value.settings
+        val validation = settings.imageGenerationValidationError()
+        if (validation != null) return AiBridgeImageResult.Error(validation)
+        if (imageBytes.isEmpty()) return AiBridgeImageResult.Error("图生图源图片为空")
+        val usageResult = state.value.usage.consumeAiRequest(settings)
+        if (usageResult.errorMessage != null) {
+            mutableState.update { it.copy(usage = usageResult.usage, errorMessage = usageResult.errorMessage, message = null) }
+            persist()
+            return AiBridgeImageResult.Error(usageResult.errorMessage)
+        }
+        mutableState.update { it.copy(usage = usageResult.usage) }
+        persist()
+        return when (
+            val result = repository.editImage(
+                settings = settings,
+                prompt = prompt,
+                imageBytes = imageBytes,
+                imageContentType = imageContentType,
+                imageFileName = imageFileName,
+                model = settings.imageGenerationModel,
+                options = options,
+            )
+        ) {
+            is AiImageGenerationResult.Success -> AiBridgeImageResult.Success(
+                images = result.images,
+            )
+            AiImageGenerationResult.Unauthorized -> AiBridgeImageResult.Error("AI API Key 无效或权限不足")
+            is AiImageGenerationResult.Error -> AiBridgeImageResult.Error(result.message)
         }
     }
 
@@ -362,24 +454,89 @@ class AiStateHolder(
 }
 
 interface AiBridge {
-    suspend fun evaluateSemanticCondition(prompt: String, eventText: String): AiBridgeResult
+    suspend fun evaluateSemanticCondition(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String> = emptyList(),
+        fileContext: String = "",
+    ): AiBridgeResult
 
-    suspend fun generateAutomationText(prompt: String, eventText: String): AiBridgeResult
+    suspend fun generateAutomationText(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String> = emptyList(),
+        fileContext: String = "",
+    ): AiBridgeResult
+
+    suspend fun generateAutomationImage(
+        prompt: String,
+        options: AiImageRequestOptions = AiImageRequestOptions(),
+    ): AiBridgeImageResult
+
+    suspend fun editAutomationImage(
+        prompt: String,
+        imageBytes: ByteArray,
+        imageContentType: String,
+        imageFileName: String,
+        options: AiImageRequestOptions = AiImageRequestOptions(),
+    ): AiBridgeImageResult
 }
 
 object NoopAiBridge : AiBridge {
-    override suspend fun evaluateSemanticCondition(prompt: String, eventText: String): AiBridgeResult {
+    override suspend fun evaluateSemanticCondition(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
         return AiBridgeResult.Error("AI 未接入")
     }
 
-    override suspend fun generateAutomationText(prompt: String, eventText: String): AiBridgeResult {
+    override suspend fun generateAutomationText(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
         return AiBridgeResult.Error("AI 未接入")
+    }
+
+    override suspend fun generateAutomationImage(
+        prompt: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        return AiBridgeImageResult.Error("AI 未接入")
+    }
+
+    override suspend fun editAutomationImage(
+        prompt: String,
+        imageBytes: ByteArray,
+        imageContentType: String,
+        imageFileName: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        return AiBridgeImageResult.Error("AI 未接入")
     }
 }
 
 sealed interface AiBridgeResult {
     data class Success(val text: String) : AiBridgeResult
     data class Error(val message: String) : AiBridgeResult
+}
+
+sealed interface AiBridgeImageResult {
+    data class Success(
+        val images: List<AiGeneratedImage>,
+    ) : AiBridgeImageResult {
+        val bytes: ByteArray
+            get() = images.firstOrNull()?.bytes ?: byteArrayOf()
+        val contentType: String
+            get() = images.firstOrNull()?.contentType.orEmpty()
+        val revisedPrompt: String
+            get() = images.firstOrNull()?.revisedPrompt.orEmpty()
+    }
+
+    data class Error(val message: String) : AiBridgeImageResult
 }
 
 private fun AiSettings.validationError(kind: AiTaskKind): String? {
@@ -436,6 +593,14 @@ private fun AiSettings.validationError(kind: AiTaskKind): String? {
     return null
 }
 
+private fun AiSettings.imageGenerationValidationError(): String? {
+    if (!enabled) return "AI 未启用"
+    if (cleanImageGenerationBaseUrl.isBlank()) return "请先填写生图 Base URL"
+    if (imageGenerationApiKey.isBlank()) return "请先填写生图 API Key"
+    if (imageGenerationModel.trim().isBlank()) return "请先填写生图模型"
+    return null
+}
+
 private fun AiAutomationModelConfig.cleaned(): AiAutomationModelConfig {
     return copy(
         baseUrl = baseUrl.trim().take(240),
@@ -454,6 +619,9 @@ private fun AiSettings.cleaned(): AiSettings {
         fastModel = fastModel.trim().take(160),
         longContextModel = longContextModel.trim().take(160),
         visionModel = visionModel.trim().take(160),
+        imageGenerationBaseUrl = imageGenerationBaseUrl.trim().take(240),
+        imageGenerationApiKey = imageGenerationApiKey.trim().take(1_000),
+        imageGenerationModel = imageGenerationModel.trim().take(160).ifBlank { DEFAULT_IMAGE_GENERATION_MODEL },
         embeddingModel = embeddingModel.trim().take(160),
         maxInputChars = maxInputChars.coerceIn(1_000, 40_000),
         maxOutputTokens = maxOutputTokens.coerceIn(64, 4_000),

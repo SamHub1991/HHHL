@@ -46,14 +46,21 @@ fun HhhlSegmentedControl(
 ) {
     val colors = LocalHhhlColors.current
     val isDarkSurface = isHhhlDarkSurface()
-    val shape = RoundedCornerShape(17.dp)
+    val shape = RoundedCornerShape(22.dp)
     Row(
         modifier = modifier
+            .shadow(
+                elevation = if (isDarkSurface) 1.dp else 2.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = colors.shadow,
+                spotColor = colors.shadow,
+            )
             .clip(shape)
-            .background(hhhlNeutralControlContainerColor(selected = false).copy(alpha = if (isDarkSurface) 0.82f else 0.72f))
-            .border(1.dp, colors.border.copy(alpha = if (isDarkSurface) 0.28f else 0.22f), shape)
-            .padding(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
+            .background(hhhlNeutralControlContainerColor(selected = false).copy(alpha = if (isDarkSurface) 0.88f else 0.82f))
+            .border(1.dp, colors.border.copy(alpha = if (isDarkSurface) 0.32f else 0.30f), shape)
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
         content = content,
     )
@@ -66,13 +73,14 @@ fun HhhlAnimatedSegmentedControl(
     onSelected: (Int) -> Unit,
     modifier: Modifier = Modifier,
     badgeCounts: List<Int> = emptyList(),
+    itemBaseHeight: Dp = 42.dp,
 ) {
     if (labels.isEmpty()) return
     val colors = LocalHhhlColors.current
     val isDarkSurface = isHhhlDarkSurface()
-    val outerShape = RoundedCornerShape(18.dp)
-    val sliderShape = RoundedCornerShape(15.dp)
-    val itemHeight = scaledSegmentedControlHeight(34.dp)
+    val outerShape = RoundedCornerShape(23.dp)
+    val sliderShape = RoundedCornerShape(19.dp)
+    val itemHeight = scaledSegmentedControlHeight(itemBaseHeight)
     val selectedContainerColor = hhhlNeutralControlContainerColor(selected = true)
     val sliderContainerColor = selectedContainerColor.copy(alpha = if (isDarkSurface) 0.92f else 0.88f)
     val safeSelectedIndex = selectedIndex.coerceIn(0, labels.lastIndex)
@@ -80,10 +88,17 @@ fun HhhlAnimatedSegmentedControl(
     BoxWithConstraints(
         modifier = modifier
             .height(itemHeight + 4.dp)
+            .shadow(
+                elevation = if (isDarkSurface) 1.dp else 2.dp,
+                shape = outerShape,
+                clip = false,
+                ambientColor = colors.shadow,
+                spotColor = colors.shadow,
+            )
             .clip(outerShape)
-            .background(hhhlNeutralControlContainerColor(selected = false).copy(alpha = if (isDarkSurface) 0.82f else 0.72f))
-            .border(1.dp, colors.border.copy(alpha = if (isDarkSurface) 0.32f else 0.22f), outerShape)
-            .padding(2.dp),
+            .background(hhhlNeutralControlContainerColor(selected = false).copy(alpha = if (isDarkSurface) 0.88f else 0.82f))
+            .border(1.dp, colors.border.copy(alpha = if (isDarkSurface) 0.34f else 0.30f), outerShape)
+            .padding(3.dp),
     ) {
         val itemWidth = maxWidth / labels.size
         val sliderOffset by animateDpAsState(
@@ -125,6 +140,7 @@ fun HhhlAnimatedSegmentedControl(
                     badgeCount = badgeCounts.getOrNull(index) ?: 0,
                     onClick = { onSelected(index) },
                     modifier = Modifier.weight(1f),
+                    itemBaseHeight = itemBaseHeight,
                 )
             }
         }
@@ -141,7 +157,7 @@ fun HhhlSegmentedItem(
     selectedUsesPrimary: Boolean = false,
 ) {
     val colors = LocalHhhlColors.current
-    val itemHeight = scaledSegmentedControlHeight(34.dp)
+    val itemHeight = scaledSegmentedControlHeight(42.dp)
     val selectedContainerColor = hhhlNeutralControlContainerColor(selected = true)
     val selectedColor = if (selectedUsesPrimary) {
         hhhlReadableOnControlColor(selectedContainerColor, colors.accent)
@@ -151,7 +167,7 @@ fun HhhlSegmentedItem(
     Row(
         modifier = modifier
             .height(itemHeight)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(16.dp))
             .then(
                 if (selected) Modifier.background(selectedContainerColor)
                 else Modifier.background(Color.Transparent),
@@ -159,10 +175,10 @@ fun HhhlSegmentedItem(
             .border(
                 width = 1.dp,
                 color = if (selected) hhhlNeutralControlBorderColor(selected = true) else Color.Transparent,
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(16.dp),
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -188,7 +204,7 @@ fun HhhlFilterPill(
     minWidth: Dp = 58.dp,
 ) {
     val colors = LocalHhhlColors.current
-    val itemHeight = scaledSegmentedControlHeight(32.dp)
+    val itemHeight = scaledSegmentedControlHeight(38.dp)
     val containerColor = hhhlNeutralControlContainerColor(selected = selected)
     Row(
         modifier = modifier
@@ -198,7 +214,7 @@ fun HhhlFilterPill(
             .background(containerColor)
             .border(1.dp, hhhlNeutralControlBorderColor(selected = selected), RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 11.dp),
+            .padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -221,9 +237,10 @@ private fun HhhlAnimatedSegmentedItem(
     badgeCount: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    itemBaseHeight: Dp = 42.dp,
 ) {
     val colors = LocalHhhlColors.current
-    val itemHeight = scaledSegmentedControlHeight(34.dp)
+    val itemHeight = scaledSegmentedControlHeight(itemBaseHeight)
     val selectedContainerColor = hhhlNeutralControlContainerColor(selected = true)
     val targetTextColor = if (selected) {
         hhhlReadableOnControlColor(selectedContainerColor, colors.textPrimary)
@@ -241,7 +258,7 @@ private fun HhhlAnimatedSegmentedItem(
             .height(itemHeight)
             .clip(RoundedCornerShape(15.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {

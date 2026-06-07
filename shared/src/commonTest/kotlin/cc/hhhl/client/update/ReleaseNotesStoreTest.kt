@@ -10,18 +10,18 @@ class ReleaseNotesStoreTest {
         val timeline = releaseNotesTimeline()
 
         assertEquals(
-            listOf("0.7.5", "0.7.4", "0.7.3", "0.7.2", "0.7.1", "0.7.0", "0.6.1", "0.6.0", "0.5.2", "0.5.1", "0.5.0", "0.4.2", "0.4.1", "0.4.0"),
+            listOf("0.8.0", "0.7.5", "0.7.4", "0.7.3", "0.7.2", "0.7.1", "0.7.0", "0.6.1", "0.6.0", "0.5.2", "0.5.1", "0.5.0", "0.4.2", "0.4.1", "0.4.0"),
             timeline.map { it.versionName },
         )
     }
 
     @Test
     fun currentReleaseNotesIncludeUpdateTimelineChanges() {
-        val notes = releaseNotesFor("v0.7.5")
+        val notes = releaseNotesFor("v0.8.0")
 
-        assertEquals("0.7.5", notes.versionName)
-        assertTrue(notes.highlights.any { it.contains("竞态") })
-        assertTrue(notes.highlights.any { it.contains("AI 小助手") })
-        assertTrue(notes.highlights.any { it.contains("Release") })
+        assertEquals("0.8.0", notes.versionName)
+        assertTrue(notes.highlights.any { it.contains("微信") })
+        assertTrue(notes.highlights.any { it.contains("生图") })
+        assertTrue(notes.highlights.any { it.contains("自动化") })
     }
 }

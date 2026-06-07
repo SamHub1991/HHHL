@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import cc.hhhl.client.theme.LocalHhhlColors
 
-val HhhlDropdownMenuMaxHeight = 320.dp
+val HhhlDropdownMenuMaxHeight = 380.dp
 
 @Composable
 fun HhhlDropdownMenu(
@@ -37,7 +37,7 @@ fun HhhlDropdownMenu(
     modifier: Modifier = Modifier,
     offset: DpOffset = DpOffset.Zero,
     maxHeight: Dp = HhhlDropdownMenuMaxHeight,
-    shape: Shape = RoundedCornerShape(18.dp),
+    shape: Shape = RoundedCornerShape(20.dp),
     containerColor: Color? = null,
     borderColor: Color? = null,
     properties: PopupProperties = PopupProperties(focusable = true),
@@ -61,7 +61,7 @@ fun HhhlDropdownMenu(
         shape = resolvedShape,
         containerColor = resolvedContainerColor,
         tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
+        shadowElevation = 12.dp,
         border = BorderStroke(1.dp, resolvedBorderColor),
         modifier = modifier,
     ) {

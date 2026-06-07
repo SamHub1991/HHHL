@@ -1,6 +1,8 @@
 package cc.hhhl.client.ui.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -12,8 +14,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -23,8 +36,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
@@ -64,13 +79,15 @@ fun MediaPreviewOverlay(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                MediaPreviewTextButton(onClick = onDismiss) {
-                    Text("关闭", color = colors.textInverse)
-                }
+                MediaPreviewIconButton(
+                    icon = Icons.Filled.Close,
+                    label = "关闭",
+                    onClick = onDismiss,
+                )
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = item.label,
@@ -88,18 +105,26 @@ fun MediaPreviewOverlay(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                MediaPreviewTextButton(onClick = { onDownload(item) }) {
-                    Text("保存", color = colors.textInverse)
-                }
-                MediaPreviewTextButton(onClick = { clipboardManager.setText(AnnotatedString(item.openUrl)) }) {
-                    Text("复制链接", color = colors.textInverse)
-                }
-                MediaPreviewTextButton(onClick = { onShare(item.openUrl) }) {
-                    Text("分享", color = colors.textInverse)
-                }
-                MediaPreviewTextButton(onClick = { onOpenExternal(item.openUrl) }) {
-                    Text("打开", color = colors.textInverse)
-                }
+                MediaPreviewIconButton(
+                    icon = Icons.Filled.Download,
+                    label = "保存",
+                    onClick = { onDownload(item) },
+                )
+                MediaPreviewIconButton(
+                    icon = Icons.Filled.Link,
+                    label = "复制链接",
+                    onClick = { clipboardManager.setText(AnnotatedString(item.openUrl)) },
+                )
+                MediaPreviewIconButton(
+                    icon = Icons.Filled.Share,
+                    label = "分享",
+                    onClick = { onShare(item.openUrl) },
+                )
+                MediaPreviewIconButton(
+                    icon = Icons.Filled.OpenInNew,
+                    label = "打开",
+                    onClick = { onOpenExternal(item.openUrl) },
+                )
             }
             Box(
                 modifier = Modifier
@@ -124,18 +149,18 @@ fun MediaPreviewOverlay(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                MediaPreviewTextButton(
+                MediaPreviewPagerButton(
+                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                    label = "上一张",
                     onClick = { onSessionChanged(session.previous()) },
                     enabled = session.canGoPrevious,
-                ) {
-                    Text("上一张")
-                }
-                MediaPreviewTextButton(
+                )
+                MediaPreviewPagerButton(
+                    icon = Icons.AutoMirrored.Filled.ArrowForward,
+                    label = "下一张",
                     onClick = { onSessionChanged(session.next()) },
                     enabled = session.canGoNext,
-                ) {
-                    Text("下一张")
-                }
+                )
             }
         }
     }
@@ -192,20 +217,51 @@ private fun ZoomablePreviewImage(
 }
 
 @Composable
-private fun MediaPreviewTextButton(
+private fun MediaPreviewIconButton(
+    icon: ImageVector,
+    label: String,
     onClick: () -> Unit,
     enabled: Boolean = true,
-    content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val shape = RoundedCornerShape(HhhlIconActionCornerRadius)
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(shape)
+            .background(colors.surfaceElevated.copy(alpha = if (enabled) 0.18f else 0.08f))
+            .border(1.dp, colors.textInverse.copy(alpha = if (enabled) 0.12f else 0.06f), shape)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = colors.textInverse.copy(alpha = if (enabled) 0.92f else 0.36f),
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun MediaPreviewPagerButton(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean,
 ) {
     val colors = LocalHhhlColors.current
     HhhlTextButton(
         onClick = onClick,
         enabled = enabled,
-        containerColor = colors.surfaceElevated.copy(alpha = if (enabled) 0.28f else 0.14f),
-        borderColor = colors.textInverse.copy(alpha = if (enabled) 0.16f else 0.08f),
-        contentColor = colors.textInverse.copy(alpha = if (enabled) 1f else 0.42f),
-        content = content,
-    )
+        containerColor = colors.surfaceElevated.copy(alpha = if (enabled) 0.18f else 0.08f),
+        borderColor = colors.textInverse.copy(alpha = if (enabled) 0.12f else 0.06f),
+        contentColor = colors.textInverse.copy(alpha = if (enabled) 0.92f else 0.36f),
+        modifier = Modifier.widthIn(min = 0.dp),
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+        Text(label)
+    }
 }
 
 @Composable

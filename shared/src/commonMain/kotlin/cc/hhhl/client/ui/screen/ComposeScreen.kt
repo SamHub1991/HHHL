@@ -337,7 +337,7 @@ fun ComposeScreen(
         HhhlDivider()
         LazyColumn(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item(key = "compose-summary", contentType = "compose-summary") {
                 ComposeSummaryRow(
@@ -461,7 +461,7 @@ fun ComposeScreen(
                 item(key = "compose-error", contentType = "compose-error") {
                     val colors = LocalHhhlColors.current
                     HhhlInlinePanel(
-                        modifier = Modifier.padding(horizontal = 14.dp),
+                        modifier = Modifier.padding(horizontal = 18.dp),
                     ) {
                         Text(
                             text = message,
@@ -474,7 +474,7 @@ fun ComposeScreen(
             if (state?.restoredDraft == true) {
                 item(key = "compose-draft-restored", contentType = "compose-status") {
                     HhhlInlinePanel(
-                        modifier = Modifier.padding(horizontal = 14.dp),
+                        modifier = Modifier.padding(horizontal = 18.dp),
                     ) {
                         Text(
                             text = "已恢复草稿",
@@ -499,8 +499,8 @@ fun ComposeScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -856,23 +856,23 @@ private fun ComposeEditorSection(
         supportingText = if (draft.cw != null) "已启用内容警告" else "支持 Markdown、表情、提及和话题",
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(
-                    if (colors.surface.luminance() < 0.2f) {
-                        colors.pageBackground.copy(alpha = 0.34f)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        if (colors.surface.luminance() < 0.2f) {
+                            colors.pageBackground.copy(alpha = 0.34f)
                     } else {
                         colors.inputBackground.copy(alpha = 0.74f)
                     },
                 )
-                .border(
-                    1.dp,
-                    colors.border.copy(alpha = 0.48f),
-                    RoundedCornerShape(18.dp),
-                )
-                .padding(composeEditorSurfaceSpec().contentPadding.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                    .border(
+                        1.dp,
+                        colors.border.copy(alpha = 0.48f),
+                        RoundedCornerShape(20.dp),
+                    )
+                    .padding(composeEditorSurfaceSpec().contentPadding.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1739,10 +1739,11 @@ private fun ComposeAttachmentSection(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(LocalHhhlColors.current.buttonBackground)
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                        .border(1.dp, LocalHhhlColors.current.border.copy(alpha = 0.24f), RoundedCornerShape(16.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1910,7 +1911,7 @@ private fun ComposeSection(
 ) {
     val colors = LocalHhhlColors.current
     val isDarkSurface = colors.surface.luminance() < 0.2f
-    val shape = RoundedCornerShape(if (compact) 18.dp else 20.dp)
+    val shape = RoundedCornerShape(if (compact) 20.dp else 22.dp)
     val containerColor = if (isDarkSurface) {
         colors.noteBackground.copy(alpha = 0.82f)
     } else {
@@ -1924,9 +1925,9 @@ private fun ComposeSection(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp)
+            .padding(horizontal = 18.dp)
             .shadow(
-                elevation = if (isDarkSurface) 3.dp else 1.dp,
+                elevation = if (isDarkSurface) 4.dp else 2.dp,
                 shape = shape,
                 clip = false,
                 ambientColor = colors.shadow,
@@ -1935,10 +1936,10 @@ private fun ComposeSection(
             .clip(shape)
             .background(containerColor)
             .border(1.dp, borderColor, shape)
-            .padding(horizontal = 14.dp, vertical = if (compact) 12.dp else 14.dp),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
+            .padding(horizontal = 18.dp, vertical = if (compact) 15.dp else 18.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 13.dp else 16.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
                 text = title,
                 color = colors.textPrimary,
@@ -2129,7 +2130,7 @@ private fun ComposeTargetPreviewCard(preview: ComposeTargetPreview) {
     HhhlInlinePanel(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),

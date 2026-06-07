@@ -5,13 +5,17 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.HttpRequestData
 import io.ktor.client.request.HttpResponseData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.ContentType
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.content.TextContent
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -37,6 +41,133 @@ class AiRepositoryTest {
         )
 
         assertEquals(AiRepositoryResult.Success("整理完成"), result)
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    @Test
+    fun generateImageUsesOpenAiCompatibleImageEndpoint() = runTest {
+        val imageBytes = byteArrayOf(1, 2, 3)
+        var requestBody = ""
+        val repository = AiRepository(
+            httpClient = aiTestClient { request ->
+                assertEquals("/v1/images/generations", request.url.encodedPath)
+                assertEquals("image.example", request.url.host)
+                assertEquals("Bearer image-key", request.headers[HttpHeaders.Authorization])
+                requestBody = (request.body as TextContent).text
+                respond(
+                    content = """{"data":[{"b64_json":"${Base64.encode(imageBytes)}","revised_prompt":"白猫"}]}""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = repository.generateImage(
+            settings = AiSettings(
+                enabled = true,
+                serviceMode = AiServiceMode.LocalOnly,
+                apiKey = "chat-key",
+                imageGenerationBaseUrl = "http://image.example/v1",
+                imageGenerationApiKey = "image-key",
+                imageGenerationModel = "gpt-image-2",
+            ),
+            prompt = "画一只白猫",
+            options = AiImageRequestOptions(
+                size = "1536x1024",
+                quality = "high",
+                background = "auto",
+                outputFormat = "webp",
+                outputCompression = 75,
+                count = 2,
+            ),
+        )
+
+        assertTrue(result is AiImageGenerationResult.Success)
+        assertEquals(imageBytes.toList(), result.bytes.toList())
+        assertEquals("image/png", result.contentType)
+        assertTrue(requestBody.contains(""""model":"gpt-image-2""""))
+        assertTrue(requestBody.contains(""""prompt":"画一只白猫""""))
+        assertTrue(requestBody.contains(""""n":2"""))
+        assertTrue(requestBody.contains(""""size":"1536x1024""""))
+        assertTrue(requestBody.contains(""""quality":"high""""))
+        assertTrue(requestBody.contains(""""background":"auto""""))
+        assertTrue(requestBody.contains(""""output_format":"webp""""))
+        assertTrue(requestBody.contains(""""output_compression":75"""))
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    @Test
+    fun generateImageKeepsMultipleReturnedImages() = runTest {
+        val first = byteArrayOf(1, 2, 3)
+        val second = byteArrayOf(4, 5, 6)
+        val repository = AiRepository(
+            httpClient = aiTestClient {
+                respond(
+                    content = """{"data":[{"b64_json":"${Base64.encode(first)}","revised_prompt":"第一张"},{"b64_json":"${Base64.encode(second)}","mime_type":"image/webp","revised_prompt":"第二张"}]}""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = repository.generateImage(
+            settings = AiSettings(
+                enabled = true,
+                serviceMode = AiServiceMode.LocalOnly,
+                imageGenerationBaseUrl = "http://image.example/v1",
+                imageGenerationApiKey = "image-key",
+            ),
+            prompt = "两张图",
+            options = AiImageRequestOptions(count = 2),
+        )
+
+        assertTrue(result is AiImageGenerationResult.Success)
+        assertEquals(2, result.images.size)
+        assertEquals(first.toList(), result.images[0].bytes.toList())
+        assertEquals("image/png", result.images[0].contentType)
+        assertEquals(second.toList(), result.images[1].bytes.toList())
+        assertEquals("image/webp", result.images[1].contentType)
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    @Test
+    fun editImageUsesOpenAiCompatibleImageEditEndpoint() = runTest {
+        val imageBytes = byteArrayOf(4, 5, 6)
+        var capturedRequest: HttpRequestData? = null
+        val repository = AiRepository(
+            httpClient = aiTestClient { request ->
+                assertEquals("image.example", request.url.host)
+                assertEquals("Bearer image-key", request.headers[HttpHeaders.Authorization])
+                capturedRequest = request
+                respond(
+                    content = """{"data":[{"b64_json":"${Base64.encode(imageBytes)}","revised_prompt":"保留构图改成夜景"}]}""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = repository.editImage(
+            settings = AiSettings(
+                enabled = true,
+                serviceMode = AiServiceMode.LocalOnly,
+                apiKey = "chat-key",
+                imageGenerationBaseUrl = "http://image.example/v1",
+                imageGenerationApiKey = "image-key",
+                imageGenerationModel = "gpt-image-2",
+            ),
+            prompt = "改成夜景",
+            imageBytes = byteArrayOf(1, 2, 3),
+            imageContentType = "image/png",
+        )
+
+        val request = checkNotNull(capturedRequest)
+        assertEquals("/v1/images/edits", request.url.encodedPath)
+        assertEquals(ContentType.MultiPart.FormData, request.body.contentType?.withoutParameters())
+        assertTrue(request.body is MultiPartFormDataContent)
+        assertTrue(result is AiImageGenerationResult.Success)
+        assertEquals(imageBytes.toList(), result.bytes.toList())
+        assertEquals("image/png", result.contentType)
     }
 
     @Test
@@ -233,6 +364,135 @@ class AiRepositoryTest {
         assertTrue(bodies[1].contains(""""model":"gpt-5.5""""))
         assertTrue(bodies[1].contains(""""content":"user prompt""""))
         assertTrue(bodies[1].contains(""""systemPrompt":"system prompt""""))
+    }
+
+    @Test
+    fun completeParsesWrappedServerAiStatusAndPlainJsonChatResponse() = runTest {
+        val repository = AiRepository(
+            httpClient = aiTestClient { request ->
+                when (request.url.encodedPath) {
+                    "/api/ai/status" -> respond(
+                        content = """
+                            {
+                              "ok": true,
+                              "data": {
+                                "enabled": true,
+                                "defaultProviderId": "remote-gpt",
+                                "providers": [
+                                  {"id":"remote-gpt","name":"Remote GPT","isEnabled":true,"defaultModel":"gpt-5.5","allowedModels":["gpt-5.5"]}
+                                ]
+                              }
+                            }
+                        """.trimIndent(),
+                        status = HttpStatusCode.OK,
+                        headers = jsonHeaders,
+                    )
+                    "/api/ai/chat-stream" -> respond(
+                        content = """{"reply":"远端完成"}""",
+                        status = HttpStatusCode.OK,
+                        headers = jsonHeaders,
+                    )
+                    else -> error("Unexpected path ${request.url.encodedPath}")
+                }
+            },
+            remoteTokenProvider = { "session-token" },
+            remoteBaseUrlProvider = { "https://dc.hhhl.cc" },
+        )
+
+        val result = repository.complete(
+            settings = AiSettings(apiKey = "local-key"),
+            prompt = AiPrompt("system prompt", "user prompt", 120),
+        )
+
+        assertEquals(AiRepositoryResult.Success("远端完成"), result)
+    }
+
+    @Test
+    fun completeParsesServerAiDefaultMessageSseEvents() = runTest {
+        val repository = AiRepository(
+            httpClient = aiTestClient { request ->
+                when (request.url.encodedPath) {
+                    "/api/ai/status" -> respond(
+                        content = """
+                            {
+                              "enabled": true,
+                              "defaultProviderId": "remote-gpt",
+                              "providers": [
+                                {"id":"remote-gpt","name":"Remote GPT","isEnabled":true,"defaultModel":"gpt-5.5","allowedModels":["gpt-5.5"]}
+                              ]
+                            }
+                        """.trimIndent(),
+                        status = HttpStatusCode.OK,
+                        headers = jsonHeaders,
+                    )
+                    "/api/ai/chat-stream" -> respond(
+                        content = """
+                            data: {"delta":"远端"}
+
+                            data: {"content":"完成"}
+
+                            data: [DONE]
+                        """.trimIndent(),
+                        status = HttpStatusCode.OK,
+                        headers = eventStreamHeaders,
+                    )
+                    else -> error("Unexpected path ${request.url.encodedPath}")
+                }
+            },
+            remoteTokenProvider = { "session-token" },
+            remoteBaseUrlProvider = { "https://dc.hhhl.cc" },
+        )
+
+        val result = repository.complete(
+            settings = AiSettings(apiKey = "local-key"),
+            prompt = AiPrompt("system prompt", "user prompt", 120),
+        )
+
+        assertEquals(AiRepositoryResult.Success("远端完成"), result)
+    }
+
+    @Test
+    fun completeParsesOpenAiStyleServerAiSseChunks() = runTest {
+        val repository = AiRepository(
+            httpClient = aiTestClient { request ->
+                when (request.url.encodedPath) {
+                    "/api/ai/status" -> respond(
+                        content = """
+                            {
+                              "enabled": true,
+                              "defaultProviderId": "remote-gpt",
+                              "providers": [
+                                {"id":"remote-gpt","name":"Remote GPT","isEnabled":true,"defaultModel":"gpt-5.5","allowedModels":["gpt-5.5"]}
+                              ]
+                            }
+                        """.trimIndent(),
+                        status = HttpStatusCode.OK,
+                        headers = jsonHeaders,
+                    )
+                    "/api/ai/chat-stream" -> respond(
+                        content = """
+                            data: {"choices":[{"delta":{"content":"远端"}}]}
+
+                            data: {"choices":[{"delta":{"content":"完成"}}]}
+
+                            data: [DONE]
+                        """.trimIndent(),
+                        status = HttpStatusCode.OK,
+                        headers = eventStreamHeaders,
+                    )
+                    else -> error("Unexpected path ${request.url.encodedPath}")
+                }
+            },
+            remoteTokenProvider = { "session-token" },
+            remoteBaseUrlProvider = { "https://dc.hhhl.cc" },
+        )
+
+        val result = repository.complete(
+            settings = AiSettings(apiKey = "local-key"),
+            prompt = AiPrompt("system prompt", "user prompt", 120),
+        )
+
+        assertEquals(AiRepositoryResult.Success("远端完成"), result)
     }
 
     @Test

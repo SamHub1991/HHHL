@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,10 +32,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.outlined.AddReaction
-import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
@@ -65,7 +65,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -81,12 +80,12 @@ import cc.hhhl.client.model.commonReactionOptions
 import cc.hhhl.client.theme.LocalHhhlColors
 import kotlin.math.abs
 
-internal val HhhlNoteActionMinHeight = HhhlControlMinHeight
-internal val HhhlNoteActionMinWidth = HhhlControlMinWidth
-internal val HhhlNoteActionHorizontalPadding = 6.dp
-internal val HhhlNoteActionVerticalPadding = 5.dp
-internal val HhhlNoteActionIconSize = 17.dp
-internal val HhhlNoteActionSpacing = 4.dp
+internal val HhhlNoteActionMinHeight = 28.dp
+internal val HhhlNoteActionMinWidth = 30.dp
+internal val HhhlNoteActionHorizontalPadding = 4.dp
+internal val HhhlNoteActionVerticalPadding = 2.dp
+internal val HhhlNoteActionIconSize = 15.dp
+internal val HhhlNoteActionSpacing = 2.dp
 internal val HhhlReactionPickerMenuWidth = 260.dp
 internal val HhhlReactionPickerItemSize = 42.dp
 internal val HhhlReactionPickerGridSpacing = 6.dp
@@ -182,6 +181,7 @@ fun NoteRow(
     var userQuickPanelOpen by remember(note.author.id) { mutableStateOf(false) }
     var blockUserConfirmOpen by remember(note.author.id) { mutableStateOf(false) }
     var contentExpanded by remember(note.id, note.cw) { mutableStateOf(note.cw.isNullOrBlank()) }
+    var bodyExpanded by remember(note.id, note.text) { mutableStateOf(false) }
     var mutedContentExpanded by remember(note.id, mutedFilters.mutedWords) {
         mutableStateOf(!note.matchesMutedWords(mutedFilters.mutedWords))
     }
@@ -206,6 +206,14 @@ fun NoteRow(
     }
     val isContentVisible = noteContentVisible(note, expanded = contentExpanded)
     val metrics = remember(density) { noteRowMetrics(density) }
+    val collapsedBodyMaxChars = noteCollapsedBodyMaxChars(density)
+    val bodyCollapsible = remember(note.text, density) {
+        noteBodyShouldCollapse(
+            text = note.text,
+            maxChars = collapsedBodyMaxChars,
+            maxLines = NOTE_COLLAPSED_BODY_MAX_LINES,
+        )
+    }
     val canAddToClip = onAddToClip != null
     val overflowActions = remember(canAddToClip, effectiveCanEdit, canDelete) {
         noteOverflowActions(
@@ -217,11 +225,7 @@ fun NoteRow(
     val noteLink = remember(note.id) { notePermalink(note.id) }
     val noteCopyText = remember(note.text, note.cw) { noteClipboardText(note) }
     val noteEmbedCode = remember(note.id) { noteEmbedCode(note.id) }
-    val rowSizeAnimationModifier = if (note.cw.isNullOrBlank()) {
-        Modifier
-    } else {
-        Modifier.animateContentSize()
-    }
+    val rowSizeAnimationModifier = Modifier.animateContentSize()
     val mutedPhrase = remember(note, mutedFilters.mutedWords) {
         note.firstMatchedMutedWord(mutedFilters.mutedWords)
     }
@@ -351,11 +355,20 @@ fun NoteRow(
                     InlineRichText(
                         text = note.text,
                         style = MaterialTheme.typography.bodyMedium,
-                        maxChars = if (density == NoteRowDensity.Compact) 700 else null,
+                        maxChars = when {
+                            bodyCollapsible && !bodyExpanded -> collapsedBodyMaxChars
+                            else -> null
+                        },
                         onOpenUrl = onOpenUrl,
                         onOpenMention = onOpenMention,
                         onOpenHashtag = onOpenHashtag,
                     )
+                    if (bodyCollapsible) {
+                        NoteBodyExpandToggle(
+                            expanded = bodyExpanded,
+                            onClick = { bodyExpanded = !bodyExpanded },
+                        )
+                    }
                     if (note.media.isNotEmpty()) {
                         MediaStrip(
                             note = note,
@@ -393,9 +406,10 @@ fun NoteRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    Spacer(modifier = Modifier.weight(1f))
                     NoteActionButton(
                         icon = Icons.Outlined.ChatBubbleOutline,
                         count = note.replyCount,
@@ -403,7 +417,6 @@ fun NoteRow(
                         enabled = !isActionPending,
                         showDisabledState = false,
                         onClick = { onReply(note.id) },
-                        modifier = Modifier.weight(1f),
                     )
                     NoteActionButton(
                         icon = Icons.Outlined.Repeat,
@@ -412,24 +425,6 @@ fun NoteRow(
                         enabled = !isActionPending,
                         showDisabledState = false,
                         onClick = { onRenote(note.id) },
-                        modifier = Modifier.weight(1f),
-                    )
-                    NoteActionButton(
-                        icon = Icons.Outlined.FormatQuote,
-                        contentDescription = "引用",
-                        enabled = !isActionPending,
-                        showDisabledState = false,
-                        onClick = { onQuote(note.id) },
-                        modifier = Modifier.weight(1f),
-                    )
-                    NoteActionButton(
-                        icon = Icons.Outlined.Bookmark,
-                        selected = note.isFavorited,
-                        contentDescription = if (note.isFavorited) "取消保存" else "保存到收藏",
-                        enabled = !isActionPending,
-                        showDisabledState = false,
-                        onClick = { onFavorite(note.id) },
-                        modifier = Modifier.weight(1f),
                     )
                     NoteActionButton(
                         icon = if (note.myReaction == null) Icons.Outlined.AddReaction else null,
@@ -447,7 +442,6 @@ fun NoteRow(
                                 reactionMenuExpanded = true
                             }
                         },
-                        modifier = Modifier.weight(1f),
                     )
                     if (reactionMenuExpanded) {
                         ReactionPickerDialog(
@@ -480,6 +474,7 @@ fun NoteRow(
                                         clipboardManager.setText(AnnotatedString(noteLink))
                                     }
                                 }
+                                NoteOverflowAction.Quote -> onQuote(note.id)
                                 NoteOverflowAction.AiSummary -> rowActions.onAiSummarizeNote(note)
                                 NoteOverflowAction.AiReplyDraft -> rowActions.onAiReplyDraft(note)
                                 NoteOverflowAction.Favorite -> onFavorite(note.id)
@@ -530,10 +525,19 @@ fun NoteRow(
                                 }
                             }
                         }
+                        val actionColors = LocalHhhlColors.current
                         HhhlOverflowMenu(
                             actions = menuActions,
                             enabled = !isActionPending,
                             showDisabledState = false,
+                            buttonContainerColor = Color.Transparent,
+                            iconTint = actionColors.textSecondary,
+                            buttonWidth = HhhlNoteActionMinWidth,
+                            buttonHeight = HhhlNoteActionMinHeight,
+                            buttonIconSize = HhhlNoteActionIconSize,
+                            buttonCornerRadius = HhhlControlCornerRadius,
+                            buttonBorderAlpha = 0f,
+                            buttonElevation = 0.dp,
                         )
                     }
                 }
@@ -847,6 +851,7 @@ enum class NoteOverflowAction(val label: String) {
     CopyLink("复制链接"),
     Embed("嵌入"),
     Share("分享"),
+    Quote("引用"),
     AiSummary("AI 总结"),
     AiReplyDraft("AI 回复草稿"),
     Favorite("收藏"),
@@ -1087,6 +1092,7 @@ fun noteOverflowActions(
     add(NoteOverflowAction.CopyLink)
     add(NoteOverflowAction.Embed)
     add(NoteOverflowAction.Share)
+    add(NoteOverflowAction.Quote)
     add(NoteOverflowAction.AiSummary)
     add(NoteOverflowAction.AiReplyDraft)
     add(NoteOverflowAction.Favorite)
@@ -1242,17 +1248,56 @@ fun noteRowMetrics(density: NoteRowDensity): NoteRowMetrics {
             mediaHeight = 72,
         )
         NoteRowDensity.Comfortable -> NoteRowMetrics(
-            horizontalPadding = 14,
-            verticalPadding = 12,
-            avatarSize = 42,
-            contentSpacing = 6,
-            mediaHeight = 86,
+            horizontalPadding = 16,
+            verticalPadding = 14,
+            avatarSize = 44,
+            contentSpacing = 7,
+            mediaHeight = 92,
         )
     }
 }
 
 fun noteContentVisible(note: Note, expanded: Boolean): Boolean {
     return note.cw.isNullOrBlank() || expanded
+}
+
+const val NOTE_COLLAPSED_BODY_MAX_LINES = 6
+
+fun noteCollapsedBodyMaxChars(density: NoteRowDensity): Int {
+    return when (density) {
+        NoteRowDensity.UltraCompact -> 260
+        NoteRowDensity.Compact -> 320
+        NoteRowDensity.Comfortable -> 380
+    }
+}
+
+fun noteBodyShouldCollapse(
+    text: String,
+    maxChars: Int,
+    maxLines: Int = NOTE_COLLAPSED_BODY_MAX_LINES,
+): Boolean {
+    val clean = text.trim()
+    if (clean.length > maxChars) return true
+    if (maxLines <= 0) return false
+    return clean.lineSequence().count() > maxLines
+}
+
+@Composable
+private fun NoteBodyExpandToggle(
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Text(
+        text = if (expanded) "收起" else "展开全文",
+        color = colors.accent,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 2.dp, vertical = 2.dp),
+    )
 }
 
 fun noteMediaVisible(media: NoteMedia, revealed: Boolean): Boolean {
@@ -1807,20 +1852,18 @@ private fun NoteActionButton(
     )
     val containerColor by animateColorAsState(
         targetValue = when {
-            softSelected -> colors.noteActionBackground.copy(alpha = 0.62f)
-            selected -> colors.noteActionBackground.copy(alpha = 0.92f)
-            !visuallyEnabled -> colors.noteActionBackground.copy(alpha = 0.36f)
-            else -> colors.noteActionBackground
+            softSelected -> colors.accent.copy(alpha = 0.08f)
+            selected -> colors.accent.copy(alpha = 0.10f)
+            !visuallyEnabled -> Color.Transparent
+            else -> Color.Transparent
         },
         animationSpec = tween(durationMillis = 150),
         label = "note-action-container",
     )
     val borderColor by animateColorAsState(
         targetValue = when {
-            softSelected -> colors.border.copy(alpha = 0.24f)
-            selected -> colors.focusRing.copy(alpha = 0.48f)
-            !visuallyEnabled -> colors.border.copy(alpha = 0.18f)
-            else -> colors.border.copy(alpha = 0.22f)
+            selected -> colors.focusRing.copy(alpha = 0.14f)
+            else -> Color.Transparent
         },
         animationSpec = tween(durationMillis = 150),
         label = "note-action-border",
@@ -1832,7 +1875,7 @@ private fun NoteActionButton(
             .widthIn(min = 0.dp)
             .defaultMinSize(minHeight = HhhlNoteActionMinHeight, minWidth = HhhlNoteActionMinWidth)
             .shadow(
-                elevation = if (selected && !softSelected) HhhlIconActionIdleElevation else 0.dp,
+                elevation = 0.dp,
                 shape = shape,
                 clip = false,
                 ambientColor = colors.shadow,

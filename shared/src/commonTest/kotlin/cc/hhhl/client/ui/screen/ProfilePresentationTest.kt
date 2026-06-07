@@ -119,6 +119,7 @@ class ProfilePresentationTest {
                 "快速模型",
                 "长上下文模型",
                 "视觉模型",
+                "生图模型",
                 "向量模型",
                 "读取权限",
                 "AI 自动化",
@@ -143,12 +144,12 @@ class ProfilePresentationTest {
 
     @Test
     fun profileQuickActionsUseCompactCardMetrics() {
-        assertEquals(16.dp, ProfileQuickActionsHorizontalPadding)
+        assertEquals(18.dp, ProfileQuickActionsHorizontalPadding)
         assertEquals(10.dp, ProfileQuickActionsCardInnerPadding)
-        assertEquals(96.dp, ProfilePrimaryShortcutTileHeight)
-        assertEquals(58.dp, ProfileWorkspaceShortcutTileHeight)
+        assertEquals(58.dp, ProfilePrimaryShortcutTileHeight)
+        assertEquals(52.dp, ProfileWorkspaceShortcutTileHeight)
         assertEquals(14.dp, ProfileShortcutTileCornerRadius)
-        assertEquals(32.dp, ProfileShortcutIconContainerSize)
+        assertEquals(30.dp, ProfileShortcutIconContainerSize)
         assertEquals(17.dp, ProfileShortcutIconSize)
     }
 }

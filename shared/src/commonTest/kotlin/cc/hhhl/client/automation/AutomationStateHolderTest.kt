@@ -1,9 +1,16 @@
 package cc.hhhl.client.automation
 
 import cc.hhhl.client.ai.AiBridge
+import cc.hhhl.client.ai.AiBridgeImageResult
 import cc.hhhl.client.ai.AiBridgeResult
+import cc.hhhl.client.ai.AiGeneratedImage
+import cc.hhhl.client.ai.AiImageRequestOptions
+import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.model.ChatMessage
+import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
+import cc.hhhl.client.repository.DriveFileRepository
+import cc.hhhl.client.repository.DriveFileRepositoryResult
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRepository
 import io.ktor.client.HttpClient
@@ -1144,6 +1151,81 @@ class AutomationStateHolderTest {
     }
 
     @Test
+    fun aiSemanticConditionPassesImageAttachmentsToBridge() = runTest {
+        val aiBridge = RecordingAiBridge("RESULT: YES\n图片里有需要处理的信息")
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-ai-image",
+                        name = "AI 看图条件",
+                        trigger = AutomationTrigger.ChatMessage,
+                        conditions = listOf(
+                            AutomationCondition(
+                                id = "condition-ai-image",
+                                type = AutomationConditionType.AiSemantic,
+                                value = "图片里包含错误截图",
+                            ),
+                        ),
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-log",
+                                type = AutomationActionType.AddLog,
+                                bodyTemplate = "{{message.text}}",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            aiBridge = aiBridge,
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.emit(
+            AutomationEvent(
+                id = "event-ai-image",
+                trigger = AutomationTrigger.ChatMessage,
+                messageText = "帮我看下这个截图",
+                attachments = listOf(
+                    AutomationAttachment(
+                        id = "image-file",
+                        name = "error.png",
+                        type = "image/png",
+                        description = "错误截图",
+                    ),
+                    AutomationAttachment(
+                        id = "doc-file",
+                        name = "readme.txt",
+                        type = "text/plain",
+                    ),
+                    AutomationAttachment(
+                        id = "duplicate-image",
+                        name = "duplicate.png",
+                        type = "IMAGE/PNG",
+                    ),
+                    AutomationAttachment(
+                        id = "image-file",
+                        name = "same.png",
+                        type = "image/png",
+                    ),
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf("image-file", "duplicate-image"), aiBridge.semanticFileIds)
+        assertTrue(aiBridge.semanticFileContext.contains("error.png"))
+        assertTrue(aiBridge.semanticFileContext.contains("doc-file"))
+        assertTrue(aiBridge.semanticFileContext.contains("将作为图片传给 AI"))
+        assertTrue(holder.state.value.logs.single().success)
+    }
+
+    @Test
     fun aiGeneratedWebhookUsesGeneratedTextAsWebhookBody() = runTest {
         var webhookBody = ""
         val executor = AppAutomationActionExecutor(
@@ -1182,6 +1264,48 @@ class AutomationStateHolderTest {
         assertTrue(webhookBody.contains("AI 生成的回调正文"))
         assertTrue(webhookBody.contains("AI 事件"))
         assertTrue(webhookBody.contains("event-1"))
+    }
+
+    @Test
+    fun aiGeneratedActionPassesImageAttachmentsToBridge() = runTest {
+        val aiBridge = RecordingAiBridge(generatedText = "图片显示更新失败")
+        val executor = AppAutomationActionExecutor(
+            chatRepository = cc.hhhl.client.repository.ChatRepository(tokenProvider = { "token" }),
+            notificationRepository = cc.hhhl.client.repository.NotificationRepository(tokenProvider = { "token" }),
+            aiBridge = aiBridge,
+        )
+
+        val result = executor.execute(
+            action = AutomationAction(
+                id = "action-ai-log",
+                type = AutomationActionType.AiGenerateLog,
+                bodyTemplate = "总结图片里的问题",
+            ),
+            event = AutomationEvent(
+                id = "event-ai-action-image",
+                trigger = AutomationTrigger.ChatMessage,
+                messageText = "看截图",
+                attachments = listOf(
+                    AutomationAttachment(
+                        id = "image-file",
+                        name = "screen.png",
+                        type = "image/png",
+                    ),
+                    AutomationAttachment(
+                        id = "video-file",
+                        name = "demo.mp4",
+                        type = "video/mp4",
+                    ),
+                ),
+            ),
+            title = "AI 日志",
+            body = "原始日志",
+        )
+
+        assertTrue(result.success)
+        assertEquals(listOf("image-file"), aiBridge.generatedFileIds)
+        assertTrue(aiBridge.generatedFileContext.contains("screen.png"))
+        assertTrue(aiBridge.generatedFileContext.contains("demo.mp4"))
     }
 
     @Test
@@ -1839,39 +1963,367 @@ class AutomationStateHolderTest {
         assertEquals("message-1", chatRepository.lastReplyId)
         assertTrue(holder.state.value.logs.single().success)
     }
+
+    @Test
+    fun aiReplyToChatGeneratesImageUploadsAndSendsAttachment() = runTest {
+        val chatRepository = RecordingChatRepository()
+        val driveRepository = RecordingDriveFileRepository("generated-image")
+        val executor = AppAutomationActionExecutor(
+            chatRepository = chatRepository,
+            notificationRepository = cc.hhhl.client.repository.NotificationRepository(tokenProvider = { "token" }),
+            driveFileRepository = driveRepository,
+            aiBridge = RecordingAiBridge(
+                generatedText = "IMAGE_PROMPT: 一只白色机械猫坐在雨夜霓虹街道，电影感，高细节",
+                imageBytes = byteArrayOf(1, 2, 3, 4),
+            ),
+        )
+
+        val result = executor.execute(
+            action = AutomationAction(
+                id = "action-ai-image-reply",
+                type = AutomationActionType.AiReplyToChat,
+                bodyTemplate = "如果对方要求生图就生成图片",
+                replyToEvent = true,
+            ),
+            event = AutomationEvent(
+                id = "event-image-request",
+                trigger = AutomationTrigger.ChatAttention,
+                chatMessageId = "message-image-request",
+                sourceKind = "room",
+                roomId = "room-1",
+                messageText = "帮我生成一张白色机械猫图片",
+            ),
+            title = "聊天回复",
+            body = "",
+        )
+
+        assertTrue(result.success)
+        assertEquals("room-1", chatRepository.lastRoomId)
+        assertEquals(listOf("generated-image"), chatRepository.lastFileIds)
+        assertEquals("message-image-request", chatRepository.lastReplyId)
+        assertEquals("image/png", driveRepository.lastUpload?.contentType)
+        assertEquals(byteArrayOf(1, 2, 3, 4).toList(), driveRepository.lastUpload?.bytes?.toList())
+    }
+
+    @Test
+    fun aiReplyToChatParsesImageParametersAndPreservesReplyOptions() = runTest {
+        val chatRepository = RecordingChatRepository()
+        val driveRepository = RecordingDriveFileRepository("generated-transparent-image")
+        val aiBridge = RecordingAiBridge(
+            generatedText = """IMAGE_PROMPT: {"prompt":"画一个透明背景的狐狸贴纸","size":"1024x1536","quality":"high","background":"auto","output_format":"png","output_compression":80,"n":2,"transparent":true,"caption":"给你两张候选"}""",
+            imageBytes = byteArrayOf(1, 2, 3, 4),
+        )
+        val executor = AppAutomationActionExecutor(
+            chatRepository = chatRepository,
+            notificationRepository = cc.hhhl.client.repository.NotificationRepository(tokenProvider = { "token" }),
+            driveFileRepository = driveRepository,
+            aiBridge = aiBridge,
+        )
+
+        val result = executor.execute(
+            action = AutomationAction(
+                id = "action-ai-image-params",
+                type = AutomationActionType.AiReplyToChat,
+                bodyTemplate = "如果对方要求生图就生成图片，保留回复要求",
+                mentionSender = true,
+                replyToEvent = true,
+                quoteEvent = true,
+            ),
+            event = AutomationEvent(
+                id = "event-image-params",
+                trigger = AutomationTrigger.ChatAttention,
+                chatMessageId = "message-image-params",
+                sourceKind = "room",
+                roomId = "room-1",
+                senderUsername = "alice",
+                messageText = "帮我生成两张透明背景高清狐狸贴纸，竖图",
+            ),
+            title = "聊天回复",
+            body = "",
+        )
+
+        assertTrue(result.success)
+        assertEquals("画一个透明背景的狐狸贴纸", aiBridge.imagePrompt.substringBefore('。'))
+        assertTrue(aiBridge.imagePrompt.contains("透明背景"))
+        assertEquals("1024x1536", aiBridge.imageOptions.size)
+        assertEquals("high", aiBridge.imageOptions.quality)
+        assertEquals("auto", aiBridge.imageOptions.background)
+        assertEquals("png", aiBridge.imageOptions.outputFormat)
+        assertEquals(80, aiBridge.imageOptions.outputCompression)
+        assertEquals(2, aiBridge.imageOptions.count)
+        assertEquals("@alice 给你两张候选", chatRepository.lastText)
+        assertEquals("message-image-params", chatRepository.lastReplyId)
+        assertEquals("message-image-params", chatRepository.lastQuoteId)
+        assertEquals(listOf("generated-transparent-image"), chatRepository.lastFileIds)
+    }
+
+    @Test
+    fun aiReplyToChatEditsImageAttachmentUploadsAndSendsAttachment() = runTest {
+        val chatRepository = RecordingChatRepository()
+        val driveRepository = RecordingDriveFileRepository("edited-image")
+        val aiBridge = RecordingAiBridge(
+            generatedText = "IMAGE_EDIT_PROMPT: 把图片背景改成赛博朋克城市夜景",
+            imageBytes = byteArrayOf(8, 7, 6, 5),
+        )
+        val sourceBytes = byteArrayOf(1, 2, 3, 4)
+        val executor = AppAutomationActionExecutor(
+            chatRepository = chatRepository,
+            notificationRepository = cc.hhhl.client.repository.NotificationRepository(tokenProvider = { "token" }),
+            driveFileRepository = driveRepository,
+            aiBridge = aiBridge,
+            httpClient = HttpClient(MockEngine { request ->
+                assertEquals("https://files.example.com/source.png", request.url.toString())
+                respond(
+                    content = sourceBytes,
+                    status = HttpStatusCode.OK,
+                    headers = io.ktor.http.headersOf(io.ktor.http.HttpHeaders.ContentType, "image/png"),
+                )
+            }),
+        )
+
+        val result = executor.execute(
+            action = AutomationAction(
+                id = "action-ai-edit-image-reply",
+                type = AutomationActionType.AiReplyToChat,
+                bodyTemplate = "如果对方要求编辑图片就按要求改图",
+                replyToEvent = true,
+            ),
+            event = AutomationEvent(
+                id = "event-image-edit-request",
+                trigger = AutomationTrigger.ChatAttention,
+                chatMessageId = "message-image-edit-request",
+                sourceKind = "room",
+                roomId = "room-1",
+                messageText = "帮我把这张图改成赛博朋克背景",
+                messageType = "text,image",
+                attachments = listOf(
+                    AutomationAttachment(
+                        id = "source-file",
+                        name = "source.png",
+                        type = "image/png",
+                        url = "https://files.example.com/source.png",
+                    ),
+                ),
+            ),
+            title = "聊天回复",
+            body = "",
+        )
+
+        assertTrue(result.success)
+        assertEquals("room-1", chatRepository.lastRoomId)
+        assertEquals(listOf("edited-image"), chatRepository.lastFileIds)
+        assertEquals("message-image-edit-request", chatRepository.lastReplyId)
+        assertEquals("把图片背景改成赛博朋克城市夜景", aiBridge.imageEditPrompt)
+        assertEquals(sourceBytes.toList(), aiBridge.imageEditSourceBytes.toList())
+        assertEquals("image/png", aiBridge.imageEditContentType)
+        assertEquals("source.png", aiBridge.imageEditFileName)
+        assertEquals(byteArrayOf(8, 7, 6, 5).toList(), driveRepository.lastUpload?.bytes?.toList())
+    }
 }
 
 private class FakeAiBridge(
     private val generatedText: String,
 ) : AiBridge {
-    override suspend fun evaluateSemanticCondition(prompt: String, eventText: String): AiBridgeResult {
+    override suspend fun evaluateSemanticCondition(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
         return AiBridgeResult.Success("YES")
     }
 
-    override suspend fun generateAutomationText(prompt: String, eventText: String): AiBridgeResult {
+    override suspend fun generateAutomationText(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
         return AiBridgeResult.Success(generatedText)
+    }
+
+    override suspend fun generateAutomationImage(
+        prompt: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        return AiBridgeImageResult.Error("不会执行")
+    }
+
+    override suspend fun editAutomationImage(
+        prompt: String,
+        imageBytes: ByteArray,
+        imageContentType: String,
+        imageFileName: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        return AiBridgeImageResult.Error("不会执行")
     }
 }
 
 private object FailingSemanticAiBridge : AiBridge {
-    override suspend fun evaluateSemanticCondition(prompt: String, eventText: String): AiBridgeResult {
+    override suspend fun evaluateSemanticCondition(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
         return AiBridgeResult.Error("AI 自动化未启用")
     }
 
-    override suspend fun generateAutomationText(prompt: String, eventText: String): AiBridgeResult {
+    override suspend fun generateAutomationText(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
         return AiBridgeResult.Success("不会执行")
+    }
+
+    override suspend fun generateAutomationImage(
+        prompt: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        return AiBridgeImageResult.Error("不会执行")
+    }
+
+    override suspend fun editAutomationImage(
+        prompt: String,
+        imageBytes: ByteArray,
+        imageContentType: String,
+        imageFileName: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        return AiBridgeImageResult.Error("不会执行")
     }
 }
 
 private class SemanticReplyAiBridge(
     private val semanticReply: String,
 ) : AiBridge {
-    override suspend fun evaluateSemanticCondition(prompt: String, eventText: String): AiBridgeResult {
+    override suspend fun evaluateSemanticCondition(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
         return AiBridgeResult.Success(semanticReply)
     }
 
-    override suspend fun generateAutomationText(prompt: String, eventText: String): AiBridgeResult {
+    override suspend fun generateAutomationText(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
         return AiBridgeResult.Success("不会执行")
+    }
+
+    override suspend fun generateAutomationImage(
+        prompt: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        return AiBridgeImageResult.Error("不会执行")
+    }
+
+    override suspend fun editAutomationImage(
+        prompt: String,
+        imageBytes: ByteArray,
+        imageContentType: String,
+        imageFileName: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        return AiBridgeImageResult.Error("不会执行")
+    }
+}
+
+private class RecordingAiBridge(
+    private val semanticReply: String = "RESULT: YES",
+    private val generatedText: String = "generated",
+    private val imageBytes: ByteArray = byteArrayOf(9, 9, 9),
+) : AiBridge {
+    var semanticFileIds: List<String> = emptyList()
+        private set
+    var semanticFileContext: String = ""
+        private set
+    var generatedFileIds: List<String> = emptyList()
+        private set
+    var generatedFileContext: String = ""
+        private set
+    var imagePrompt: String = ""
+        private set
+    var imageOptions: AiImageRequestOptions = AiImageRequestOptions()
+        private set
+    var imageEditPrompt: String = ""
+        private set
+    var imageEditOptions: AiImageRequestOptions = AiImageRequestOptions()
+        private set
+    var imageEditSourceBytes: ByteArray = byteArrayOf()
+        private set
+    var imageEditContentType: String = ""
+        private set
+    var imageEditFileName: String = ""
+        private set
+
+    override suspend fun evaluateSemanticCondition(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
+        semanticFileIds = fileIds
+        semanticFileContext = fileContext
+        return AiBridgeResult.Success(semanticReply)
+    }
+
+    override suspend fun generateAutomationText(
+        prompt: String,
+        eventText: String,
+        fileIds: List<String>,
+        fileContext: String,
+    ): AiBridgeResult {
+        generatedFileIds = fileIds
+        generatedFileContext = fileContext
+        return AiBridgeResult.Success(generatedText)
+    }
+
+    override suspend fun generateAutomationImage(
+        prompt: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        imagePrompt = prompt
+        imageOptions = options
+        return AiBridgeImageResult.Success(
+            images = listOf(
+                AiGeneratedImage(
+                    bytes = imageBytes,
+                    contentType = "image/png",
+                    revisedPrompt = prompt,
+                ),
+            ),
+        )
+    }
+
+    override suspend fun editAutomationImage(
+        prompt: String,
+        imageBytes: ByteArray,
+        imageContentType: String,
+        imageFileName: String,
+        options: AiImageRequestOptions,
+    ): AiBridgeImageResult {
+        imageEditPrompt = prompt
+        imageEditOptions = options
+        imageEditSourceBytes = imageBytes
+        imageEditContentType = imageContentType
+        imageEditFileName = imageFileName
+        return AiBridgeImageResult.Success(
+            images = listOf(
+                AiGeneratedImage(
+                    bytes = this.imageBytes,
+                    contentType = "image/png",
+                    revisedPrompt = prompt,
+                ),
+            ),
+        )
     }
 }
 
@@ -1929,10 +2381,35 @@ private class InterleavingAutomationStore(
         )
     }
 }
+
+private class RecordingDriveFileRepository(
+    private val fileId: String,
+) : DriveFileRepository(tokenProvider = { "token" }) {
+    var lastUpload: DriveFileUpload? = null
+        private set
+
+    override suspend fun upload(upload: DriveFileUpload): DriveFileRepositoryResult {
+        lastUpload = upload
+        return DriveFileRepositoryResult.Success(
+            DriveFile(
+                id = fileId,
+                name = upload.fileName,
+                type = upload.contentType,
+                url = "https://example.com/${upload.fileName}",
+                thumbnailUrl = null,
+                comment = upload.comment,
+                size = upload.bytes.size.toLong(),
+                isSensitive = false,
+            ),
+        )
+    }
+}
+
 private class RecordingChatRepository : ChatRepository(tokenProvider = { "token" }) {
     var lastRoomId: String? = null
     var lastUserId: String? = null
     var lastText: String? = null
+    var lastFileIds: List<String> = emptyList()
     var lastReplyId: String? = null
     var lastQuoteId: String? = null
 
@@ -1946,6 +2423,7 @@ private class RecordingChatRepository : ChatRepository(tokenProvider = { "token"
     ): ChatMessageRepositoryResult {
         lastRoomId = roomId
         lastText = text
+        lastFileIds = fileIds + listOfNotNull(fileId)
         lastReplyId = replyId
         lastQuoteId = quoteId
         return ChatMessageRepositoryResult.Created(fakeMessage(roomId, text))
@@ -1960,6 +2438,7 @@ private class RecordingChatRepository : ChatRepository(tokenProvider = { "token"
     ): ChatMessageRepositoryResult {
         lastUserId = userId
         lastText = text
+        lastFileIds = listOfNotNull(fileId)
         lastReplyId = replyId
         lastQuoteId = quoteId
         return ChatMessageRepositoryResult.Created(fakeMessage("", text))

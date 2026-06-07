@@ -480,13 +480,13 @@ private fun AutomationRuleDraftPreviewCard(
         }
         AutomationPanel(compact = true) {
             AutomationTitle("条件")
-            rule.conditions.take(6).forEachIndexed { index, condition ->
+            rule.conditions.forEachIndexed { index, condition ->
                 AutomationMutedText("${index + 1}. ${condition.type.label} = ${condition.value.ifBlank { "全部" }}${if (condition.enabled) "" else "（停用）"}")
             }
         }
         AutomationPanel(compact = true) {
             AutomationTitle("动作")
-            rule.actions.take(6).forEachIndexed { index, action ->
+            rule.actions.forEachIndexed { index, action ->
                 val target = action.targetId.ifBlank { "默认目标" }
                 AutomationMutedText("${index + 1}. ${action.type.label} -> $target${if (action.enabled) "" else "（停用）"}")
             }
@@ -1175,7 +1175,7 @@ private fun AutomationHistorySimulationCard(
         if (messages.isEmpty()) {
             AutomationMutedText("先打开一个聊天室或私聊，最近消息会显示在这里。")
         } else {
-            messages.take(5).forEach { message ->
+            messages.take(20).forEach { message ->
                 AutomationPanel(compact = true) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {

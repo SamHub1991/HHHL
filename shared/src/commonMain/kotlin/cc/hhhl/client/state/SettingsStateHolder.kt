@@ -134,6 +134,7 @@ enum class SettingsItemKey {
     AiFastModel,
     AiLongContextModel,
     AiVisionModel,
+    AiImageGenerationModel,
     AiEmbeddingModel,
     AiReadPermissions,
     AiAutomation,

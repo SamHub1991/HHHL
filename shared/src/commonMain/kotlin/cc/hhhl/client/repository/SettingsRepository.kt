@@ -780,6 +780,13 @@ open class SettingsRepository(
                     enabled = aiSettings.enabled,
                 ),
                 SettingsItem(
+                    key = SettingsItemKey.AiImageGenerationModel,
+                    label = "生图模型",
+                    value = aiSettings.imageGenerationModel.ifBlank { "未配置" },
+                    icon = "图",
+                    enabled = aiSettings.enabled,
+                ),
+                SettingsItem(
                     key = SettingsItemKey.AiEmbeddingModel,
                     label = "向量模型",
                     value = aiSettings.embeddingModel.ifBlank { "未配置" },

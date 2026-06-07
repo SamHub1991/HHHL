@@ -1,7 +1,6 @@
 package cc.hhhl.client.ui.component
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,8 +24,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.focus.onFocusChanged
@@ -41,11 +38,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.theme.LocalHhhlColors
 
-internal val HhhlTextInputSingleLineMinHeight = 42.dp
-internal val HhhlTextInputMultiLineMinHeight = 80.dp
-internal val HhhlTextInputCornerRadius = 13.dp
-internal val HhhlTextInputHorizontalPadding = 12.dp
-internal val HhhlTextInputVerticalPadding = 8.dp
+internal val HhhlTextInputSingleLineMinHeight = 52.dp
+internal val HhhlTextInputMultiLineMinHeight = 112.dp
+internal val HhhlTextInputCornerRadius = 17.dp
+internal val HhhlTextInputHorizontalPadding = 17.dp
+internal val HhhlTextInputVerticalPadding = 13.dp
 
 @Composable
 fun HhhlTextInput(
@@ -112,16 +109,15 @@ fun HhhlTextInput(
         neutralDarkInputContainer(
             pageBackground = colors.pageBackground,
             surface = colors.surface,
-            surfaceElevated = colors.surfaceElevated,
         )
     } else {
         colors.inputBackground.blendWith(colors.surfaceElevated, 0.34f)
     }
     val containerColor by animateColorAsState(
         targetValue = when {
-            !enabled -> baseContainer.withMultipliedAlpha(if (isDarkSurface) 0.46f else 0.52f)
-            focused -> baseContainer.withMultipliedAlpha(if (isDarkSurface) 0.82f else 0.92f)
-            else -> baseContainer.withMultipliedAlpha(if (isDarkSurface) 0.58f else 0.72f)
+            !enabled -> baseContainer.copy(alpha = if (isDarkSurface) 0.46f else 0.52f).asOpaqueOver(colors.pageBackground)
+            focused -> baseContainer.copy(alpha = if (isDarkSurface) 0.92f else 0.92f).asOpaqueOver(colors.pageBackground)
+            else -> baseContainer.copy(alpha = if (isDarkSurface) 0.72f else 0.72f).asOpaqueOver(colors.pageBackground)
         },
         animationSpec = tween(durationMillis = 160),
         label = "text-input-container",
@@ -138,17 +134,6 @@ fun HhhlTextInput(
         },
         animationSpec = tween(durationMillis = 160),
         label = "text-input-border",
-    )
-    val elevation by animateDpAsState(
-        targetValue = when {
-            !enabled -> 0.dp
-            focused && isDarkSurface -> 2.dp
-            isDarkSurface -> 0.dp
-            focused -> 1.dp
-            else -> 0.dp
-        },
-        animationSpec = tween(durationMillis = 160),
-        label = "text-input-elevation",
     )
 
     Column(modifier = modifier, horizontalAlignment = Alignment.Start) {
@@ -191,32 +176,17 @@ fun HhhlTextInput(
                 androidx.compose.foundation.layout.Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .shadow(
-                            elevation = elevation,
-                            shape = shape,
-                            clip = false,
-                            ambientColor = colors.shadow,
-                            spotColor = colors.shadow,
-                        )
                         .clip(shape)
                         .defaultMinSize(
                             minHeight = resolvedMinHeight,
                         )
-                        .background(
-                            brush = Brush.verticalGradient(
-                                listOf(
-                                    containerColor,
-                                    containerColor.withMultipliedAlpha(if (isDarkSurface) 0.86f else 0.92f),
-                                ),
-                            ),
-                            shape = shape,
-                        )
+                        .background(containerColor, shape)
                         .border(1.dp, borderColor, shape)
                         .padding(
                             horizontal = horizontalPadding,
                             vertical = verticalPadding,
                         ),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     leading?.invoke()
@@ -262,10 +232,6 @@ private fun TextRange.constrainToTextLength(textLength: Int): TextRange {
     return TextRange(constrainedStart, constrainedEnd)
 }
 
-private fun Color.withMultipliedAlpha(multiplier: Float): Color {
-    return copy(alpha = (alpha * multiplier).coerceIn(0f, 1f))
-}
-
 private fun Color.blendWith(other: Color, otherRatio: Float): Color {
     val ratio = otherRatio.coerceIn(0f, 1f)
     val selfRatio = 1f - ratio
@@ -277,13 +243,26 @@ private fun Color.blendWith(other: Color, otherRatio: Float): Color {
     )
 }
 
+private fun Color.asOpaqueOver(background: Color): Color {
+    val sourceAlpha = alpha.coerceIn(0f, 1f)
+    val backgroundAlpha = background.alpha.coerceIn(0f, 1f)
+    val outputAlpha = sourceAlpha + backgroundAlpha * (1f - sourceAlpha)
+    if (outputAlpha <= 0f) return Color.Transparent
+    return Color(
+        red = (red * sourceAlpha + background.red * backgroundAlpha * (1f - sourceAlpha)) / outputAlpha,
+        green = (green * sourceAlpha + background.green * backgroundAlpha * (1f - sourceAlpha)) / outputAlpha,
+        blue = (blue * sourceAlpha + background.blue * backgroundAlpha * (1f - sourceAlpha)) / outputAlpha,
+        alpha = 1f,
+    )
+}
+
 private fun neutralDarkInputContainer(
     pageBackground: Color,
     surface: Color,
-    surfaceElevated: Color,
 ): Color {
-    val neutralBase = surface.blendWith(pageBackground, 0.36f)
-    return neutralBase.blendWith(surfaceElevated, 0.18f).desaturate(0.42f)
+    return pageBackground.blendWith(Color.White, 0.075f)
+        .blendWith(surface, 0.18f)
+        .desaturate(0.80f)
 }
 
 private fun neutralDarkInputBorder(

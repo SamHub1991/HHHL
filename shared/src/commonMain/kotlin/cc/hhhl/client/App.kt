@@ -3569,6 +3569,7 @@ private fun MainShell(
                 notificationRepository = notificationRepository,
                 composeRepository = ComposeRepository(tokenProvider = { sessionToken }),
                 noteActionRepository = NoteActionRepository(tokenProvider = { sessionToken }),
+                driveFileRepository = DriveFileRepository(tokenProvider = { sessionToken }),
                 clipboardWriter = { text ->
                     clipboardManager.setText(AnnotatedString(text))
                     true

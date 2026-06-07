@@ -23,6 +23,25 @@ class NoteContentVisibilitySpecTest {
     }
 
     @Test
+    fun longNoteBodyCollapsesByCharacterCount() {
+        val text = "长内容".repeat(140)
+
+        assertTrue(noteBodyShouldCollapse(text, maxChars = 320))
+    }
+
+    @Test
+    fun longNoteBodyCollapsesByExplicitLines() {
+        val text = (1..7).joinToString(separator = "\n") { "第 $it 行" }
+
+        assertTrue(noteBodyShouldCollapse(text, maxChars = 320, maxLines = 6))
+    }
+
+    @Test
+    fun shortNoteBodyDoesNotCollapse() {
+        assertFalse(noteBodyShouldCollapse("短内容\n第二行", maxChars = 320, maxLines = 6))
+    }
+
+    @Test
     fun mutedWordMatchesTextCwAndAuthor() {
         val note = FakeData.timeline.first().copy(
             text = "今天讨论 Kotlin",

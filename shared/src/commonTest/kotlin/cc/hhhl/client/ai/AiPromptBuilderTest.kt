@@ -208,6 +208,9 @@ class AiPromptBuilderTest {
         assertTrue(prompt.user.contains("AiGenerateWebhook"))
         assertTrue(prompt.user.contains("只输出 JSON"))
         assertTrue(prompt.user.contains("AiForwardToRoom"))
+        assertTrue(prompt.user.contains("output_format"))
+        assertTrue(prompt.user.contains("transparent"))
+        assertTrue(prompt.user.contains("mentionSender"))
     }
 
     @Test

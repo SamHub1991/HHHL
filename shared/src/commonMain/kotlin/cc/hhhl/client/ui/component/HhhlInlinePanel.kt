@@ -8,12 +8,10 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
@@ -29,37 +27,40 @@ fun HhhlInlinePanel(
 ) {
     val colors = LocalHhhlColors.current
     val isDarkSurface = colors.surface.luminance() < 0.2f
-    val shape = RoundedCornerShape(12.dp)
-    val containerColor = if (emphasized) {
+    val shape = RoundedCornerShape(18.dp)
+    val rawContainerColor = if (emphasized) {
         colors.chipSelectedBackground
     } else {
-        colors.inputBackground.copy(alpha = if (isDarkSurface) 0.40f else 0.52f)
+        colors.surfaceElevated.copy(alpha = if (isDarkSurface) 0.72f else 0.80f)
     }
+    val containerColor = rawContainerColor.asOpaqueOver(colors.pageBackground)
     val borderColor = when {
         emphasized -> colors.focusRing.copy(alpha = if (isDarkSurface) 0.46f else 0.30f)
-        else -> colors.border.copy(alpha = if (isDarkSurface) 0.32f else 0.28f)
+        else -> colors.border.copy(alpha = if (isDarkSurface) 0.34f else 0.34f)
     }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        containerColor,
-                        containerColor.withMultipliedAlpha(if (isDarkSurface) 0.80f else 0.90f),
-                    ),
-                ),
-            )
+            .background(containerColor)
             .border(1.dp, borderColor, shape)
-            .padding(horizontal = 10.dp, vertical = 9.dp),
+            .padding(horizontal = 18.dp, vertical = 16.dp),
         verticalArrangement = verticalArrangement,
         horizontalAlignment = horizontalAlignment,
         content = content,
     )
 }
 
-private fun Color.withMultipliedAlpha(multiplier: Float): Color {
-    return copy(alpha = (alpha * multiplier).coerceIn(0f, 1f))
+private fun Color.asOpaqueOver(background: Color): Color {
+    val sourceAlpha = alpha.coerceIn(0f, 1f)
+    val backgroundAlpha = background.alpha.coerceIn(0f, 1f)
+    val outputAlpha = sourceAlpha + backgroundAlpha * (1f - sourceAlpha)
+    if (outputAlpha <= 0f) return Color.Transparent
+    return Color(
+        red = (red * sourceAlpha + background.red * backgroundAlpha * (1f - sourceAlpha)) / outputAlpha,
+        green = (green * sourceAlpha + background.green * backgroundAlpha * (1f - sourceAlpha)) / outputAlpha,
+        blue = (blue * sourceAlpha + background.blue * backgroundAlpha * (1f - sourceAlpha)) / outputAlpha,
+        alpha = 1f,
+    )
 }

@@ -26,7 +26,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
@@ -40,25 +39,25 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cc.hhhl.client.theme.LocalHhhlColors
 
-internal val HhhlControlCornerRadius = 11.dp
-internal val HhhlControlMinHeight = 30.dp
-internal val HhhlControlMinWidth = 34.dp
-internal val HhhlIconActionCornerRadius = 13.dp
+internal val HhhlControlCornerRadius = 13.dp
+internal val HhhlControlMinHeight = 40.dp
+internal val HhhlControlMinWidth = 44.dp
+internal val HhhlIconActionCornerRadius = 999.dp
 internal val HhhlIconActionIdleElevation = 0.dp
 internal val HhhlIconActionEmphasizedElevation = 0.dp
-internal val HhhlIconActionDarkIdleElevation = 2.dp
-internal val HhhlIconActionDarkEmphasizedElevation = 4.dp
+internal val HhhlIconActionDarkIdleElevation = 0.dp
+internal val HhhlIconActionDarkEmphasizedElevation = 0.dp
 internal val HhhlControlHighlightAlpha = 0.08f
 internal val HhhlActionChipMinHeight = HhhlControlMinHeight
-internal val HhhlActionChipHorizontalPadding = 11.dp
-internal val HhhlActionChipVerticalPadding = 4.dp
-internal val HhhlActionChipMaxWidth = 184.dp
-internal val HhhlIconActionButtonSize = 34.dp
-internal val HhhlIconActionButtonIconSize = 18.dp
-internal val HhhlTextButtonMinHeight = 32.dp
-internal val HhhlTextButtonHorizontalPadding = 12.dp
-internal val HhhlTextButtonVerticalPadding = 6.dp
-internal val HhhlTextButtonCornerRadius = 13.dp
+internal val HhhlActionChipHorizontalPadding = 15.dp
+internal val HhhlActionChipVerticalPadding = 6.dp
+internal val HhhlActionChipMaxWidth = 200.dp
+internal val HhhlIconActionButtonSize = 42.dp
+internal val HhhlIconActionButtonIconSize = 20.dp
+internal val HhhlTextButtonMinHeight = 40.dp
+internal val HhhlTextButtonHorizontalPadding = 16.dp
+internal val HhhlTextButtonVerticalPadding = 8.dp
+internal val HhhlTextButtonCornerRadius = 999.dp
 
 @Composable
 fun HhhlActionChip(
@@ -72,9 +71,9 @@ fun HhhlActionChip(
     val isDarkSurface = colors.surface.luminance() < 0.2f
     val minHeight = scaledControlMinHeight(HhhlActionChipMinHeight)
     val targetContainerColor = when {
-        !enabled -> colors.chipBackground.withMultipliedAlpha(if (isDarkSurface) 0.55f else 0.62f)
-        emphasized -> colors.chipSelectedBackground
-        else -> colors.chipBackground
+        !enabled -> Color.Transparent
+        emphasized -> colors.accent.copy(alpha = if (isDarkSurface) 0.08f else 0.06f)
+        else -> Color.Transparent
     }
     val containerColor by animateColorAsState(
         targetValue = targetContainerColor,
@@ -83,24 +82,19 @@ fun HhhlActionChip(
     )
     val targetContentColor = when {
         !enabled -> colors.textMuted
-        emphasized -> hhhlReadableOnControlColor(targetContainerColor, colors.accent)
+        emphasized -> colors.accent
         else -> colors.textPrimary
     }
     val borderColor by animateColorAsState(
         targetValue = when {
-            emphasized -> colors.focusRing.copy(alpha = if (isDarkSurface) 0.54f else 0.34f)
-            isDarkSurface -> colors.border.copy(alpha = 0.30f)
-            else -> colors.border.copy(alpha = 0.36f)
+            emphasized -> colors.focusRing.copy(alpha = if (isDarkSurface) 0.28f else 0.22f)
+            else -> Color.Transparent
         },
         animationSpec = tween(durationMillis = 160),
         label = "chip-border",
     )
     val elevation by animateDpAsState(
         targetValue = when {
-            !enabled -> 0.dp
-            isDarkSurface && emphasized -> HhhlIconActionDarkIdleElevation
-            isDarkSurface -> HhhlIconActionIdleElevation
-            emphasized -> HhhlIconActionIdleElevation
             else -> HhhlIconActionIdleElevation
         },
         animationSpec = tween(durationMillis = 160),
@@ -118,14 +112,7 @@ fun HhhlActionChip(
                 spotColor = colors.shadow,
             )
             .clip(RoundedCornerShape(HhhlControlCornerRadius))
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        containerColor,
-                        containerColor.withMultipliedAlpha(if (isDarkSurface) 0.82f else 0.90f),
-                    ),
-                ),
-            )
+            .background(containerColor)
             .border(1.dp, borderColor, RoundedCornerShape(HhhlControlCornerRadius))
             .clickable(enabled = enabled, onClick = onClick)
             .defaultMinSize(minHeight = minHeight)
@@ -139,7 +126,7 @@ fun HhhlActionChip(
         Text(
             text = label,
             color = targetContentColor,
-            style = MaterialTheme.typography.labelMedium.copy(lineHeight = 17.sp),
+            style = MaterialTheme.typography.labelMedium.copy(lineHeight = 18.sp),
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -164,10 +151,7 @@ fun HhhlTextButton(
     val isDarkSurface = colors.surface.luminance() < 0.2f
     val minHeight = scaledControlMinHeight(HhhlTextButtonMinHeight)
     val targetContainerColor = containerColor ?: when {
-        !enabled -> colors.buttonBackground.withMultipliedAlpha(if (isDarkSurface) 0.55f else 0.62f)
-        destructive -> colors.danger.copy(alpha = 0.10f)
-        emphasized -> colors.buttonSelectedBackground
-        else -> colors.buttonBackground
+        else -> Color.Transparent
     }
     val resolvedContainerColor by animateColorAsState(
         targetValue = targetContainerColor,
@@ -178,7 +162,7 @@ fun HhhlTextButton(
         targetValue = contentColor ?: when {
             !enabled -> colors.textMuted
             destructive -> colors.danger
-            emphasized -> hhhlReadableOnControlColor(targetContainerColor, colors.accent)
+            emphasized -> colors.accent
             else -> colors.textPrimary
         },
         animationSpec = tween(durationMillis = 160),
@@ -186,22 +170,14 @@ fun HhhlTextButton(
     )
     val resolvedBorderColor by animateColorAsState(
         targetValue = borderColor ?: when {
-            destructive -> colors.danger.copy(alpha = 0.22f)
-            emphasized -> colors.focusRing.copy(alpha = if (isDarkSurface) 0.54f else 0.34f)
-            !enabled -> colors.border.copy(alpha = 0.18f)
-            isDarkSurface -> colors.border.copy(alpha = 0.30f)
-            else -> colors.border.copy(alpha = 0.36f)
+            else -> Color.Transparent
         },
         animationSpec = tween(durationMillis = 160),
         label = "text-button-border",
     )
     val elevation by animateDpAsState(
         targetValue = when {
-            !enabled -> 0.dp
-            isDarkSurface && emphasized -> HhhlIconActionDarkIdleElevation
-            isDarkSurface -> HhhlIconActionIdleElevation
-            emphasized -> HhhlIconActionIdleElevation
-            else -> 0.dp
+            else -> HhhlIconActionIdleElevation
         },
         animationSpec = tween(durationMillis = 160),
         label = "text-button-elevation",
@@ -219,14 +195,7 @@ fun HhhlTextButton(
                 spotColor = colors.shadow,
             )
             .clip(shape)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        resolvedContainerColor,
-                        resolvedContainerColor.withMultipliedAlpha(if (isDarkSurface) 0.84f else 0.92f),
-                    ),
-                ),
-            )
+            .background(resolvedContainerColor)
             .border(1.dp, resolvedBorderColor, shape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(
@@ -264,9 +233,9 @@ fun HhhlIconActionButton(
     val colors = LocalHhhlColors.current
     val isDarkSurface = colors.surface.luminance() < 0.2f
     val targetContainerColor = when {
-        !enabled -> colors.buttonBackground.withMultipliedAlpha(if (isDarkSurface) 0.55f else 0.62f)
-        emphasized -> colors.buttonSelectedBackground
-        else -> colors.buttonBackground
+        !enabled -> Color.Transparent
+        emphasized -> colors.accent.copy(alpha = if (isDarkSurface) 0.08f else 0.06f)
+        else -> Color.Transparent
     }
     val containerColor by animateColorAsState(
         targetValue = targetContainerColor,
@@ -276,7 +245,7 @@ fun HhhlIconActionButton(
     val iconColor by animateColorAsState(
         targetValue = when {
             !enabled -> colors.textMuted
-            emphasized -> hhhlReadableOnControlColor(targetContainerColor, colors.accent)
+            emphasized -> colors.accent
             else -> colors.textPrimary
         },
         animationSpec = tween(durationMillis = 160),
@@ -300,22 +269,15 @@ fun HhhlIconActionButton(
                 spotColor = colors.shadow,
             )
             .clip(RoundedCornerShape(HhhlIconActionCornerRadius))
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        containerColor,
-                        containerColor.withMultipliedAlpha(if (isDarkSurface) 0.82f else 0.90f),
-                    ),
-                ),
-            )
+            .background(containerColor)
             .border(
                 width = 1.dp,
-                color = if (emphasized) colors.focusRing.copy(alpha = if (isDarkSurface) 0.54f else 0.32f) else colors.border.copy(alpha = if (isDarkSurface) 0.34f else 0.28f),
+                color = if (emphasized) colors.focusRing.copy(alpha = if (isDarkSurface) 0.22f else 0.16f) else Color.Transparent,
                 shape = RoundedCornerShape(HhhlIconActionCornerRadius),
             )
             .clickable(enabled = enabled, onClick = onClick)
             .semantics { this.contentDescription = contentDescription }
-            .padding(7.dp),
+            .padding(9.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -334,8 +296,4 @@ internal fun hhhlReadableOnControlColor(
 ): Color {
     if (containerColor.alpha < 0.55f) return softContentColor
     return if (containerColor.luminance() < 0.48f) Color.White else Color(0xFF0F1419)
-}
-
-private fun Color.withMultipliedAlpha(multiplier: Float): Color {
-    return copy(alpha = (alpha * multiplier).coerceIn(0f, 1f))
 }

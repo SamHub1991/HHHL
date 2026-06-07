@@ -4,19 +4,25 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.forms.MultiPartFormDataContent
+import io.ktor.client.request.forms.formData
 import io.ktor.client.request.header
+import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.Headers
 import io.ktor.http.URLBuilder
 import io.ktor.http.appendPathSegments
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -75,6 +81,106 @@ open class AiRepository(
             completeAnthropic(settings, prompt, cleanModel, baseUrl)
         } else {
             completeOpenAiCompatible(settings, prompt, cleanModel, baseUrl)
+        }
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    open suspend fun generateImage(
+        settings: AiSettings,
+        prompt: String,
+        model: String = settings.imageGenerationModel,
+        options: AiImageRequestOptions = AiImageRequestOptions(),
+    ): AiImageGenerationResult {
+        if (!settings.enabled) return AiImageGenerationResult.Error("AI 未启用")
+        val baseUrl = settings.cleanImageGenerationBaseUrl
+        if (baseUrl.isBlank()) return AiImageGenerationResult.Error("生图 Base URL 不能为空")
+        val cleanModel = model.trim().ifBlank { DEFAULT_IMAGE_GENERATION_MODEL }
+        val cleanPrompt = prompt.trim()
+        if (cleanPrompt.isBlank()) return AiImageGenerationResult.Error("生图提示词不能为空")
+        if (settings.imageGenerationApiKey.isBlank()) return AiImageGenerationResult.Unauthorized
+        val cleanOptions = options.cleanedForImageGeneration()
+
+        return runCatching {
+            val response = httpClient.post(baseUrl.aiEndpointUrl("images/generations")) {
+                contentType(ContentType.Application.Json)
+                header(HttpHeaders.Accept, ContentType.Application.Json.toString())
+                header(HttpHeaders.Authorization, "Bearer ${settings.imageGenerationApiKey.trim()}")
+                setBody(
+                    OpenAiImageGenerationRequest(
+                        model = cleanModel,
+                        prompt = cleanPrompt,
+                        n = cleanOptions.count,
+                        size = cleanOptions.size,
+                        quality = cleanOptions.quality,
+                        background = cleanOptions.background,
+                        outputFormat = cleanOptions.outputFormat,
+                        outputCompression = cleanOptions.outputCompression,
+                    ),
+                )
+            }
+            val status = response.status.value
+            parseImageResponse(status, response.bodyAsText(), "生图接口")
+        }.getOrElse { error ->
+            AiImageGenerationResult.Error(error.message ?: "生图请求失败")
+        }
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    open suspend fun editImage(
+        settings: AiSettings,
+        prompt: String,
+        imageBytes: ByteArray,
+        imageContentType: String = "image/png",
+        imageFileName: String = "source.png",
+        model: String = settings.imageGenerationModel,
+        options: AiImageRequestOptions = AiImageRequestOptions(),
+    ): AiImageGenerationResult {
+        if (!settings.enabled) return AiImageGenerationResult.Error("AI 未启用")
+        val baseUrl = settings.cleanImageGenerationBaseUrl
+        if (baseUrl.isBlank()) return AiImageGenerationResult.Error("图生图 Base URL 不能为空")
+        val cleanModel = model.trim().ifBlank { DEFAULT_IMAGE_GENERATION_MODEL }
+        val cleanPrompt = prompt.trim()
+        if (cleanPrompt.isBlank()) return AiImageGenerationResult.Error("图生图提示词不能为空")
+        if (imageBytes.isEmpty()) return AiImageGenerationResult.Error("图生图源图片不能为空")
+        if (settings.imageGenerationApiKey.isBlank()) return AiImageGenerationResult.Unauthorized
+        val cleanOptions = options.cleanedForImageGeneration()
+
+        return runCatching {
+            val response = httpClient.post(baseUrl.aiEndpointUrl("images/edits")) {
+                header(HttpHeaders.Accept, ContentType.Application.Json.toString())
+                header(HttpHeaders.Authorization, "Bearer ${settings.imageGenerationApiKey.trim()}")
+                setBody(
+                    MultiPartFormDataContent(
+                        formData {
+                            append("model", cleanModel)
+                            append("prompt", cleanPrompt)
+                            append("n", cleanOptions.count.toString())
+                            append("size", cleanOptions.size)
+                            append("quality", cleanOptions.quality)
+                            append("output_format", cleanOptions.outputFormat)
+                            cleanOptions.background?.let { background -> append("background", background) }
+                            cleanOptions.outputCompression?.let { compression ->
+                                append("output_compression", compression.toString())
+                            }
+                            append(
+                                key = "image",
+                                value = imageBytes,
+                                headers = Headers.build {
+                                    append(HttpHeaders.ContentType, imageContentType.ifBlank { "image/png" })
+                                    append(
+                                        HttpHeaders.ContentDisposition,
+                                        "form-data; name=\"image\"; filename=\"${imageFileName.ifBlank { "source.png" }}\"",
+                                    )
+                                },
+                            )
+                        },
+                    ),
+                )
+            }
+            val status = response.status.value
+            parseImageResponse(status, response.bodyAsText(), "图生图接口")
+        }.getOrElse { error ->
+            AiImageGenerationResult.Error(error.message ?: "图生图请求失败")
         }
     }
 
@@ -492,12 +598,7 @@ open class AiRepository(
                     "服务器 AI 状态返回 $statusCode${body.take(240).takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()}",
                 )
             }
-            val payload = runCatching {
-                AiRepositoryJson.decodeFromString<ServerAiStatus>(body)
-            }.getOrElse {
-                val element = AiRepositoryJson.parseToJsonElement(body)
-                AiRepositoryJson.decodeFromJsonElement(element)
-            }
+            val payload = decodeServerAiStatus(body)
             ServerAiStatusResult.Success(payload)
         }.getOrElse { error ->
             ServerAiStatusResult.Error(error.message ?: "服务器 AI 状态请求失败")
@@ -535,6 +636,54 @@ open class AiRepository(
             ServerAiJsonResult.Error(message = error.message ?: "服务器 AI 请求失败")
         }
     }
+
+    private suspend fun downloadGeneratedImage(url: String): ByteArray {
+        val response = httpClient.get(url)
+        if (response.status.value !in 200..299) {
+            throw IllegalStateException("图片下载返回 ${response.status.value}")
+        }
+        return response.bodyAsBytes()
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    private suspend fun parseImageResponse(
+        status: Int,
+        body: String,
+        label: String,
+    ): AiImageGenerationResult {
+        if (status == 401 || status == 403) return AiImageGenerationResult.Unauthorized
+        if (status !in 200..299) {
+            val cleanBody = body.take(300)
+            return AiImageGenerationResult.Error(
+                "$label 返回 $status${cleanBody.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()}",
+            )
+        }
+        val payload = AiRepositoryJson.decodeFromString<OpenAiImageGenerationResponse>(body)
+        val images = payload.data.mapNotNull { item ->
+            val bytes = item.b64Json
+                ?.takeIf { it.isNotBlank() }
+                ?.let { Base64.decode(it) }
+                ?: item.url
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { url -> downloadGeneratedImage(url) }
+            bytes
+                ?.takeIf { it.isNotEmpty() }
+                ?.let {
+                    AiGeneratedImage(
+                        bytes = it,
+                        contentType = item.mimeType.ifBlank { "image/png" },
+                        revisedPrompt = item.revisedPrompt.orEmpty(),
+                    )
+                }
+        }
+        return if (images.isEmpty()) {
+            AiImageGenerationResult.Error("$label 没有返回可下载图片")
+        } else {
+            AiImageGenerationResult.Success(
+                images = images,
+            )
+        }
+    }
 }
 
 sealed interface AiRepositoryResult {
@@ -542,6 +691,28 @@ sealed interface AiRepositoryResult {
     data object Unauthorized : AiRepositoryResult
     data class Error(val message: String) : AiRepositoryResult
 }
+
+sealed interface AiImageGenerationResult {
+    data class Success(
+        val images: List<AiGeneratedImage>,
+    ) : AiImageGenerationResult {
+        val bytes: ByteArray
+            get() = images.firstOrNull()?.bytes ?: byteArrayOf()
+        val contentType: String
+            get() = images.firstOrNull()?.contentType.orEmpty()
+        val revisedPrompt: String
+            get() = images.firstOrNull()?.revisedPrompt.orEmpty()
+    }
+
+    data object Unauthorized : AiImageGenerationResult
+    data class Error(val message: String) : AiImageGenerationResult
+}
+
+data class AiGeneratedImage(
+    val bytes: ByteArray,
+    val contentType: String,
+    val revisedPrompt: String = "",
+)
 
 sealed interface ServerAiStatusResult {
     data class Success(val status: ServerAiStatus) : ServerAiStatusResult
@@ -606,6 +777,31 @@ private data class OpenAiChatChoice(
 )
 
 @Serializable
+private data class OpenAiImageGenerationRequest(
+    val model: String,
+    val prompt: String,
+    val n: Int = 1,
+    val size: String = DEFAULT_IMAGE_GENERATION_SIZE,
+    val quality: String = DEFAULT_IMAGE_GENERATION_QUALITY,
+    val background: String? = null,
+    @SerialName("output_format") val outputFormat: String = DEFAULT_IMAGE_GENERATION_OUTPUT_FORMAT,
+    @SerialName("output_compression") val outputCompression: Int? = null,
+)
+
+@Serializable
+private data class OpenAiImageGenerationResponse(
+    val data: List<OpenAiGeneratedImage> = emptyList(),
+)
+
+@Serializable
+private data class OpenAiGeneratedImage(
+    val url: String? = null,
+    @SerialName("b64_json") val b64Json: String? = null,
+    @SerialName("revised_prompt") val revisedPrompt: String? = null,
+    @SerialName("mime_type") val mimeType: String = "",
+)
+
+@Serializable
 private data class AnthropicMessagesRequest(
     val model: String,
     val system: String,
@@ -643,6 +839,14 @@ private data class ServerAiChatStreamRequest(
 )
 
 private const val ANTHROPIC_API_VERSION = "2023-06-01"
+private const val GPT_IMAGE_2_MAX_EDGE = 3840
+private const val GPT_IMAGE_2_MAX_RATIO = 3
+private const val GPT_IMAGE_2_MIN_PIXELS = 655_360
+private const val GPT_IMAGE_2_MAX_PIXELS = 8_294_400
+private val imageGenerationSizePattern = Regex("""([1-9]\d*)x([1-9]\d*)""")
+private val imageGenerationQualities = setOf("low", "medium", "high", "auto")
+private val imageGenerationBackgrounds = setOf("opaque", "auto")
+private val imageGenerationOutputFormats = setOf("png", "jpeg", "webp")
 
 private fun String.aiEndpointUrl(endpointPath: String): String {
     val cleanBase = trim().trimEnd('/')
@@ -689,6 +893,57 @@ private fun JsonObjectBuilder.putNullableString(key: String, value: String?) {
     } else {
         put(key, JsonPrimitive(clean))
     }
+}
+
+internal fun AiImageRequestOptions.cleanedForImageGeneration(): AiImageRequestOptions {
+    val cleanOutputFormat = outputFormat.trim().lowercase()
+        .let { if (it == "jpg") "jpeg" else it }
+        .takeIf { it in imageGenerationOutputFormats }
+        ?: DEFAULT_IMAGE_GENERATION_OUTPUT_FORMAT
+    val cleanQuality = quality.trim().lowercase()
+        .takeIf { it in imageGenerationQualities }
+        ?: DEFAULT_IMAGE_GENERATION_QUALITY
+    val cleanBackground = background
+        ?.trim()
+        ?.lowercase()
+        ?.takeIf { it in imageGenerationBackgrounds }
+    val cleanCount = count.coerceIn(1, 10)
+    return copy(
+        size = size.cleanImageGenerationSize(),
+        quality = cleanQuality,
+        background = cleanBackground,
+        outputFormat = cleanOutputFormat,
+        outputCompression = outputCompression?.coerceIn(0, 100),
+        count = cleanCount,
+    )
+}
+
+private fun String.cleanImageGenerationSize(): String {
+    val clean = trim().lowercase()
+    val alias = when (clean) {
+        "square", "正方形", "方图", "1:1", "1024" -> "1024x1024"
+        "portrait", "竖图", "竖版", "纵向", "9:16", "2:3" -> "1024x1536"
+        "landscape", "横图", "横版", "横向", "16:9", "3:2" -> "1536x1024"
+        "4k-square", "4k方图", "4k正方形" -> "2048x2048"
+        "4k-portrait", "4k竖图", "4k竖版", "4k纵向" -> "2160x3840"
+        "4k-landscape", "4k横图", "4k横版", "4k横向", "4k" -> "3840x2160"
+        else -> clean
+    }
+    return alias.takeIf { it.isValidGptImage2Size() } ?: DEFAULT_IMAGE_GENERATION_SIZE
+}
+
+private fun String.isValidGptImage2Size(): Boolean {
+    val match = imageGenerationSizePattern.matchEntire(this) ?: return false
+    val width = match.groupValues[1].toIntOrNull() ?: return false
+    val height = match.groupValues[2].toIntOrNull() ?: return false
+    val maxEdge = maxOf(width, height)
+    val minEdge = minOf(width, height)
+    val pixels = width * height
+    return maxEdge <= GPT_IMAGE_2_MAX_EDGE &&
+        width % 16 == 0 &&
+        height % 16 == 0 &&
+        maxEdge <= minEdge * GPT_IMAGE_2_MAX_RATIO &&
+        pixels in GPT_IMAGE_2_MIN_PIXELS..GPT_IMAGE_2_MAX_PIXELS
 }
 
 private fun serverAiChatBody(
@@ -747,9 +1002,14 @@ private fun ServerAiStatus.selectProviderAndModel(preferredModel: String): Serve
 }
 
 private fun parseServerAiSseText(body: String): String {
-    if (body.isBlank()) return ""
+    val trimmedBody = body.trim()
+    if (trimmedBody.isBlank()) return ""
+    runCatching {
+        AiRepositoryJson.parseToJsonElement(trimmedBody).serverAiTextValue()
+    }.getOrNull()?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+
     val output = StringBuilder()
-    val events = body
+    val events = trimmedBody
         .replace("\r\n", "\n")
         .split(Regex("\n{2,}"))
         .map { it.trim() }
@@ -757,9 +1017,10 @@ private fun parseServerAiSseText(body: String): String {
     var finalPayload: JsonElement? = null
     for (eventText in events) {
         val event = parseServerAiSseEvent(eventText)
-        when (event.type) {
-            "delta" -> event.data?.serverAiTextValue()?.takeIf { it.isNotBlank() }?.let(output::append)
-            "done" -> finalPayload = event.data
+        when (event.type.lowercase()) {
+            "delta", "message", "token", "content", "chunk" ->
+                event.data?.serverAiTextValue()?.takeIf { it.isNotBlank() }?.let(output::append)
+            "done", "complete", "final", "finish", "result" -> finalPayload = event.data
             "error" -> throw IllegalStateException(event.data?.serverAiErrorMessage() ?: "服务器 AI 流式请求失败")
         }
     }
@@ -783,9 +1044,39 @@ private fun parseServerAiSseEvent(eventText: String): ServerAiSseEvent {
         }
     }
     val data = dataLines.joinToString("\n")
-        .takeIf { it.isNotBlank() && it != "[DONE]" }
-        ?.let { AiRepositoryJson.parseToJsonElement(it) }
+        .takeIf { it.isNotBlank() && it.trim() != "[DONE]" }
+        ?.let { parseServerAiDataElement(it) }
     return ServerAiSseEvent(type = type, data = data)
+}
+
+private fun parseServerAiDataElement(rawData: String): JsonElement {
+    val data = rawData.trim()
+    return runCatching { AiRepositoryJson.parseToJsonElement(data) }
+        .getOrElse { JsonPrimitive(data) }
+}
+
+private fun decodeServerAiStatus(body: String): ServerAiStatus {
+    val element = AiRepositoryJson.parseToJsonElement(body)
+    return AiRepositoryJson.decodeFromJsonElement(element.serverAiStatusPayload())
+}
+
+private fun JsonElement.serverAiStatusPayload(): JsonElement {
+    val obj = this as? JsonObject ?: return this
+    if (obj.looksLikeServerAiStatus()) return obj
+    return listOf("status", "data", "result", "payload", "ai")
+        .firstNotNullOfOrNull { key ->
+            obj[key]
+                ?.serverAiStatusPayload()
+                ?.takeIf { (it as? JsonObject)?.looksLikeServerAiStatus() == true }
+        }
+        ?: this
+}
+
+private fun JsonObject.looksLikeServerAiStatus(): Boolean {
+    return containsKey("enabled") ||
+        containsKey("providers") ||
+        containsKey("defaultProviderId") ||
+        containsKey("maxContextMessages")
 }
 
 private fun JsonElement.serverAiTextValue(): String {
@@ -795,7 +1086,7 @@ private fun JsonElement.serverAiTextValue(): String {
         is JsonObject -> {
             val direct = listOf("text", "content", "message", "delta")
                 .firstNotNullOfOrNull { key -> get(key)?.serverAiTextValue()?.takeIf { it.isNotBlank() } }
-            direct ?: listOf("assistantMessage", "assistant", "reply", "result", "data")
+            direct ?: listOf("assistantMessage", "assistant", "reply", "answer", "response", "output_text", "output", "result", "data", "choices")
                 .firstNotNullOfOrNull { key -> get(key)?.serverAiTextValue()?.takeIf { it.isNotBlank() } }
                 ?: ""
         }

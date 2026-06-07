@@ -1,8 +1,11 @@
 package cc.hhhl.client.automation
 
 import cc.hhhl.client.api.ComposeDraft
+import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.NoteVisibility
+import cc.hhhl.client.repository.DriveFileRepository
+import cc.hhhl.client.repository.DriveFileRepositoryResult
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
 import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ComposeRepository
@@ -13,15 +16,20 @@ import cc.hhhl.client.repository.NoteActionRequest
 import cc.hhhl.client.repository.NotificationRepository
 import cc.hhhl.client.repository.NotificationRepositoryResult
 import cc.hhhl.client.ai.AiBridge
+import cc.hhhl.client.ai.AiBridgeImageResult
 import cc.hhhl.client.ai.AiBridgeResult
+import cc.hhhl.client.ai.AiGeneratedImage
+import cc.hhhl.client.ai.AiImageRequestOptions
 import cc.hhhl.client.ai.NoopAiBridge
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsBytes
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
@@ -30,12 +38,17 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
 
 class AppAutomationActionExecutor(
     private val chatRepository: ChatRepository,
     private val notificationRepository: NotificationRepository,
     private val composeRepository: ComposeRepository? = null,
     private val noteActionRepository: NoteActionRepository? = null,
+    private val driveFileRepository: DriveFileRepository? = null,
     private val clipboardWriter: ((String) -> Boolean?)? = null,
     private val systemNotificationPublisher: ((String, String) -> Boolean?)? = null,
     private val aiBridge: AiBridge = NoopAiBridge,
@@ -98,6 +111,10 @@ class AppAutomationActionExecutor(
                 val generated = result.text.cleanedOutgoingText()
                 if (generated.shouldSkipGeneratedAction()) {
                     AutomationActionExecutionResult(true, "AI 判断无需回复")
+                } else if (generated.isAutomationImageEditPrompt()) {
+                    editImageAndReplyToChat(action, event, generated.automationImageEditRequest())
+                } else if (generated.isAutomationImagePrompt()) {
+                    generateImageAndReplyToChat(action, event, generated.automationImageRequest())
                 } else {
                     replyToChat(action, event, generated, aiGenerated = true)
                 }
@@ -148,16 +165,32 @@ class AppAutomationActionExecutor(
         val fullPrompt = buildString {
             appendLine(prompt.ifBlank { "根据事件生成自然、克制、贴合上下文的$actionLabel。" })
             appendLine("只输出要发送的正文，不要解释，不要加标题。")
+            if (actionLabel == "聊天回复") {
+                appendLine("如果对方明确要求画图、生成图片、生图、出图或把描述变成图片，第一行只输出 IMAGE_PROMPT: 后接可直接用于生图模型的详细提示词，不要输出普通回复。")
+                appendLine("如果对方明确要求编辑触发消息里的图片附件，第一行只输出 IMAGE_EDIT_PROMPT: 后接图生图编辑提示词，不要输出普通回复。")
+                appendLine("如果能从语义判断出图片参数，优先在标记后输出一行 JSON：{\"prompt\":\"详细提示词\",\"size\":\"1024x1024|1024x1536|1536x1024|3840x2160|2160x3840\",\"quality\":\"low|medium|high|auto\",\"background\":\"opaque|auto\",\"output_format\":\"png|jpeg|webp\",\"output_compression\":0-100,\"n\":1-10,\"transparent\":true|false,\"caption\":\"可选聊天说明\"}。")
+                appendLine("参数规则：头像/表情包/贴纸/透明/抠图倾向 png，transparent=true，并在 prompt 里要求透明背景或干净抠图；壁纸/横图倾向 1536x1024 或 3840x2160；竖屏/手机壁纸倾向 1024x1536 或 2160x3840；正方形头像/图标倾向 1024x1024；高清/精细用 high，未明确用 medium；多张候选从语义里取 n。")
+            }
             appendLine("如果上下文不该自动执行，输出 SKIP。")
         }.trim()
-        return aiBridge.generateAutomationText(fullPrompt, event.aiContextText())
+        return aiBridge.generateAutomationText(
+            prompt = fullPrompt,
+            eventText = event.aiContextText(),
+            fileIds = event.aiAttachmentFileIds(),
+            fileContext = event.aiAttachmentContextText(),
+        )
     }
 
     private suspend fun generateAiLog(
         prompt: String,
         event: AutomationEvent,
     ): AutomationActionExecutionResult {
-        return when (val result = aiBridge.generateAutomationText(prompt, event.aiContextText())) {
+        return when (val result = aiBridge.generateAutomationText(
+            prompt = prompt,
+            eventText = event.aiContextText(),
+            fileIds = event.aiAttachmentFileIds(),
+            fileContext = event.aiAttachmentContextText(),
+        )) {
             is AiBridgeResult.Success -> AutomationActionExecutionResult(true, result.text)
             is AiBridgeResult.Error -> AutomationActionExecutionResult(false, result.message)
         }
@@ -168,7 +201,12 @@ class AppAutomationActionExecutor(
         prompt: String,
         event: AutomationEvent,
     ): AutomationActionExecutionResult {
-        return when (val result = aiBridge.generateAutomationText(prompt, event.aiContextText())) {
+        return when (val result = aiBridge.generateAutomationText(
+            prompt = prompt,
+            eventText = event.aiContextText(),
+            fileIds = event.aiAttachmentFileIds(),
+            fileContext = event.aiAttachmentContextText(),
+        )) {
             is AiBridgeResult.Success -> createNotification(title, result.text)
             is AiBridgeResult.Error -> AutomationActionExecutionResult(false, result.message)
         }
@@ -180,7 +218,12 @@ class AppAutomationActionExecutor(
         event: AutomationEvent,
         title: String,
     ): AutomationActionExecutionResult {
-        return when (val result = aiBridge.generateAutomationText(prompt, event.aiContextText())) {
+        return when (val result = aiBridge.generateAutomationText(
+            prompt = prompt,
+            eventText = event.aiContextText(),
+            fileIds = event.aiAttachmentFileIds(),
+            fileContext = event.aiAttachmentContextText(),
+        )) {
             is AiBridgeResult.Success -> sendWebhook(url, event, title, result.text)
             is AiBridgeResult.Error -> AutomationActionExecutionResult(false, result.message)
         }
@@ -292,6 +335,156 @@ class AppAutomationActionExecutor(
                 unauthorizedMessage = "登录已失效，无法回复私聊",
                 aiGenerated = aiGenerated,
             )
+        }
+    }
+
+    private suspend fun generateImageAndReplyToChat(
+        action: AutomationAction,
+        event: AutomationEvent,
+        imageRequest: AutomationImageRequest,
+    ): AutomationActionExecutionResult {
+        if (imageRequest.prompt.isBlank()) return AutomationActionExecutionResult(false, "AI 没有返回生图提示词")
+        val image = when (
+            val result = aiBridge.generateAutomationImage(
+                prompt = imageRequest.effectivePrompt(),
+                options = imageRequest.options,
+            )
+        ) {
+            is AiBridgeImageResult.Success -> result
+            is AiBridgeImageResult.Error -> return AutomationActionExecutionResult(false, result.message)
+        }
+        return uploadGeneratedImageAndReplyToChat(action, event, imageRequest, image)
+    }
+
+    private suspend fun editImageAndReplyToChat(
+        action: AutomationAction,
+        event: AutomationEvent,
+        imageRequest: AutomationImageRequest,
+    ): AutomationActionExecutionResult {
+        if (imageRequest.prompt.isBlank()) return AutomationActionExecutionResult(false, "AI 没有返回图生图提示词")
+        val sourceImage = when (val result = loadAutomationSourceImage(event)) {
+            is AutomationSourceImageLoadResult.Success -> result
+            is AutomationSourceImageLoadResult.Error -> return AutomationActionExecutionResult(false, result.message)
+        }
+        val image = when (
+            val result = aiBridge.editAutomationImage(
+                prompt = imageRequest.effectivePrompt(),
+                imageBytes = sourceImage.bytes,
+                imageContentType = sourceImage.contentType,
+                imageFileName = sourceImage.fileName,
+                options = imageRequest.options,
+            )
+        ) {
+            is AiBridgeImageResult.Success -> result
+            is AiBridgeImageResult.Error -> return AutomationActionExecutionResult(false, result.message)
+        }
+        return uploadGeneratedImageAndReplyToChat(action, event, imageRequest, image)
+    }
+
+    private suspend fun uploadGeneratedImageAndReplyToChat(
+        action: AutomationAction,
+        event: AutomationEvent,
+        imageRequest: AutomationImageRequest,
+        image: AiBridgeImageResult.Success,
+    ): AutomationActionExecutionResult {
+        val driveRepository = driveFileRepository
+            ?: return AutomationActionExecutionResult(false, "Drive 上传执行器未接入，无法发送生成图片")
+        val generatedImages = image.images.ifEmpty {
+            listOf(AiGeneratedImage(image.bytes, image.contentType.ifBlank { "image/png" }, image.revisedPrompt))
+        }
+        val files = mutableListOf<cc.hhhl.client.model.DriveFile>()
+        for (generatedImage in generatedImages) {
+            val upload = DriveFileUpload(
+                bytes = generatedImage.bytes,
+                fileName = automationGeneratedImageFileName(generatedImage.contentType),
+                contentType = generatedImage.contentType.ifBlank { "image/png" },
+                comment = generatedImage.revisedPrompt
+                    .ifBlank { imageRequest.prompt }
+                    .take(AUTOMATION_GENERATED_IMAGE_COMMENT_MAX_LENGTH),
+                force = true,
+            )
+            val file = when (val uploadResult = driveRepository.upload(upload)) {
+                is DriveFileRepositoryResult.Success -> uploadResult.file
+                DriveFileRepositoryResult.Unauthorized -> return AutomationActionExecutionResult(false, "登录已失效，无法上传生成图片")
+                is DriveFileRepositoryResult.ValidationError -> return AutomationActionExecutionResult(false, uploadResult.message)
+                is DriveFileRepositoryResult.Error -> return AutomationActionExecutionResult(false, uploadResult.message)
+            }
+            files += file
+        }
+        val target = resolveChatTarget(action.targetId, event)
+            ?: return AutomationActionExecutionResult(false, "找不到可回复的聊天会话")
+        val text = imageRequest.caption.withOptionalMention(event, action.mentionSender)
+        val sourceMessageId = event.chatMessageId.takeIf { it.isNotBlank() }
+        val replyId = sourceMessageId.takeIf { action.replyToEvent }
+        val quoteId = sourceMessageId.takeIf { action.quoteEvent }
+        val fileIds = files.map { it.id }.filter { it.isNotBlank() }
+        return when (target) {
+            is AutomationChatTarget.Room -> mapChatSendResult(
+                chatRepository.sendMessage(
+                    roomId = target.id,
+                    text = text,
+                    fileIds = fileIds,
+                    replyId = replyId,
+                    quoteId = quoteId,
+                ),
+                successMessage = "已生成并发送图片",
+                unauthorizedMessage = "登录已失效，无法发送生成图片",
+                aiGenerated = true,
+            )
+            is AutomationChatTarget.User -> mapChatSendResult(
+                chatRepository.sendUserMessage(
+                    userId = target.id,
+                    text = text,
+                    fileId = fileIds.firstOrNull(),
+                    replyId = replyId,
+                    quoteId = quoteId,
+                ),
+                successMessage = "已生成并发送图片",
+                unauthorizedMessage = "登录已失效，无法发送生成图片",
+                aiGenerated = true,
+            )
+        }
+    }
+
+    private suspend fun loadAutomationSourceImage(event: AutomationEvent): AutomationSourceImageLoadResult {
+        val imageAttachments = event.attachments.filter { attachment ->
+            attachment.type.startsWith("image/", ignoreCase = true)
+        }
+        val attachment = imageAttachments.firstOrNull { it.url.isNotBlank() || it.thumbnailUrl.isNotBlank() }
+            ?: return if (imageAttachments.isEmpty()) {
+                AutomationSourceImageLoadResult.Error("触发消息没有可编辑的图片附件")
+            } else {
+                AutomationSourceImageLoadResult.Error("图片附件没有可下载 URL，无法图生图")
+            }
+        val sourceUrl = attachment.url.ifBlank { attachment.thumbnailUrl }.trim()
+        return runCatching {
+            val response = httpClient.get(sourceUrl) {
+                header(HttpHeaders.Accept, attachment.type.ifBlank { "image/*" })
+                if (sourceUrl.canReceiveAttachmentAuthHeaders()) {
+                    attachmentAuthHeaderProvider().cleanAttachmentAuthHeaders().forEach { (name, value) ->
+                        header(name, value)
+                    }
+                }
+            }
+            if (response.status.value !in 200..299) {
+                return@runCatching AutomationSourceImageLoadResult.Error("源图片下载失败：HTTP ${response.status.value}")
+            }
+            val bytes = response.bodyAsBytes()
+            if (bytes.isEmpty()) {
+                AutomationSourceImageLoadResult.Error("源图片下载为空，无法图生图")
+            } else {
+                AutomationSourceImageLoadResult.Success(
+                    bytes = bytes,
+                    contentType = response.headers[HttpHeaders.ContentType]
+                        ?.substringBefore(';')
+                        ?.trim()
+                        ?.ifBlank { null }
+                        ?: attachment.type.ifBlank { "image/png" },
+                    fileName = attachment.sourceImageFileName(),
+                )
+            }
+        }.getOrElse { error ->
+            AutomationSourceImageLoadResult.Error(error.message ?: "源图片下载失败")
         }
     }
 
@@ -621,6 +814,152 @@ private fun String.shouldSkipGeneratedAction(): Boolean {
     return clean == "SKIP" || clean == "NO_REPLY" || clean == "NO" || trim() == "不回复" || trim() == "不执行"
 }
 
+private fun String.isAutomationImagePrompt(): Boolean {
+    val clean = trim()
+    return clean.startsWith("IMAGE_PROMPT:", ignoreCase = true) ||
+        clean.startsWith("IMAGE:", ignoreCase = true) ||
+        clean.startsWith("生图：")
+}
+
+private fun String.isAutomationImageEditPrompt(): Boolean {
+    val clean = trim()
+    return clean.startsWith("IMAGE_EDIT_PROMPT:", ignoreCase = true) ||
+        clean.startsWith("EDIT_IMAGE:", ignoreCase = true) ||
+        clean.startsWith("IMAGE_EDIT:", ignoreCase = true) ||
+        clean.startsWith("图生图：") ||
+        clean.startsWith("编辑图片：") ||
+        clean.startsWith("改图：")
+}
+
+private fun String.automationImagePrompt(): String {
+    val clean = trim()
+    return when {
+        clean.startsWith("IMAGE_PROMPT:", ignoreCase = true) -> clean.substringAfter(':')
+        clean.startsWith("IMAGE:", ignoreCase = true) -> clean.substringAfter(':')
+        clean.startsWith("生图：") -> clean.substringAfter('：')
+        else -> clean
+    }.trim()
+}
+
+private fun String.automationImageRequest(): AutomationImageRequest {
+    return automationImagePrompt().toAutomationImageRequest()
+}
+
+private fun String.automationImageEditPrompt(): String {
+    val clean = trim()
+    return when {
+        clean.startsWith("IMAGE_EDIT_PROMPT:", ignoreCase = true) -> clean.substringAfter(':')
+        clean.startsWith("EDIT_IMAGE:", ignoreCase = true) -> clean.substringAfter(':')
+        clean.startsWith("IMAGE_EDIT:", ignoreCase = true) -> clean.substringAfter(':')
+        clean.startsWith("图生图：") -> clean.substringAfter('：')
+        clean.startsWith("编辑图片：") -> clean.substringAfter('：')
+        clean.startsWith("改图：") -> clean.substringAfter('：')
+        else -> clean
+    }.trim()
+}
+
+private fun String.automationImageEditRequest(): AutomationImageRequest {
+    return automationImageEditPrompt().toAutomationImageRequest()
+}
+
+private fun String.toAutomationImageRequest(): AutomationImageRequest {
+    val payload = trim()
+    val json = payload.parseAutomationImageJsonObject()
+    if (json == null) {
+        return AutomationImageRequest(prompt = payload.take(MAX_AUTOMATION_IMAGE_PROMPT_LENGTH))
+    }
+    val prompt = json.stringValue("prompt", "image_prompt", "imagePrompt", "提示词")
+        .ifBlank { payload }
+        .take(MAX_AUTOMATION_IMAGE_PROMPT_LENGTH)
+    val transparent = json.booleanValue("transparent", "透明", "transparent_background") ||
+        json.stringValue("background", "背景").equals("transparent", ignoreCase = true) ||
+        json.stringValue("background", "背景") == "透明"
+    val outputFormat = json.stringValue("output_format", "outputFormat", "format", "格式")
+        .ifBlank { if (transparent) "png" else "png" }
+    val background = json.stringValue("background", "背景")
+        .takeIf { it.isNotBlank() && !it.equals("transparent", ignoreCase = true) && it != "透明" }
+        ?: if (transparent) "auto" else null
+    return AutomationImageRequest(
+        prompt = prompt,
+        options = AiImageRequestOptions(
+            size = json.stringValue("size", "resolution", "preset", "分辨率", "尺寸").ifBlank { "1024x1024" },
+            quality = json.stringValue("quality", "质量", "清晰度").ifBlank { "medium" },
+            background = background,
+            outputFormat = outputFormat,
+            outputCompression = json.intValue("output_compression", "outputCompression", "compression", "压缩"),
+            count = json.intValue("n", "count", "数量", "张数") ?: 1,
+        ),
+        caption = json.stringValue("caption", "message", "text", "说明", "回复")
+            .take(MAX_AUTOMATION_IMAGE_CAPTION_LENGTH),
+        transparent = transparent,
+    )
+}
+
+private fun String.parseAutomationImageJsonObject(): JsonObject? {
+    val clean = trim()
+    if (!clean.startsWith("{")) return null
+    return runCatching {
+        AutomationProtocolJson.parseToJsonElement(clean).jsonObject
+    }.getOrNull()
+}
+
+private fun JsonObject.stringValue(vararg keys: String): String {
+    return keys.firstNotNullOfOrNull { key ->
+        (this[key] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+    }.orEmpty()
+}
+
+private fun JsonObject.intValue(vararg keys: String): Int? {
+    return keys.firstNotNullOfOrNull { key ->
+        val primitive = this[key] as? JsonPrimitive ?: return@firstNotNullOfOrNull null
+        primitive.intOrNull ?: primitive.contentOrNull?.trim()?.toIntOrNull()
+    }
+}
+
+private fun JsonObject.booleanValue(vararg keys: String): Boolean {
+    return keys.firstNotNullOfOrNull { key ->
+        val primitive = this[key] as? JsonPrimitive ?: return@firstNotNullOfOrNull null
+        primitive.booleanOrNull ?: when (primitive.contentOrNull?.trim()?.lowercase()) {
+            "true", "yes", "1", "是", "需要", "透明" -> true
+            "false", "no", "0", "否", "不需要", "不透明" -> false
+            else -> null
+        }
+    } ?: false
+}
+
+private fun AutomationImageRequest.effectivePrompt(): String {
+    if (!transparent) return prompt
+    val lower = prompt.lowercase()
+    val alreadyMentionsTransparency = lower.contains("transparent") ||
+        prompt.contains("透明") ||
+        prompt.contains("抠图")
+    if (alreadyMentionsTransparency) return prompt
+    return "$prompt。生成透明背景图片，主体边缘清晰，适合抠图使用，不要水印。"
+}
+
+private fun AutomationAttachment.sourceImageFileName(): String {
+    val cleanName = name.trim().takeIf { it.isNotBlank() }
+        ?: id.trim().takeIf { it.isNotBlank() }
+        ?: "source"
+    val extension = cleanName.substringAfterLast('.', missingDelimiterValue = "")
+        .takeIf { it.length in 2..5 }
+        ?: when (type.lowercase().substringBefore(';').trim()) {
+            "image/jpeg", "image/jpg" -> "jpg"
+            "image/webp" -> "webp"
+            else -> "png"
+        }
+    return if (cleanName.endsWith(".$extension", ignoreCase = true)) cleanName else "$cleanName.$extension"
+}
+
+private fun automationGeneratedImageFileName(contentType: String): String {
+    val extension = when (contentType.lowercase().substringBefore(';').trim()) {
+        "image/jpeg", "image/jpg" -> "jpg"
+        "image/webp" -> "webp"
+        else -> "png"
+    }
+    return "hhhl-ai-image-${kotlinx.datetime.Clock.System.now().toEpochMilliseconds()}.$extension"
+}
+
 private fun channelLink(targetId: String, event: AutomationEvent): String? {
     val clean = targetId.trim().ifBlank { event.channelId }
     if (clean.isBlank()) return null
@@ -666,9 +1005,33 @@ private fun Map<String, String>.cleanAttachmentAuthHeaders(): Map<String, String
 
 private const val DEFAULT_LOCAL_BASE_URL = "https://dc.hhhl.cc"
 private const val MAX_AUTOMATION_OUTGOING_TEXT = 1600
+private const val MAX_AUTOMATION_IMAGE_PROMPT_LENGTH = 2000
+private const val MAX_AUTOMATION_IMAGE_CAPTION_LENGTH = 300
+private const val AUTOMATION_GENERATED_IMAGE_COMMENT_MAX_LENGTH = 500
 private const val AUTOMATION_WEBHOOK_REQUEST_TIMEOUT_MS = 120_000L
 private const val AUTOMATION_WEBHOOK_CONNECT_TIMEOUT_MS = 8_000L
 private val private172HostPattern = Regex("""172\.(1[6-9]|2\d|3[0-1])\..+""")
+private val AutomationProtocolJson = Json {
+    ignoreUnknownKeys = true
+    explicitNulls = false
+}
+
+private data class AutomationImageRequest(
+    val prompt: String,
+    val options: AiImageRequestOptions = AiImageRequestOptions(),
+    val caption: String = "",
+    val transparent: Boolean = false,
+)
+
+private sealed interface AutomationSourceImageLoadResult {
+    data class Success(
+        val bytes: ByteArray,
+        val contentType: String,
+        val fileName: String,
+    ) : AutomationSourceImageLoadResult
+
+    data class Error(val message: String) : AutomationSourceImageLoadResult
+}
 
 private fun Throwable.webhookFailureMessage(): String {
     val raw = message.orEmpty()

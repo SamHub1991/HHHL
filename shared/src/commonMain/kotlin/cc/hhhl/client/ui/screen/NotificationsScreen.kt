@@ -16,8 +16,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -53,7 +51,6 @@ import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
 import cc.hhhl.client.ui.component.Avatar
 import cc.hhhl.client.ui.component.HhhlDivider
-import cc.hhhl.client.ui.component.HhhlFilterPill
 import cc.hhhl.client.ui.component.HhhlIconActionButton
 import cc.hhhl.client.ui.component.HhhlAnimatedSegmentedControl
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
@@ -62,6 +59,9 @@ import cc.hhhl.client.ui.component.HhhlStatusRow
 import cc.hhhl.client.ui.component.InlineRichText
 import cc.hhhl.client.presentation.notificationLineText
 import cc.hhhl.client.presentation.richTextPlainPreviewText
+
+private const val NotificationCollapsedLineMaxChars = 76
+private const val NotificationCollapsedPreviewMaxChars = 62
 
 @Composable
 fun NotificationsScreen(
@@ -159,11 +159,53 @@ fun NotificationsScreen(
         return
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        NotificationInboxSectionRow(
+    val unreadNotificationCount = state?.unreadCount ?: notifications.size
+    val unreadAnnouncementCount = announcements.count { !it.isRead }
+    val isCurrentSectionLoading = when (selectedSection) {
+        NotificationInboxSection.Notifications -> state?.isLoading == true
+        NotificationInboxSection.Announcements -> announcementState?.isLoading == true
+    }
+    val headerActions = when (selectedSection) {
+        NotificationInboxSection.Notifications -> notificationSummaryActions(
+            isLoading = state?.isLoading == true,
+            isMarkingAllRead = state?.isMarkingAllRead == true,
+            notificationCount = notifications.size,
+            onMarkAllAsRead = onMarkAllAsRead,
+            onFlush = onFlush,
+            onSendTestNotification = onSendTestNotification,
+            onSendReminderNotification = onSendReminderNotification,
+            aiEnabled = aiEnabled,
+            isAiProcessing = isAiProcessing,
+            onAiSummary = { onAiAction(AiTaskKind.NotificationSummary, notifications, selectedFilter) },
+            onAiFollowUp = { onAiAction(AiTaskKind.NotificationFollowUp, notifications, selectedFilter) },
+            onAiPriority = { onAiAction(AiTaskKind.NotificationPriority, notifications, selectedFilter) },
+        )
+        NotificationInboxSection.Announcements -> listOf(
+            HhhlOverflowMenuAction(
+                label = if (announcementState?.isLoading == true) "同步中" else "刷新公告",
+                icon = Icons.Filled.Refresh,
+                enabled = announcementState?.isLoading != true,
+                onClick = onRefreshAnnouncements,
+            ),
+        )
+    }
+
+    val screenColors = LocalHhhlColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(screenColors.pageBackground),
+    ) {
+        NotificationWeChatHeader(
             selectedSection = selectedSection,
-            unreadNotificationCount = state?.unreadCount ?: notifications.size,
-            unreadAnnouncementCount = announcements.count { !it.isRead },
+            unreadNotificationCount = unreadNotificationCount,
+            unreadAnnouncementCount = unreadAnnouncementCount,
+            isRefreshing = isCurrentSectionLoading,
+            actions = headerActions,
+            onRefresh = when (selectedSection) {
+                NotificationInboxSection.Notifications -> onRefresh
+                NotificationInboxSection.Announcements -> onRefreshAnnouncements
+            },
             onSelected = { selectedSection = it },
         )
         when (selectedSection) {
@@ -220,6 +262,69 @@ private enum class NotificationInboxSection {
     Notifications,
     Announcements,
 }
+
+@Composable
+private fun NotificationWeChatHeader(
+    selectedSection: NotificationInboxSection,
+    unreadNotificationCount: Int,
+    unreadAnnouncementCount: Int,
+    isRefreshing: Boolean,
+    actions: List<HhhlOverflowMenuAction>,
+    onRefresh: () -> Unit,
+    onSelected: (NotificationInboxSection) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.pageBackground)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HhhlAnimatedSegmentedControl(
+            labels = listOf("通知", "公告"),
+            selectedIndex = if (selectedSection == NotificationInboxSection.Notifications) 0 else 1,
+            badgeCounts = listOf(unreadNotificationCount, unreadAnnouncementCount),
+            onSelected = { index ->
+                onSelected(
+                    if (index == 0) {
+                        NotificationInboxSection.Notifications
+                    } else {
+                        NotificationInboxSection.Announcements
+                    },
+                )
+            },
+            modifier = Modifier
+                .weight(1f),
+            itemBaseHeight = 32.dp,
+        )
+        HhhlIconActionButton(
+            icon = Icons.Filled.Refresh,
+            contentDescription = if (isRefreshing) "同步中" else "刷新",
+            enabled = !isRefreshing,
+            onClick = onRefresh,
+        )
+        HhhlOverflowMenu(
+            actions = actions,
+            label = "通知操作",
+            buttonContainerColor = Color.Transparent,
+            iconTint = colors.textPrimary,
+            buttonWidth = 42.dp,
+            buttonHeight = 42.dp,
+            buttonIconSize = 21.dp,
+            buttonCornerRadius = 999.dp,
+            buttonBorderAlpha = 0f,
+            buttonElevation = 0.dp,
+        )
+    }
+}
+
+private val NotificationInboxSection.label: String
+    get() = when (this) {
+        NotificationInboxSection.Notifications -> "通知"
+        NotificationInboxSection.Announcements -> "公告"
+    }
 
 @Composable
 private fun NotificationInboxSectionRow(
@@ -290,26 +395,6 @@ private fun NotificationListContent(
         specialCareUnreadCount = state?.specialCareUnreadCount ?: notifications.countSpecialCareUnread(),
         onFilterSelected = onFilterSelected,
     )
-    NotificationSummaryRow(
-        selectedFilter = selectedFilter,
-        notificationCount = notifications.size,
-        unreadCount = state?.unreadCount ?: notifications.size,
-        specialCareNotificationCount = state?.specialCareNotificationCount ?: notifications.count { it.isSpecialCare },
-        specialCareUnreadCount = state?.specialCareUnreadCount ?: notifications.countSpecialCareUnread(),
-        isLoading = state?.isLoading == true,
-        isMarkingAllRead = state?.isMarkingAllRead == true,
-        onRefresh = onRefresh,
-        onMarkAllAsRead = onMarkAllAsRead,
-        onFlush = onFlush,
-        onSendTestNotification = onSendTestNotification,
-        onSendReminderNotification = onSendReminderNotification,
-        aiEnabled = aiEnabled,
-        isAiProcessing = isAiProcessing,
-        onAiSummary = { onAiAction(AiTaskKind.NotificationSummary, notifications, selectedFilter) },
-        onAiFollowUp = { onAiAction(AiTaskKind.NotificationFollowUp, notifications, selectedFilter) },
-        onAiPriority = { onAiAction(AiTaskKind.NotificationPriority, notifications, selectedFilter) },
-    )
-    HhhlDivider()
     if (!aiResultText.isNullOrBlank()) {
         NotificationAiResultPanel(
             label = aiResultLabel ?: "AI 结果",
@@ -411,14 +496,29 @@ private fun NotificationRow(
     onOpenChatUser: (String, String?) -> Unit,
 ) {
     val colors = LocalHhhlColors.current
+    var expanded by remember(notification.id) { mutableStateOf(false) }
+    val lineText = remember(notification.id, notification.type, notification.actor.displayName, notification.text) {
+        notificationLineText(notification)
+    }
+    val notePreviewText = remember(notification.notePreviewText) {
+        notification.notePreviewText.orEmpty().normalizeNotificationNotePreviewText()
+    }
+    val canExpand = remember(lineText, notePreviewText, notification.hasNotePreview) {
+        lineText.length > NotificationCollapsedLineMaxChars ||
+            (notification.hasNotePreview && notePreviewText.length > NotificationCollapsedPreviewMaxChars)
+    }
     val rowClick = {
-        onMarkNotificationRead(notification.id)
-        when (val target = notification.navigationTarget) {
-            is NotificationNavigationTarget.NoteDetail -> onOpenNote(target.noteId)
-            is NotificationNavigationTarget.UserProfile -> onOpenUser(target.userId)
-            is NotificationNavigationTarget.ChatUser -> onOpenChatUser(target.userId, target.messageId)
-            NotificationNavigationTarget.Chat -> onOpenChat()
-            null -> Unit
+        if (canExpand) {
+            expanded = !expanded
+        } else {
+            onMarkNotificationRead(notification.id)
+            when (val target = notification.navigationTarget) {
+                is NotificationNavigationTarget.NoteDetail -> onOpenNote(target.noteId)
+                is NotificationNavigationTarget.UserProfile -> onOpenUser(target.userId)
+                is NotificationNavigationTarget.ChatUser -> onOpenChatUser(target.userId, target.messageId)
+                NotificationNavigationTarget.Chat -> onOpenChat()
+                null -> Unit
+            }
         }
     }
     val createdAtLabel = notification.createdAtLabel.ifBlank { "刚刚" }
@@ -437,9 +537,9 @@ private fun NotificationRow(
         )
         Column(modifier = Modifier.weight(1f)) {
             InlineRichText(
-                text = notificationLineText(notification),
+                text = lineText,
                 style = MaterialTheme.typography.bodyMedium,
-                maxChars = 220,
+                maxChars = if (expanded) null else NotificationCollapsedLineMaxChars,
                 color = if (notification.isRead) {
                     colors.textMuted
                 } else {
@@ -450,17 +550,25 @@ private fun NotificationRow(
                 onOpenHashtag = onOpenHashtag,
             )
             if (notification.hasNotePreview) {
-                val notePreviewText = remember(notification.notePreviewText) {
-                    notification.notePreviewText.orEmpty().normalizeNotificationNotePreviewText()
-                }
                 InlineRichText(
                     text = notePreviewText,
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textMuted,
-                    maxChars = 260,
+                    maxChars = if (expanded) null else NotificationCollapsedPreviewMaxChars,
                     onOpenUrl = onOpenUrl,
                     onOpenMention = onOpenMention,
                     onOpenHashtag = onOpenHashtag,
+                )
+            }
+            if (canExpand) {
+                Text(
+                    text = if (expanded) "收起" else "展开",
+                    color = colors.accent,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .clickable { expanded = !expanded },
                 )
             }
             Text(
@@ -574,21 +682,69 @@ private fun NotificationPrimaryFilterRow(
     specialCareUnreadCount: Int,
     onFilterSelected: (NotificationFilter) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(horizontal = 16.dp, vertical = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        notificationVisiblePrimaryFilters().forEach { filter ->
-            HhhlFilterPill(
+        notificationPrimaryFilters().forEach { filter ->
+            NotificationFilterChip(
                 selected = filter == selectedFilter,
                 label = notificationFilterLabel(filter, specialCareUnreadCount),
                 onClick = { onFilterSelected(filter) },
             )
         }
+        HhhlOverflowMenu(
+            actions = notificationOverflowActions(
+                selectedFilter = selectedFilter,
+                onFilterSelected = onFilterSelected,
+            ),
+            label = "更多筛选",
+            buttonContainerColor = Color.Transparent,
+            iconTint = colors.textSecondary,
+            buttonWidth = 34.dp,
+            buttonHeight = 30.dp,
+            buttonIconSize = 17.dp,
+            buttonCornerRadius = 999.dp,
+            buttonBorderAlpha = 0f,
+            buttonElevation = 0.dp,
+        )
+    }
+}
+
+@Composable
+private fun NotificationFilterChip(
+    selected: Boolean,
+    label: String,
+    onClick: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val shape = RoundedCornerShape(999.dp)
+    Row(
+        modifier = Modifier
+            .height(30.dp)
+            .clip(shape)
+            .background(if (selected) colors.accent.copy(alpha = 0.10f) else Color.Transparent)
+            .border(
+                width = 1.dp,
+                color = if (selected) colors.accent.copy(alpha = 0.26f) else Color.Transparent,
+                shape = shape,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            color = if (selected) colors.accent else colors.textSecondary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -732,7 +888,7 @@ fun notificationPrimaryFilters(): List<NotificationFilter> = listOf(
     NotificationFilter.Reactions,
 )
 
-fun notificationVisiblePrimaryFilters(): List<NotificationFilter> = NotificationFilter.entries
+fun notificationVisiblePrimaryFilters(): List<NotificationFilter> = notificationPrimaryFilters()
 
 fun notificationOverflowFilters(): List<NotificationFilter> =
     listOf(

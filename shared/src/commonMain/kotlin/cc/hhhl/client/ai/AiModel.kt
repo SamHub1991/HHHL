@@ -22,6 +22,9 @@ data class AiSettings(
     val fastModel: String = AiProviderPreset.OpenAiCompatible.defaultFastModel,
     val longContextModel: String = AiProviderPreset.OpenAiCompatible.defaultLongContextModel,
     val visionModel: String = AiProviderPreset.OpenAiCompatible.defaultVisionModel,
+    val imageGenerationBaseUrl: String = AiProviderPreset.OpenAiCompatible.defaultBaseUrl,
+    val imageGenerationApiKey: String = "",
+    val imageGenerationModel: String = DEFAULT_IMAGE_GENERATION_MODEL,
     val embeddingModel: String = AiProviderPreset.OpenAiCompatible.defaultEmbeddingModel,
     val readTimelineAllowed: Boolean = true,
     val readNotificationsAllowed: Boolean = true,
@@ -51,8 +54,14 @@ data class AiSettings(
     val cleanBaseUrl: String
         get() = baseUrl.trim().trimEnd('/')
 
+    val cleanImageGenerationBaseUrl: String
+        get() = imageGenerationBaseUrl.trim().trimEnd('/')
+
     val hasEndpoint: Boolean
         get() = hasServerAiEndpoint || hasLocalEndpoint
+
+    val hasImageGenerationEndpoint: Boolean
+        get() = cleanImageGenerationBaseUrl.isNotBlank() && imageGenerationModel.trim().isNotBlank()
 
     val hasServerAiEndpoint: Boolean
         get() = serviceMode != AiServiceMode.LocalOnly &&
@@ -142,6 +151,10 @@ enum class AiProviderPreset(
 
 const val DEFAULT_SERVER_AI_BASE_URL: String = "https://dc.hhhl.cc"
 const val DEFAULT_SERVER_AI_MODEL: String = "gpt-5.5"
+const val DEFAULT_IMAGE_GENERATION_MODEL: String = "gpt-image-2"
+const val DEFAULT_IMAGE_GENERATION_SIZE: String = "1024x1024"
+const val DEFAULT_IMAGE_GENERATION_QUALITY: String = "medium"
+const val DEFAULT_IMAGE_GENERATION_OUTPUT_FORMAT: String = "png"
 
 @Serializable
 enum class AiTaskKind(val label: String) {
@@ -449,6 +462,15 @@ data class AiUsageWindow(
 data class AiUsageConsumeResult(
     val usage: AiUsageWindow,
     val errorMessage: String? = null,
+)
+
+data class AiImageRequestOptions(
+    val size: String = DEFAULT_IMAGE_GENERATION_SIZE,
+    val quality: String = DEFAULT_IMAGE_GENERATION_QUALITY,
+    val background: String? = null,
+    val outputFormat: String = DEFAULT_IMAGE_GENERATION_OUTPUT_FORMAT,
+    val outputCompression: Int? = null,
+    val count: Int = 1,
 )
 
 fun AiUsageWindow.normalizedAiUsage(nowEpochMillis: Long = Clock.System.now().toEpochMilliseconds()): AiUsageWindow {

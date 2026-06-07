@@ -1,5 +1,6 @@
 package cc.hhhl.client.ui.screen
 
+import androidx.compose.ui.unit.dp
 import cc.hhhl.client.state.SettingsItemKey
 import cc.hhhl.client.model.SettingsManagementSectionKey
 import kotlin.test.Test
@@ -38,5 +39,22 @@ class SettingsPresentationTest {
             settingsManagementSectionKey(SettingsItemKey.SigninHistory),
         )
         assertNull(settingsManagementSectionKey(SettingsItemKey.Passkeys))
+    }
+
+    @Test
+    fun settingsControlsUseCompactMetrics() {
+        assertEquals(11.dp, SettingsRowVerticalPadding)
+        assertEquals(12.dp, SettingsRowContentSpacing)
+        assertEquals(6.dp, SettingsRowDetailSpacing)
+        assertEquals(40.dp, SettingsCompactInputMinHeight)
+        assertEquals(12.dp, SettingsCompactInputHorizontalPadding)
+        assertEquals(8.dp, SettingsCompactInputVerticalPadding)
+        assertEquals(34.dp, SettingsCompactIconButtonSize)
+        assertEquals(18.dp, SettingsCompactIconSize)
+        assertEquals(12.dp, SettingsCompactPanelHorizontalPadding)
+        assertEquals(10.dp, SettingsCompactPanelVerticalPadding)
+        assertEquals(32.dp, SettingsItemIconSize)
+        assertEquals(17.dp, SettingsItemIconInnerSize)
+        assertEquals(0.82f, SettingsSwitchScale)
     }
 }

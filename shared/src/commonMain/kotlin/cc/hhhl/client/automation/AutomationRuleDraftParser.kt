@@ -34,7 +34,6 @@ fun parseAutomationRuleDraft(raw: String): AutomationRuleDraftParseResult {
                 enabled = item.booleanValue("enabled", default = true),
             )
         }
-        .take(8)
         .ifEmpty { listOf(defaultDraftCondition(trigger, now)) }
     val actions = root["actions"]?.jsonArray.orEmpty()
         .mapNotNull { element ->
@@ -54,7 +53,6 @@ fun parseAutomationRuleDraft(raw: String): AutomationRuleDraftParseResult {
                     ?: AutomationFailurePolicy.Continue,
             )
         }
-        .take(6)
         .ifEmpty { listOf(defaultDraftAction(trigger, now)) }
 
     return AutomationRuleDraftParseResult(

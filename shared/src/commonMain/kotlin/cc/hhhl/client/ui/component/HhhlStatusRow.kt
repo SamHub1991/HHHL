@@ -38,8 +38,8 @@ fun HhhlStatusRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(horizontal = 18.dp, vertical = 15.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (loading) {
@@ -73,18 +73,18 @@ fun HhhlStatusRow(
         if (onDismiss != null) {
             Box(
                 modifier = Modifier
-                    .size(26.dp)
-                    .clip(RoundedCornerShape(13.dp))
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(17.dp))
                     .clickable { onDismiss() }
                     .semantics { contentDescription = dismissContentDescription }
-                    .padding(5.dp),
+                    .padding(7.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
                     contentDescription = null,
                     tint = colors.textMuted,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(17.dp),
                 )
             }
         }

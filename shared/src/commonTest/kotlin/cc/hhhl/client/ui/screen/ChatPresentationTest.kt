@@ -46,6 +46,7 @@ class ChatPresentationTest {
         assertEquals(
             listOf(
                 "刷新消息",
+                "查看成员",
                 "搜索消息",
                 "AI",
                 "过滤设置",
@@ -60,17 +61,33 @@ class ChatPresentationTest {
             actions.map { it.label },
         )
         assertEquals(
-            listOf(true, true, false, true, true, true, true, true, true, true, true),
+            listOf(true, true, true, false, true, true, true, true, true, true, true, true),
             actions.map { it.enabled },
         )
         assertEquals(
             listOf("最近 50 条", "今日摘要", "未读摘要", "回复草稿", "待办提取", "决策摘要"),
-            actions[2].children.map { it.label },
+            actions[3].children.map { it.label },
         )
         assertEquals(
             listOf("保留设置", "清空数据"),
-            actions[6].children.map { it.label },
+            actions[7].children.map { it.label },
         )
+    }
+
+    @Test
+    fun chatDetailOverflowCanReturnFromMembersToMessages() {
+        val actions = chatDetailSummaryActions(
+            showingMembers = true,
+            isUploadingMedia = false,
+            hasAttachment = false,
+            canRefreshCurrent = true,
+            canAddMedia = true,
+            onRefresh = {},
+            onAddMedia = {},
+        )
+
+        assertEquals("返回消息", actions[1].label)
+        assertEquals(false, actions.first { it.label == "AI" }.enabled)
     }
 
     @Test

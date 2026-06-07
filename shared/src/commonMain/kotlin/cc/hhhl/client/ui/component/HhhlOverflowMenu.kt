@@ -69,7 +69,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
@@ -82,8 +81,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cc.hhhl.client.theme.LocalHhhlColors
 
-internal val HhhlOverflowMenuButtonHeight = HhhlControlMinHeight
 internal val HhhlOverflowMenuButtonMinWidth = HhhlControlMinWidth
+internal val HhhlOverflowMenuButtonHeight = HhhlOverflowMenuButtonMinWidth
 internal val HhhlOverflowMenuButtonSize = HhhlOverflowMenuButtonMinWidth
 internal val HhhlOverflowMenuIconSize = 19.dp
 private val HhhlOverflowMenuLabeledButtonHeight = 27.dp
@@ -114,6 +113,12 @@ fun HhhlOverflowMenu(
     buttonText: String? = null,
     buttonContainerColor: Color? = null,
     iconTint: Color? = null,
+    buttonWidth: Dp = HhhlOverflowMenuButtonMinWidth,
+    buttonHeight: Dp = HhhlOverflowMenuButtonHeight,
+    buttonIconSize: Dp = HhhlOverflowMenuIconSize,
+    buttonCornerRadius: Dp = HhhlIconActionCornerRadius,
+    buttonBorderAlpha: Float? = null,
+    buttonElevation: Dp? = null,
     labeledButtonColumnWidth: Dp = 43.dp,
     labeledButtonWidth: Dp = HhhlOverflowMenuLabeledButtonMinWidth,
     labeledButtonHeight: Dp = HhhlOverflowMenuLabeledButtonHeight,
@@ -125,34 +130,26 @@ fun HhhlOverflowMenu(
     val colors = LocalHhhlColors.current
     val isDarkSurface = colors.surface.luminance() < 0.2f
     val visuallyEnabled = enabled || !showDisabledState
-    val targetButtonContainerColor = buttonContainerColor ?: when {
-        !visuallyEnabled || actions.isEmpty() -> {
-            colors.buttonBackground.withMultipliedAlpha(if (isDarkSurface) 0.55f else 0.62f)
-        }
-        buttonText != null -> colors.buttonBackground.withMultipliedAlpha(if (isDarkSurface) 0.76f else 0.72f)
-        else -> colors.buttonBackground
-    }
+    val targetButtonContainerColor = buttonContainerColor ?: Color.Transparent
     val resolvedButtonContainerColor by animateColorAsState(
         targetValue = targetButtonContainerColor,
         animationSpec = tween(durationMillis = 160),
         label = "overflow-button-container",
     )
     val elevation by animateDpAsState(
-        targetValue = when {
-            !isDarkSurface && expanded -> 1.dp
-            !isDarkSurface -> HhhlIconActionIdleElevation
-            expanded -> 3.dp
-            else -> 1.dp
+        targetValue = buttonElevation ?: when {
+            buttonContainerColor != null && expanded -> 1.dp
+            else -> 0.dp
         },
         animationSpec = tween(durationMillis = 160),
         label = "overflow-elevation",
     )
-    val resolvedIconTint = iconTint ?: if (enabled && actions.isNotEmpty()) {
-        hhhlReadableOnControlColor(targetButtonContainerColor, colors.textSecondary)
-    } else if (visuallyEnabled && actions.isNotEmpty()) {
+    val resolvedIconTint = iconTint ?: if (!visuallyEnabled || actions.isEmpty()) {
+        colors.textMuted
+    } else if (buttonContainerColor != null && targetButtonContainerColor.alpha >= 0.55f) {
         hhhlReadableOnControlColor(targetButtonContainerColor, colors.textSecondary)
     } else {
-        colors.textMuted
+        colors.textPrimary
     }
     Box {
         if (buttonText == null) {
@@ -164,6 +161,11 @@ fun HhhlOverflowMenu(
                 iconTint = resolvedIconTint,
                 elevation = elevation,
                 isDarkSurface = isDarkSurface,
+                minWidth = buttonWidth,
+                height = buttonHeight,
+                iconSize = buttonIconSize,
+                cornerRadius = buttonCornerRadius,
+                borderAlpha = buttonBorderAlpha ?: 0f,
                 onClick = { expanded = true },
             )
         } else {
@@ -183,6 +185,7 @@ fun HhhlOverflowMenu(
                     minWidth = labeledButtonWidth,
                     height = labeledButtonHeight,
                     iconSize = labeledButtonIconSize,
+                    cornerRadius = buttonCornerRadius,
                     borderAlpha = if (isDarkSurface) 0.20f else 0.16f,
                     onClick = { expanded = true },
                 )
@@ -361,38 +364,33 @@ private fun HhhlOverflowMenuButton(
     minWidth: Dp = HhhlOverflowMenuButtonMinWidth,
     height: Dp = HhhlOverflowMenuButtonHeight,
     iconSize: Dp = HhhlOverflowMenuIconSize,
+    cornerRadius: Dp = HhhlIconActionCornerRadius,
     borderAlpha: Float? = null,
     onClick: () -> Unit,
 ) {
     val colors = LocalHhhlColors.current
+    val shape = RoundedCornerShape(cornerRadius)
     Box(
         modifier = Modifier
             .width(minWidth)
             .height(height)
             .shadow(
                 elevation = elevation,
-                shape = RoundedCornerShape(HhhlIconActionCornerRadius),
+                shape = shape,
                 clip = false,
                 ambientColor = colors.shadow,
                 spotColor = colors.shadow,
             )
-            .clip(RoundedCornerShape(HhhlIconActionCornerRadius))
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        containerColor,
-                        containerColor.withMultipliedAlpha(if (isDarkSurface) 0.82f else 0.90f),
-                    ),
-                ),
-            )
+            .clip(shape)
+            .background(containerColor)
             .border(
                 width = 1.dp,
                 color = if (expanded) {
                     colors.focusRing.copy(alpha = if (isDarkSurface) 0.48f else 0.30f)
                 } else {
-                    colors.border.copy(alpha = borderAlpha ?: if (isDarkSurface) 0.34f else 0.28f)
+                    colors.border.copy(alpha = borderAlpha ?: 0f)
                 },
-                shape = RoundedCornerShape(HhhlIconActionCornerRadius),
+                shape = shape,
             )
             .clickable(enabled = enabled, onClick = onClick)
             .semantics { contentDescription = label },
@@ -405,10 +403,6 @@ private fun HhhlOverflowMenuButton(
             modifier = Modifier.size(iconSize),
         )
     }
-}
-
-private fun Color.withMultipliedAlpha(multiplier: Float): Color {
-    return copy(alpha = (alpha * multiplier).coerceIn(0f, 1f))
 }
 
 private fun defaultOverflowMenuIcon(label: String): ImageVector {

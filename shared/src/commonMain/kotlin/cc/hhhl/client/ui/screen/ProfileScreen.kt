@@ -53,7 +53,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalDensity
@@ -94,12 +93,12 @@ import cc.hhhl.client.ui.component.NoteRowDensity
 import cc.hhhl.client.ui.component.ThemePicker
 import cc.hhhl.client.ui.component.TimelineDensityPicker
 
-internal val ProfileQuickActionsHorizontalPadding = 16.dp
+internal val ProfileQuickActionsHorizontalPadding = 18.dp
 internal val ProfileQuickActionsCardInnerPadding = 10.dp
-internal val ProfilePrimaryShortcutTileHeight = 96.dp
-internal val ProfileWorkspaceShortcutTileHeight = 58.dp
+internal val ProfilePrimaryShortcutTileHeight = 58.dp
+internal val ProfileWorkspaceShortcutTileHeight = 52.dp
 internal val ProfileShortcutTileCornerRadius = 14.dp
-internal val ProfileShortcutIconContainerSize = 32.dp
+internal val ProfileShortcutIconContainerSize = 30.dp
 internal val ProfileShortcutIconSize = 17.dp
 private const val ProfileDefaultBannerImageUrl = "https://dc.hhhl.cc/client-assets/icon.png"
 
@@ -228,8 +227,8 @@ fun ProfileScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                            .padding(bottom = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         ProfileHeaderIdentity(
                             user = user,
@@ -259,7 +258,7 @@ fun ProfileScreen(
                                 text = user.bio,
                                 color = LocalHhhlColors.current.textPrimary,
                                 style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(horizontal = 16.dp),
+                                modifier = Modifier.padding(horizontal = 18.dp),
                                 onOpenMention = onOpenMention,
                                 onOpenHashtag = onOpenHashtag,
                             )
@@ -1050,13 +1049,13 @@ private fun ProfileQuickActions(
             .fillMaxWidth()
             .padding(horizontal = ProfileQuickActionsHorizontalPadding)
             .padding(vertical = ProfileQuickActionsCardInnerPadding),
-        verticalArrangement = Arrangement.spacedBy(11.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(
@@ -1081,7 +1080,7 @@ private fun ProfileQuickActions(
             )
         }
 
-        ProfileShortcutGrid(primaryShortcuts, columns = 2, compact = false)
+        ProfileShortcutGrid(primaryShortcuts, columns = 2, compact = true)
         ProfileShortcutGroupLabel("工作区")
         ProfileShortcutGrid(workspaceShortcuts, columns = 2, compact = true)
     }
@@ -1303,7 +1302,7 @@ private fun ProfileShortcutGroupLabel(label: String) {
         color = LocalHhhlColors.current.textMuted,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(top = 2.dp, start = 2.dp),
+        modifier = Modifier.padding(top = 4.dp, start = 2.dp),
     )
 }
 
@@ -1326,36 +1325,17 @@ private fun ProfileShortcutTile(
     val iconContainerShape = RoundedCornerShape(10.dp)
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    val tileBrush = Brush.verticalGradient(
-        colors = if (compact) {
-            listOf(
-                colors.inputBackground.copy(alpha = 0.34f),
-                colors.surface.copy(alpha = 0.30f),
-            )
-        } else {
-            listOf(
-                colors.noteBackground.copy(alpha = 0.98f),
-                colors.surface.copy(alpha = 0.94f),
-            )
-        },
-    )
-    val iconBrush = Brush.verticalGradient(
-        colors = listOf(
-            colors.accent.copy(alpha = if (compact) 0.06f else 0.10f),
-            colors.inputBackground.copy(alpha = if (compact) 0.34f else 0.58f),
-        ),
-    )
     val tileBorderColor by animateColorAsState(
         targetValue = if (pressed) {
-            colors.focusRing.copy(alpha = 0.24f)
+            colors.focusRing.copy(alpha = 0.22f)
         } else {
-            colors.border.copy(alpha = if (compact) 0.18f else 0.30f)
+            colors.border.copy(alpha = 0.24f)
         },
         label = "profile-shortcut-border",
     )
     val pressedOverlayColor by animateColorAsState(
         targetValue = if (pressed) {
-            colors.accent.copy(alpha = if (compact) 0.05f else 0.08f)
+            colors.accent.copy(alpha = 0.05f)
         } else {
             colors.inputBackground.copy(alpha = 0f)
         },
@@ -1363,15 +1343,8 @@ private fun ProfileShortcutTile(
     )
     val tileModifier = modifier
         .height(tileHeight)
-        .shadow(
-            elevation = if (compact) 0.dp else 0.25.dp,
-            shape = tileShape,
-            clip = false,
-            ambientColor = colors.shadow,
-            spotColor = colors.shadow,
-        )
         .clip(tileShape)
-        .background(tileBrush)
+        .background(colors.surfaceElevated.copy(alpha = 0.54f))
         .background(pressedOverlayColor)
         .border(
             width = 1.dp,
@@ -1387,15 +1360,15 @@ private fun ProfileShortcutTile(
     if (compact) {
         Row(
             modifier = tileModifier
-                .padding(horizontal = 10.dp, vertical = 9.dp),
-            horizontalArrangement = Arrangement.spacedBy(9.dp),
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
                     .size(ProfileShortcutIconContainerSize)
                     .clip(iconContainerShape)
-                    .background(iconBrush),
+                    .background(colors.accent.copy(alpha = 0.08f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -1421,7 +1394,7 @@ private fun ProfileShortcutTile(
                 Text(
                     text = shortcut.supportingText,
                     color = colors.textMuted,
-                    style = MaterialTheme.typography.labelSmall.copy(lineHeight = 16.sp),
+                    style = MaterialTheme.typography.labelSmall.copy(lineHeight = 17.sp),
                     maxLines = supportingMaxLines,
                     overflow = TextOverflow.Ellipsis,
                     softWrap = supportingMaxLines > 1,
@@ -1435,17 +1408,17 @@ private fun ProfileShortcutTile(
         modifier = tileModifier
             .padding(
                 horizontal = 10.dp,
-                vertical = 10.dp,
+                vertical = 9.dp,
             ),
-        verticalArrangement = Arrangement.spacedBy(7.dp, Alignment.Top),
+        verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Top),
         horizontalAlignment = Alignment.Start,
     ) {
         Box(
             modifier = Modifier
                 .size(ProfileShortcutIconContainerSize)
                 .clip(iconContainerShape)
-                .background(iconBrush)
-                .border(1.dp, colors.border.copy(alpha = 0.12f), iconContainerShape),
+                .background(colors.accent.copy(alpha = 0.08f))
+                .border(1.dp, colors.border.copy(alpha = 0.16f), iconContainerShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -1472,7 +1445,7 @@ private fun ProfileShortcutTile(
             Text(
                 text = shortcut.supportingText,
                 color = colors.textMuted,
-                style = MaterialTheme.typography.labelSmall.copy(lineHeight = 16.sp),
+                style = MaterialTheme.typography.labelSmall.copy(lineHeight = 17.sp),
                 maxLines = supportingMaxLines,
                 overflow = TextOverflow.Ellipsis,
                 softWrap = supportingMaxLines > 1,

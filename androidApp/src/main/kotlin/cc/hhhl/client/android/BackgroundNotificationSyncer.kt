@@ -62,6 +62,7 @@ import cc.hhhl.client.repository.ChatUserConversationRepositoryResult
 import cc.hhhl.client.repository.ChannelRepository
 import cc.hhhl.client.repository.ChannelTimelineRepositoryResult
 import cc.hhhl.client.repository.ComposeRepository
+import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.NoteActionRepository
 import cc.hhhl.client.repository.NotificationRepository
 import cc.hhhl.client.repository.requiresRealtimeAttentionResolution
@@ -1029,6 +1030,7 @@ class BackgroundNotificationSyncer(
                 notificationRepository = NotificationRepository(tokenProvider = { token }),
                 composeRepository = ComposeRepository(tokenProvider = { token }),
                 noteActionRepository = NoteActionRepository(tokenProvider = { token }),
+                driveFileRepository = DriveFileRepository(tokenProvider = { token }),
                 clipboardWriter = { text ->
                     context.writeAutomationClipboardText(text)
                     true

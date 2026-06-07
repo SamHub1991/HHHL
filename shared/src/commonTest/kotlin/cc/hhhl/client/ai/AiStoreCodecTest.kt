@@ -14,6 +14,9 @@ class AiStoreCodecTest {
                 baseUrl = "https://api.deepseek.com/v1",
                 apiKey = "secret",
                 chatModel = "deepseek-chat",
+                imageGenerationBaseUrl = "https://image.example.com/v1",
+                imageGenerationApiKey = "image-secret",
+                imageGenerationModel = "gpt-image-2",
                 backgroundAllowed = true,
                 wifiOnlyBackground = true,
                 assistantLowRiskAutoApproval = true,
@@ -54,6 +57,9 @@ class AiStoreCodecTest {
 
         assertEquals(snapshot.settings.provider, decoded.settings.provider)
         assertEquals("deepseek-chat", decoded.settings.chatModel)
+        assertEquals("https://image.example.com/v1", decoded.settings.imageGenerationBaseUrl)
+        assertEquals("image-secret", decoded.settings.imageGenerationApiKey)
+        assertEquals("gpt-image-2", decoded.settings.imageGenerationModel)
         assertTrue(decoded.settings.wifiOnlyBackground)
         assertTrue(decoded.settings.assistantLowRiskAutoApproval)
         assertTrue(decoded.settings.assistantHighRiskAutoApproval)

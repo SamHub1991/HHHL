@@ -10,11 +10,11 @@ class NoteRowDensitySpecTest {
     fun comfortableDensityMatchesCurrentTimelineSpacing() {
         assertEquals(
             NoteRowMetrics(
-                horizontalPadding = 14,
-                verticalPadding = 12,
-                avatarSize = 42,
-                contentSpacing = 6,
-                mediaHeight = 86,
+                horizontalPadding = 16,
+                verticalPadding = 14,
+                avatarSize = 44,
+                contentSpacing = 7,
+                mediaHeight = 92,
             ),
             noteRowMetrics(NoteRowDensity.Comfortable),
         )
@@ -42,12 +42,12 @@ class NoteRowDensitySpecTest {
 
     @Test
     fun noteActionsShareCompactControlMetrics() {
-        assertEquals(30.dp, HhhlNoteActionMinHeight)
-        assertEquals(34.dp, HhhlNoteActionMinWidth)
-        assertEquals(6.dp, HhhlNoteActionHorizontalPadding)
-        assertEquals(5.dp, HhhlNoteActionVerticalPadding)
-        assertEquals(17.dp, HhhlNoteActionIconSize)
-        assertEquals(4.dp, HhhlNoteActionSpacing)
+        assertEquals(28.dp, HhhlNoteActionMinHeight)
+        assertEquals(30.dp, HhhlNoteActionMinWidth)
+        assertEquals(4.dp, HhhlNoteActionHorizontalPadding)
+        assertEquals(2.dp, HhhlNoteActionVerticalPadding)
+        assertEquals(15.dp, HhhlNoteActionIconSize)
+        assertEquals(2.dp, HhhlNoteActionSpacing)
     }
 
     @Test

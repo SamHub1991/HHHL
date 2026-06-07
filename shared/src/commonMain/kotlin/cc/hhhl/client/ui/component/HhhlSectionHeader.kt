@@ -25,6 +25,6 @@ fun HhhlSectionHeader(
         overflow = TextOverflow.Ellipsis,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .padding(horizontal = 18.dp, vertical = 13.dp),
     )
 }
