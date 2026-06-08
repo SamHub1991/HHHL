@@ -354,6 +354,7 @@ fun ComposeScreen(
                 ComposeEditorSection(
                     draft = draft,
                     pollEnabled = poll != null,
+                    replyTargetAvailable = isReply && targetNote != null,
                     aiEnabled = aiEnabled,
                     isAiProcessing = isAiProcessing,
                     onAiAction = { kind -> onAiAction(kind, draft, targetNote) },
@@ -822,6 +823,7 @@ fun composeFailedSendPreview(draft: ComposeDraft): String {
 private fun ComposeEditorSection(
     draft: ComposeDraft,
     pollEnabled: Boolean,
+    replyTargetAvailable: Boolean,
     aiEnabled: Boolean,
     isAiProcessing: Boolean,
     onAiAction: (AiTaskKind) -> Unit,
@@ -901,6 +903,7 @@ private fun ComposeEditorSection(
                     actions = composeSecondaryActions(
                         cwEnabled = draft.cw != null,
                         pollEnabled = pollEnabled,
+                        replyTargetAvailable = replyTargetAvailable,
                         aiEnabled = aiEnabled,
                         isAiProcessing = isAiProcessing,
                         onAiAction = onAiAction,
@@ -1989,6 +1992,7 @@ fun composeVisibilityOptions(canPublicNote: Boolean = true): List<NoteVisibility
 fun composeSecondaryActions(
     cwEnabled: Boolean,
     pollEnabled: Boolean,
+    replyTargetAvailable: Boolean = false,
     aiEnabled: Boolean = false,
     isAiProcessing: Boolean = false,
     onAiAction: (AiTaskKind) -> Unit = {},
@@ -2014,16 +2018,19 @@ fun composeSecondaryActions(
             enabled = aiEnabled && !isAiProcessing,
             icon = Icons.Filled.AutoAwesome,
             onClick = {},
-            children = listOf(
-                HhhlOverflowMenuAction(label = "润色", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposePolish) }),
-                HhhlOverflowMenuAction(label = "结合最近帖子生成", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeFromRecentPosts) }),
-                HhhlOverflowMenuAction(label = "缩短", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeShorten) }),
-                HhhlOverflowMenuAction(label = "扩写", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeExpand) }),
-                HhhlOverflowMenuAction(label = "翻译中文", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeTranslateZh) }),
-                HhhlOverflowMenuAction(label = "生成 CW", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeContentWarning) }),
-                HhhlOverflowMenuAction(label = "推荐话题", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeHashtags) }),
-                HhhlOverflowMenuAction(label = "推荐 @", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeMentionSuggestions) }),
-            ),
+            children = buildList {
+                if (replyTargetAvailable) {
+                    add(HhhlOverflowMenuAction(label = "AI 回复", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.PostReplyDraft) }))
+                }
+                add(HhhlOverflowMenuAction(label = "润色", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposePolish) }))
+                add(HhhlOverflowMenuAction(label = "结合最近帖子生成", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeFromRecentPosts) }))
+                add(HhhlOverflowMenuAction(label = "缩短", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeShorten) }))
+                add(HhhlOverflowMenuAction(label = "扩写", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeExpand) }))
+                add(HhhlOverflowMenuAction(label = "翻译中文", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeTranslateZh) }))
+                add(HhhlOverflowMenuAction(label = "生成 CW", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeContentWarning) }))
+                add(HhhlOverflowMenuAction(label = "推荐话题", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeHashtags) }))
+                add(HhhlOverflowMenuAction(label = "推荐 @", icon = Icons.Filled.AutoAwesome, onClick = { onAiAction(AiTaskKind.ComposeMentionSuggestions) }))
+            },
         ),
     )
 }

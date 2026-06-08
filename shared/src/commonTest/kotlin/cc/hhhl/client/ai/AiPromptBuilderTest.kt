@@ -177,6 +177,24 @@ class AiPromptBuilderTest {
     }
 
     @Test
+    fun postReplyDraftPromptIncludesOriginalPostAndCurrentIntent() {
+        val prompt = AiPromptBuilder.build(
+            settings = AiSettings(enabled = true, apiKey = "key"),
+            kind = AiTaskKind.PostReplyDraft,
+            input = AiTaskInput(
+                text = "想表达我也遇到了这个问题",
+                noteAuthor = "Alice",
+                noteText = "新版时间线打开帖子详情后回复按钮不明显",
+            ),
+        )
+
+        assertTrue(prompt.user.contains("基于这条帖子内容"))
+        assertTrue(prompt.user.contains("作者：Alice"))
+        assertTrue(prompt.user.contains("帖子：\n新版时间线打开帖子详情后回复按钮不明显"))
+        assertTrue(prompt.user.contains("当前回复草稿/我的意图：\n想表达我也遇到了这个问题"))
+    }
+
+    @Test
     fun automationRuleSuggestionsPromptKeepsActionsConfirmationGated() {
         val prompt = AiPromptBuilder.build(
             settings = AiSettings(enabled = true, apiKey = "key"),

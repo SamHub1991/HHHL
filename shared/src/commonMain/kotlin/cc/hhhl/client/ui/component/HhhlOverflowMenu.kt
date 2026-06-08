@@ -425,7 +425,7 @@ private fun defaultOverflowMenuIcon(label: String): ImageVector {
         "复制链接" -> Icons.Outlined.Link
         "嵌入" -> Icons.Outlined.Code
         "分享" -> Icons.Outlined.Share
-        "AI 总结", "AI 回复草稿", "总结通知", "待处理", "优先级" -> Icons.Filled.AutoAwesome
+        "AI 总结", "AI 回复", "AI 回复草稿", "总结通知", "待处理", "优先级" -> Icons.Filled.AutoAwesome
         "收藏", "收藏/取消收藏", "收藏信息" -> Icons.Outlined.StarBorder
         "设为特别关心", "取消特别关心" -> Icons.Outlined.FavoriteBorder
         "回应", "回应处理中" -> Icons.Outlined.AddReaction

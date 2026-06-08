@@ -853,7 +853,7 @@ enum class NoteOverflowAction(val label: String) {
     Share("分享"),
     Quote("引用"),
     AiSummary("AI 总结"),
-    AiReplyDraft("AI 回复草稿"),
+    AiReplyDraft("AI 回复"),
     Favorite("收藏"),
     AddToClip("便签"),
     Edit("编辑"),
@@ -873,7 +873,7 @@ private val NoteOverflowAction.isAiAction: Boolean
 private val NoteOverflowAction.aiChildLabel: String
     get() = when (this) {
         NoteOverflowAction.AiSummary -> "总结"
-        NoteOverflowAction.AiReplyDraft -> "回复草稿"
+        NoteOverflowAction.AiReplyDraft -> "AI 回复"
         else -> label
     }
 

@@ -39,6 +39,17 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.8.4",
+            title = "HHHL 0.8.4 更新内容",
+            summary = "这版补齐回复编辑页里的 AI 回复入口，并让回复草稿生成更贴合原帖内容。",
+            highlights = listOf(
+                "在回复某条已加载帖子时，编辑页的更多菜单 AI 子菜单会显示“AI 回复”。",
+                "AI 回复草稿会结合对方原帖、作者、引用内容和当前输入框里的回复意图生成，不再只处理当前草稿。",
+                "统一帖子操作里的 AI 回复文案和图标映射，减少“回复草稿”和“AI 回复”混用。",
+                "补充编辑页操作和 AI prompt 回归测试，避免后续改动丢失原帖上下文。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.8.3",
             title = "HHHL 0.8.3 更新内容",
             summary = "这版重点修复聊天加载消息时可能导致界面无响应、ANR 或崩溃的问题。",

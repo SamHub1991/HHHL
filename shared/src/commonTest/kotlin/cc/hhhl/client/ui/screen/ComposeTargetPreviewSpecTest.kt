@@ -126,6 +126,22 @@ class ComposeTargetPreviewSpecTest {
     }
 
     @Test
+    fun secondaryActionsShowAiReplyForReplyDraftWithTarget() {
+        val actions = composeSecondaryActions(
+            cwEnabled = false,
+            pollEnabled = false,
+            replyTargetAvailable = true,
+            onToggleCw = {},
+            onTogglePoll = {},
+        )
+
+        assertEquals(
+            listOf("AI 回复", "润色", "结合最近帖子生成", "缩短", "扩写", "翻译中文", "生成 CW", "推荐话题", "推荐 @"),
+            actions.last().children.map { it.label },
+        )
+    }
+
+    @Test
     fun composeDangerousInlineActionsMoveToOverflow() {
         assertEquals(
             listOf("移除附件"),

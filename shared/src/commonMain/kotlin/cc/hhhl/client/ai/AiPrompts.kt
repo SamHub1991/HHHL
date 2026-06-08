@@ -55,7 +55,7 @@ object AiPromptBuilder {
                     input = compact,
                 )
                 AiTaskKind.PostReplyDraft -> postPrompt(
-                    instruction = "基于这条帖子写一个自然、礼貌、简洁的回复草稿。只输出回复正文，不要自动 @ 人。",
+                    instruction = "基于这条帖子内容写一个自然、礼貌、简洁的回复草稿。如果有当前草稿，把它当作我的回复意图或要点来保留和完善。只输出回复正文，不要自动 @ 人。",
                     input = compact,
                 )
                 AiTaskKind.ThreadSummary -> timelinePrompt(
@@ -181,6 +181,11 @@ object AiPromptBuilder {
                 appendLine()
                 appendLine("引用内容：")
                 appendLine(input.quotedNoteText)
+            }
+            if (input.text.isNotBlank()) {
+                appendLine()
+                appendLine("当前回复草稿/我的意图：")
+                appendLine(input.text)
             }
         }.trim()
     }
