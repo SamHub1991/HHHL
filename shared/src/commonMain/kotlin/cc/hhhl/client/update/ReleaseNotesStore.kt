@@ -39,6 +39,17 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.8.5",
+            title = "HHHL 0.8.5 更新内容",
+            summary = "这版修复聊天里图片和文件附件发送不完整的问题。",
+            highlights = listOf(
+                "私聊发送图片/文件时会把全部已上传附件 fileIds 一起提交，不再只发送第一张图或第一个文件。",
+                "聊天室和私聊发送附件统一兼容单附件 fileId 与多附件 fileIds，请求体更贴合 Sharkey 聊天接口。",
+                "连续选择多张图片或多个文件后，发送成功会正常清空聊天输入框附件状态。",
+                "补充聊天 API、仓库和状态层回归测试，覆盖私聊多附件和文件消息发送路径。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.8.4",
             title = "HHHL 0.8.4 更新内容",
             summary = "这版补齐回复编辑页里的 AI 回复入口，并让回复草稿生成更贴合原帖内容。",

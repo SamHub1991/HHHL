@@ -434,14 +434,17 @@ open class ChatRepository(
         userId: String,
         text: String,
         fileId: String? = null,
+        fileIds: List<String> = emptyList(),
         replyId: String? = null,
         quoteId: String? = null,
     ): ChatMessageRepositoryResult {
         val cleanUserId = userId.takeIf { it.isNotBlank() }
             ?: return ChatMessageRepositoryResult.Error("请选择用户")
         val cleanText = text.trim()
-        val cleanFileId = fileId?.trim()?.takeIf(String::isNotEmpty)
-        if (cleanText.isBlank() && cleanFileId == null) {
+        val cleanFileIds = (fileIds + listOfNotNull(fileId))
+            .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+            .distinct()
+        if (cleanText.isBlank() && cleanFileIds.isEmpty()) {
             return ChatMessageRepositoryResult.Error("请输入消息")
         }
         val token = tokenProvider()?.takeIf { it.isNotBlank() }
@@ -452,7 +455,8 @@ open class ChatRepository(
                 token = token,
                 userId = cleanUserId,
                 text = cleanText,
-                fileId = cleanFileId,
+                fileId = cleanFileIds.firstOrNull(),
+                fileIds = cleanFileIds,
                 replyId = replyId,
                 quoteId = quoteId,
             )

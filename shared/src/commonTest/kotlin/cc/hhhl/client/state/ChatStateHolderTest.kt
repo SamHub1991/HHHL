@@ -1233,6 +1233,46 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun sendUserMessageWithAttachedFilesPassesAllFileIdsAndClearsAttachment() = runTest {
+        val user = User(id = "user-1", displayName = "Bob", username = "bob", avatarInitial = "B")
+        val conversation = ChatUserConversation(user = user)
+        val file = sampleDriveFile()
+        val created = sampleMessage("message-created", text = "", roomId = "").copy(toUserId = user.id)
+        val calls = mutableListOf<SendCall>()
+        var uploadIndex = 0
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(emptyList()),
+                refreshUserMessagesResult = ChatMessageRepositoryResult.Success(emptyList()),
+                sendMessageResult = ChatMessageRepositoryResult.Created(created),
+                onSend = { userId, text, fileIds, replyId, quoteId ->
+                    calls.add(SendCall(userId, text, fileIds, replyId, quoteId))
+                },
+            ),
+            driveFileRepository = fakeDriveRepository {
+                DriveFileRepositoryResult.Success(
+                    if (uploadIndex++ == 0) file else file.copy(id = "file-2", name = "second.png"),
+                )
+            },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectUserConversation(conversation)
+        advanceUntilIdle()
+        holder.uploadMedia(sampleUpload())
+        holder.uploadMedia(sampleUpload().copy(fileName = "second.png"))
+        advanceUntilIdle()
+        holder.sendMessage()
+        advanceUntilIdle()
+
+        assertEquals(listOf(SendCall("user-1", "", listOf("file-1", "file-2"), null, null)), calls)
+        assertEquals(null, holder.state.value.attachedFile)
+        assertEquals(emptyList(), holder.state.value.attachments)
+        assertEquals(listOf(created), holder.state.value.messages)
+    }
+
+    @Test
     fun chatComposerAttachmentModelClassifiesNonImageFiles() {
         val file = sampleDriveFile().copy(
             id = "file-pdf",
@@ -3254,6 +3294,7 @@ class ChatStateHolderTest {
                     userId: String,
                     text: String,
                     fileId: String?,
+                    fileIds: List<String>,
                     replyId: String?,
                     quoteId: String?,
                 ): ChatMessageCreateResult = ChatMessageCreateResult.Success(sampleMessage("created-user"))
@@ -3481,6 +3522,18 @@ class ChatStateHolderTest {
                 quoteId: String?,
             ): ChatMessageRepositoryResult {
                 onSend(roomId, text, fileIds + listOfNotNull(fileId), replyId, quoteId)
+                return sendMessageResult
+            }
+
+            override suspend fun sendUserMessage(
+                userId: String,
+                text: String,
+                fileId: String?,
+                fileIds: List<String>,
+                replyId: String?,
+                quoteId: String?,
+            ): ChatMessageRepositoryResult {
+                onSend(userId, text, fileIds + listOfNotNull(fileId), replyId, quoteId)
                 return sendMessageResult
             }
 

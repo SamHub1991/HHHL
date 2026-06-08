@@ -336,6 +336,32 @@ class SharkeyChatApiTest {
     }
 
     @Test
+    fun createsUserMessageWithFileIds() = runTest {
+        val api = SharkeyChatApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                assertEquals("https://dc.hhhl.cc/api/chat/messages/create-to-user", request.url.toString())
+                val body = (request.body as TextContent).text
+                assertTrue(body.contains(""""i":"token-123""""))
+                assertTrue(body.contains(""""toUserId":"user-1""""))
+                assertTrue(body.contains(""""text":"多图""""))
+                assertTrue(body.contains(""""fileId":"file-1""""))
+                assertTrue(body.contains(""""fileIds":["file-1","file-2"]"""))
+                respondCreatedRoomMessage()
+            },
+        )
+
+        val result = api.createUserMessage(
+            token = "token-123",
+            userId = "user-1",
+            text = "多图",
+            fileIds = listOf("file-1", " file-2 ", "file-1"),
+        )
+
+        assertIs<ChatMessageCreateResult.Success>(result)
+    }
+
+    @Test
     fun reactsToChatMessageFromReactEndpoint() = runTest {
         val api = SharkeyChatApi(
             baseUrl = "https://dc.hhhl.cc/",

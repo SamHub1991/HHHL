@@ -116,6 +116,7 @@ interface ChatApi {
         userId: String,
         text: String,
         fileId: String? = null,
+        fileIds: List<String> = emptyList(),
         replyId: String? = null,
         quoteId: String? = null,
     ): ChatMessageCreateResult
@@ -655,18 +656,21 @@ class SharkeyChatApi(
         userId: String,
         text: String,
         fileId: String?,
+        fileIds: List<String>,
         replyId: String?,
         quoteId: String?,
     ): ChatMessageCreateResult {
         val cleanToken = token.trim()
         val cleanUserId = userId.trim()
         val cleanText = text.trim()
-        val cleanFileId = fileId?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanFileIds = (fileIds + listOfNotNull(fileId))
+            .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+            .distinct()
         if (cleanToken.isEmpty()) return ChatMessageCreateResult.Unauthorized
         if (cleanUserId.isEmpty()) {
             return ChatMessageCreateResult.ServerError(400, "请选择用户")
         }
-        if (cleanText.isBlank() && cleanFileId == null) {
+        if (cleanText.isBlank() && cleanFileIds.isEmpty()) {
             return ChatMessageCreateResult.ServerError(400, "请输入消息")
         }
 
@@ -678,7 +682,8 @@ class SharkeyChatApi(
                         i = cleanToken,
                         toUserId = cleanUserId,
                         text = cleanText.takeIf { it.isNotEmpty() },
-                        fileId = cleanFileId,
+                        fileId = cleanFileIds.firstOrNull(),
+                        fileIds = cleanFileIds.takeIf { it.size > 1 },
                         replyId = replyId?.trim()?.takeIf { it.isNotEmpty() },
                         quoteId = quoteId?.trim()?.takeIf { it.isNotEmpty() },
                     ),
@@ -1392,6 +1397,7 @@ private data class ChatCreateUserMessageRequest(
     val toUserId: String,
     val text: String? = null,
     val fileId: String? = null,
+    val fileIds: List<String>? = null,
     val replyId: String? = null,
     val quoteId: String? = null,
 )

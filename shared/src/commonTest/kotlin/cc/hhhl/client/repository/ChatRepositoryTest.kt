@@ -903,6 +903,32 @@ class ChatRepositoryTest {
     }
 
     @Test
+    fun sendUserMessagePassesMultipleFileIdsWhenProvided() = runTest {
+        val created = sampleMessage("message-created", text = "多图")
+        val calls = mutableListOf<CreateCall>()
+        val repository = ChatRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                createCalls = calls,
+                createResult = ChatMessageCreateResult.Success(created),
+                result = ChatRoomLoadResult.Success(emptyList()),
+            ),
+        )
+
+        val result = repository.sendUserMessage(
+            userId = "user-1",
+            text = "多图",
+            fileIds = listOf("file-1", " file-2 ", "file-1"),
+        )
+
+        assertIs<ChatMessageRepositoryResult.Created>(result)
+        assertEquals(
+            listOf(CreateCall("token-123", "user-1", "多图", "file-1", listOf("file-1", "file-2"))),
+            calls,
+        )
+    }
+
+    @Test
     fun reactToMessageCallsApiWithToken() = runTest {
         val calls = mutableListOf<ReactionCall>()
         val repository = ChatRepository(
@@ -1113,7 +1139,7 @@ class ChatRepositoryTest {
                     ChatRoomMutationResult.Success(sampleRoom("room-created", "membership-created"))
                 override suspend fun createRoomMessage(token: String, roomId: String, text: String, fileId: String?, fileIds: List<String>, replyId: String?, quoteId: String?) =
                     ChatMessageCreateResult.Success(sampleMessage("created"))
-                override suspend fun createUserMessage(token: String, userId: String, text: String, fileId: String?, replyId: String?, quoteId: String?) =
+                override suspend fun createUserMessage(token: String, userId: String, text: String, fileId: String?, fileIds: List<String>, replyId: String?, quoteId: String?) =
                     ChatMessageCreateResult.Success(sampleMessage("created"))
                 override suspend fun reactToMessage(token: String, messageId: String, reaction: String) =
                     ChatMessageReactionResult.Success
@@ -1256,9 +1282,13 @@ class ChatRepositoryTest {
                 userId: String,
                 text: String,
                 fileId: String?,
+                fileIds: List<String>,
                 replyId: String?,
                 quoteId: String?,
-            ): ChatMessageCreateResult = createResult
+            ): ChatMessageCreateResult {
+                createCalls.add(CreateCall(token, userId, text, fileId, fileIds))
+                return createResult
+            }
 
             override suspend fun deleteMessage(
                 token: String,

@@ -2469,12 +2469,13 @@ private class RecordingChatRepository : ChatRepository(tokenProvider = { "token"
         userId: String,
         text: String,
         fileId: String?,
+        fileIds: List<String>,
         replyId: String?,
         quoteId: String?,
     ): ChatMessageRepositoryResult {
         lastUserId = userId
         lastText = text
-        lastFileIds = listOfNotNull(fileId)
+        lastFileIds = fileIds + listOfNotNull(fileId)
         lastReplyId = replyId
         lastQuoteId = quoteId
         return ChatMessageRepositoryResult.Created(fakeMessage("", text))

@@ -2172,7 +2172,7 @@ class ChatStateHolder(
                     result = repository.sendUserMessage(
                         userId = userConversation.user.id,
                         text = text,
-                        fileId = fileIds.firstOrNull(),
+                        fileIds = fileIds,
                         replyId = current.replyingMessage?.messageId,
                         quoteId = current.quotedMessage?.messageId,
                     ),
