@@ -328,6 +328,7 @@ import cc.hhhl.client.ui.screen.TimelineScreen
 import cc.hhhl.client.ui.screen.UserListScreen
 import cc.hhhl.client.ui.screen.UserSocialScreen
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -3444,6 +3445,7 @@ private fun MainShell(
             unreadStore = chatUnreadStore,
             currentUserProvider = { accountUser?.toDomainUser(host = currentAccountHost) },
             scope = appScope,
+            workerDispatcher = Dispatchers.Default,
         )
     }
     val chatState by chatStateHolder.state.collectAsState()

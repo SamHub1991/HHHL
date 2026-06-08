@@ -26,8 +26,8 @@ android {
         applicationId = "cc.hhhl.client"
         minSdk = 26
         targetSdk = 35
-        versionCode = 23
-        versionName = "0.8.2"
+        versionCode = 24
+        versionName = "0.8.3"
     }
 
     compileOptions {

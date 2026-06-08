@@ -39,6 +39,18 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.8.3",
+            title = "HHHL 0.8.3 更新内容",
+            summary = "这版重点修复聊天加载消息时可能导致界面无响应、ANR 或崩溃的问题。",
+            highlights = listOf(
+                "聊天消息加载、缓存读写和消息合并改为后台 worker 执行，避免重活阻塞主界面线程。",
+                "聊天后台任务增加串行保护，减少多路加载同时改状态带来的 ANR 和竞态风险。",
+                "Android 聊天消息缓存改为按会话拆分存储，并移除旧的大体积单字段缓存，降低 SharedPreferences 锁等待和 GC 压力。",
+                "修复进入聊天详情时初始滚动位置可能误触发连续加载更早消息的问题。",
+                "发布前已通过 shared 全量单测、Android Debug 编译、Debug 模拟器安装和 Release 签名校验。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.8.2",
             title = "HHHL 0.8.2 更新内容",
             summary = "这版优化时间线新内容提示的位置，减少顶部标签栏拥挤。",

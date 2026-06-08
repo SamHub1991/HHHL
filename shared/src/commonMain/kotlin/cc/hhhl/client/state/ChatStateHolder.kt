@@ -37,11 +37,15 @@ import cc.hhhl.client.repository.UserRelationshipRepository
 import cc.hhhl.client.repository.UserRelationshipRepositoryResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 data class ChatUiState(
@@ -153,6 +157,7 @@ class ChatStateHolder(
     private val accountIdProvider: () -> String? = { null },
     private val unreadStore: ChatUnreadStore = NoopChatUnreadStore,
     private val currentUserProvider: () -> User? = { null },
+    private val workerDispatcher: CoroutineDispatcher? = null,
 ) {
     private val mutableState = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = mutableState
@@ -168,6 +173,7 @@ class ChatStateHolder(
     private var specialCareRoomLatestMessageIds: Map<String, String> = emptyMap()
     private var roomMessageRequestGenerations: Map<String, Int> = emptyMap()
     private var userMessageRequestGenerations: Map<String, Int> = emptyMap()
+    private val workerMutex = Mutex()
 
     private fun currentAccountId(): String? = accountIdProvider()?.trim()?.takeIf { it.isNotEmpty() }
 
@@ -222,6 +228,17 @@ class ChatStateHolder(
 
     private fun saveLocalUnreadSnapshot(snapshot: ChatUnreadSnapshot) {
         currentAccountId()?.let { accountId -> unreadStore.save(accountId, snapshot) }
+    }
+
+    private suspend fun <T> runChatWorker(block: suspend () -> T): T {
+        val dispatcher = workerDispatcher ?: return block()
+        return workerMutex.withLock {
+            withContext(dispatcher) { block() }
+        }
+    }
+
+    private fun launchChatWorker(block: suspend () -> Unit): Job {
+        return scope.launch { runChatWorker(block) }
     }
 
     private fun clearLocalRoomUnread(roomId: String) {
@@ -489,7 +506,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             val roomResult = repository.refresh()
             applyResult(roomResult, loadingMore = false)
             if (roomResult is ChatRepositoryResult.Success) {
@@ -508,7 +525,7 @@ class ChatStateHolder(
         mutableState.update {
             it.copy(isLoadingRoomExtras = true, roomManagementMessage = null, requiresRelogin = false)
         }
-        scope.launch {
+        launchChatWorker {
             val ownedResult = repository.refreshOwnedRooms()
             val inboxResult = repository.refreshInvitationInbox()
             val outboxResult = repository.refreshInvitationOutbox()
@@ -520,7 +537,7 @@ class ChatStateHolder(
         val current = state.value
         if (isRefreshingUserConversationsQuietly || !current.chatAvailable || current.isLoading) return
         isRefreshingUserConversationsQuietly = true
-        scope.launch {
+        launchChatWorker {
             try {
                 applyUserConversationResult(
                     result = resolveUserConversationAttentionReferences(repository.refreshUserConversations()),
@@ -552,7 +569,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             applyResult(repository.loadMore(current.rooms), loadingMore = true)
         }
     }
@@ -713,7 +730,7 @@ class ChatStateHolder(
                 requiresRelogin = false,
             )
         }
-        scope.launch {
+        launchChatWorker {
             repository.deleteCachedUserMessages(cleanUserId)
         }
     }
@@ -821,7 +838,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             val shownRoom = when (val showResult = repository.showRoom(cleanRoomId)) {
                 is ChatRoomMutationRepositoryResult.RoomSaved -> showResult.room
                 is ChatRoomMutationRepositoryResult.RoomMessagesCleared,
@@ -830,15 +847,15 @@ class ChatStateHolder(
                 is ChatRoomMutationRepositoryResult.ActionCompleted -> placeholderRoom(cleanRoomId)
                 ChatRoomMutationRepositoryResult.Unauthorized -> {
                     completeOpenRoomByIdWithError("登录已失效，请重新登录", requiresRelogin = true)
-                    return@launch
+                    return@launchChatWorker
                 }
                 is ChatRoomMutationRepositoryResult.ValidationError -> {
                     completeOpenRoomByIdWithError(showResult.message)
-                    return@launch
+                    return@launchChatWorker
                 }
                 is ChatRoomMutationRepositoryResult.Error -> {
                     completeOpenRoomByIdWithError(showResult.message)
-                    return@launch
+                    return@launchChatWorker
                 }
             }
 
@@ -865,7 +882,7 @@ class ChatStateHolder(
                     }
                 }
             }
-            if (!canOpen) return@launch
+            if (!canOpen) return@launchChatWorker
 
             val refreshedRoom = when (val refreshResult = repository.refresh()) {
                 is ChatRepositoryResult.Success -> {
@@ -898,7 +915,7 @@ class ChatStateHolder(
 
     private fun restoreCachedRoomMessages(roomId: String) {
         val requestGeneration = roomMessageRequestGeneration(roomId)
-        scope.launch {
+        launchChatWorker {
             applyCachedRoomMessageResult(
                 roomId = roomId,
                 result = repository.restoreCachedMessages(roomId),
@@ -909,7 +926,7 @@ class ChatStateHolder(
 
     private fun restoreCachedUserMessages(userId: String) {
         val requestGeneration = userMessageRequestGeneration(userId)
-        scope.launch {
+        launchChatWorker {
             applyCachedUserMessageResult(
                 userId = userId,
                 result = repository.restoreCachedUserMessages(userId),
@@ -996,7 +1013,7 @@ class ChatStateHolder(
             return
         }
         isRefreshingRoomsQuietly = true
-        scope.launch {
+        launchChatWorker {
             try {
                 applyBackgroundRoomRefreshResult(
                     result = repository.refresh(),
@@ -1023,7 +1040,7 @@ class ChatStateHolder(
             return
         }
         isRefreshingMessagesQuietly = true
-        scope.launch {
+        launchChatWorker {
             try {
                 if (roomId != null) {
                     val requestGeneration = roomMessageRequestGeneration(roomId)
@@ -1059,7 +1076,7 @@ class ChatStateHolder(
             return
         }
         isRefreshingSpecialCareMessagesQuietly = true
-        scope.launch {
+        launchChatWorker {
             try {
                 when (val result = loadRoomsForSpecialCareScan()) {
                     is ChatRepositoryResult.Success -> {
@@ -1133,7 +1150,7 @@ class ChatStateHolder(
         val cleanDirectUserId = directUserId?.trim()?.takeIf { it.isNotEmpty() }
         val cleanRoomId = message.roomId.trim().takeIf { it.isNotEmpty() }
         if (cleanDirectUserId == null && cleanRoomId == null) return
-        scope.launch {
+        launchChatWorker {
             if (cleanDirectUserId != null) {
                 repository.cacheUserMessage(cleanDirectUserId, message)
             } else if (cleanRoomId != null) {
@@ -1278,7 +1295,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             if (room != null) {
                 val requestGeneration = roomMessageRequestGeneration(room.id)
                 applyRoomMessageResult(
@@ -1321,7 +1338,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             if (room != null) {
                 val requestGeneration = roomMessageRequestGeneration(room.id)
                 applyRoomMessageResult(
@@ -1378,7 +1395,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             try {
                 applyMessageSearchResult(
                     query = cleanQuery,
@@ -1449,7 +1466,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             val result = try {
                 withTimeoutOrNull(CHAT_USER_SEARCH_TIMEOUT_MS) {
                     repository.searchUsers(cleanQuery)
@@ -1487,7 +1504,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             try {
                 applyMessageSearchResult(
                     query = cleanQuery,
@@ -1547,7 +1564,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             val result = repository.refreshMembers(room.id)
             applyMemberResult(
                 roomId = room.id,
@@ -1578,7 +1595,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             applyMemberResult(
                 roomId = room.id,
                 result = repository.loadMoreMembers(room.id, current.members),
@@ -1606,7 +1623,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             applyRoomMutationResult(
                 result = repository.createRoom(name, description, joinMode),
                 selectSavedRoom = false,
@@ -1624,7 +1641,7 @@ class ChatStateHolder(
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
         }
-        scope.launch {
+        launchChatWorker {
             applyRoomMutationResult(
                 result = repository.joinRoom(invitation.room.id),
                 successMessage = "已加入聊天室",
@@ -1642,7 +1659,7 @@ class ChatStateHolder(
         mutableState.update {
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
         }
-        scope.launch {
+        launchChatWorker {
             applyRoomMutationResult(
                 result = repository.ignoreInvitation(roomId),
                 successMessage = "已忽略邀请",
@@ -1672,7 +1689,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             applyRoomMutationResult(
                 result = repository.updateRoom(room.id, name, description, joinMode),
                 selectSavedRoom = true,
@@ -1698,7 +1715,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             applyRoomMutationResult(
                 result = repository.updateRoomManagement(room.id, messageRetentionDays),
                 selectSavedRoom = true,
@@ -1723,7 +1740,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             applyRoomMutationResult(
                 result = repository.inviteRoomMember(room.id, userId),
                 successMessage = "已发送邀请",
@@ -1748,7 +1765,7 @@ class ChatStateHolder(
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
         }
 
-        scope.launch {
+        launchChatWorker {
             applyRoomMutationResult(
                 result = repository.leaveRoom(cleanRoomId),
                 successMessage = "已退出聊天室",
@@ -1778,7 +1795,7 @@ class ChatStateHolder(
             it.copy(isManagingRoom = true, roomManagementMessage = null, messageErrorMessage = null, requiresRelogin = false)
         }
 
-        scope.launch {
+        launchChatWorker {
             applyRoomMutationResult(
                 result = repository.deleteAllRoomMessages(cleanRoomId),
                 successMessage = "聊天室消息已清空",
@@ -1798,7 +1815,7 @@ class ChatStateHolder(
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
         }
 
-        scope.launch {
+        launchChatWorker {
             applyRoomMutationResult(
                 result = repository.deleteRoom(cleanRoomId),
                 successMessage = "聊天室已删除",
@@ -1823,7 +1840,7 @@ class ChatStateHolder(
             it.copy(isManagingRoom = true, roomManagementMessage = null, requiresRelogin = false)
         }
 
-        scope.launch {
+        launchChatWorker {
             applyRoomMutationResult(
                 result = repository.muteRoom(cleanRoomId, muted),
                 successMessage = if (muted) "聊天室已静音" else "已取消静音",
@@ -1913,7 +1930,7 @@ class ChatStateHolder(
         mutableState.update {
             it.copy(messageErrorMessage = null, requiresRelogin = false)
         }
-        scope.launch {
+        launchChatWorker {
             val comment = "https://dc.hhhl.cc/chat/messages/${message.id}\n-----\n客户端举报聊天消息"
             when (val result = reportRepository.reportUser(message.fromUser.id, comment)) {
                 UserRelationshipRepositoryResult.Success -> mutableState.update {
@@ -1962,7 +1979,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             fun ChatUiState.canApplyUploadResult(): Boolean {
                 return mediaUploadRequestId == uploadRequestId &&
                     (!isContextBound || isCurrentMessageActionContext(roomId, userId))
@@ -2136,7 +2153,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             if (room != null) {
                 applyRoomMessageResult(
                     roomId = room.id,
@@ -2212,7 +2229,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             when (
                 val result = repository.deleteMessage(
                     messageId = cleanMessageId,
@@ -2282,7 +2299,7 @@ class ChatStateHolder(
             )
         }
 
-        scope.launch {
+        launchChatWorker {
             val result = if (react) {
                 repository.reactToMessage(messageId, reaction)
             } else {
@@ -3402,7 +3419,7 @@ class ChatStateHolder(
             }
             is ChatStreamingEvent.MessageReceived -> {
                 if (event.message.roomId == roomId) {
-                    scope.launch { repository.cacheRoomMessage(roomId, event.message) }
+                    launchChatWorker { repository.cacheRoomMessage(roomId, event.message) }
                 }
                 mutableState.update {
                     if (it.selectedRoom?.id != roomId || event.message.roomId != roomId) {
@@ -3475,7 +3492,7 @@ class ChatStateHolder(
             }
             is ChatStreamingEvent.MessageReceived -> {
                 if (event.message.belongsToUserConversation(userId)) {
-                    scope.launch { repository.cacheUserMessage(userId, event.message) }
+                    launchChatWorker { repository.cacheUserMessage(userId, event.message) }
                     hiddenUserConversationLatestMessageIds = hiddenUserConversationLatestMessageIds - userId
                 }
                 mutableState.update {

@@ -2015,6 +2015,7 @@ private fun ChatDetailScreen(
             var scrollToLatestAfterSend by remember(conversationKey) { mutableStateOf(false) }
             var lastOlderLoadAnchorId by remember(conversationKey) { mutableStateOf<String?>(null) }
             var pendingOlderLoadAnchor by remember(conversationKey) { mutableStateOf<ChatOlderLoadAnchor?>(null) }
+            var olderAutoLoadArmed by remember(conversationKey) { mutableStateOf(false) }
             val olderLoaderItems = if (!state.messagesEndReached) 1 else 0
             val latestMessageIndex = olderLoaderItems + visibleMessages.lastIndex
             val showJumpToLatest by remember(messageListState, latestMessageIndex) {
@@ -2061,6 +2062,7 @@ private fun ChatDetailScreen(
 
                 if (shouldAutoScroll) {
                     messageListState.scrollToItem(targetIndex)
+                    olderAutoLoadArmed = true
                     scrollToLatestAfterSend = false
                 }
 
@@ -2078,6 +2080,7 @@ private fun ChatDetailScreen(
                         index = olderLoaderItems + targetIndexInMessages,
                         scrollOffset = messageListState.centeredChatJumpOffset(),
                     )
+                    olderAutoLoadArmed = true
                     onUnreadJumpHandled()
                 }
             }
@@ -2093,6 +2096,7 @@ private fun ChatDetailScreen(
                         index = olderLoaderItems + targetIndexInMessages,
                         scrollOffset = messageListState.centeredChatJumpOffset(),
                     )
+                    olderAutoLoadArmed = true
                     pendingMessageJumpId = null
                 } else if (!state.messagesEndReached && !state.isLoadingOlderMessages && !state.isLoadingMessages) {
                     pendingOlderLoadAnchor = messageListState.currentOlderLoadAnchor(
@@ -2115,7 +2119,8 @@ private fun ChatDetailScreen(
                     state.messagesEndReached ||
                     state.isLoadingOlderMessages ||
                     state.isLoadingMessages ||
-                    pendingOlderLoadAnchor != null
+                    pendingOlderLoadAnchor != null ||
+                    !olderAutoLoadArmed
                 ) {
                     return@LaunchedEffect
                 }
@@ -2146,6 +2151,7 @@ private fun ChatDetailScreen(
                     index = olderLoaderItems + anchorIndexInMessages,
                     scrollOffset = anchor.scrollOffset,
                 )
+                olderAutoLoadArmed = true
                 pendingOlderLoadAnchor = null
             }
             LaunchedEffect(
@@ -2167,6 +2173,7 @@ private fun ChatDetailScreen(
                         index = olderLoaderItems + targetIndexInMessages,
                         scrollOffset = messageListState.centeredChatJumpOffset(),
                     )
+                    olderAutoLoadArmed = true
                     onSpecialCareJumpHandled()
                 } else if (!state.messagesEndReached && !state.isLoadingOlderMessages && !state.isLoadingMessages) {
                     onLoadOlderMessages()
@@ -2197,6 +2204,7 @@ private fun ChatDetailScreen(
                         index = olderLoaderItems + targetIndexInMessages,
                         scrollOffset = messageListState.centeredChatJumpOffset(),
                     )
+                    olderAutoLoadArmed = true
                     pendingQuoteJump = null
                 } else if (!state.messagesEndReached && !state.isLoadingOlderMessages && !state.isLoadingMessages) {
                     onLoadOlderMessages()
