@@ -59,7 +59,6 @@ import cc.hhhl.client.theme.LocalHhhlColors
 import cc.hhhl.client.ui.component.AiResultCommonActionChips
 import cc.hhhl.client.ui.component.AiResultPanel
 import cc.hhhl.client.ui.component.AutoLoadMoreEffect
-import cc.hhhl.client.ui.component.HhhlActionChip
 import cc.hhhl.client.ui.component.HhhlDivider
 import cc.hhhl.client.ui.component.HhhlAnimatedSegmentedControl
 import cc.hhhl.client.ui.component.HhhlOverflowMenu
@@ -233,8 +232,6 @@ fun TimelineScreen(
                 showTrends = showTrends,
                 hasTrendTab = hasTrendTab,
                 toolbarActions = toolbarActions,
-                newNoteCount = selectedTabState.newNoteCount,
-                onJumpToNewNotes = jumpToNewNotes,
                 onTimelineSelected = onTimelineSelected,
                 onTrendSelected = onTrendSelected,
             )
@@ -375,6 +372,15 @@ fun TimelineScreen(
                 .align(Alignment.BottomEnd)
                 .padding(end = 20.dp, bottom = 20.dp),
         )
+        if (jumpToNewNotes != null && selectedTabState.newNoteCount > 0) {
+            TimelineNewNotesFloatingButton(
+                newNoteCount = selectedTabState.newNoteCount,
+                onClick = jumpToNewNotes,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 58.dp, end = 20.dp),
+            )
+        }
     }
 }
 
@@ -386,8 +392,6 @@ private fun TimelineTabStrip(
     showTrends: Boolean,
     hasTrendTab: Boolean,
     toolbarActions: List<HhhlOverflowMenuAction>,
-    newNoteCount: Int,
-    onJumpToNewNotes: (() -> Unit)?,
     onTimelineSelected: (TimelineKind) -> Unit,
     onTrendSelected: () -> Unit,
 ) {
@@ -432,13 +436,6 @@ private fun TimelineTabStrip(
                 .weight(1f),
             itemBaseHeight = 32.dp,
         )
-        if (onJumpToNewNotes != null && newNoteCount > 0) {
-            HhhlActionChip(
-                label = "新 $newNoteCount",
-                emphasized = true,
-                onClick = onJumpToNewNotes,
-            )
-        }
         if (overflowActions.isNotEmpty()) {
             HhhlOverflowMenu(
                 actions = overflowActions,
@@ -453,6 +450,46 @@ private fun TimelineTabStrip(
                 buttonElevation = 0.dp,
             )
         }
+    }
+}
+
+@Composable
+private fun TimelineNewNotesFloatingButton(
+    newNoteCount: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalHhhlColors.current
+    val shape = RoundedCornerShape(999.dp)
+    Box(
+        modifier = modifier
+            .shadow(
+                elevation = 3.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = colors.shadow.copy(alpha = 0.12f),
+                spotColor = colors.shadow.copy(alpha = 0.18f),
+            )
+            .clip(shape)
+            .background(colors.accent.copy(alpha = 0.12f))
+            .border(
+                width = 1.dp,
+                color = colors.accent.copy(alpha = 0.34f),
+                shape = shape,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 5.dp)
+            .semantics { contentDescription = "跳转到 $newNoteCount 条新内容" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "新 $newNoteCount",
+            color = colors.accent,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

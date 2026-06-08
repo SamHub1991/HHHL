@@ -39,6 +39,16 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.8.2",
+            title = "HHHL 0.8.2 更新内容",
+            summary = "这版优化时间线新内容提示的位置，减少顶部标签栏拥挤。",
+            highlights = listOf(
+                "时间线顶部的新内容入口从 segmented 标签行移出，避免“新 N”按钮挤占首页、社交、本地等标签文本。",
+                "新内容提示改为右上方半透明悬浮胶囊按钮，视觉更轻，也不会增加顶部行高。",
+                "点击新内容悬浮按钮仍会跳转到第一条新内容，并保持原有的新内容标记消费逻辑。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.8.1",
             title = "HHHL 0.8.1 更新内容",
             summary = "这版修复自动化规则里“过滤自己发的消息”开关在部分动作下无法关闭的问题。",
