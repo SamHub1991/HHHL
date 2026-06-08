@@ -1117,7 +1117,6 @@ private fun AutomationRule.withDefaultRiskControls(): AutomationRule {
     val hasLoopRiskAction = actions.any { action -> action.type.isLoopRiskAction() || action.mentionSender }
     val hasWebhookCallbackAction = actions.any { action -> action.type.isWebhookCallbackAction() }
     return copy(
-        ignoreOwnMessages = ignoreOwnMessages || hasLoopRiskAction,
         cooldownSeconds = when {
             cooldownSeconds > 0 -> cooldownSeconds
             hasLoopRiskAction -> DEFAULT_RISKY_ACTION_COOLDOWN_SECONDS

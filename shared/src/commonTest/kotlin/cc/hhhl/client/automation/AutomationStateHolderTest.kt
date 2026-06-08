@@ -728,6 +728,42 @@ class AutomationStateHolderTest {
     }
 
     @Test
+    fun canDisableIgnoreOwnMessagesForLoopRiskRule() = runTest {
+        val store = MemoryAutomationStore(
+            AutomationSnapshot(
+                rules = listOf(
+                    AutomationRule(
+                        id = "rule-loop-risk",
+                        name = "AI reply",
+                        trigger = AutomationTrigger.ChatMessage,
+                        ignoreOwnMessages = true,
+                        actions = listOf(
+                            AutomationAction(
+                                id = "action-ai-reply",
+                                type = AutomationActionType.AiReplyToChat,
+                                bodyTemplate = "按上下文回复",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val holder = AutomationStateHolder(
+            store = store,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+        holder.restore()
+
+        holder.updateRuleIgnoreOwnMessages("rule-loop-risk", false)
+
+        assertEquals(false, holder.state.value.rules.single().ignoreOwnMessages)
+        assertEquals(false, store.lastSnapshot.rules.single().ignoreOwnMessages)
+        assertEquals(30, holder.state.value.rules.single().cooldownSeconds)
+        assertEquals(2, holder.state.value.rules.single().maxExecutionsPer30Seconds)
+    }
+
+    @Test
     fun emitIgnoresAiGeneratedEventToPreventLoops() = runTest {
         val store = MemoryAutomationStore(
             AutomationSnapshot(

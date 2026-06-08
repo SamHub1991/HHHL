@@ -39,6 +39,16 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.8.1",
+            title = "HHHL 0.8.1 更新内容",
+            summary = "这版修复自动化规则里“过滤自己发的消息”开关在部分动作下无法关闭的问题。",
+            highlights = listOf(
+                "修复带 AI 回复、转发、发帖、@ 等动作的自动化规则中，“过滤自己发的消息”关闭后又被保存逻辑改回开启的问题。",
+                "保留高风险动作的默认冷却时间和频率限制，关闭自己消息过滤时仍然会保留基础防循环保护。",
+                "补充自动化规则回归测试，避免后续风险控制清洗再次覆盖用户手动开关选择。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.8.0",
             title = "HHHL 0.8.0 更新内容",
             summary = "这版重做时间线、聊天、发现、通知和设置等核心界面，并把 AI 自动化扩展到生图、图生图和图片参数识别。",
