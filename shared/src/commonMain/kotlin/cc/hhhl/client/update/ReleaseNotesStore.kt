@@ -39,6 +39,16 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.8.6",
+            title = "HHHL 0.8.6 更新内容",
+            summary = "这版修复聊天室渲染带颜色富文本时可能崩溃的问题。",
+            highlights = listOf(
+                "修复聊天室消息里 MFM/富文本颜色样式触发的 ArrayIndexOutOfBoundsException。",
+                "颜色解析改为按 RRGGBB/RRGGBBAA 通道构造 Compose Color，避免生成无效颜色空间。",
+                "补充富文本颜色回归测试，覆盖后续透明度 copy 的崩溃路径。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.8.5",
             title = "HHHL 0.8.5 更新内容",
             summary = "这版修复聊天里图片和文件附件发送不完整的问题。",

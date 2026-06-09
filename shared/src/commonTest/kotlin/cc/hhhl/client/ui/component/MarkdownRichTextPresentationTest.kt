@@ -258,6 +258,28 @@ class MarkdownRichTextPresentationTest {
     }
 
     @Test
+    fun mfmColorsUseValidComposeColorValues() {
+        val red = requireNotNull("ff0000".toComposeColor())
+        val shortGreen = requireNotNull("#0f08".toComposeColor())
+        val translucentGreen = requireNotNull("00ff0088".toComposeColor())
+
+        red.copy(alpha = 0.42f)
+        shortGreen.copy(alpha = 0.42f)
+        translucentGreen.copy(alpha = 0.42f)
+
+        assertEquals(1f, red.red)
+        assertEquals(0f, red.green)
+        assertEquals(0f, red.blue)
+        assertEquals(1f, red.alpha)
+        assertEquals(0f, shortGreen.red)
+        assertEquals(1f, shortGreen.green)
+        assertEquals(0f, shortGreen.blue)
+        assertEquals(0x88 / 255f, shortGreen.alpha)
+        assertEquals(0x88 / 255f, translucentGreen.alpha)
+        assertEquals(null, "not-a-color".toComposeColor())
+    }
+
+    @Test
     fun parsesMfmUnixtimeAsCompactDateLabel() {
         val seconds = assertIs<InlineMarkdownSpan.Text>(parseInlineMarkdown("$[unixtime 946728000]").single())
         val millis = assertIs<InlineMarkdownSpan.Text>(parseInlineMarkdown("$[unixtime 946728000000]").single())

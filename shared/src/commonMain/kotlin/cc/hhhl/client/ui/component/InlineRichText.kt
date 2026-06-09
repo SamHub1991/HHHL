@@ -2614,10 +2614,20 @@ private fun String.normalizeMfmColor(): String? {
     }.lowercase()
 }
 
-private fun String.toComposeColor(): Color? {
+internal fun String.toComposeColor(): Color? {
     val clean = normalizeMfmColor() ?: return null
-    val argb = if (clean.length == 6) "FF$clean" else clean
-    return runCatching { Color(argb.toLong(16).toULong()) }.getOrNull()
+    return runCatching {
+        val red = clean.substring(0, 2).toInt(16)
+        val green = clean.substring(2, 4).toInt(16)
+        val blue = clean.substring(4, 6).toInt(16)
+        val alpha = if (clean.length == 8) clean.substring(6, 8).toInt(16) else 0xFF
+        Color(
+            red = red / 255f,
+            green = green / 255f,
+            blue = blue / 255f,
+            alpha = alpha / 255f,
+        )
+    }.getOrNull()
 }
 
 private fun String.toMfmFloat(min: Float, max: Float): Float? {
