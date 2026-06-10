@@ -126,6 +126,7 @@ class RealtimeNotificationService : Service() {
                             }
                             if (!handledRealtime) syncRealtimeChatEvent(debounce = true)
                         }
+                        is MainStreamingEvent.ChatMessageDeleted -> syncRealtimeChatEvent(debounce = true)
                         MainStreamingEvent.NewChatMessage -> syncRealtimeChatEvent()
                         is MainStreamingEvent.TimelineNote -> syncTimelineEvent(event)
                         MainStreamingEvent.Unauthorized -> unauthorized = true
@@ -211,6 +212,7 @@ class RealtimeNotificationService : Service() {
                                 )
                                 if (!handledRealtime) syncRealtimeChatEvent(debounce = true)
                             }
+                            is ChatStreamingEvent.MessageDeleted -> syncRealtimeChatEvent(debounce = true)
                             ChatStreamingEvent.Unauthorized -> unauthorized = true
                             ChatStreamingEvent.Connecting,
                             ChatStreamingEvent.Connected,

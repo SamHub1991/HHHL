@@ -62,6 +62,11 @@ sealed interface MainStreamingEvent {
         val message: ChatMessage,
     ) : MainStreamingEvent
 
+    data class ChatMessageDeleted(
+        val messageId: String,
+        val source: ChatStreamingMessageSource = ChatStreamingMessageSource(),
+    ) : MainStreamingEvent
+
     data class TimelineNote(
         val kind: TimelineKind,
         val note: Note? = null,
@@ -238,6 +243,16 @@ internal fun parseSharkeyMainStreamingEvents(
     }
     if (channelId.isNotBlank() && channelId != MAIN_STREAM_ID) return emptyList()
     val notification = body.obj("body")?.toStreamingNotificationOrNull(json)
+    if (eventType.isChatStreamingMessageDeletedEventType()) {
+        val messageElement = body["body"] ?: return listOf(MainStreamingEvent.NewChatMessage)
+        val source = messageElement.chatMessageDeletionSource()
+        val messageIds = messageElement.chatMessageDeletionIds()
+        return if (messageIds.isEmpty()) {
+            listOf(MainStreamingEvent.NewChatMessage)
+        } else {
+            messageIds.map { messageId -> MainStreamingEvent.ChatMessageDeleted(messageId = messageId, source = source) }
+        }
+    }
     return when (eventType) {
         "notification" -> listOf(
             notification?.let { MainStreamingEvent.NotificationReceived(it) }

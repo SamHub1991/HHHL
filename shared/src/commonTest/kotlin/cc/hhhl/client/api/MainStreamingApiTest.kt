@@ -150,6 +150,29 @@ class MainStreamingApiTest {
     }
 
     @Test
+    fun parsesMainChatMessageDeletedBodyWhenProvided() {
+        val event = parseSharkeyMainStreamingEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "main",
+                "type": "chatMessageDeleted",
+                "body": {
+                  "messageId": "chat-message-1",
+                  "roomId": "room-1"
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val deletedEvent = assertIs<MainStreamingEvent.ChatMessageDeleted>(event)
+        assertEquals("chat-message-1", deletedEvent.messageId)
+        assertEquals("room-1", deletedEvent.source.roomId)
+    }
+
+    @Test
     fun parsesMainWrappedChatMessageBodyWhenProvided() {
         val event = parseSharkeyMainStreamingEvent(
             """

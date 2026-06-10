@@ -67,6 +67,11 @@ sealed interface ChatStreamingEvent {
         val source: ChatStreamingMessageSource = ChatStreamingMessageSource(),
     ) : ChatStreamingEvent
 
+    data class MessageDeleted(
+        val messageId: String,
+        val source: ChatStreamingMessageSource = ChatStreamingMessageSource(),
+    ) : ChatStreamingEvent
+
     data class Error(val message: String) : ChatStreamingEvent
 
     data object Closed : ChatStreamingEvent
@@ -306,13 +311,19 @@ internal fun parseSharkeyStreamingChatEvent(
 internal fun parseSharkeyStreamingChatEvents(
     raw: String,
     json: Json = defaultChatStreamingJson,
-): List<ChatStreamingEvent.MessageReceived> {
+): List<ChatStreamingEvent> {
     val root = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return emptyList()
     if (root.string("type") != "channel") return emptyList()
     val body = root.obj("body") ?: return emptyList()
-    if (!body.string("type").isChatStreamingMessageEventType()) return emptyList()
+    val eventType = body.string("type")
     val source = body.string("id").toChatStreamingMessageSource()
     val messageElement = body["body"] ?: return emptyList()
+    if (eventType.isChatStreamingMessageDeletedEventType()) {
+        val resolvedSource = messageElement.chatMessageDeletionSource(source)
+        return messageElement.chatMessageDeletionIds()
+            .map { messageId -> ChatStreamingEvent.MessageDeleted(messageId = messageId, source = resolvedSource) }
+    }
+    if (!eventType.isChatStreamingMessageEventType()) return emptyList()
     return messageElement.chatMessageElements()
         .mapNotNull { element -> parseSharkeyStreamingChatMessage(element, source, json) }
         .map { message -> ChatStreamingEvent.MessageReceived(message = message, source = source) }
@@ -338,6 +349,80 @@ private fun JsonElement.chatMessageElements(): List<JsonElement> {
     }
 }
 
+internal fun JsonElement.chatMessageDeletionIds(): List<String> {
+    return when (this) {
+        is JsonArray -> flatMap { element -> element.chatMessageDeletionIds() }
+        is JsonObject -> {
+            val directIds = listOfNotNull(
+                string("id"),
+                string("messageId"),
+                string("chatMessageId"),
+                string("messagingMessageId"),
+                string("deletedMessageId"),
+                string("deletedChatMessageId"),
+            )
+            val nestedIds = listOfNotNull(
+                this["message"],
+                this["chatMessage"],
+                this["messagingMessage"],
+                this["deletedMessage"],
+                this["deletedChatMessage"],
+                this["deletedMessagingMessage"],
+            ).flatMap { element -> element.chatMessageDeletionIds() }
+            val arrayIds = listOfNotNull(
+                this["ids"],
+                this["messageIds"],
+                this["chatMessageIds"],
+                this["messagingMessageIds"],
+                this["deletedMessageIds"],
+            ).flatMap { element -> element.chatMessageDeletionIds() }
+            (directIds + nestedIds + arrayIds)
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+        }
+        else -> jsonPrimitive.contentOrNull
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let(::listOf)
+            .orEmpty()
+    }
+}
+
+internal fun JsonElement.chatMessageDeletionSource(
+    fallback: ChatStreamingMessageSource = ChatStreamingMessageSource(),
+): ChatStreamingMessageSource {
+    val body = this as? JsonObject ?: return fallback
+    val nestedSources = listOfNotNull(
+        body["message"],
+        body["chatMessage"],
+        body["messagingMessage"],
+        body["deletedMessage"],
+        body["deletedChatMessage"],
+        body["deletedMessagingMessage"],
+    ).map { element -> element.chatMessageDeletionSource() }
+    val bodyRoomId = listOfNotNull(
+        body.string("roomId"),
+        body.string("toRoomId"),
+        body.string("chatRoomId"),
+    ).firstOrNull { it.isNotBlank() }
+    val bodyUserId = listOfNotNull(
+        body.string("userId"),
+        body.string("otherId"),
+        body.string("toUserId"),
+        body.string("fromUserId"),
+        body.string("chatUserId"),
+    ).firstOrNull { it.isNotBlank() }
+    return ChatStreamingMessageSource(
+        roomId = fallback.roomId
+            ?: bodyRoomId
+            ?: nestedSources.firstNotNullOfOrNull { source -> source.roomId },
+        userId = fallback.userId
+            ?: bodyUserId
+            ?: nestedSources.firstNotNullOfOrNull { source -> source.userId },
+    )
+}
+
 private fun String?.isChatStreamingMessageEventType(): Boolean {
     return when (this) {
         "message",
@@ -347,6 +432,24 @@ private fun String?.isChatStreamingMessageEventType(): Boolean {
         "unreadChatMessages",
         "messagingMessage",
         "unreadMessagingMessage",
+            -> true
+        else -> false
+    }
+}
+
+internal fun String?.isChatStreamingMessageDeletedEventType(): Boolean {
+    return when (this) {
+        "delete",
+        "deleted",
+        "messageDelete",
+        "messageDeleted",
+        "chatMessageDelete",
+        "chatMessageDeleted",
+        "deletedMessage",
+        "deletedChatMessage",
+        "messagingMessageDelete",
+        "messagingMessageDeleted",
+        "deletedMessagingMessage",
             -> true
         else -> false
     }

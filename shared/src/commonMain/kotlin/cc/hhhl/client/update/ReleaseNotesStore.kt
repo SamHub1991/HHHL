@@ -39,6 +39,17 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.8.7",
+            title = "HHHL 0.8.7 更新内容",
+            summary = "这版修复聊天消息删除没有通过实时频道同步的问题。",
+            highlights = listOf(
+                "聊天实时流新增消息删除事件解析，兼容 chatMessageDeleted、messageDeleted、deleted 等事件名。",
+                "聊天室和私聊收到删除事件后会同步移除当前消息、搜索结果和本地消息缓存。",
+                "主实时流和 Android 后台实时通知服务也接入删除事件，避免删除被当作新消息通知。",
+                "补充实时删除事件解析和聊天状态层回归测试。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.8.6",
             title = "HHHL 0.8.6 更新内容",
             summary = "这版修复聊天室渲染带颜色富文本时可能崩溃的问题。",

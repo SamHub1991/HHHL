@@ -147,6 +147,11 @@ data class SpecialCareChatToast(
     val kind: ChatAttentionKind = ChatAttentionKind.SpecialCare,
 )
 
+private data class ChatMessageDeletionTarget(
+    val roomId: String? = null,
+    val directUserId: String? = null,
+)
+
 class ChatStateHolder(
     private val repository: ChatRepository,
     private val driveFileRepository: DriveFileRepository? = null,
@@ -1243,6 +1248,31 @@ class ChatStateHolder(
             }
         } else if (cleanRoomId != null && state.value.selectedRoom?.id == cleanRoomId) {
             markLocalRoomRead(cleanRoomId, message.unreadMarker())
+        }
+    }
+
+    fun recordRealtimeMessageDeletion(
+        messageId: String,
+        roomId: String? = null,
+        directUserId: String? = null,
+    ) {
+        val cleanMessageId = messageId.trim().takeIf { it.isNotEmpty() } ?: return
+        val cleanRoomId = roomId?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanDirectUserId = directUserId?.trim()?.takeIf { it.isNotEmpty() }
+        val target = state.value.inferRealtimeDeletionTarget(
+            messageId = cleanMessageId,
+            roomId = cleanRoomId,
+            directUserId = cleanDirectUserId,
+        )
+        launchChatWorker {
+            target.roomId?.let { repository.removeCachedRoomMessage(it, cleanMessageId) }
+            target.directUserId?.let { repository.removeCachedUserMessage(it, cleanMessageId) }
+        }
+        mutableState.update { current ->
+            current.withRealtimeMessageDeleted(
+                messageId = cleanMessageId,
+                target = target,
+            )
         }
     }
 
@@ -3452,6 +3482,14 @@ class ChatStateHolder(
                     markLocalRoomRead(roomId, event.message.unreadMarker())
                 }
             }
+            is ChatStreamingEvent.MessageDeleted -> {
+                val sourceRoomId = event.source.roomId
+                if (sourceRoomId != null && sourceRoomId != roomId) return
+                recordRealtimeMessageDeletion(
+                    messageId = event.messageId,
+                    roomId = sourceRoomId ?: roomId,
+                )
+            }
             is ChatStreamingEvent.Error -> mutableState.update {
                 if (it.selectedRoom?.id != roomId) return@update it
                 it.copy(
@@ -3530,6 +3568,14 @@ class ChatStateHolder(
                 ) {
                     markLocalUserRead(userId, event.message.unreadMarker())
                 }
+            }
+            is ChatStreamingEvent.MessageDeleted -> {
+                val sourceUserId = event.source.userId
+                if (sourceUserId != null && sourceUserId != userId) return
+                recordRealtimeMessageDeletion(
+                    messageId = event.messageId,
+                    directUserId = sourceUserId ?: userId,
+                )
             }
             is ChatStreamingEvent.Error -> mutableState.update {
                 if (it.selectedUserConversation?.user?.id != userId) return@update it
@@ -3768,6 +3814,123 @@ private fun ChatRoom.withLatestMessageAt(message: ChatMessage): ChatRoom {
     )
 }
 
+private fun ChatUiState.inferRealtimeDeletionTarget(
+    messageId: String,
+    roomId: String?,
+    directUserId: String?,
+): ChatMessageDeletionTarget {
+    var targetRoomId = roomId
+    var targetDirectUserId = directUserId
+    if (targetRoomId == null && targetDirectUserId == null) {
+        val currentMessagesContainDeleted = messages.any { message -> message.id == messageId }
+        when {
+            selectedRoom != null && currentMessagesContainDeleted -> targetRoomId = selectedRoom.id
+            selectedUserConversation != null &&
+                (currentMessagesContainDeleted || selectedUserConversation.latestMessage?.id == messageId) ->
+                targetDirectUserId = selectedUserConversation.user.id
+        }
+    }
+    if (targetDirectUserId == null) {
+        targetDirectUserId = userConversations
+            .firstOrNull { conversation -> conversation.latestMessage?.id == messageId }
+            ?.user
+            ?.id
+    }
+    return ChatMessageDeletionTarget(
+        roomId = targetRoomId,
+        directUserId = targetDirectUserId,
+    )
+}
+
+private fun ChatUiState.withRealtimeMessageDeleted(
+    messageId: String,
+    target: ChatMessageDeletionTarget,
+): ChatUiState {
+    val currentMessagesContainDeleted = messages.any { message -> message.id == messageId }
+    val deleteSelectedRoomMessage = selectedRoom != null &&
+        currentMessagesContainDeleted &&
+        (target.roomId == selectedRoom.id || (target.roomId == null && target.directUserId == null))
+    val deleteSelectedUserMessage = selectedUserConversation != null &&
+        currentMessagesContainDeleted &&
+        (target.directUserId == selectedUserConversation.user.id || (target.roomId == null && target.directUserId == null))
+    val deleteSelectedMessage = deleteSelectedRoomMessage || deleteSelectedUserMessage
+    val nextMessages = if (deleteSelectedMessage) {
+        messages.filterNot { message -> message.id == messageId }
+    } else {
+        messages
+    }
+    val replacementLatestMessage = if (deleteSelectedMessage) nextMessages.lastOrNull() else null
+    val nextRooms = target.roomId?.let { roomId ->
+        rooms.withDeletedLatestRoomMessage(
+            roomId = roomId,
+            messageId = messageId,
+            replacement = replacementLatestMessage.takeIf { deleteSelectedRoomMessage },
+        )
+    } ?: rooms
+    val nextOwnedRooms = target.roomId?.let { roomId ->
+        ownedRooms.withDeletedLatestRoomMessage(
+            roomId = roomId,
+            messageId = messageId,
+            replacement = replacementLatestMessage.takeIf { deleteSelectedRoomMessage },
+        )
+    } ?: ownedRooms
+    val nextUserConversations = target.directUserId?.let { userId ->
+        userConversations.withDeletedLatestUserMessage(
+            userId = userId,
+            messageId = messageId,
+            replacement = replacementLatestMessage.takeIf { deleteSelectedUserMessage },
+        )
+    } ?: userConversations
+    return copy(
+        rooms = nextRooms,
+        ownedRooms = nextOwnedRooms,
+        userConversations = nextUserConversations,
+        selectedRoom = selectedRoom?.let { room ->
+            if (deleteSelectedRoomMessage) {
+                room.withDeletedLatestMessage(messageId, replacementLatestMessage)
+            } else {
+                room
+            }
+        },
+        selectedUserConversation = selectedUserConversation?.let { conversation ->
+            if (deleteSelectedUserMessage) {
+                conversation.withDeletedLatestMessage(messageId, replacementLatestMessage)
+            } else {
+                conversation
+            }
+        },
+        messages = nextMessages,
+        messageSearchResults = messageSearchResults.filterNot { message -> message.id == messageId },
+        pendingMessageDeleteIds = pendingMessageDeleteIds - messageId,
+        specialCareToast = specialCareToast?.takeUnless { toast -> toast.messageId == messageId },
+        specialCareJumpMessageId = specialCareJumpMessageId.takeUnless { it == messageId },
+        unreadJumpMessageId = unreadJumpMessageId.takeUnless { it == messageId },
+    )
+}
+
+private fun List<ChatRoom>.withDeletedLatestRoomMessage(
+    roomId: String,
+    messageId: String,
+    replacement: ChatMessage?,
+): List<ChatRoom> {
+    val index = indexOfFirst { room -> room.id == roomId }
+    if (index < 0) return this
+    val updated = this[index].withDeletedLatestMessage(messageId, replacement)
+    if (updated == this[index]) return this
+    val next = toMutableList()
+    next[index] = updated
+    return next
+}
+
+private fun ChatRoom.withDeletedLatestMessage(
+    messageId: String,
+    replacement: ChatMessage?,
+): ChatRoom {
+    if (!messageId.matchesReadMarker(unreadMarker())) return this
+    return replacement?.let(::withLatestMessageAt)
+        ?: copy(latestMessageAtLabel = "", latestMessageMarker = "")
+}
+
 private fun List<ChatUserConversation>.markChatUserConversationRead(userId: String): List<ChatUserConversation> {
     if (userId.isBlank()) return this
     val index = indexOfFirst { conversation -> conversation.user.id == userId }
@@ -3775,6 +3938,28 @@ private fun List<ChatUserConversation>.markChatUserConversationRead(userId: Stri
     val next = toMutableList()
     next[index] = this[index].copy(unreadCount = 0)
     return next
+}
+
+private fun List<ChatUserConversation>.withDeletedLatestUserMessage(
+    userId: String,
+    messageId: String,
+    replacement: ChatMessage?,
+): List<ChatUserConversation> {
+    val index = indexOfFirst { conversation -> conversation.user.id == userId }
+    if (index < 0) return this
+    val updated = this[index].withDeletedLatestMessage(messageId, replacement)
+    if (updated == this[index]) return this
+    val next = toMutableList()
+    next[index] = updated
+    return next
+}
+
+private fun ChatUserConversation.withDeletedLatestMessage(
+    messageId: String,
+    replacement: ChatMessage?,
+): ChatUserConversation {
+    if (latestMessage?.id != messageId) return this
+    return copy(latestMessage = replacement)
 }
 
 private fun List<ChatUserConversation>.mergeUserUnreadCounts(

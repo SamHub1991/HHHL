@@ -129,10 +129,60 @@ class ChatStreamingApiTest {
         )
 
         assertEquals(2, events.size)
-        assertEquals("message-batch-1", events[0].message.id)
-        assertEquals("message-batch-2", events[1].message.id)
-        assertEquals("quoted-message", events[1].message.quote?.id)
-        assertEquals("room-1", events[1].source.roomId)
+        val first = assertIs<ChatStreamingEvent.MessageReceived>(events[0])
+        val second = assertIs<ChatStreamingEvent.MessageReceived>(events[1])
+        assertEquals("message-batch-1", first.message.id)
+        assertEquals("message-batch-2", second.message.id)
+        assertEquals("quoted-message", second.message.quote?.id)
+        assertEquals("room-1", second.source.roomId)
+    }
+
+    @Test
+    fun parsesChatMessageDeletedEvent() {
+        val event = parseSharkeyStreamingChatEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "chat-room-room-1",
+                "type": "chatMessageDeleted",
+                "body": {
+                  "messageId": "message-deleted",
+                  "roomId": "room-1"
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val deletedEvent = assertIs<ChatStreamingEvent.MessageDeleted>(event)
+        assertEquals("message-deleted", deletedEvent.messageId)
+        assertEquals("room-1", deletedEvent.source.roomId)
+    }
+
+    @Test
+    fun parsesWrappedChatMessageDeletedEvent() {
+        val event = parseSharkeyStreamingChatEvent(
+            """
+            {
+              "type": "channel",
+              "body": {
+                "id": "chat-user-user-2",
+                "type": "deleted",
+                "body": {
+                  "chatMessage": {
+                    "id": "message-deleted",
+                    "toUserId": "user-2"
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val deletedEvent = assertIs<ChatStreamingEvent.MessageDeleted>(event)
+        assertEquals("message-deleted", deletedEvent.messageId)
+        assertEquals("user-2", deletedEvent.source.userId)
     }
 
     @Test

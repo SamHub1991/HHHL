@@ -2632,6 +2632,49 @@ class ChatStateHolderTest {
     }
 
     @Test
+    fun streamingDeletedMessageRemovesSelectedRoomMessage() = runTest {
+        val baseRoom = sampleRoom(id = "room-1")
+        val keptMessage = sampleMessage(
+            id = "message-kept",
+            roomId = baseRoom.id,
+            createdAt = "2026-05-25T10:01:00.000Z",
+        )
+        val deletedMessage = sampleMessage(
+            id = "message-deleted",
+            roomId = baseRoom.id,
+            createdAt = "2026-05-25T10:02:00.000Z",
+        )
+        val room = baseRoom.copy(
+            latestMessageAtLabel = deletedMessage.createdAtLabel,
+            latestMessageMarker = deletedMessage.id,
+        )
+        val stream = MutableSharedFlow<ChatStreamingEvent>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(keptMessage, deletedMessage)),
+            ),
+            streamingRepository = fakeStreamingRepository(stream),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        stream.emit(
+            ChatStreamingEvent.MessageDeleted(
+                messageId = deletedMessage.id,
+                source = cc.hhhl.client.api.ChatStreamingMessageSource(roomId = baseRoom.id),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf(keptMessage.id), holder.state.value.messages.map { it.id })
+        assertFalse(holder.state.value.pendingMessageDeleteIds.contains(deletedMessage.id))
+        assertEquals(keptMessage.id, holder.state.value.selectedRoom?.latestMessageMarker)
+    }
+
+    @Test
     fun refreshRoomExtrasAddsOwnedOnlyRoomToMainRoomList() = runTest {
         val joinedRoom = sampleRoom(id = "room-joined")
         val ownedRoom = sampleRoom(id = "room-owned").copy(

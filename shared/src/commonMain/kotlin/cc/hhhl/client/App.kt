@@ -4562,6 +4562,18 @@ private fun MainShell(
                                 )
                             }
                         }
+                        is ChatStreamingEvent.MessageDeleted -> {
+                            val sourceRoomId = event.source.roomId?.takeIf { roomId -> roomId in streamTargets.roomIdSet }
+                            val sourceUserId = event.source.userId?.takeIf { userId -> userId in streamTargets.userIdSet }
+                            if (sourceRoomId != null || sourceUserId != null) {
+                                chatStateHolder.recordRealtimeMessageDeletion(
+                                    messageId = event.messageId,
+                                    roomId = sourceRoomId,
+                                    directUserId = sourceUserId,
+                                )
+                                refreshChatAfterRealtimeSignal()
+                            }
+                        }
                         ChatStreamingEvent.Unauthorized -> unauthorized = true
                         ChatStreamingEvent.Connecting,
                         ChatStreamingEvent.Connected,
@@ -4646,6 +4658,14 @@ private fun MainShell(
                     }
                     is MainStreamingEvent.ChatMessageReceived -> {
                         emitRealtimeStreamChatMessage(event.message)
+                        refreshChatAfterRealtimeSignal()
+                    }
+                    is MainStreamingEvent.ChatMessageDeleted -> {
+                        chatStateHolder.recordRealtimeMessageDeletion(
+                            messageId = event.messageId,
+                            roomId = event.source.roomId,
+                            directUserId = event.source.userId,
+                        )
                         refreshChatAfterRealtimeSignal()
                     }
                     MainStreamingEvent.NewChatMessage -> refreshChatAfterRealtimeSignal()

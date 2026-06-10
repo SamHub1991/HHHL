@@ -174,6 +174,14 @@ open class ChatRepository(
         appendCachedMessage(ChatMessageCacheConversationType.User, userId, message)
     }
 
+    open suspend fun removeCachedRoomMessage(roomId: String, messageId: String) {
+        removeCachedMessage(ChatMessageCacheConversationType.Room, roomId, messageId)
+    }
+
+    open suspend fun removeCachedUserMessage(userId: String, messageId: String) {
+        removeCachedMessage(ChatMessageCacheConversationType.User, userId, messageId)
+    }
+
     open suspend fun deleteCachedUserMessages(userId: String) {
         val key = cacheKey(ChatMessageCacheConversationType.User, userId) ?: return
         messageCacheMutex.withLock {
