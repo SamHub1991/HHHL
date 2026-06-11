@@ -714,17 +714,16 @@ class NotificationStateHolder(
         chatAttentionNotifications: List<NotificationItem>,
         specialCareNotifications: List<NotificationItem>,
     ): Int {
-        val remoteUnreadIds = remoteNotifications
-            .asSequence()
-            .filterNot { it.isRead }
-            .mapTo(LinkedHashSet()) { it.id }
-        val chatAttentionUnreadCount = chatAttentionNotifications.count { notification ->
-            !notification.isRead && notification.id !in remoteUnreadIds
-        }
-        val localSpecialCareUnreadCount = specialCareNotifications.count { notification ->
-            !notification.isRead && notification.id !in remoteUnreadIds
-        }
-        return remoteUnreadIds.size + chatAttentionUnreadCount + localSpecialCareUnreadCount
+        val countedKeys = LinkedHashSet<String>()
+        var unreadCount = 0
+        sequenceOf(remoteNotifications, chatAttentionNotifications, specialCareNotifications)
+            .flatMap { notifications -> notifications.asSequence() }
+            .forEach { notification ->
+                if (countedKeys.add(notification.notificationDedupeKey()) && !notification.isRead) {
+                    unreadCount += 1
+                }
+            }
+        return unreadCount
     }
 
     private fun List<NotificationItem>.applyLocalReadState(): List<NotificationItem> {
@@ -825,10 +824,12 @@ class NotificationStateHolder(
         limit: Int,
     ): List<NotificationItem> {
         val storedById = storedNotifications.associateBy { it.id }
+        val storedByKey = storedNotifications.associateBy { it.notificationDedupeKey() }
         return (map { notification ->
-            notification.copy(isRead = notification.isRead || storedById[notification.id]?.isRead == true)
+            val previous = storedById[notification.id] ?: storedByKey[notification.notificationDedupeKey()]
+            notification.copy(isRead = notification.isRead || previous?.isRead == true)
         } + storedNotifications)
-            .distinctBy { it.id }
+            .distinctBy { it.notificationDedupeKey() }
             .sortedByDescending { it.createdAtEpochMillis }
             .take(limit)
     }
@@ -926,8 +927,9 @@ private fun List<NotificationItem>.withLocalSpecialCareNotifications(
 ): List<NotificationItem> {
     if (specialCareNotifications.isEmpty()) return this
     val remoteIds = mapTo(LinkedHashSet(size)) { it.id }
-    return (specialCareNotifications.filterNot { it.id in remoteIds } + this)
-        .distinctBy { it.id }
+    val remoteKeys = mapTo(LinkedHashSet(size)) { it.notificationDedupeKey() }
+    return (specialCareNotifications.filterNot { it.id in remoteIds || it.notificationDedupeKey() in remoteKeys } + this)
+        .distinctBy { it.notificationDedupeKey() }
 }
 
 private fun List<NotificationItem>.withLocalChatAttentionNotifications(
@@ -935,9 +937,23 @@ private fun List<NotificationItem>.withLocalChatAttentionNotifications(
 ): List<NotificationItem> {
     if (chatAttentionNotifications.isEmpty()) return this
     val remoteIds = mapTo(LinkedHashSet(size)) { it.id }
-    return (chatAttentionNotifications.filterNot { it.id in remoteIds } + this)
-        .distinctBy { it.id }
+    val remoteKeys = mapTo(LinkedHashSet(size)) { it.notificationDedupeKey() }
+    return (chatAttentionNotifications.filterNot { it.id in remoteIds || it.notificationDedupeKey() in remoteKeys } + this)
+        .distinctBy { it.notificationDedupeKey() }
         .sortedByDescending { it.createdAtEpochMillis }
+}
+
+private fun NotificationItem.notificationDedupeKey(): String {
+    noteId?.trim()?.takeIf { it.isNotEmpty() }?.let { cleanNoteId ->
+        return "note:${type.name}:${actor.id}:$cleanNoteId"
+    }
+    chatMessageId?.trim()?.takeIf { it.isNotEmpty() }?.let { cleanMessageId ->
+        val sourceId = chatUserId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: chatRoomId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: ""
+        return "chat:${type.name}:${actor.id}:$sourceId:$cleanMessageId"
+    }
+    return "id:$id"
 }
 
 internal data class SpecialCareNotificationInsertResult(
@@ -955,7 +971,8 @@ internal fun insertSpecialCareNotification(
     notification: NotificationItem,
     limit: Int,
 ): SpecialCareNotificationInsertResult {
-    if (limit <= 0 || notification.id.isBlank() || current.any { it.id == notification.id }) {
+    val dedupeKey = notification.notificationDedupeKey()
+    if (limit <= 0 || notification.id.isBlank() || current.any { it.id == notification.id || it.notificationDedupeKey() == dedupeKey }) {
         return SpecialCareNotificationInsertResult(current, inserted = false)
     }
     val next = (listOf(notification.copy(isSpecialCare = true)) + current)
@@ -969,7 +986,8 @@ internal fun insertChatAttentionNotification(
     notification: NotificationItem,
     limit: Int,
 ): ChatAttentionNotificationInsertResult {
-    if (limit <= 0 || notification.id.isBlank() || current.any { it.id == notification.id }) {
+    val dedupeKey = notification.notificationDedupeKey()
+    if (limit <= 0 || notification.id.isBlank() || current.any { it.id == notification.id || it.notificationDedupeKey() == dedupeKey }) {
         return ChatAttentionNotificationInsertResult(current, inserted = false)
     }
     val next = (listOf(notification.copy(isSpecialCare = false)) + current)
@@ -986,11 +1004,12 @@ internal fun mergeRemoteSpecialCareNotifications(
 ): List<NotificationItem> {
     if (limit <= 0 || remote.isEmpty() || specialCareUserIds.isEmpty()) return current
     val currentById = current.associateBy { it.id }
+    val currentByKey = current.associateBy { it.notificationDedupeKey() }
     val remoteSpecialCare = remote
         .asSequence()
         .filter { notification -> notification.id.isNotBlank() && notification.actor.id in specialCareUserIds }
         .map { notification ->
-            val previous = currentById[notification.id]
+            val previous = currentById[notification.id] ?: currentByKey[notification.notificationDedupeKey()]
             notification.copy(
                 isSpecialCare = true,
                 isRead = previous?.isRead == true || notification.isRead,
@@ -1000,8 +1019,9 @@ internal fun mergeRemoteSpecialCareNotifications(
     if (remoteSpecialCare.isEmpty()) return current
 
     val remoteSpecialCareIds = remoteSpecialCare.mapTo(LinkedHashSet(remoteSpecialCare.size)) { it.id }
-    val next = (remoteSpecialCare + current.filterNot { it.id in remoteSpecialCareIds })
-        .distinctBy { it.id }
+    val remoteSpecialCareKeys = remoteSpecialCare.mapTo(LinkedHashSet(remoteSpecialCare.size)) { it.notificationDedupeKey() }
+    val next = (remoteSpecialCare + current.filterNot { it.id in remoteSpecialCareIds || it.notificationDedupeKey() in remoteSpecialCareKeys })
+        .distinctBy { it.notificationDedupeKey() }
         .sortedByDescending { it.createdAtEpochMillis }
         .take(limit)
     return if (next == current) current else next

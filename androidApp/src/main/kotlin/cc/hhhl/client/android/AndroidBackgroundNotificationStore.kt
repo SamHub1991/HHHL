@@ -91,6 +91,33 @@ class AndroidBackgroundNotificationStore(context: Context) {
         }
     }
 
+    fun claimSeenIdGroup(
+        ids: Collection<String>,
+        limit: Int = MAX_SEEN_IDS,
+    ): Boolean {
+        val cleanIds = ids.cleanSeenIds()
+        if (cleanIds.isEmpty()) return false
+        return synchronized(SEEN_IDS_LOCK) {
+            val current = loadSeenIdsLocked()
+            if (cleanIds.any { it in current }) {
+                saveSeenIdsLocked(
+                    cleanIds.mergeWithSeenIds(
+                        previous = current,
+                        limit = limit.coerceAtLeast(1),
+                    ),
+                )
+                return@synchronized false
+            }
+            saveSeenIdsLocked(
+                cleanIds.mergeWithSeenIds(
+                    previous = current,
+                    limit = limit.coerceAtLeast(1),
+                ),
+            )
+            true
+        }
+    }
+
     private fun loadSeenIdsLocked(): Set<String> {
         return preferences.getStringSet(KEY_SEEN_IDS, emptySet()).orEmpty().toSet()
     }

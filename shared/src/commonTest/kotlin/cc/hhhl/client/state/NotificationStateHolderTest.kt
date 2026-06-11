@@ -449,7 +449,7 @@ class NotificationStateHolderTest {
     @Test
     fun insertSpecialCareNotificationMarksAndPrependsNewNotificationOnly() {
         val first = FakeData.notifications[0].copy(id = "special-1")
-        val second = FakeData.notifications[1].copy(id = "special-2")
+        val second = FakeData.notifications[1].copy(id = "special-2", noteId = "note-special-2")
 
         val inserted = insertSpecialCareNotification(
             current = listOf(first.copy(isSpecialCare = true)),
@@ -461,12 +461,19 @@ class NotificationStateHolderTest {
             notification = second.copy(text = "duplicate"),
             limit = 2,
         )
+        val duplicateByNote = insertSpecialCareNotification(
+            current = inserted.notifications,
+            notification = second.copy(id = "special-2-local-duplicate"),
+            limit = 2,
+        )
 
         assertTrue(inserted.inserted)
         assertEquals(listOf("special-2", "special-1"), inserted.notifications.map { it.id })
         assertTrue(inserted.notifications.first().isSpecialCare)
         assertFalse(duplicate.inserted)
         assertEquals(inserted.notifications, duplicate.notifications)
+        assertFalse(duplicateByNote.inserted)
+        assertEquals(inserted.notifications, duplicateByNote.notifications)
     }
 
     @Test
@@ -599,6 +606,61 @@ class NotificationStateHolderTest {
 
         assertEquals(1, holder.state.value.specialCareUnreadCount)
         assertEquals(1, holder.state.value.unreadCount)
+    }
+
+    @Test
+    fun remoteSpecialCareWithSameNoteIdReplacesLocalSpecialCare() {
+        val local = FakeData.notifications[0].copy(
+            id = "special-care-note-note-1",
+            type = NotificationType.Note,
+            noteId = "note-1",
+            isRead = true,
+            isSpecialCare = true,
+        )
+        val remote = local.copy(
+            id = "remote-note-notification-1",
+            isRead = false,
+            isSpecialCare = false,
+        )
+
+        val merged = mergeRemoteSpecialCareNotifications(
+            current = listOf(local),
+            remote = listOf(remote),
+            specialCareUserIds = setOf(remote.actor.id),
+            limit = 10,
+        )
+
+        assertEquals(listOf("remote-note-notification-1"), merged.map { it.id })
+        assertTrue(merged.single().isSpecialCare)
+        assertTrue(merged.single().isRead)
+    }
+
+    @Test
+    fun allFilterHidesLocalSpecialCareWhenRemoteHasSameNoteId() = runTest {
+        val actor = FakeData.notifications[0].actor
+        val local = FakeData.notifications[0].copy(
+            id = "special-care-note-note-2",
+            type = NotificationType.Note,
+            actor = actor,
+            noteId = "note-2",
+            isRead = false,
+        )
+        val remote = local.copy(
+            id = "remote-note-notification-2",
+            isRead = true,
+        )
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(NotificationRepositoryResult.Success(listOf(remote))),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateSpecialCareUsers(setOf(actor.id))
+        holder.addSpecialCareNotification(local)
+        holder.refresh()
+        advanceUntilIdle()
+
+        assertEquals(listOf("remote-note-notification-2"), holder.state.value.notifications.map { it.id })
+        assertEquals(0, holder.state.value.unreadCount)
     }
 
     @Test

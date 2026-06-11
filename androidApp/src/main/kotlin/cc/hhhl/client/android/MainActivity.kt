@@ -441,8 +441,8 @@ class MainActivity : ComponentActivity() {
         if (!settings.isBackgroundSyncEnabled()) return
         if (notification.isSpecialCare && !settings.isSpecialCareEnabled()) return
         if (shouldRequestNotificationPermission()) return
-        val eventId = notification.specialCareSystemEventId()
-        if (eventId !in settings.claimSeenIds(listOf(eventId))) return
+        val eventId = notification.systemNotificationEventId()
+        if (!settings.claimSeenIdGroup(notification.notificationSeenIds())) return
 
         BackgroundNotificationPublisher(applicationContext).publish(
             listOf(
@@ -504,17 +504,6 @@ private fun NotificationItem.chatAttentionSystemTitlePrefix(): String {
         cleanText.startsWith("有人引用你") -> "有人引用你"
         else -> "特别关心"
     }
-}
-
-private fun NotificationItem.specialCareSystemEventId(): String {
-    noteId?.takeIf { it.isNotBlank() }?.let { return "special-note:$it" }
-    chatUserId?.takeIf { it.isNotBlank() }?.let { userId ->
-        return "user:$userId:${chatMessageId?.takeIf { it.isNotBlank() } ?: id}"
-    }
-    chatRoomId?.takeIf { it.isNotBlank() }?.let { roomId ->
-        return "room:$roomId:${chatMessageId?.takeIf { it.isNotBlank() } ?: id}"
-    }
-    return "special:$id"
 }
 
 private fun String.toDownloadTitle(url: String): String {

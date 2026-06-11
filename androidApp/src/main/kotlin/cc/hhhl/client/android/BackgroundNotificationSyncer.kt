@@ -273,11 +273,15 @@ class BackgroundNotificationSyncer(
         val fallbackNotificationSeenId = notification?.let {
             normalizedMessage.realtimeFallbackNotificationEventId(cleanDirectUserId)
         }
-        val claimedNotificationIds = notification
-            ?.let { event -> settings.claimSeenIds(listOf(event.id), MAX_STORED_SEEN_IDS) }
+        val notificationSeenIds = notification
+            ?.let { event ->
+                (event.notificationSeenIds() + listOfNotNull(fallbackNotificationSeenId)).cleanNotificationSeenIds()
+            }
             .orEmpty()
+        val shouldPublishNotification = notification != null &&
+            settings.claimSeenIdGroup(notificationSeenIds, MAX_STORED_SEEN_IDS)
         notification?.let { event ->
-            if (event.id in claimedNotificationIds && (!event.gatedBySpecialCareSetting || settings.isSpecialCareEnabled())) {
+            if (shouldPublishNotification && (!event.gatedBySpecialCareSetting || settings.isSpecialCareEnabled())) {
                 BackgroundNotificationPublisher(context).publish(listOf(event))
                 context.cacheBackgroundNotificationEvents(session.id, listOf(event))
             }
@@ -285,8 +289,7 @@ class BackgroundNotificationSyncer(
         val handledIds = buildList {
             if (chatSeenId !in seenIds) add(chatSeenId)
             attentionSeenId?.takeIf { it !in seenIds }?.let { add(it) }
-            notification?.id?.takeIf { it !in seenIds }?.let { add(it) }
-            fallbackNotificationSeenId?.takeIf { it !in seenIds }?.let { add(it) }
+            notificationSeenIds.filterNot { it in seenIds }.forEach(::add)
         }
         if (handledIds.isNotEmpty()) {
             settings.mergeSeenIds(handledIds, MAX_STORED_SEEN_IDS)
@@ -920,11 +923,12 @@ class BackgroundNotificationSyncer(
                             .thenByDescending { it.createdAtEpochMillis },
                     )
                     .take(maxNotificationsPerSync(trigger))
-                val claimedVisibleEventIds = settings.claimSeenIds(
-                    ids = visibleEventCandidates.map { it.id },
-                    limit = MAX_STORED_SEEN_IDS,
-                )
-                val visibleEvents = visibleEventCandidates.filter { it.id in claimedVisibleEventIds }
+                val visibleEvents = visibleEventCandidates.filter { event ->
+                    settings.claimSeenIdGroup(
+                        ids = event.notificationSeenIds(),
+                        limit = MAX_STORED_SEEN_IDS,
+                    )
+                }
                 val automationEventCandidates = automationEvents.distinctBy { it.backgroundAutomationCandidateKey() }
                 if (visibleEvents.isNotEmpty()) {
                     BackgroundNotificationPublisher(context).publish(visibleEvents)
@@ -1119,6 +1123,10 @@ internal data class BackgroundNotificationEvent(
     val cacheNotification: NotificationItem? = null,
 )
 
+internal fun BackgroundNotificationEvent.notificationSeenIds(): List<String> {
+    return (listOf(id) + cacheNotification.notificationSeenIds()).cleanNotificationSeenIds()
+}
+
 internal fun Context.cacheSpecialCareNotifications(
     accountId: String,
     notifications: List<NotificationItem>,
@@ -1237,6 +1245,48 @@ internal fun cc.hhhl.client.model.NotificationItem.isAppNotification(): Boolean 
 }
 
 internal fun NotificationItem.notificationEventId(): String = "notification-alert:$id"
+
+internal fun NotificationItem.systemNotificationEventId(): String {
+    noteId?.takeIf { it.isNotBlank() }?.let { return "special-note:$it" }
+    chatUserId?.takeIf { it.isNotBlank() }?.let { userId ->
+        return "user:$userId:${chatMessageId?.takeIf { it.isNotBlank() } ?: id}"
+    }
+    chatRoomId?.takeIf { it.isNotBlank() }?.let { roomId ->
+        return "room:$roomId:${chatMessageId?.takeIf { it.isNotBlank() } ?: id}"
+    }
+    return "special:$id"
+}
+
+internal fun NotificationItem?.notificationSeenIds(): List<String> {
+    val notification = this ?: return emptyList()
+    return buildList {
+        add(notification.notificationEventId())
+        add(notification.systemNotificationEventId())
+        notification.chatAttentionRealtimeEventId()?.let(::add)
+    }.cleanNotificationSeenIds()
+}
+
+private fun NotificationItem.chatAttentionRealtimeEventId(): String? {
+    val sourceId = chatUserId?.takeIf { it.isNotBlank() }
+        ?: chatRoomId?.takeIf { it.isNotBlank() }
+        ?: return null
+    val messageKey = chatMessageId?.takeIf { it.isNotBlank() }
+        ?: id.takeIf { it.isNotBlank() }
+        ?: return null
+    val kind = when (type) {
+        NotificationType.Mention -> ChatAttentionKind.Mention
+        NotificationType.Reply -> ChatAttentionKind.Reply
+        NotificationType.Quote -> ChatAttentionKind.Quote
+        else -> ChatAttentionKind.SpecialCare.takeIf { isSpecialCare }
+    } ?: return null
+    return "chat-attention-alert:${kind.name}:$sourceId:$messageKey"
+}
+
+private fun Iterable<String>.cleanNotificationSeenIds(): List<String> {
+    return map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+}
 
 private fun String.automationSeenId(): String = "automation:$this"
 

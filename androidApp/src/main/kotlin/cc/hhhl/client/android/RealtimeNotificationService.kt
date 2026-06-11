@@ -307,7 +307,7 @@ class RealtimeNotificationService : Service() {
         val specialCareUserIds = AndroidSpecialCareStore(applicationContext).loadSpecialCareUserIds(session.id)
         val isSpecialCare = notification.actor.id in specialCareUserIds
         if (isSpecialCare && !settings.isSpecialCareEnabled()) return
-        if (eventId !in settings.claimSeenIds(listOf(eventId), MAX_REALTIME_SEEN_IDS)) return
+        if (!settings.claimSeenIdGroup(notification.notificationSeenIds(), MAX_REALTIME_SEEN_IDS)) return
         val createdAtEpochMillis = notification.createdAtEpochMillis.takeIf { it > 0L }
             ?: System.currentTimeMillis()
         BackgroundNotificationPublisher(applicationContext).publish(
@@ -358,8 +358,6 @@ class RealtimeNotificationService : Service() {
         if (note.author.id !in specialCareUserIds) return true
 
         val eventId = "special-note:${note.id}"
-        if (eventId !in settings.claimSeenIds(listOf(eventId), MAX_REALTIME_SEEN_IDS)) return true
-
         val createdAtEpochMillis = note.createdAt.toEpochMillisOrNull()
             ?: System.currentTimeMillis()
         val notification = NotificationItem(
@@ -373,6 +371,7 @@ class RealtimeNotificationService : Service() {
             notePreviewText = note.text.takeIf { it.isNotBlank() } ?: note.cw,
             isSpecialCare = true,
         )
+        if (!settings.claimSeenIdGroup(notification.notificationSeenIds(), MAX_REALTIME_SEEN_IDS)) return true
         BackgroundNotificationPublisher(applicationContext).publish(
             listOf(
                 BackgroundNotificationEvent(

@@ -39,6 +39,17 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.8.8",
+            title = "HHHL 0.8.8 更新内容",
+            summary = "这版修复通知可能重复弹出或在通知页重复显示的问题。",
+            highlights = listOf(
+                "后台实时通知、补偿同步和前台系统通知统一按同一组业务 ID 去重，避免同一条提醒多入口重复弹出。",
+                "聊天提醒会同时兼容 room/user、chat-attention-alert 和 notification-alert 等旧版去重 ID，升级后不需要清缓存。",
+                "通知页对相同帖子和相同聊天消息按业务键合并，减少特别关心与远端通知同时出现的重复条目。",
+                "补充通知状态层回归测试，覆盖同一帖子通知合并和未读数去重。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.8.7",
             title = "HHHL 0.8.7 更新内容",
             summary = "这版修复聊天消息删除没有通过实时频道同步的问题。",
