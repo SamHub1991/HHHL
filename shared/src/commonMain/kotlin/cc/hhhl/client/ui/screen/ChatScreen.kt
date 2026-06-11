@@ -227,11 +227,11 @@ private val CHAT_ROOM_LIST_GROUP_BADGE_MAX_WIDTH = 112.dp
 
 private val ChatRoomGroupWhitespaceRegex = Regex("\\s+")
 
-private val ChatMessageTelegramTailWidth = 12.dp
-private val ChatMessageTelegramTailHeight = 10.dp
+private val ChatMessageTelegramTailWidth = 10.dp
+private val ChatMessageTelegramTailHeight = 9.dp
 private val ChatMessageTelegramTailAnchorY = 8.dp
 private val ChatMessageTelegramBubbleRadius = 21.dp
-private val ChatMessageIncomingAvatarTopPadding = 13.dp
+private val ChatMessageAvatarTopPadding = 13.dp
 private val ChatMessageBubbleMaxWidth = 340.dp
 private val ChatMessageMetaNameMaxWidth = 176.dp
 
@@ -5018,13 +5018,13 @@ private fun Density.createTelegramChatBubblePath(
     val bodyWidth = (right - left).coerceAtLeast(0f)
     val bodyHeight = (bottom - top).coerceAtLeast(0f)
     val radius = cornerRadius.coerceAtMost(minOf(bodyWidth, bodyHeight) / 2f)
-    val tailRootY = (top + tailAnchorY).coerceIn(top + 2.dp.toPx(), top + radius * 0.86f)
-    val tailUpperY = (tailRootY - tailHeight * 0.42f).coerceAtLeast(top + 0.4.dp.toPx())
-    val tailLowerY = (tailRootY + tailHeight * 0.64f).coerceAtMost(top + radius * 1.10f)
-    val tailTipInset = 0.25f.dp.toPx() + strokeWidth / 2f
-    val tailTipRound = 0.9.dp.toPx()
-    val tailShoulder = tailWidth * 0.20f
-    val tailNeck = tailWidth * 0.92f
+    val tailRootY = (top + tailAnchorY).coerceIn(top + 3.dp.toPx(), top + radius * 0.92f)
+    val tailUpperY = (tailRootY - tailHeight * 0.42f).coerceAtLeast(top + 0.8.dp.toPx())
+    val tailLowerY = (tailRootY + tailHeight * 0.52f).coerceAtMost(top + radius * 1.02f)
+    val tailTipInset = 0.06f.dp.toPx() + strokeWidth / 2f
+    val tailTipY = tailRootY - tailHeight * 0.08f
+    val tailShoulder = tailWidth * 0.16f
+    val tailNeck = tailWidth * 0.48f
     val cornerK = 0.55228475f
     return Path().apply {
         if (isOutgoing) {
@@ -5040,25 +5040,17 @@ private fun Density.createTelegramChatBubblePath(
             )
             cubicTo(
                 right + tailShoulder,
-                tailUpperY - tailHeight * 0.08f,
+                tailUpperY + tailHeight * 0.03f,
                 right + tailNeck,
-                tailRootY - tailHeight * 0.58f,
+                tailTipY - tailHeight * 0.26f,
                 size.width - tailTipInset,
-                top + 0.65.dp.toPx(),
-            )
-            cubicTo(
-                size.width + tailTipInset * 0.12f,
-                top + tailTipRound * 0.45f,
-                size.width + tailTipInset * 0.12f,
-                top + tailTipRound * 1.55f,
-                size.width - tailTipInset,
-                top + tailTipRound * 2.0f,
+                tailTipY,
             )
             cubicTo(
                 right + tailNeck,
-                tailRootY + tailHeight * 0.12f,
+                tailTipY + tailHeight * 0.30f,
                 right + tailShoulder,
-                tailLowerY - tailHeight * 0.05f,
+                tailLowerY - tailHeight * 0.04f,
                 right,
                 tailLowerY,
             )
@@ -5121,25 +5113,17 @@ private fun Density.createTelegramChatBubblePath(
             lineTo(left, tailLowerY)
             cubicTo(
                 left - tailShoulder,
-                tailLowerY - tailHeight * 0.05f,
+                tailLowerY - tailHeight * 0.04f,
                 left - tailNeck,
-                tailRootY + tailHeight * 0.12f,
+                tailTipY + tailHeight * 0.30f,
                 tailTipInset,
-                top + tailTipRound * 2.0f,
-            )
-            cubicTo(
-                -tailTipInset * 0.12f,
-                top + tailTipRound * 1.55f,
-                -tailTipInset * 0.12f,
-                top + tailTipRound * 0.45f,
-                tailTipInset,
-                top + 0.65.dp.toPx(),
+                tailTipY,
             )
             cubicTo(
                 left - tailNeck,
-                tailRootY - tailHeight * 0.58f,
+                tailTipY - tailHeight * 0.26f,
                 left - tailShoulder,
-                tailUpperY - tailHeight * 0.08f,
+                tailUpperY + tailHeight * 0.03f,
                 left,
                 tailUpperY,
             )
@@ -5282,22 +5266,12 @@ private fun ChatMessageRow(
         verticalAlignment = Alignment.Top,
     ) {
         if (!isOutgoing) {
-            Box(
-                modifier = Modifier
-                    .padding(top = ChatMessageIncomingAvatarTopPadding)
-                    .combinedClickable(
-                        interactionSource = presslessInteractionSource,
-                        indication = null,
-                        onClick = { onOpenUser(message.fromUser.id) },
-                        onLongClick = { onMentionUser(message.fromUser) },
-                    ),
-            ) {
-                Avatar(
-                    initial = message.fromUser.avatarInitial,
-                    avatarUrl = message.fromUser.avatarUrl,
-                    avatarDecorations = message.fromUser.avatarDecorations,
-                )
-            }
+            ChatMessageAvatar(
+                message = message,
+                presslessInteractionSource = presslessInteractionSource,
+                onOpenUser = onOpenUser,
+                onMentionUser = onMentionUser,
+            )
         }
         Column(
             modifier = Modifier
@@ -5444,6 +5418,40 @@ private fun ChatMessageRow(
                 )
             }
         }
+        if (isOutgoing) {
+            Spacer(modifier = Modifier.width(8.dp))
+            ChatMessageAvatar(
+                message = message,
+                presslessInteractionSource = presslessInteractionSource,
+                onOpenUser = onOpenUser,
+                onMentionUser = onMentionUser,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatMessageAvatar(
+    message: ChatMessage,
+    presslessInteractionSource: MutableInteractionSource,
+    onOpenUser: (String) -> Unit,
+    onMentionUser: (cc.hhhl.client.model.User) -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .padding(top = ChatMessageAvatarTopPadding)
+            .combinedClickable(
+                interactionSource = presslessInteractionSource,
+                indication = null,
+                onClick = { onOpenUser(message.fromUser.id) },
+                onLongClick = { onMentionUser(message.fromUser) },
+            ),
+    ) {
+        Avatar(
+            initial = message.fromUser.avatarInitial,
+            avatarUrl = message.fromUser.avatarUrl,
+            avatarDecorations = message.fromUser.avatarDecorations,
+        )
     }
 }
 

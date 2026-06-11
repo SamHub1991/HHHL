@@ -39,6 +39,17 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.8.9",
+            title = "HHHL 0.8.9 更新内容",
+            summary = "这版微调聊天消息气泡，让自己发出的消息更像完整的对话布局。",
+            highlights = listOf(
+                "聊天里自己发出的右侧消息会显示自己的头像，不再让气泡直接顶到屏幕右侧。",
+                "聊天气泡尾巴重新绘制为更柔和的曲线，并保持尖角朝向对应头像。",
+                "收细气泡尾巴宽高和尾根控制点，减少尾巴过胖、过钝的视觉感。",
+                "左右气泡共用同一套头像点击和长按提及行为，交互保持一致。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.8.8",
             title = "HHHL 0.8.8 更新内容",
             summary = "这版修复通知可能重复弹出或在通知页重复显示的问题。",
