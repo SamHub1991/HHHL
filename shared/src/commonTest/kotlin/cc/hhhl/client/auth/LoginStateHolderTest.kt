@@ -24,6 +24,7 @@ class LoginStateHolderTest {
         )
 
         holder.startBrowserLogin { openedUrls.add(it) }
+        runCurrent()
 
         assertEquals(listOf("https://dc.hhhl.cc/miauth/session-123"), openedUrls)
         assertEquals("session-123", holder.state.value.pendingSession)
@@ -42,7 +43,9 @@ class LoginStateHolderTest {
         )
 
         holder.startBrowserLogin { openedUrls.add(it) }
+        runCurrent()
         holder.startBrowserLogin { openedUrls.add(it) }
+        runCurrent()
 
         assertEquals(
             listOf(
@@ -72,6 +75,7 @@ class LoginStateHolderTest {
         )
 
         holder.startBrowserLogin {}
+        advanceUntilIdle()
         holder.completeBrowserLogin("session-123")
         assertTrue(holder.state.value.isLoading)
 
@@ -102,6 +106,7 @@ class LoginStateHolderTest {
         )
 
         holder.startBrowserLogin {}
+        advanceUntilIdle()
         holder.completeBrowserLogin("session-123")
         advanceUntilIdle()
 
@@ -214,6 +219,7 @@ class LoginStateHolderTest {
         )
 
         holder.startBrowserLogin {}
+        advanceUntilIdle()
         holder.completeBrowserLogin("session-123")
         advanceUntilIdle()
 
@@ -318,6 +324,7 @@ class LoginStateHolderTest {
             scope = TestScope(testScheduler),
         )
         holder.startBrowserLogin {}
+        advanceUntilIdle()
         holder.completeBrowserLogin("session-123")
         advanceUntilIdle()
 
@@ -484,6 +491,7 @@ class LoginStateHolderTest {
         )
 
         holder.startBrowserLogin {}
+        advanceUntilIdle()
         holder.completeBrowserLogin("other-session")
         advanceUntilIdle()
 

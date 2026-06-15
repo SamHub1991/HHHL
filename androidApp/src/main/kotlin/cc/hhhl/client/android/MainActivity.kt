@@ -200,6 +200,8 @@ class MainActivity : ComponentActivity() {
                 mediaPicker = mediaPicker,
                 speechTextInput = speechTextInput,
                 authCallbackSession = authCallbackSession,
+                fixedAppAuthClientId = BuildConfig.HHHL_AUTH_CLIENT_ID,
+                fixedAppAuthSecret = BuildConfig.HHHL_AUTH_SECRET,
                 authTokenStore = authTokenStore,
                 themeStore = themeStore,
                 displayPreferenceStore = displayPreferenceStore,
@@ -326,7 +328,8 @@ class MainActivity : ComponentActivity() {
 
     private fun Uri.parseMiAuthSession(): String? {
         if (scheme != "hhhl" || host != "miauth") return null
-        return getQueryParameter("session")?.takeIf { it.isNotBlank() }
+        return getQueryParameter("token")?.takeIf { it.isNotBlank() }
+            ?: getQueryParameter("session")?.takeIf { it.isNotBlank() }
     }
 
     private fun configureImageLoader() {

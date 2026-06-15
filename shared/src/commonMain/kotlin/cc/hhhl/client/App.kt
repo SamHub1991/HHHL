@@ -82,6 +82,8 @@ import cc.hhhl.client.api.toApiInstantOrNull
 import cc.hhhl.client.auth.AccountSession
 import cc.hhhl.client.auth.AuthenticatedUser
 import cc.hhhl.client.auth.AuthTokenStore
+import cc.hhhl.client.auth.FixedAppAuthConfig
+import cc.hhhl.client.auth.FixedAppAuthenticator
 import cc.hhhl.client.auth.LoginStateHolder
 import cc.hhhl.client.auth.NoopAuthTokenStore
 import cc.hhhl.client.auth.SharkeyAuthApi
@@ -347,6 +349,8 @@ fun HhhlApp(
     mediaPicker: MediaPicker? = null,
     speechTextInput: SpeechTextInput? = null,
     authCallbackSession: String? = null,
+    fixedAppAuthClientId: String = "",
+    fixedAppAuthSecret: String = "",
     authTokenStore: AuthTokenStore = NoopAuthTokenStore,
     themeStore: ThemeStore = NoopThemeStore,
     displayPreferenceStore: DisplayPreferenceStore = NoopDisplayPreferenceStore,
@@ -381,9 +385,17 @@ fun HhhlApp(
     onAuthCallbackConsumed: () -> Unit = {},
 ) {
     val appScope = rememberCoroutineScope()
-    val loginStateHolder = remember {
+    val loginStateHolder = remember(fixedAppAuthClientId, fixedAppAuthSecret) {
+        val fixedAppAuthConfig = FixedAppAuthConfig(
+            clientId = fixedAppAuthClientId,
+            appSecret = fixedAppAuthSecret,
+        )
         LoginStateHolder(
-            authenticator = SharkeyAuthApi(),
+            authenticator = if (fixedAppAuthConfig.isEnabled) {
+                FixedAppAuthenticator(fixedAppAuthConfig)
+            } else {
+                SharkeyAuthApi()
+            },
             tokenStore = authTokenStore,
             onAccountRemoved = { accountId ->
                 chatMessageCache.clearAccount(accountId)

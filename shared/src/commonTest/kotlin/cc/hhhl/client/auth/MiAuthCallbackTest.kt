@@ -14,6 +14,14 @@ class MiAuthCallbackTest {
     }
 
     @Test
+    fun parsesFixedAppCallbackToken() {
+        assertEquals(
+            "auth-session-token",
+            MiAuthCallback.parseSession("hhhl://miauth?token=auth-session-token"),
+        )
+    }
+
+    @Test
     fun ignoresUnexpectedCallbackHost() {
         assertNull(MiAuthCallback.parseSession("hhhl://other?session=session-123"))
     }

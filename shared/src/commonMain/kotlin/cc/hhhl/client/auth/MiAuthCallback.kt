@@ -11,6 +11,7 @@ object MiAuthCallback {
             return null
         }
 
-        return url.parameters["session"]?.takeIf { it.isNotBlank() }
+        return url.parameters["token"]?.takeIf { it.isNotBlank() }
+            ?: url.parameters["session"]?.takeIf { it.isNotBlank() }
     }
 }

@@ -39,6 +39,17 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.9.0",
+            title = "HHHL 0.9.0 更新内容",
+            summary = "这版切换到固定应用授权登录，并保持授权参数只从本机配置注入。",
+            highlights = listOf(
+                "登录改为使用服务器已配置的 HHHL 应用授权流程，打开授权页前会先生成固定应用会话。",
+                "授权回调支持 hhhl://miauth?token=...，同时兼容旧的 session 回调参数。",
+                "Android 入口会直接接收 hhhl://miauth 深链接并完成登录，不再依赖网页回调地址继续跳转。",
+                "客户端应用 ID 和密钥只从本机 local.properties 注入，源码仓库不写入具体值。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.8.9",
             title = "HHHL 0.8.9 更新内容",
             summary = "这版微调聊天消息气泡，让自己发出的消息更像完整的对话布局。",

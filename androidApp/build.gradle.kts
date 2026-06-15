@@ -14,6 +14,17 @@ val keystoreProperties = Properties().apply {
     }
 }
 
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun buildConfigString(value: String): String {
+    return "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+}
+
 android {
     namespace = "cc.hhhl.client.android"
     compileSdk = 35
@@ -26,8 +37,18 @@ android {
         applicationId = "cc.hhhl.client"
         minSdk = 26
         targetSdk = 35
-        versionCode = 30
-        versionName = "0.8.9"
+        versionCode = 31
+        versionName = "0.9.0"
+        buildConfigField(
+            "String",
+            "HHHL_AUTH_CLIENT_ID",
+            buildConfigString(localProperties.getProperty("hhhl.auth.clientId")?.trim().orEmpty()),
+        )
+        buildConfigField(
+            "String",
+            "HHHL_AUTH_SECRET",
+            buildConfigString(localProperties.getProperty("hhhl.auth.secret")?.trim().orEmpty()),
+        )
     }
 
     compileOptions {

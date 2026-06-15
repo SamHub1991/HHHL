@@ -39,27 +39,58 @@ class LoginStateHolder(
 
         val current = state.value
         val hadPendingSession = current.pendingSession != null
-        val session = current.pendingSession ?: sessionIdProvider()
-        val url = authenticator.buildAuthorizationUrl(session)
+        val requestedSession = current.pendingSession ?: sessionIdProvider()
+        val requestId = nextAuthRequestId()
 
         mutableState.update {
             it.copy(
-                pendingSession = session,
-                statusMessage = "请在浏览器完成登录",
+                isLoading = true,
+                statusMessage = "正在打开登录页...",
                 errorMessage = null,
                 passwordLoginNeedsTotp = false,
             )
         }
 
-        try {
-            openUrl(url)
-        } catch (error: Throwable) {
-            mutableState.update {
-                it.copy(
-                    pendingSession = if (hadPendingSession) session else null,
-                    statusMessage = null,
-                    errorMessage = "无法打开登录页：${error.message ?: "未知错误"}",
-                )
+        scope.launch {
+            when (val result = authenticator.prepareBrowserLogin(requestedSession)) {
+                is BrowserLoginRequestResult.Success -> {
+                    if (!isCurrentAuthRequest(requestId)) return@launch
+                    val prepared = result.request
+                    mutableState.update {
+                        it.copy(
+                            isLoading = false,
+                            pendingSession = prepared.session,
+                            statusMessage = "请在浏览器完成登录",
+                            errorMessage = null,
+                            passwordLoginNeedsTotp = false,
+                        )
+                    }
+                    try {
+                        openUrl(prepared.url)
+                    } catch (error: Throwable) {
+                        mutableState.update {
+                            it.copy(
+                                pendingSession = if (hadPendingSession) prepared.session else null,
+                                statusMessage = null,
+                                errorMessage = "无法打开登录页：${error.message ?: "未知错误"}",
+                            )
+                        }
+                    }
+                }
+                is BrowserLoginRequestResult.NetworkError -> mutableState.update {
+                    it.copy(
+                        isLoading = false,
+                        statusMessage = null,
+                        errorMessage = loginNetworkErrorMessage(result.message),
+                    )
+                }
+                is BrowserLoginRequestResult.ServerError -> mutableState.update {
+                    it.copy(
+                        isLoading = false,
+                        statusMessage = null,
+                        errorMessage = result.message,
+                    )
+                }
             }
         }
     }
