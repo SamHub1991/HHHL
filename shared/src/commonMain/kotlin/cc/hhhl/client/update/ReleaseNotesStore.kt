@@ -39,6 +39,28 @@ fun releaseNotesTimeline(): List<AppReleaseNotes> = knownReleaseNotes()
 private fun knownReleaseNotes(): List<AppReleaseNotes> {
     return listOf(
         AppReleaseNotes(
+            versionName = "0.9.2",
+            title = "HHHL 0.9.2 更新内容",
+            summary = "这版把服务器新增的频道分类接口接到手机端，频道浏览和管理都更完整。",
+            highlights = listOf(
+                "频道页新增分类加载和分类筛选，可直接浏览服务端返回的频道分类列表，并支持未分类频道入口。",
+                "频道列表刷新会按当前分类或当前频道类型分别走对应接口，切换分类后会自动刷新频道和时间线。",
+                "新建和编辑频道时可填写分类，频道头部也会显示所属分类信息。",
+                "补充频道 API、仓库、状态层和展示层回归测试，并通过 shared 全量单测验证。",
+            ),
+        ),
+        AppReleaseNotes(
+            versionName = "0.9.1",
+            title = "HHHL 0.9.1 更新内容",
+            summary = "这版补齐跨平台图片处理和用户资料能力，为后续图片与资料相关流程打底。",
+            highlights = listOf(
+                "新增跨平台 ImageProcessor 抽象，Android 和 iOS 各自接入本地图片处理实现。",
+                "媒体选择链路补齐图片处理支持，后续图片压缩、编辑和上传入口更统一。",
+                "完善用户资料页的数据仓库、状态层和界面逻辑，补充对应回归测试。",
+                "同步更新 API 文档和构建配置，并发布为 0.9.1。",
+            ),
+        ),
+        AppReleaseNotes(
             versionName = "0.9.0",
             title = "HHHL 0.9.0 更新内容",
             summary = "这版切换到固定应用授权登录，并保持授权参数只从本机配置注入。",

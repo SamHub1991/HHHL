@@ -23,6 +23,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -690,7 +691,7 @@ class UserProfileStateHolderTest {
             fileName = "avatar1.png",
         )
         holder.updateAvatar(firstUpload)
-        advanceUntilIdle()
+        runCurrent()
 
         // 第一次上传应该成功
         assertEquals(AVATAR_UPLOAD_COOLDOWN_SECONDS, holder.state.value.avatarUploadCooldownSeconds)
@@ -702,7 +703,7 @@ class UserProfileStateHolderTest {
             fileName = "avatar2.png",
         )
         holder.updateAvatar(secondUpload)
-        advanceUntilIdle()
+        runCurrent()
 
         // 应该显示冷却时间错误
         assertTrue(holder.state.value.profileEditErrorMessage?.contains("请等待") == true)
@@ -1016,12 +1017,13 @@ class UserProfileStateHolderTest {
         assertTrue(uploadedFolderId!!.isNotBlank())
     }
 
-    private fun createAvatarTestHolder(
+    private fun TestScope.createAvatarTestHolder(
         onDeleteFile: (String) -> Unit = {},
         onCreateFolder: (String) -> Unit = {},
         onUpload: (cc.hhhl.client.api.DriveFileUpload) -> Unit = {},
         imageProcessor: cc.hhhl.client.media.ImageProcessor? = null,
     ): UserProfileStateHolder {
+        val baseTimeMillis = 1_000_000L
         val driveRepository = object : cc.hhhl.client.repository.DriveFileRepository(
             tokenProvider = { "token-123" },
         ) {
@@ -1070,8 +1072,8 @@ class UserProfileStateHolderTest {
             repository = fakeRepository(UserProfileRepositoryResult.Success(FakeData.me)),
             driveFileRepository = driveRepository,
             imageProcessor = imageProcessor,
-            scope = TestScope(testScheduler),
-            timeProvider = { testScheduler.currentTime },
+            scope = this,
+            timeProvider = { baseTimeMillis + testScheduler.currentTime },
         )
     }
 

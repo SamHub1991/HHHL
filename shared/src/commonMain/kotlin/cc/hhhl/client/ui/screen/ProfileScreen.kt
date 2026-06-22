@@ -78,6 +78,8 @@ import cc.hhhl.client.model.InstanceCapabilities
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.UserSocialKind
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import cc.hhhl.client.state.AVATAR_DAILY_UPLOAD_LIMIT
 import cc.hhhl.client.state.UserProfileUiState
 import cc.hhhl.client.theme.HhhlThemePreset

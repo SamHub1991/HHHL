@@ -7,8 +7,14 @@ class MediaPickerTest {
     @Test
     fun chatPhotoAndFileEntrancesUseExpectedMimeTypes() {
         val requestedMimeTypes = mutableListOf<String>()
-        val picker = MediaPicker { mimeType, _, _ ->
-            requestedMimeTypes.add(mimeType)
+        val picker = object : MediaPicker {
+            override fun pickMedia(
+                mimeType: String,
+                onPicked: (cc.hhhl.client.api.DriveFileUpload) -> Unit,
+                onError: (String) -> Unit,
+            ) {
+                requestedMimeTypes.add(mimeType)
+            }
         }
 
         picker.pickImages(onPicked = {}, onError = {})

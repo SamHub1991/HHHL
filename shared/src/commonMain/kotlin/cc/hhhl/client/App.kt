@@ -260,6 +260,9 @@ import cc.hhhl.client.update.NoopReleaseNotesStore
 import cc.hhhl.client.update.ReleaseNotesStore
 import cc.hhhl.client.update.releaseNotesFor
 import cc.hhhl.client.update.releaseNotesTimeline
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsBytes
 import cc.hhhl.client.ui.component.HhhlBottomNav
 import cc.hhhl.client.ui.component.HhhlAlertDialog
 import cc.hhhl.client.ui.component.HhhlTextButton
