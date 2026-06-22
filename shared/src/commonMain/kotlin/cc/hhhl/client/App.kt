@@ -3041,9 +3041,10 @@ private fun ChannelsRouteContent(
     ChannelScreen(
         state = state,
         onBack = onBack,
-        onRefreshChannels = { stateHolder.refreshChannels() },
+        onRefreshChannels = stateHolder::refreshCurrentChannels,
         onRefreshTimeline = stateHolder::refreshTimeline,
         onKindSelected = stateHolder::selectKind,
+        onCategorySelected = stateHolder::selectCategory,
         onSelectChannel = stateHolder::selectChannel,
         onToggleFollowChannel = stateHolder::toggleFollowSelectedChannel,
         onToggleFavoriteChannel = stateHolder::toggleFavoriteSelectedChannel,

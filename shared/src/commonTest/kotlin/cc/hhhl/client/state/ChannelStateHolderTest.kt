@@ -2,11 +2,13 @@ package cc.hhhl.client.state
 
 import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelCategory
 import cc.hhhl.client.model.ChannelDraft
 import cc.hhhl.client.model.ChannelListKind
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.repository.ChannelRepository
 import cc.hhhl.client.repository.ChannelActionRepositoryResult
+import cc.hhhl.client.repository.ChannelCategoriesRepositoryResult
 import cc.hhhl.client.repository.ChannelMutationRepositoryResult
 import cc.hhhl.client.repository.ChannelTimelineRepositoryResult
 import cc.hhhl.client.repository.ChannelsRepositoryResult
@@ -47,6 +49,24 @@ class ChannelStateHolderTest {
     }
 
     @Test
+    fun refreshChannelsAlsoLoadsCategories() = runTest {
+        val category = ChannelCategory(name = "AI与大模型", channelsCount = 13)
+        val holder = ChannelStateHolder(
+            repository = fakeRepository(
+                categoriesResult = ChannelCategoriesRepositoryResult.Success(listOf(category)),
+                channelsResult = ChannelsRepositoryResult.Success(listOf(sampleChannel("channel-1"))),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshChannels()
+        advanceUntilIdle()
+
+        assertFalse(holder.state.value.isLoadingCategories)
+        assertEquals(listOf(category), holder.state.value.categories)
+    }
+
+    @Test
     fun selectKindLoadsThatKindChannels() = runTest {
         val featured = sampleChannel("channel-featured")
         val favorite = sampleChannel("channel-favorite")
@@ -72,6 +92,72 @@ class ChannelStateHolderTest {
         assertEquals(ChannelListKind.Favorites, holder.state.value.selectedKind)
         assertEquals(listOf(favorite), holder.state.value.channels)
         assertEquals(favorite, holder.state.value.selectedChannel)
+    }
+
+    @Test
+    fun selectCategoryLoadsThatCategoryChannels() = runTest {
+        val category = ChannelCategory(name = "AI与大模型", channelsCount = 13)
+        val featured = sampleChannel("channel-featured")
+        val categorized = sampleChannel("channel-category").copy(category = category.name)
+        val note = FakeData.timeline[0]
+        val categoryCalls = mutableListOf<ChannelCategory>()
+        val timelineCalls = mutableListOf<String>()
+        val holder = ChannelStateHolder(
+            repository = sequenceRepository(
+                channelResults = listOf(ChannelsRepositoryResult.Success(listOf(featured))),
+                categoryChannelsResult = ChannelsRepositoryResult.Success(listOf(categorized)),
+                categoriesResult = ChannelCategoriesRepositoryResult.Success(listOf(category)),
+                timelineResult = ChannelTimelineRepositoryResult.Success(listOf(note)),
+                onRefreshChannelsByCategory = { categoryCalls.add(it) },
+                onRefreshTimeline = { timelineCalls.add(it) },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshChannels()
+        advanceUntilIdle()
+        holder.selectCategory(category)
+        assertTrue(holder.state.value.isLoadingChannels)
+        advanceUntilIdle()
+
+        assertEquals(category, holder.state.value.selectedCategory)
+        assertEquals(listOf(categorized), holder.state.value.channels)
+        assertEquals(categorized, holder.state.value.selectedChannel)
+        assertEquals(listOf(note), holder.state.value.notes)
+        assertEquals(listOf(category), categoryCalls)
+        assertEquals("channel-category", timelineCalls.last())
+    }
+
+    @Test
+    fun refreshCurrentChannelsUsesSelectedCategoryWhenPresent() = runTest {
+        val category = ChannelCategory(name = "AI与大模型", channelsCount = 13)
+        val featured = sampleChannel("channel-featured")
+        val categorized = sampleChannel("channel-category").copy(category = category.name)
+        val kindCalls = mutableListOf<ChannelListKind>()
+        val categoryCalls = mutableListOf<ChannelCategory>()
+        val holder = ChannelStateHolder(
+            repository = sequenceRepository(
+                channelResults = listOf(ChannelsRepositoryResult.Success(listOf(featured))),
+                categoryChannelsResult = ChannelsRepositoryResult.Success(listOf(categorized)),
+                categoriesResult = ChannelCategoriesRepositoryResult.Success(listOf(category)),
+                timelineResult = ChannelTimelineRepositoryResult.Success(emptyList()),
+                onRefreshChannels = { kindCalls.add(it) },
+                onRefreshChannelsByCategory = { categoryCalls.add(it) },
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refreshChannels()
+        advanceUntilIdle()
+        holder.selectCategory(category)
+        advanceUntilIdle()
+        holder.refreshCurrentChannels()
+        advanceUntilIdle()
+
+        assertEquals(listOf(ChannelListKind.Featured), kindCalls)
+        assertEquals(listOf(category, category), categoryCalls)
+        assertEquals(category, holder.state.value.selectedCategory)
+        assertEquals(listOf(categorized), holder.state.value.channels)
     }
 
     @Test
@@ -530,27 +616,39 @@ class ChannelStateHolderTest {
     }
 
     private fun fakeRepository(
+        categoriesResult: ChannelCategoriesRepositoryResult = ChannelCategoriesRepositoryResult.Success(emptyList()),
         channelsResult: ChannelsRepositoryResult,
+        categoryChannelsResult: ChannelsRepositoryResult = channelsResult,
         timelineResult: ChannelTimelineRepositoryResult = ChannelTimelineRepositoryResult.Success(emptyList()),
         loadMoreResult: ChannelTimelineRepositoryResult = timelineResult,
         actionResult: ChannelActionRepositoryResult = ChannelActionRepositoryResult.Success,
         mutationResult: ChannelMutationRepositoryResult = ChannelMutationRepositoryResult.Success(sampleChannel("channel-mutated")),
+        onRefreshCategories: () -> Unit = {},
         onRefreshChannels: (ChannelListKind) -> Unit = {},
+        onRefreshChannelsByCategory: (ChannelCategory) -> Unit = {},
         onRefreshTimeline: (String) -> Unit = {},
+        refreshCategoriesResultProvider: (suspend () -> ChannelCategoriesRepositoryResult)? = null,
         refreshChannelsResultProvider: (suspend (ChannelListKind) -> ChannelsRepositoryResult)? = null,
+        refreshCategoryChannelsResultProvider: (suspend (ChannelCategory) -> ChannelsRepositoryResult)? = null,
         actionResultProvider: suspend (String) -> ChannelActionRepositoryResult = { actionResult },
         updateResultProvider: suspend (String, ChannelDraft) -> ChannelMutationRepositoryResult = { _, _ -> mutationResult },
         archiveResultProvider: suspend (Channel) -> ChannelMutationRepositoryResult = { mutationResult },
     ): ChannelRepository {
         return sequenceRepository(
             channelResults = listOf(channelsResult),
+            categoriesResult = categoriesResult,
+            categoryChannelsResult = categoryChannelsResult,
             timelineResult = timelineResult,
             loadMoreResult = loadMoreResult,
             actionResult = actionResult,
             mutationResult = mutationResult,
+            onRefreshCategories = onRefreshCategories,
             onRefreshChannels = onRefreshChannels,
+            onRefreshChannelsByCategory = onRefreshChannelsByCategory,
             onRefreshTimeline = onRefreshTimeline,
+            refreshCategoriesResultProvider = refreshCategoriesResultProvider,
             refreshChannelsResultProvider = refreshChannelsResultProvider,
+            refreshCategoryChannelsResultProvider = refreshCategoryChannelsResultProvider,
             actionResultProvider = actionResultProvider,
             updateResultProvider = updateResultProvider,
             archiveResultProvider = archiveResultProvider,
@@ -559,13 +657,20 @@ class ChannelStateHolderTest {
 
     private fun sequenceRepository(
         channelResults: List<ChannelsRepositoryResult>,
+        categoriesResult: ChannelCategoriesRepositoryResult = ChannelCategoriesRepositoryResult.Success(emptyList()),
+        categoryChannelsResult: ChannelsRepositoryResult = channelResults.firstOrNull()
+            ?: ChannelsRepositoryResult.Success(emptyList()),
         timelineResult: ChannelTimelineRepositoryResult,
         loadMoreResult: ChannelTimelineRepositoryResult = timelineResult,
         actionResult: ChannelActionRepositoryResult = ChannelActionRepositoryResult.Success,
         mutationResult: ChannelMutationRepositoryResult = ChannelMutationRepositoryResult.Success(sampleChannel("channel-mutated")),
+        onRefreshCategories: () -> Unit = {},
         onRefreshChannels: (ChannelListKind) -> Unit = {},
+        onRefreshChannelsByCategory: (ChannelCategory) -> Unit = {},
         onRefreshTimeline: (String) -> Unit = {},
+        refreshCategoriesResultProvider: (suspend () -> ChannelCategoriesRepositoryResult)? = null,
         refreshChannelsResultProvider: (suspend (ChannelListKind) -> ChannelsRepositoryResult)? = null,
+        refreshCategoryChannelsResultProvider: (suspend (ChannelCategory) -> ChannelsRepositoryResult)? = null,
         actionResultProvider: suspend (String) -> ChannelActionRepositoryResult = { actionResult },
         updateResultProvider: suspend (String, ChannelDraft) -> ChannelMutationRepositoryResult = { _, _ -> mutationResult },
         archiveResultProvider: suspend (Channel) -> ChannelMutationRepositoryResult = { mutationResult },
@@ -574,11 +679,24 @@ class ChannelStateHolderTest {
         return object : ChannelRepository(
             tokenProvider = { "token-123" },
             api = object : cc.hhhl.client.api.ChannelApi {
+                override suspend fun loadChannelCategories(): cc.hhhl.client.api.ChannelCategoryLoadResult {
+                    return cc.hhhl.client.api.ChannelCategoryLoadResult.Success(emptyList())
+                }
+
                 override suspend fun loadChannels(
                     token: String,
                     kind: ChannelListKind,
                     limit: Int,
                     untilId: String?,
+                ): cc.hhhl.client.api.ChannelLoadResult {
+                    return cc.hhhl.client.api.ChannelLoadResult.Success(emptyList())
+                }
+
+                override suspend fun loadChannelsByCategory(
+                    category: String?,
+                    uncategorized: Boolean,
+                    limit: Int,
+                    offset: Int,
                 ): cc.hhhl.client.api.ChannelLoadResult {
                     return cc.hhhl.client.api.ChannelLoadResult.Success(emptyList())
                 }
@@ -638,12 +756,22 @@ class ChannelStateHolderTest {
                 }
             },
         ) {
+            override suspend fun refreshCategories(): ChannelCategoriesRepositoryResult {
+                onRefreshCategories()
+                return refreshCategoriesResultProvider?.invoke() ?: categoriesResult
+            }
+
             override suspend fun refreshChannels(kind: ChannelListKind): ChannelsRepositoryResult {
                 onRefreshChannels(kind)
                 refreshChannelsResultProvider?.let { provider -> return provider(kind) }
                 val result = channelResults.getOrElse(channelResultIndex) { channelResults.last() }
                 channelResultIndex += 1
                 return result
+            }
+
+            override suspend fun refreshChannelsByCategory(category: ChannelCategory): ChannelsRepositoryResult {
+                onRefreshChannelsByCategory(category)
+                return refreshCategoryChannelsResultProvider?.invoke(category) ?: categoryChannelsResult
             }
 
             override suspend fun refreshTimeline(channelId: String): ChannelTimelineRepositoryResult {

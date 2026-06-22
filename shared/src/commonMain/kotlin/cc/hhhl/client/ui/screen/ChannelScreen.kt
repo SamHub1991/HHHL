@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelCategory
 import cc.hhhl.client.model.ChannelDefaultColorHex
 import cc.hhhl.client.model.ChannelDraft
 import cc.hhhl.client.model.ChannelListKind
@@ -64,6 +65,7 @@ fun ChannelScreen(
     onRefreshChannels: () -> Unit = {},
     onRefreshTimeline: () -> Unit = {},
     onKindSelected: (ChannelListKind) -> Unit = {},
+    onCategorySelected: (ChannelCategory) -> Unit = {},
     onSelectChannel: (Channel) -> Unit = {},
     onToggleFollowChannel: () -> Unit = {},
     onToggleFavoriteChannel: () -> Unit = {},
@@ -115,14 +117,17 @@ fun ChannelScreen(
         HhhlTopBar(
             title = "频道",
             supportingText = selectedChannel?.name?.ifBlank { null }
+                ?: state?.selectedCategory?.label
                 ?: (state?.selectedKind ?: ChannelListKind.Featured).label,
             navigation = { HhhlBackButton(onClick = onBack) },
         )
         HhhlDivider()
         ChannelSummaryRow(
             selectedKind = state?.selectedKind ?: ChannelListKind.Featured,
+            selectedCategory = state?.selectedCategory,
             channelCount = channels.size,
             selectedChannel = selectedChannel,
+            isLoadingCategories = state?.isLoadingCategories == true,
             isLoadingChannels = state?.isLoadingChannels == true,
             isLoadingTimeline = state?.isLoadingTimeline == true,
             isMutatingChannel = state?.isMutatingChannel == true,
@@ -133,8 +138,18 @@ fun ChannelScreen(
         HhhlDivider()
         ChannelKindFilterRow(
             selectedKind = state?.selectedKind ?: ChannelListKind.Featured,
+            selectedCategory = state?.selectedCategory,
             onKindSelected = onKindSelected,
         )
+        if (state?.isLoadingCategories == true || state?.categories?.isNotEmpty() == true) {
+            HhhlDivider()
+            ChannelCategoryFilterRow(
+                categories = state.categories,
+                selectedCategory = state.selectedCategory,
+                isLoadingCategories = state.isLoadingCategories,
+                onCategorySelected = onCategorySelected,
+            )
+        }
         HhhlDivider()
         ChannelPickerRow(
             channels = channels,
@@ -396,6 +411,7 @@ private fun ChannelActionRow(
 @Composable
 private fun ChannelKindFilterRow(
     selectedKind: ChannelListKind,
+    selectedCategory: ChannelCategory?,
     onKindSelected: (ChannelListKind) -> Unit,
 ) {
     FlowRow(
@@ -408,17 +424,63 @@ private fun ChannelKindFilterRow(
         channelPrimaryKinds().forEach { kind ->
             HhhlActionChip(
                 label = kind.label,
-                emphasized = kind == selectedKind,
+                emphasized = selectedCategory == null && kind == selectedKind,
                 onClick = { onKindSelected(kind) },
             )
         }
-        if (selectedKind !in channelPrimaryKinds()) {
+        if (selectedCategory == null && selectedKind !in channelPrimaryKinds()) {
             HhhlActionChip(
                 label = selectedKind.label,
                 emphasized = true,
                 onClick = { onKindSelected(selectedKind) },
             )
         }
+    }
+}
+
+@Composable
+private fun ChannelCategoryFilterRow(
+    categories: List<ChannelCategory>,
+    selectedCategory: ChannelCategory?,
+    isLoadingCategories: Boolean,
+    onCategorySelected: (ChannelCategory) -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (isLoadingCategories && categories.isEmpty()) {
+            item(key = "channel-category-loading", contentType = "channel-category-status") {
+                Text(
+                    text = "加载分类中",
+                    color = LocalHhhlColors.current.textMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                )
+            }
+        }
+        items(
+            items = categories,
+            key = { if (it.uncategorized) "__uncategorized__" else it.name },
+            contentType = { "channel-category-chip" },
+        ) { category ->
+            HhhlActionChip(
+                label = channelCategoryLabel(category),
+                emphasized = selectedCategory.sameCategory(category),
+                onClick = { onCategorySelected(category) },
+            )
+        }
+    }
+}
+
+fun channelCategoryLabel(category: ChannelCategory): String {
+    return if (category.channelsCount > 0) {
+        "${category.label} ${category.channelsCount}"
+    } else {
+        category.label
     }
 }
 
@@ -453,6 +515,7 @@ private fun ChannelEditorDialog(
     var name by remember(initialChannel?.id) { mutableStateOf(initialChannel?.name.orEmpty()) }
     var description by remember(initialChannel?.id) { mutableStateOf(initialChannel?.description.orEmpty()) }
     var color by remember(initialChannel?.id) { mutableStateOf(initialChannel?.color.ifNullOrBlank(ChannelDefaultColorHex)) }
+    var category by remember(initialChannel?.id) { mutableStateOf(initialChannel?.category.orEmpty()) }
     var isSensitive by remember(initialChannel?.id) { mutableStateOf(initialChannel?.isSensitive == true) }
     var allowRenoteToExternal by remember(initialChannel?.id) {
         mutableStateOf(initialChannel?.allowRenoteToExternal != false)
@@ -491,6 +554,15 @@ private fun ChannelEditorDialog(
                     enabled = !isMutating,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                HhhlTextInput(
+                    value = category,
+                    onValueChange = { category = it },
+                    label = "分类",
+                    placeholder = "如 AI与大模型",
+                    singleLine = true,
+                    enabled = !isMutating,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 ChannelCheckRow("敏感频道", isSensitive, !isMutating) { isSensitive = it }
                 ChannelCheckRow("允许站外转发", allowRenoteToExternal, !isMutating) {
                     allowRenoteToExternal = it
@@ -508,6 +580,7 @@ private fun ChannelEditorDialog(
                             isArchived = initialChannel?.isArchived == true,
                             isSensitive = isSensitive,
                             allowRenoteToExternal = allowRenoteToExternal,
+                            category = category,
                         ),
                     )
                 },
@@ -583,8 +656,10 @@ private fun ArchiveChannelDialog(
 @Composable
 private fun ChannelSummaryRow(
     selectedKind: ChannelListKind,
+    selectedCategory: ChannelCategory?,
     channelCount: Int,
     selectedChannel: Channel?,
+    isLoadingCategories: Boolean,
     isLoadingChannels: Boolean,
     isLoadingTimeline: Boolean,
     isMutatingChannel: Boolean,
@@ -594,10 +669,11 @@ private fun ChannelSummaryRow(
 ) {
     val colors = LocalHhhlColors.current
     val titleText = listOfNotNull(
-        selectedKind.label,
+        selectedCategory?.label ?: selectedKind.label,
         selectedChannel?.name?.ifBlank { "未命名频道" },
     ).joinToString(" · ")
     val stateText = when {
+        isLoadingCategories -> "加载分类中"
         isLoadingChannels -> "加载频道中"
         isLoadingTimeline -> "加载时间线中"
         selectedChannel != null -> "${channelCount} 个频道 · ${selectedChannel.notesCount} 条"
@@ -754,6 +830,12 @@ private fun ChannelPickerChip(
 @Composable
 private fun ChannelHeader(channel: Channel) {
     val colors = LocalHhhlColors.current
+    val metaText = listOfNotNull(
+        channel.statusLabel,
+        channel.category.takeIf { it.isNotBlank() },
+        "${channel.usersCount} 人关注",
+        "${channel.notesCount} 条动态",
+    ).joinToString(" · ")
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -774,7 +856,7 @@ private fun ChannelHeader(channel: Channel) {
             )
         }
         Text(
-            text = "${channel.statusLabel} · ${channel.usersCount} 人关注 · ${channel.notesCount} 条动态",
+            text = metaText,
             color = colors.textSecondary,
             style = MaterialTheme.typography.bodySmall,
         )
@@ -799,4 +881,10 @@ private fun ChannelStatusRow(
 
 private fun String?.ifNullOrBlank(default: String): String {
     return this?.takeIf { it.isNotBlank() } ?: default
+}
+
+private fun ChannelCategory?.sameCategory(other: ChannelCategory): Boolean {
+    return this != null &&
+        uncategorized == other.uncategorized &&
+        name.trim() == other.name.trim()
 }

@@ -12,6 +12,16 @@ enum class ChannelListKind(val label: String) {
 const val ChannelDefaultColorHex = "#40c057"
 
 @Immutable
+data class ChannelCategory(
+    val name: String,
+    val channelsCount: Int,
+    val uncategorized: Boolean = false,
+) {
+    val label: String
+        get() = if (uncategorized) "未分类" else name.ifBlank { "未分类" }
+}
+
+@Immutable
 data class Channel(
     val id: String,
     val name: String,
@@ -31,6 +41,7 @@ data class Channel(
     val notesCount: Int,
     val createdAtLabel: String = "",
     val lastNotedAtLabel: String = "",
+    val category: String = "",
 ) {
     val statusLabel: String
         get() = when {
@@ -50,4 +61,5 @@ data class ChannelDraft(
     val isArchived: Boolean = false,
     val isSensitive: Boolean = false,
     val allowRenoteToExternal: Boolean = true,
+    val category: String = "",
 )

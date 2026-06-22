@@ -1,6 +1,7 @@
 package cc.hhhl.client.api
 
 import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelCategory
 import cc.hhhl.client.model.ChannelDefaultColorHex
 import cc.hhhl.client.model.ChannelDraft
 import cc.hhhl.client.model.ChannelListKind
@@ -18,15 +19,27 @@ import io.ktor.http.appendPathSegments
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 
 interface ChannelApi {
+    suspend fun loadChannelCategories(): ChannelCategoryLoadResult
+
     suspend fun loadChannels(
         token: String,
         kind: ChannelListKind,
         limit: Int,
         untilId: String? = null,
+    ): ChannelLoadResult
+
+    suspend fun loadChannelsByCategory(
+        category: String?,
+        uncategorized: Boolean,
+        limit: Int,
+        offset: Int = 0,
     ): ChannelLoadResult
 
     suspend fun loadChannelTimeline(
@@ -68,6 +81,19 @@ interface ChannelApi {
         channelId: String,
         draft: ChannelDraft,
     ): ChannelMutationResult
+}
+
+sealed interface ChannelCategoryLoadResult {
+    data class Success(val categories: List<ChannelCategory>) : ChannelCategoryLoadResult
+
+    data object Unauthorized : ChannelCategoryLoadResult
+
+    data class ServerError(
+        val statusCode: Int,
+        val message: String,
+    ) : ChannelCategoryLoadResult
+
+    data class NetworkError(val message: String) : ChannelCategoryLoadResult
 }
 
 sealed interface ChannelLoadResult {
@@ -126,6 +152,32 @@ class SharkeyChannelApi(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val client: HttpClient = defaultChannelClient(),
 ) : ChannelApi {
+    override suspend fun loadChannelCategories(): ChannelCategoryLoadResult {
+        return try {
+            val response = client.post(apiUrl("channels", "categories")) {
+                contentType(ContentType.Application.Json)
+                setBody(buildJsonObject { })
+            }
+
+            if (response.isSharkeyUnauthorized()) return ChannelCategoryLoadResult.Unauthorized
+
+            when (response.status) {
+                HttpStatusCode.OK -> ChannelCategoryLoadResult.Success(
+                    response.body<List<ChannelCategoryDto>>().map { it.toDomainCategory() },
+                )
+                HttpStatusCode.Unauthorized -> ChannelCategoryLoadResult.Unauthorized
+                else -> ChannelCategoryLoadResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            ChannelCategoryLoadResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
     override suspend fun loadChannels(
         token: String,
         kind: ChannelListKind,
@@ -149,6 +201,44 @@ class SharkeyChannelApi(
                         i = cleanToken,
                         limit = limit.coerceIn(1, 100),
                         untilId = untilId?.takeIf { it.isNotBlank() },
+                    ),
+                )
+            }
+
+            if (response.isSharkeyUnauthorized()) return ChannelLoadResult.Unauthorized
+
+            when (response.status) {
+                HttpStatusCode.OK -> ChannelLoadResult.Success(
+                    response.body<List<ChannelDto>>().map { it.toDomainChannel() },
+                )
+                HttpStatusCode.Unauthorized -> ChannelLoadResult.Unauthorized
+                else -> ChannelLoadResult.ServerError(
+                    statusCode = response.status.value,
+                    message = response.apiErrorMessage() ?: "服务器返回 ${response.status.value}",
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            ChannelLoadResult.NetworkError(error.message ?: "网络请求失败")
+        }
+    }
+
+    override suspend fun loadChannelsByCategory(
+        category: String?,
+        uncategorized: Boolean,
+        limit: Int,
+        offset: Int,
+    ): ChannelLoadResult {
+        return try {
+            val response = client.post(apiUrl("channels", "by-category")) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    ChannelCategoryChannelsRequest(
+                        category = category?.trim()?.takeIf { it.isNotBlank() },
+                        uncategorized = uncategorized,
+                        limit = limit.coerceIn(1, 50),
+                        offset = offset.coerceAtLeast(0),
                     ),
                 )
             }
@@ -355,6 +445,16 @@ private data class ChannelListRequest(
     val untilId: String? = null,
 )
 
+@OptIn(ExperimentalSerializationApi::class)
+@Serializable
+private data class ChannelCategoryChannelsRequest(
+    val category: String? = null,
+    @EncodeDefault
+    val uncategorized: Boolean = false,
+    val limit: Int,
+    val offset: Int,
+)
+
 @Serializable
 private data class ChannelTimelineRequest(
     val i: String,
@@ -382,6 +482,7 @@ private data class ChannelMutationRequest(
     val isArchived: Boolean,
     val isSensitive: Boolean,
     val allowRenoteToExternal: Boolean,
+    val category: String? = null,
 ) {
     companion object {
         fun fromDraft(
@@ -399,8 +500,23 @@ private data class ChannelMutationRequest(
                 isArchived = draft.isArchived,
                 isSensitive = draft.isSensitive,
                 allowRenoteToExternal = draft.allowRenoteToExternal,
+                category = draft.category.trim().takeIf { it.isNotBlank() },
             )
         }
+    }
+}
+
+@Serializable
+private data class ChannelCategoryDto(
+    val category: String,
+    val channelsCount: Int,
+) {
+    fun toDomainCategory(): ChannelCategory {
+        return ChannelCategory(
+            name = category,
+            channelsCount = channelsCount,
+            uncategorized = category.isBlank(),
+        )
     }
 }
 
@@ -424,6 +540,7 @@ private data class ChannelDto(
     val isFavorited: Boolean = false,
     val hasUnreadNote: Boolean = false,
     val pinnedNotes: List<SharkeyNoteDto> = emptyList(),
+    val category: String? = null,
 ) {
     fun toDomainChannel(): Channel {
         return Channel(
@@ -445,6 +562,7 @@ private data class ChannelDto(
             notesCount = notesCount,
             createdAtLabel = createdAt.toLocalCompactDateLabel(),
             lastNotedAtLabel = lastNotedAt?.toLocalCompactDateLabel().orEmpty(),
+            category = category.orEmpty(),
         )
     }
 }

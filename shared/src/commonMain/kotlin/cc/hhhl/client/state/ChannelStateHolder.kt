@@ -1,11 +1,13 @@
 package cc.hhhl.client.state
 
 import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelCategory
 import cc.hhhl.client.model.ChannelDraft
 import cc.hhhl.client.model.ChannelListKind
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.repository.ChannelRepository
 import cc.hhhl.client.repository.ChannelActionRepositoryResult
+import cc.hhhl.client.repository.ChannelCategoriesRepositoryResult
 import cc.hhhl.client.repository.ChannelMutationRepositoryResult
 import cc.hhhl.client.repository.ChannelTimelineRepositoryResult
 import cc.hhhl.client.repository.ChannelsRepositoryResult
@@ -17,9 +19,12 @@ import kotlinx.coroutines.launch
 
 data class ChannelUiState(
     val selectedKind: ChannelListKind = ChannelListKind.Featured,
+    val selectedCategory: ChannelCategory? = null,
+    val categories: List<ChannelCategory> = emptyList(),
     val channels: List<Channel> = emptyList(),
     val selectedChannel: Channel? = null,
     val notes: List<Note> = emptyList(),
+    val isLoadingCategories: Boolean = false,
     val isLoadingChannels: Boolean = false,
     val isLoadingTimeline: Boolean = false,
     val isLoadingMore: Boolean = false,
@@ -39,14 +44,56 @@ class ChannelStateHolder(
     private val mutableState = MutableStateFlow(ChannelUiState())
     val state: StateFlow<ChannelUiState> = mutableState
     private var channelsRequestId = 0
+    private var categoriesRequestId = 0
     private var timelineRequestId = 0
+
+    fun refreshCategories() {
+        if (state.value.isLoadingCategories) return
+        val requestId = nextCategoriesRequestId()
+        mutableState.update {
+            it.copy(
+                isLoadingCategories = true,
+                errorMessage = null,
+            )
+        }
+        scope.launch {
+            when (val result = repository.refreshCategories()) {
+                is ChannelCategoriesRepositoryResult.Success -> mutableState.update {
+                    if (requestId != categoriesRequestId) return@update it
+                    it.copy(
+                        categories = result.categories,
+                        isLoadingCategories = false,
+                        errorMessage = null,
+                    )
+                }
+                ChannelCategoriesRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != categoriesRequestId) return@update it
+                    it.copy(
+                        isLoadingCategories = false,
+                        errorMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is ChannelCategoriesRepositoryResult.Error -> mutableState.update {
+                    if (requestId != categoriesRequestId) return@update it
+                    it.copy(
+                        isLoadingCategories = false,
+                        errorMessage = result.message,
+                    )
+                }
+            }
+        }
+    }
 
     fun refreshChannels(kind: ChannelListKind = state.value.selectedKind) {
         if (state.value.isLoadingChannels) return
+        if (state.value.categories.isEmpty() && !state.value.isLoadingCategories) {
+            refreshCategories()
+        }
         val requestId = nextChannelsRequestId()
 
         val previousState = state.value
-        val previousSelectedId = if (previousState.selectedKind == kind) {
+        val previousSelectedId = if (previousState.selectedKind == kind && previousState.selectedCategory == null) {
             previousState.selectedChannel?.id
         } else {
             null
@@ -55,7 +102,8 @@ class ChannelStateHolder(
         mutableState.update {
             it.copy(
                 selectedKind = kind,
-                notes = if (it.selectedKind == kind) it.notes else emptyList(),
+                selectedCategory = null,
+                notes = if (it.selectedKind == kind && it.selectedCategory == null) it.notes else emptyList(),
                 isLoadingChannels = true,
                 isLoadingMore = false,
                 endReached = false,
@@ -71,7 +119,9 @@ class ChannelStateHolder(
                     var selectedForTimeline: Channel? = null
                     var clearTimelineNotes = false
                     mutableState.update {
-                        if (requestId != channelsRequestId || it.selectedKind != kind) return@update it
+                        if (requestId != channelsRequestId || it.selectedKind != kind || it.selectedCategory != null) {
+                            return@update it
+                        }
                         val selectedId = it.selectedChannel?.id ?: previousSelectedId
                         val selected = result.channels.firstOrNull { channel -> channel.id == selectedId }
                             ?: result.channels.firstOrNull()
@@ -86,12 +136,18 @@ class ChannelStateHolder(
                             requiresRelogin = false,
                         )
                     }
-                    if (requestId == channelsRequestId && state.value.selectedKind == kind) {
+                    if (
+                        requestId == channelsRequestId &&
+                        state.value.selectedKind == kind &&
+                        state.value.selectedCategory == null
+                    ) {
                         selectedForTimeline?.let { channel -> loadTimeline(channel.id, clearNotes = clearTimelineNotes) }
                     }
                 }
                 ChannelsRepositoryResult.Unauthorized -> mutableState.update {
-                    if (requestId != channelsRequestId || it.selectedKind != kind) return@update it
+                    if (requestId != channelsRequestId || it.selectedKind != kind || it.selectedCategory != null) {
+                        return@update it
+                    }
                     it.copy(
                         isLoadingChannels = false,
                         errorMessage = "登录已失效，请重新登录",
@@ -99,7 +155,9 @@ class ChannelStateHolder(
                     )
                 }
                 is ChannelsRepositoryResult.Error -> mutableState.update {
-                    if (requestId != channelsRequestId || it.selectedKind != kind) return@update it
+                    if (requestId != channelsRequestId || it.selectedKind != kind || it.selectedCategory != null) {
+                        return@update it
+                    }
                     it.copy(
                         isLoadingChannels = false,
                         errorMessage = result.message,
@@ -110,9 +168,24 @@ class ChannelStateHolder(
         }
     }
 
+    fun refreshCurrentChannels() {
+        state.value.selectedCategory?.let { category ->
+            refreshChannelsByCategory(category)
+            return
+        }
+        refreshChannels(state.value.selectedKind)
+    }
+
     fun selectKind(kind: ChannelListKind) {
-        if (state.value.selectedKind == kind && state.value.channels.isNotEmpty()) return
+        if (state.value.selectedKind == kind && state.value.selectedCategory == null && state.value.channels.isNotEmpty()) {
+            return
+        }
         refreshChannels(kind)
+    }
+
+    fun selectCategory(category: ChannelCategory) {
+        if (state.value.selectedCategory.sameChannelCategory(category) && state.value.channels.isNotEmpty()) return
+        refreshChannelsByCategory(category)
     }
 
     fun selectChannel(channel: Channel) {
@@ -399,6 +472,80 @@ class ChannelStateHolder(
         }
     }
 
+    private fun refreshChannelsByCategory(category: ChannelCategory) {
+        if (state.value.isLoadingChannels) return
+        val requestId = nextChannelsRequestId()
+        val previousState = state.value
+        val previousSelectedId = if (previousState.selectedCategory.sameChannelCategory(category)) {
+            previousState.selectedChannel?.id
+        } else {
+            null
+        }
+
+        mutableState.update {
+            it.copy(
+                selectedCategory = category,
+                notes = if (it.selectedCategory.sameChannelCategory(category)) it.notes else emptyList(),
+                isLoadingChannels = true,
+                isLoadingMore = false,
+                endReached = false,
+                errorMessage = null,
+                timelineErrorMessage = null,
+                requiresRelogin = false,
+            )
+        }
+
+        scope.launch {
+            when (val result = repository.refreshChannelsByCategory(category)) {
+                is ChannelsRepositoryResult.Success -> {
+                    var selectedForTimeline: Channel? = null
+                    var clearTimelineNotes = false
+                    mutableState.update {
+                        if (requestId != channelsRequestId || !it.selectedCategory.sameChannelCategory(category)) {
+                            return@update it
+                        }
+                        val selectedId = it.selectedChannel?.id ?: previousSelectedId
+                        val selected = result.channels.firstOrNull { channel -> channel.id == selectedId }
+                            ?: result.channels.firstOrNull()
+                        selectedForTimeline = selected
+                        clearTimelineNotes = it.notes.isEmpty()
+                        it.copy(
+                            channels = result.channels,
+                            selectedChannel = selected,
+                            notes = if (selected == null) emptyList() else it.notes,
+                            isLoadingChannels = false,
+                            errorMessage = null,
+                            requiresRelogin = false,
+                        )
+                    }
+                    if (requestId == channelsRequestId && state.value.selectedCategory.sameChannelCategory(category)) {
+                        selectedForTimeline?.let { channel -> loadTimeline(channel.id, clearNotes = clearTimelineNotes) }
+                    }
+                }
+                ChannelsRepositoryResult.Unauthorized -> mutableState.update {
+                    if (requestId != channelsRequestId || !it.selectedCategory.sameChannelCategory(category)) {
+                        return@update it
+                    }
+                    it.copy(
+                        isLoadingChannels = false,
+                        errorMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is ChannelsRepositoryResult.Error -> mutableState.update {
+                    if (requestId != channelsRequestId || !it.selectedCategory.sameChannelCategory(category)) {
+                        return@update it
+                    }
+                    it.copy(
+                        isLoadingChannels = false,
+                        errorMessage = result.message,
+                        requiresRelogin = false,
+                    )
+                }
+            }
+        }
+    }
+
     private fun loadTimeline(
         channelId: String,
         clearNotes: Boolean,
@@ -465,6 +612,11 @@ class ChannelStateHolder(
     private fun nextChannelsRequestId(): Int {
         channelsRequestId += 1
         return channelsRequestId
+    }
+
+    private fun nextCategoriesRequestId(): Int {
+        categoriesRequestId += 1
+        return categoriesRequestId
     }
 
     private fun nextTimelineRequestId(): Int {
@@ -569,4 +721,9 @@ class ChannelStateHolder(
             }
         }
     }
+}
+
+private fun ChannelCategory?.sameChannelCategory(other: ChannelCategory?): Boolean {
+    if (this == null || other == null) return this == null && other == null
+    return uncategorized == other.uncategorized && name.trim() == other.name.trim()
 }

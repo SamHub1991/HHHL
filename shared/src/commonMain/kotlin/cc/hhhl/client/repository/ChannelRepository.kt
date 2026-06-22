@@ -2,11 +2,13 @@ package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.ChannelApi
 import cc.hhhl.client.api.ChannelActionResult
+import cc.hhhl.client.api.ChannelCategoryLoadResult
 import cc.hhhl.client.api.ChannelLoadResult
 import cc.hhhl.client.api.ChannelMutationResult
 import cc.hhhl.client.api.ChannelTimelineLoadResult
 import cc.hhhl.client.api.SharkeyChannelApi
 import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelCategory
 import cc.hhhl.client.model.ChannelDefaultColorHex
 import cc.hhhl.client.model.ChannelDraft
 import cc.hhhl.client.model.ChannelListKind
@@ -16,6 +18,19 @@ open class ChannelRepository(
     private val tokenProvider: () -> String?,
     private val api: ChannelApi = SharkeyChannelApi(),
 ) {
+    open suspend fun refreshCategories(): ChannelCategoriesRepositoryResult {
+        return when (val result = api.loadChannelCategories()) {
+            is ChannelCategoryLoadResult.Success -> ChannelCategoriesRepositoryResult.Success(
+                normalizeCategories(result.categories),
+            )
+            ChannelCategoryLoadResult.Unauthorized -> ChannelCategoriesRepositoryResult.Unauthorized
+            is ChannelCategoryLoadResult.NetworkError -> {
+                ChannelCategoriesRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is ChannelCategoryLoadResult.ServerError -> ChannelCategoriesRepositoryResult.Error(result.message)
+        }
+    }
+
     open suspend fun refreshChannels(kind: ChannelListKind): ChannelsRepositoryResult {
         val token = tokenProvider()?.takeIf { it.isNotBlank() }
             ?: return ChannelsRepositoryResult.Unauthorized
@@ -26,6 +41,24 @@ open class ChannelRepository(
                 kind = kind,
                 limit = DEFAULT_PAGE_SIZE,
                 untilId = null,
+            )
+        ) {
+            is ChannelLoadResult.Success -> ChannelsRepositoryResult.Success(result.channels)
+            ChannelLoadResult.Unauthorized -> ChannelsRepositoryResult.Unauthorized
+            is ChannelLoadResult.NetworkError -> {
+                ChannelsRepositoryResult.Error("无法连接服务器：${result.message}")
+            }
+            is ChannelLoadResult.ServerError -> ChannelsRepositoryResult.Error(result.message)
+        }
+    }
+
+    open suspend fun refreshChannelsByCategory(category: ChannelCategory): ChannelsRepositoryResult {
+        return when (
+            val result = api.loadChannelsByCategory(
+                category = category.name,
+                uncategorized = category.uncategorized,
+                limit = DEFAULT_PAGE_SIZE.coerceAtMost(50),
+                offset = 0,
             )
         ) {
             is ChannelLoadResult.Success -> ChannelsRepositoryResult.Success(result.channels)
@@ -188,6 +221,7 @@ open class ChannelRepository(
             description = description.trim(),
             color = color.trim().ifBlank { ChannelDefaultColorHex },
             bannerId = bannerId?.trim()?.takeIf { it.isNotBlank() },
+            category = category.trim(),
         )
     }
 
@@ -199,12 +233,41 @@ open class ChannelRepository(
             isArchived = isArchived,
             isSensitive = isSensitive,
             allowRenoteToExternal = allowRenoteToExternal,
+            category = category,
         )
+    }
+
+    private fun normalizeCategories(categories: List<ChannelCategory>): List<ChannelCategory> {
+        val cleaned = categories
+            .mapNotNull { category ->
+                val name = category.name.trim()
+                when {
+                    category.uncategorized || name.isEmpty() -> {
+                        category.copy(name = "", uncategorized = true)
+                    }
+                    else -> category.copy(name = name, uncategorized = false)
+                }
+            }
+            .distinctBy { if (it.uncategorized) "__uncategorized__" else it.name }
+        val hasUncategorized = cleaned.any { it.uncategorized }
+        return if (hasUncategorized) {
+            cleaned
+        } else {
+            cleaned + ChannelCategory(name = "", channelsCount = 0, uncategorized = true)
+        }
     }
 
     private companion object {
         const val DEFAULT_PAGE_SIZE = 20
     }
+}
+
+sealed interface ChannelCategoriesRepositoryResult {
+    data class Success(val categories: List<ChannelCategory>) : ChannelCategoriesRepositoryResult
+
+    data object Unauthorized : ChannelCategoriesRepositoryResult
+
+    data class Error(val message: String) : ChannelCategoriesRepositoryResult
 }
 
 sealed interface ChannelsRepositoryResult {

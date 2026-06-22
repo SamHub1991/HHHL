@@ -2,11 +2,13 @@ package cc.hhhl.client.repository
 
 import cc.hhhl.client.api.ChannelApi
 import cc.hhhl.client.api.ChannelActionResult
+import cc.hhhl.client.api.ChannelCategoryLoadResult
 import cc.hhhl.client.api.ChannelLoadResult
 import cc.hhhl.client.api.ChannelMutationResult
 import cc.hhhl.client.api.ChannelTimelineLoadResult
 import cc.hhhl.client.fake.FakeData
 import cc.hhhl.client.model.Channel
+import cc.hhhl.client.model.ChannelCategory
 import cc.hhhl.client.model.ChannelDraft
 import cc.hhhl.client.model.ChannelListKind
 import cc.hhhl.client.model.Note
@@ -16,6 +18,29 @@ import kotlin.test.assertIs
 import kotlinx.coroutines.test.runTest
 
 class ChannelRepositoryTest {
+    @Test
+    fun refreshCategoriesNormalizesServerCategoriesAndAddsUncategorizedEntry() = runTest {
+        val repository = ChannelRepository(
+            tokenProvider = { null },
+            api = fakeApi(
+                categoryResult = ChannelCategoryLoadResult.Success(
+                    listOf(ChannelCategory(name = " AI与大模型 ", channelsCount = 13)),
+                ),
+            ),
+        )
+
+        val result = repository.refreshCategories()
+
+        assertIs<ChannelCategoriesRepositoryResult.Success>(result)
+        assertEquals(
+            listOf(
+                ChannelCategory(name = "AI与大模型", channelsCount = 13),
+                ChannelCategory(name = "", channelsCount = 0, uncategorized = true),
+            ),
+            result.categories,
+        )
+    }
+
     @Test
     fun refreshChannelsUsesTokenAndKind() = runTest {
         val channels = listOf(sampleChannel("channel-1"))
@@ -33,6 +58,48 @@ class ChannelRepositoryTest {
         assertIs<ChannelsRepositoryResult.Success>(result)
         assertEquals(listOf(ChannelCall("token-123", ChannelListKind.Favorites, null)), calls)
         assertEquals(channels, result.channels)
+    }
+
+    @Test
+    fun refreshChannelsByCategoryDoesNotRequireToken() = runTest {
+        val channels = listOf(sampleChannel("channel-1").copy(category = "AI与大模型"))
+        val calls = mutableListOf<CategoryChannelCall>()
+        val repository = ChannelRepository(
+            tokenProvider = { null },
+            api = fakeApi(
+                categoryChannelCalls = calls,
+                channelResult = ChannelLoadResult.Success(channels),
+            ),
+        )
+
+        val result = repository.refreshChannelsByCategory(
+            ChannelCategory(name = "AI与大模型", channelsCount = 13),
+        )
+
+        assertIs<ChannelsRepositoryResult.Success>(result)
+        assertEquals(channels, result.channels)
+        assertEquals(
+            listOf(CategoryChannelCall(category = "AI与大模型", uncategorized = false, offset = 0)),
+            calls,
+        )
+    }
+
+    @Test
+    fun refreshChannelsByCategoryCanLoadUncategorizedChannels() = runTest {
+        val calls = mutableListOf<CategoryChannelCall>()
+        val repository = ChannelRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(categoryChannelCalls = calls),
+        )
+
+        assertIs<ChannelsRepositoryResult.Success>(
+            repository.refreshChannelsByCategory(ChannelCategory(name = "", channelsCount = 0, uncategorized = true)),
+        )
+
+        assertEquals(
+            listOf(CategoryChannelCall(category = "", uncategorized = true, offset = 0)),
+            calls,
+        )
     }
 
     @Test
@@ -186,10 +253,13 @@ class ChannelRepositoryTest {
     }
 
     private fun fakeApi(
+        categoryCalls: MutableList<Unit> = mutableListOf(),
         channelCalls: MutableList<ChannelCall> = mutableListOf(),
+        categoryChannelCalls: MutableList<CategoryChannelCall> = mutableListOf(),
         timelineCalls: MutableList<TimelineCall> = mutableListOf(),
         actionCalls: MutableList<ActionCall> = mutableListOf(),
         mutationCalls: MutableList<MutationCall> = mutableListOf(),
+        categoryResult: ChannelCategoryLoadResult = ChannelCategoryLoadResult.Success(emptyList()),
         channelResult: ChannelLoadResult = ChannelLoadResult.Success(emptyList()),
         timelineResult: ChannelTimelineLoadResult = ChannelTimelineLoadResult.Success(emptyList()),
         actionResult: ChannelActionResult = ChannelActionResult.Success,
@@ -198,6 +268,12 @@ class ChannelRepositoryTest {
         onCall: () -> Unit = {},
     ): ChannelApi {
         return object : ChannelApi {
+            override suspend fun loadChannelCategories(): ChannelCategoryLoadResult {
+                onCall()
+                categoryCalls.add(Unit)
+                return categoryResult
+            }
+
             override suspend fun loadChannels(
                 token: String,
                 kind: ChannelListKind,
@@ -206,6 +282,23 @@ class ChannelRepositoryTest {
             ): ChannelLoadResult {
                 onCall()
                 channelCalls.add(ChannelCall(token, kind, untilId))
+                return channelResult
+            }
+
+            override suspend fun loadChannelsByCategory(
+                category: String?,
+                uncategorized: Boolean,
+                limit: Int,
+                offset: Int,
+            ): ChannelLoadResult {
+                onCall()
+                categoryChannelCalls.add(
+                    CategoryChannelCall(
+                        category = category.orEmpty(),
+                        uncategorized = uncategorized,
+                        offset = offset,
+                    ),
+                )
                 return channelResult
             }
 
@@ -300,6 +393,12 @@ class ChannelRepositoryTest {
         val token: String,
         val kind: ChannelListKind,
         val untilId: String?,
+    )
+
+    private data class CategoryChannelCall(
+        val category: String,
+        val uncategorized: Boolean,
+        val offset: Int,
     )
 
     private data class TimelineCall(

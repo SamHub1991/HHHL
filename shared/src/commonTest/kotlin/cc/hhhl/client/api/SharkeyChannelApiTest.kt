@@ -25,6 +25,31 @@ import kotlinx.serialization.json.Json
 
 class SharkeyChannelApiTest {
     @Test
+    fun loadChannelCategoriesPostsJsonToCategoriesEndpoint() = runTest {
+        var capturedRequest: HttpRequestData? = null
+        val api = SharkeyChannelApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                capturedRequest = request
+                respond(
+                    content = """[{"category":"AI与大模型","channelsCount":13}]""",
+                    status = HttpStatusCode.OK,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = api.loadChannelCategories()
+
+        assertIs<ChannelCategoryLoadResult.Success>(result)
+        val request = checkNotNull(capturedRequest)
+        assertEquals("https://dc.hhhl.cc/api/channels/categories", request.url.toString())
+        assertEquals(HttpMethod.Post, request.method)
+        assertEquals("AI与大模型", result.categories.single().name)
+        assertEquals(13, result.categories.single().channelsCount)
+    }
+
+    @Test
     fun loadFeaturedChannelsPostsJsonToFeaturedEndpoint() = runTest {
         var capturedRequest: HttpRequestData? = null
         val api = SharkeyChannelApi(
@@ -58,9 +83,59 @@ class SharkeyChannelApiTest {
         assertEquals(false, channel.isArchived)
         assertEquals(true, channel.isFollowing)
         assertEquals(true, channel.hasUnreadNote)
+        assertEquals("AI与大模型", channel.category)
         assertEquals("2026-05-25 15:00", channel.createdAtLabel)
         assertEquals("2026-05-25 16:00", channel.lastNotedAtLabel)
         assertEquals("pinned-1", channel.pinnedNotes.single().id)
+    }
+
+    @Test
+    fun loadChannelsByCategoryPostsCategoryAndPagination() = runTest {
+        var capturedRequest: HttpRequestData? = null
+        val api = SharkeyChannelApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                capturedRequest = request
+                respondChannels()
+            },
+        )
+
+        val result = api.loadChannelsByCategory(
+            category = "AI与大模型",
+            uncategorized = false,
+            limit = 80,
+            offset = 12,
+        )
+
+        assertIs<ChannelLoadResult.Success>(result)
+        val request = checkNotNull(capturedRequest)
+        assertEquals("https://dc.hhhl.cc/api/channels/by-category", request.url.toString())
+        val body = (request.body as TextContent).text
+        assertTrue(body.contains(""""category":"AI与大模型""""))
+        assertTrue(body.contains(""""uncategorized":false"""))
+        assertTrue(body.contains(""""limit":50"""))
+        assertTrue(body.contains(""""offset":12"""))
+    }
+
+    @Test
+    fun loadChannelsByCategoryCanRequestUncategorizedChannels() = runTest {
+        var capturedRequest: HttpRequestData? = null
+        val api = SharkeyChannelApi(
+            baseUrl = "https://dc.hhhl.cc/",
+            client = testClient { request ->
+                capturedRequest = request
+                respondChannels()
+            },
+        )
+
+        assertIs<ChannelLoadResult.Success>(
+            api.loadChannelsByCategory(category = null, uncategorized = true, limit = 20, offset = -1),
+        )
+
+        val body = (checkNotNull(capturedRequest).body as TextContent).text
+        assertTrue(body.contains(""""uncategorized":true"""))
+        assertTrue(body.contains(""""limit":20"""))
+        assertTrue(body.contains(""""offset":0"""))
     }
 
     @Test
@@ -212,6 +287,7 @@ class SharkeyChannelApiTest {
                 color = "#40c057",
                 isSensitive = true,
                 allowRenoteToExternal = false,
+                category = "AI与大模型",
             ),
         )
 
@@ -225,6 +301,7 @@ class SharkeyChannelApiTest {
         assertTrue(body.contains(""""color":"#40c057""""))
         assertTrue(body.contains(""""isSensitive":true"""))
         assertTrue(body.contains(""""allowRenoteToExternal":false"""))
+        assertTrue(body.contains(""""category":"AI与大模型""""))
         assertEquals("channel-1", result.channel.id)
     }
 
@@ -247,6 +324,7 @@ class SharkeyChannelApiTest {
                 description = "更新描述",
                 color = "#228be6",
                 isArchived = true,
+                category = "编程开发",
             ),
         )
 
@@ -259,6 +337,7 @@ class SharkeyChannelApiTest {
         assertTrue(body.contains(""""description":"更新描述""""))
         assertTrue(body.contains(""""color":"#228be6""""))
         assertTrue(body.contains(""""isArchived":true"""))
+        assertTrue(body.contains(""""category":"编程开发""""))
     }
 
     @Test
@@ -340,6 +419,7 @@ class SharkeyChannelApiTest {
                     "notesCount": 12,
                     "isSensitive": false,
                     "allowRenoteToExternal": true,
+                    "category": "AI与大模型",
                     "isFollowing": true,
                     "isFavorited": false,
                     "hasUnreadNote": true,
@@ -387,6 +467,7 @@ class SharkeyChannelApiTest {
                   "notesCount": 12,
                   "isSensitive": false,
                   "allowRenoteToExternal": true,
+                  "category": "AI与大模型",
                   "isFollowing": true,
                   "isFavorited": false,
                   "hasUnreadNote": false,
