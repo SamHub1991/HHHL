@@ -59,6 +59,29 @@ open class UserProfileRepository(
         )
     }
 
+    /**
+     * 更新用户头像
+     * @param name 用户名称
+     * @param description 用户简介
+     * @param avatarId 头像文件ID（从 Drive 上传后获得）
+     * @return 更新结果
+     */
+    open suspend fun updateAvatar(
+        name: String,
+        description: String,
+        avatarId: String,
+    ): UserProfileRepositoryResult {
+        val cleanAvatarId = avatarId.trim()
+        if (cleanAvatarId.isBlank()) {
+            return UserProfileRepositoryResult.Error("请选择头像图片")
+        }
+        return updateProfileFields(
+            name = name,
+            description = description,
+            avatarId = cleanAvatarId,
+        )
+    }
+
     open suspend fun checkUsernameAvailable(username: String): UserProfileAvailabilityRepositoryResult {
         val cleanUsername = username.trim().removePrefix("@")
         if (cleanUsername.isBlank()) return UserProfileAvailabilityRepositoryResult.Error("请输入用户名")

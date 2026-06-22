@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,23 +22,30 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.People
-import androidx.compose.material.icons.filled.RssFeed
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -62,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.vector.ImageVector
 import coil3.compose.AsyncImage
+import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.api.USER_PROFILE_DESCRIPTION_MAX_LENGTH
 import cc.hhhl.client.api.USER_PROFILE_NAME_MAX_LENGTH
 import cc.hhhl.client.display.TimelineDensity
@@ -69,6 +78,7 @@ import cc.hhhl.client.model.InstanceCapabilities
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.UserSocialKind
+import cc.hhhl.client.state.AVATAR_DAILY_UPLOAD_LIMIT
 import cc.hhhl.client.state.UserProfileUiState
 import cc.hhhl.client.theme.HhhlThemePreset
 import cc.hhhl.client.theme.LocalHhhlColors
@@ -100,7 +110,29 @@ internal val ProfileWorkspaceShortcutTileHeight = 52.dp
 internal val ProfileShortcutTileCornerRadius = 14.dp
 internal val ProfileShortcutIconContainerSize = 30.dp
 internal val ProfileShortcutIconSize = 17.dp
-private const val ProfileDefaultBannerImageUrl = "https://dc.hhhl.cc/client-assets/icon.png"
+/** 客户端静态资源基础 URL */
+private const val ClientAssetsBaseUrl = "https://dc.hhhl.cc/client-assets"
+
+private const val ProfileDefaultBannerImageUrl = "$ClientAssetsBaseUrl/icon.png"
+
+/**
+ * 预设头像库
+ * 提供系统默认的头像选项
+ */
+private val PresetAvatarUrls = listOf(
+    "$ClientAssetsBaseUrl/avatars/avatar1.png",
+    "$ClientAssetsBaseUrl/avatars/avatar2.png",
+    "$ClientAssetsBaseUrl/avatars/avatar3.png",
+    "$ClientAssetsBaseUrl/avatars/avatar4.png",
+    "$ClientAssetsBaseUrl/avatars/avatar5.png",
+    "$ClientAssetsBaseUrl/avatars/avatar6.png",
+    "$ClientAssetsBaseUrl/avatars/avatar7.png",
+    "$ClientAssetsBaseUrl/avatars/avatar8.png",
+    "$ClientAssetsBaseUrl/avatars/avatar9.png",
+    "$ClientAssetsBaseUrl/avatars/avatar10.png",
+    "$ClientAssetsBaseUrl/avatars/avatar11.png",
+    "$ClientAssetsBaseUrl/avatars/avatar12.png",
+)
 
 @Composable
 fun ProfileScreen(
@@ -153,6 +185,12 @@ fun ProfileScreen(
     onToggleSpecialCareUser: ((String) -> Boolean)? = null,
     onUpdateProfile: (String, String) -> Unit = { _, _ -> },
     onChangeBanner: (() -> Unit)? = null,
+    onChangeAvatar: (() -> Unit)? = null,
+    onSelectPresetAvatar: ((String) -> Unit)? = null,
+    onTakePhoto: (() -> Unit)? = null,
+    pendingAvatarUpload: DriveFileUpload? = null,
+    onConfirmAvatar: () -> Unit = {},
+    onCancelAvatar: () -> Unit = {},
     onOpenSocial: (UserSocialKind) -> Unit = {},
     onOpenDrive: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
@@ -191,6 +229,15 @@ fun ProfileScreen(
             profileEditorOpen = false
             profileEditSubmitted = false
         }
+    }
+
+    // 头像预览确认对话框：选图后先预览，用户确认后才上传
+    if (pendingAvatarUpload != null) {
+        AvatarPreviewConfirmDialog(
+            upload = pendingAvatarUpload,
+            onConfirm = onConfirmAvatar,
+            onCancel = onCancelAvatar,
+        )
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -239,6 +286,7 @@ fun ProfileScreen(
                             isChanging = state?.isRelationshipChanging == true,
                             isProfileSaving = state?.isProfileSaving == true,
                             canChangeBanner = isOwnProfile && onChangeBanner != null,
+                            canChangeAvatar = isOwnProfile && onChangeAvatar != null,
                             onFollowToggle = onFollowToggle,
                             onMuteToggle = onMuteToggle,
                             onBlockToggle = onBlockToggle,
@@ -252,6 +300,11 @@ fun ProfileScreen(
                                 profileEditorOpen = true
                             },
                             onChangeBanner = onChangeBanner,
+                            onChangeAvatar = onChangeAvatar,
+                            onSelectPresetAvatar = onSelectPresetAvatar,
+                            onTakePhoto = onTakePhoto,
+                            avatarUploadCooldownSeconds = state?.avatarUploadCooldownSeconds ?: 0,
+                            avatarDailyUploadRemaining = state?.avatarDailyUploadRemaining ?: 5,
                         )
                         if (user.bio.isNotBlank()) {
                             InlineRichText(
@@ -695,6 +748,7 @@ private fun ProfileHeaderIdentity(
     isChanging: Boolean,
     isProfileSaving: Boolean,
     canChangeBanner: Boolean,
+    canChangeAvatar: Boolean,
     onFollowToggle: () -> Unit,
     onMuteToggle: () -> Unit,
     onBlockToggle: () -> Unit,
@@ -703,8 +757,17 @@ private fun ProfileHeaderIdentity(
     onToggleSpecialCare: (() -> Unit)?,
     onEditProfile: () -> Unit,
     onChangeBanner: (() -> Unit)?,
+    onChangeAvatar: (() -> Unit)?,
+    onSelectPresetAvatar: ((String) -> Unit)?,
+    onTakePhoto: (() -> Unit)? = null,
+    avatarUploadCooldownSeconds: Int = 0,
+    avatarDailyUploadRemaining: Int = AVATAR_DAILY_UPLOAD_LIMIT,
 ) {
     val colors = LocalHhhlColors.current
+    var showAvatarMenu by remember { mutableStateOf(false) }
+    var showAvatarFullImage by remember { mutableStateOf(false) }
+    var showAvatarLibrary by remember { mutableStateOf(false) }
+    
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ProfileBanner(
             bannerUrl = user.bannerUrl,
@@ -719,11 +782,34 @@ private fun ProfileHeaderIdentity(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Avatar(
-                initial = user.avatarInitial,
-                avatarUrl = user.avatarUrl,
-                size = 54.dp,
-            )
+            Box {
+                Avatar(
+                    initial = user.avatarInitial,
+                    avatarUrl = user.avatarUrl,
+                    size = 54.dp,
+                    modifier = Modifier.clickable(
+                        enabled = canChangeAvatar && !isProfileSaving,
+                        onClick = { showAvatarMenu = true }
+                    ),
+                )
+                if (canChangeAvatar) {
+                    // 添加相机图标提示可更换头像
+                    Icon(
+                        imageVector = Icons.Filled.CameraAlt,
+                        contentDescription = "更换头像",
+                        tint = colors.textPrimary,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .align(Alignment.BottomEnd)
+                            .background(colors.surfaceElevated, CircleShape)
+                            .padding(2.dp)
+                            .clickable(
+                                enabled = !isProfileSaving,
+                                onClick = { showAvatarMenu = true }
+                            ),
+                    )
+                }
+            }
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(1.dp),
@@ -777,6 +863,275 @@ private fun ProfileHeaderIdentity(
                 )
             }
         }
+    }
+
+    // 头像操作底部弹出菜单
+    if (showAvatarMenu && canChangeAvatar) {
+        AvatarActionBottomSheet(
+            onDismiss = { showAvatarMenu = false },
+            onPickFromLibrary = {
+                showAvatarMenu = false
+                showAvatarLibrary = true
+            },
+            onViewFullImage = {
+                showAvatarMenu = false
+                showAvatarFullImage = true
+            },
+            onPickFromGallery = {
+                showAvatarMenu = false
+                onChangeAvatar?.invoke()
+            },
+            onTakePhoto = {
+                showAvatarMenu = false
+                onTakePhoto?.invoke()
+            },
+            cooldownSeconds = avatarUploadCooldownSeconds,
+            dailyRemaining = avatarDailyUploadRemaining,
+        )
+    }
+    
+    // 头像库选择对话框
+    if (showAvatarLibrary && canChangeAvatar) {
+        AvatarLibraryDialog(
+            onDismiss = { showAvatarLibrary = false },
+            onSelectAvatar = { avatarUrl ->
+                showAvatarLibrary = false
+                onSelectPresetAvatar?.invoke(avatarUrl)
+            }
+        )
+    }
+    
+    // 头像大图查看对话框
+    if (showAvatarFullImage) {
+        AvatarFullImageDialog(
+            avatarUrl = user.avatarUrl,
+            onDismiss = { showAvatarFullImage = false }
+        )
+    }
+}
+
+/**
+ * 头像操作底部弹出菜单
+ * 提供头像更换的多种选项：从头像库选择、查看大图、从相册选择、拍照
+ * 同时显示上传冷却时间和剩余次数
+ */
+@Composable
+private fun AvatarActionBottomSheet(
+    onDismiss: () -> Unit,
+    onPickFromLibrary: () -> Unit,
+    onViewFullImage: () -> Unit,
+    onPickFromGallery: () -> Unit,
+    onTakePhoto: (() -> Unit)? = null,
+    cooldownSeconds: Int = 0,
+    dailyRemaining: Int = 5,
+) {
+    val colors = LocalHhhlColors.current
+    val isUploadDisabled = cooldownSeconds > 0 || dailyRemaining <= 0
+    
+    // 使用 AlertDialog 模拟底部弹出菜单
+    HhhlAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("更换头像") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // 显示上传限制信息
+                if (cooldownSeconds > 0) {
+                    Text(
+                        text = "⏱ 冷却中：请等待 ${cooldownSeconds} 秒后再上传",
+                        color = colors.warning,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+                if (dailyRemaining <= 0) {
+                    Text(
+                        text = "📊 今日上传次数已用完，请明天再试",
+                        color = colors.danger,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                } else {
+                    Text(
+                        text = "📊 今日剩余上传次数：$dailyRemaining 次",
+                        color = colors.textMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+                
+                HhhlDivider()
+                
+                AvatarActionItem(
+                    icon = Icons.Filled.Collections,
+                    label = "从头像库选择",
+                    onClick = onPickFromLibrary,
+                    colors = colors,
+                    enabled = !isUploadDisabled
+                )
+                AvatarActionItem(
+                    icon = Icons.Filled.ZoomIn,
+                    label = "查看大图",
+                    onClick = onViewFullImage,
+                    colors = colors,
+                    enabled = true
+                )
+                AvatarActionItem(
+                    icon = Icons.Filled.PhotoLibrary,
+                    label = "从手机相册中选择",
+                    onClick = onPickFromGallery,
+                    colors = colors,
+                    enabled = !isUploadDisabled
+                )
+                if (onTakePhoto != null) {
+                    AvatarActionItem(
+                        icon = Icons.Filled.CameraAlt,
+                        label = "拍照",
+                        onClick = onTakePhoto,
+                        colors = colors,
+                        enabled = !isUploadDisabled
+                    )
+                }
+                HhhlDivider()
+                AvatarActionItem(
+                    icon = Icons.Filled.Close,
+                    label = "取消",
+                    onClick = onDismiss,
+                    colors = colors,
+                    isDestructive = true
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {}
+    )
+}
+
+/**
+ * 头像操作菜单项
+ */
+@Composable
+private fun AvatarActionItem(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    colors: cc.hhhl.client.theme.HhhlColors,
+    isDestructive: Boolean = false,
+    enabled: Boolean = true
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 12.dp, horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (!enabled) colors.textMuted else if (isDestructive) colors.danger else colors.textPrimary,
+            modifier = Modifier.size(24.dp)
+        )
+        Text(
+            text = label,
+            color = if (!enabled) colors.textMuted else if (isDestructive) colors.danger else colors.textPrimary,
+            style = MaterialTheme.typography.bodyLarge
+        )
+    }
+}
+
+/**
+ * 头像库选择对话框
+ * 展示预设头像列表供用户选择
+ */
+@Composable
+private fun AvatarLibraryDialog(
+    onDismiss: () -> Unit,
+    onSelectAvatar: (String) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    
+    HhhlAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择头像") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "从预设头像中选择一个作为您的头像",
+                    color = colors.textSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                
+                // 使用 FlowRow 展示头像网格
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    PresetAvatarUrls.forEach { avatarUrl ->
+                        AvatarLibraryItem(
+                            avatarUrl = avatarUrl,
+                            onClick = { onSelectAvatar(avatarUrl) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            HhhlTextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+/**
+ * 头像库单项
+ */
+@Composable
+private fun AvatarLibraryItem(
+    avatarUrl: String,
+    onClick: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    
+    Box(
+        modifier = Modifier
+            .size(64.dp)
+            .clip(CircleShape)
+            .background(colors.surfaceElevated)
+            .border(
+                width = if (isPressed) 2.dp else 1.dp,
+                color = if (isPressed) colors.accent else colors.border,
+                shape = CircleShape
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        AsyncImage(
+            model = avatarUrl,
+            contentDescription = "预设头像",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(60.dp)
+                .clip(CircleShape)
+        )
     }
 }
 
@@ -1851,5 +2206,121 @@ private fun ProfileStatusRow(
         loading = loading,
         actionText = actionText,
         onAction = onAction,
+    )
+}
+
+/**
+ * 头像大图查看对话框
+ * 展示用户头像的高清大图
+ */
+@Composable
+private fun AvatarFullImageDialog(
+    avatarUrl: String?,
+    onDismiss: () -> Unit,
+) {
+    HhhlAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("查看头像") },
+        text = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .background(
+                        color = LocalHhhlColors.current.mediaBackground,
+                        shape = RoundedCornerShape(8.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (avatarUrl.isNullOrBlank()) {
+                    Icon(
+                        imageVector = Icons.Filled.Person,
+                        contentDescription = "默认头像",
+                        tint = LocalHhhlColors.current.textMuted,
+                        modifier = Modifier.size(80.dp)
+                    )
+                } else {
+                    AsyncImage(
+                        model = avatarUrl,
+                        contentDescription = "用户头像",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            HhhlTextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        },
+    )
+}
+
+/**
+ * 头像预览确认对话框
+ * 选图后显示预览，图片以裁剪模式显示（居中裁剪为正方形），
+ * 用户确认后执行上传
+ */
+@OptIn(ExperimentalEncodingApi::class)
+@Composable
+private fun AvatarPreviewConfirmDialog(
+    upload: DriveFileUpload,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    // 将文件字节编码为 data URL 供 AsyncImage 加载
+    val dataUrl = remember(upload) {
+        val safeContentType = upload.contentType.takeIf { it.startsWith("image/") } ?: "image/jpeg"
+        "data:$safeContentType;base64,${Base64.encode(upload.bytes)}"
+    }
+
+    HhhlAlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("确认更换头像") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // 预览区域：使用 Crop 模式模拟正方形裁剪效果
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .background(
+                            color = LocalHhhlColors.current.mediaBackground,
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .clip(RoundedCornerShape(8.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = dataUrl,
+                        contentDescription = "头像预览",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                // 裁剪提示
+                Text(
+                    text = "图片将自动裁剪为正方形头像",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LocalHhhlColors.current.textMuted,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+            }
+        },
+        confirmButton = {
+            HhhlTextButton(onClick = onConfirm) {
+                Text("确认上传")
+            }
+        },
+        dismissButton = {
+            HhhlTextButton(onClick = onCancel) {
+                Text("取消")
+            }
+        },
     )
 }

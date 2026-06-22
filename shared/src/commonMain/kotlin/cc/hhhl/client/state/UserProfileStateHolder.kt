@@ -1,11 +1,13 @@
 package cc.hhhl.client.state
 
 import cc.hhhl.client.api.DriveFileUpload
+import cc.hhhl.client.media.ImageProcessor
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.UserRelationship
 import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.DriveFileRepositoryResult
+import cc.hhhl.client.repository.DriveManagementRepositoryResult
 import cc.hhhl.client.repository.UserNotesRepository
 import cc.hhhl.client.repository.UserNotesRepositoryResult
 import cc.hhhl.client.repository.UserProfileRepository
@@ -13,10 +15,31 @@ import cc.hhhl.client.repository.UserProfileRepositoryResult
 import cc.hhhl.client.repository.UserRelationshipRepository
 import cc.hhhl.client.repository.UserRelationshipRepositoryResult
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.atStartOfDayIn
+import kotlinx.datetime.toLocalDateTime
+
+/** 头像上传冷却时间（秒） */
+const val AVATAR_UPLOAD_COOLDOWN_SECONDS = 5
+
+/** 每日头像上传次数限制 */
+const val AVATAR_DAILY_UPLOAD_LIMIT = 5
+
+/** 头像上传允许的文件格式 */
+val AVATAR_ALLOWED_CONTENT_TYPES = listOf("image/jpeg", "image/png", "image/gif", "image/webp")
+
+/** 头像文件最大大小（5MB） */
+const val AVATAR_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024L
+
+/** 头像文件夹名称 */
+const val AVATAR_FOLDER_NAME = "avatars"
 
 data class UserProfileUiState(
     val user: User? = null,
@@ -33,6 +56,12 @@ data class UserProfileUiState(
     val notesErrorMessage: String? = null,
     val message: String? = null,
     val requiresRelogin: Boolean = false,
+    /** 头像上传冷却剩余秒数，0 表示可以上传 */
+    val avatarUploadCooldownSeconds: Int = 0,
+    /** 今日头像上传剩余次数 */
+    val avatarDailyUploadRemaining: Int = AVATAR_DAILY_UPLOAD_LIMIT,
+    /** 待确认上传的头像文件，非 null 时 UI 应显示预览确认对话框 */
+    val pendingAvatarUpload: DriveFileUpload? = null,
 )
 
 class UserProfileStateHolder(
@@ -40,7 +69,9 @@ class UserProfileStateHolder(
     private val notesRepository: UserNotesRepository? = null,
     private val relationshipRepository: UserRelationshipRepository? = null,
     private val driveFileRepository: DriveFileRepository? = null,
+    private val imageProcessor: ImageProcessor? = null,
     private val scope: CoroutineScope,
+    private val timeProvider: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) {
     private val mutableState = MutableStateFlow(UserProfileUiState())
     val state: StateFlow<UserProfileUiState> = mutableState
@@ -48,6 +79,14 @@ class UserProfileStateHolder(
     private var notesRequestId = 0
     private var profileMutationRequestId = 0
     private var relationshipActionRequestId = 0
+    
+    // 头像上传限制追踪
+    private var lastAvatarUploadTimeMillis: Long = 0L
+    private var dailyAvatarUploadCount: Int = 0
+    private var dailyUploadResetDateMillis: Long = 0L
+    private var lastUploadedAvatarId: String? = null
+    /** 头像文件夹 ID，缓存以避免重复创建 */
+    private var avatarFolderId: String? = null
 
     fun load(clearContent: Boolean = false) {
         if (!clearContent && state.value.isLoading) return
@@ -263,6 +302,316 @@ class UserProfileStateHolder(
                         profileEditErrorMessage = uploadResult.message,
                         requiresRelogin = false,
                     )
+                }
+            }
+        }
+    }
+
+    /**
+     * 设置待确认上传的头像文件
+     * 选图后调用此方法，UI 会显示预览确认对话框
+     * @param upload 头像文件上传数据
+     */
+    fun setPendingAvatar(upload: DriveFileUpload) {
+        // 先校验文件，校验失败直接提示错误
+        val validationError = validateAvatarFile(upload)
+        if (validationError != null) {
+            mutableState.update {
+                it.copy(
+                    profileEditErrorMessage = validationError,
+                    message = null,
+                    requiresRelogin = false,
+                )
+            }
+            return
+        }
+        // 校验通过，设置待确认状态
+        mutableState.update {
+            it.copy(pendingAvatarUpload = upload)
+        }
+    }
+
+    /**
+     * 确认上传待确认的头像
+     * 清除待确认状态后直接调用 updateAvatar，图片裁剪和压缩统一由 processAvatarImage 处理
+     */
+    fun confirmPendingAvatar() {
+        val pending = state.value.pendingAvatarUpload ?: return
+        mutableState.update { it.copy(pendingAvatarUpload = null) }
+        updateAvatar(pending)
+    }
+
+    /**
+     * 取消待确认的头像上传
+     */
+    fun cancelPendingAvatar() {
+        mutableState.update { it.copy(pendingAvatarUpload = null) }
+    }
+
+    /**
+     * 更新用户头像
+     * 先校验文件格式和大小，再检查冷却时间和每日次数限制，
+     * 然后进行图片压缩（如果可用），获取或创建头像文件夹，
+     * 上传文件到 Drive，更新用户资料的头像字段，
+     * 最后删除旧头像文件释放存储空间
+     * @param upload 头像文件上传数据
+     */
+    fun updateAvatar(upload: DriveFileUpload) {
+        val driveRepository = driveFileRepository ?: return
+        val currentUser = state.value.user ?: return
+        if (state.value.isProfileSaving) return
+        
+        // 文件校验
+        val validationError = validateAvatarFile(upload)
+        if (validationError != null) {
+            mutableState.update {
+                it.copy(
+                    profileEditErrorMessage = validationError,
+                    message = null,
+                    requiresRelogin = false,
+                )
+            }
+            return
+        }
+        
+        // 重置每日计数器（如果跨天）
+        resetDailyUploadCountIfNeeded()
+        
+        // 检查冷却时间
+        val now = currentTimeMillis()
+        val cooldownRemaining = calculateCooldownRemaining(now)
+        if (cooldownRemaining > 0) {
+            mutableState.update {
+                it.copy(
+                    profileEditErrorMessage = "请等待 ${cooldownRemaining} 秒后再上传头像",
+                    message = null,
+                    requiresRelogin = false,
+                )
+            }
+            return
+        }
+        
+        // 检查每日次数限制
+        if (dailyAvatarUploadCount >= AVATAR_DAILY_UPLOAD_LIMIT) {
+            mutableState.update {
+                it.copy(
+                    profileEditErrorMessage = "今日头像上传次数已达上限（${AVATAR_DAILY_UPLOAD_LIMIT}次），请明天再试",
+                    message = null,
+                    requiresRelogin = false,
+                )
+            }
+            return
+        }
+        
+        val mutationRequestId = ++profileMutationRequestId
+        val oldAvatarId = lastUploadedAvatarId
+
+        mutableState.update {
+            it.copy(
+                isProfileSaving = true,
+                profileEditErrorMessage = null,
+                errorMessage = null,
+                message = null,
+                requiresRelogin = false,
+            )
+        }
+
+        scope.launch {
+            // 1. 图片压缩（如果可用）
+            val processedUpload = processAvatarImage(upload)
+            
+            // 2. 获取或创建头像文件夹
+            val folderId = getOrCreateAvatarFolder(driveRepository)
+            
+            // 3. 创建带文件夹 ID 的上传对象
+            val finalUpload = if (folderId != null) {
+                processedUpload.copy(folderId = folderId)
+            } else {
+                processedUpload
+            }
+            
+            // 4. 上传文件
+            when (val uploadResult = driveRepository.upload(finalUpload)) {
+                is DriveFileRepositoryResult.Success -> {
+                    if (!isCurrentProfileMutation(mutationRequestId, currentUser.id)) return@launch
+                    applyProfileUpdateResult(
+                        requestId = mutationRequestId,
+                        originalUserId = currentUser.id,
+                        result = repository.updateAvatar(
+                            name = currentUser.displayName,
+                            description = currentUser.bio,
+                            avatarId = uploadResult.file.id,
+                        ),
+                    )
+                    // 更新成功后，删除旧头像文件
+                    if (oldAvatarId != null && oldAvatarId != uploadResult.file.id) {
+                        driveRepository.deleteFile(oldAvatarId)
+                    }
+                    // 记录新头像 ID，以便下次上传时删除
+                    lastUploadedAvatarId = uploadResult.file.id
+                    // 更新上传计数和冷却时间
+                    onAvatarUploadSuccess()
+                }
+                DriveFileRepositoryResult.Unauthorized -> mutableState.update {
+                    if (!isCurrentProfileMutation(mutationRequestId, currentUser.id)) return@update it
+                    it.copy(
+                        isProfileSaving = false,
+                        profileEditErrorMessage = "登录已失效，请重新登录",
+                        requiresRelogin = true,
+                    )
+                }
+                is DriveFileRepositoryResult.ValidationError -> mutableState.update {
+                    if (!isCurrentProfileMutation(mutationRequestId, currentUser.id)) return@update it
+                    it.copy(
+                        isProfileSaving = false,
+                        profileEditErrorMessage = uploadResult.message,
+                        requiresRelogin = false,
+                    )
+                }
+                is DriveFileRepositoryResult.Error -> mutableState.update {
+                    if (!isCurrentProfileMutation(mutationRequestId, currentUser.id)) return@update it
+                    it.copy(
+                        isProfileSaving = false,
+                        profileEditErrorMessage = uploadResult.message,
+                        requiresRelogin = false,
+                    )
+                }
+            }
+        }
+    }
+    
+    /**
+     * 处理头像图片（压缩和裁剪）
+     * @param upload 原始上传数据
+     * @return 处理后的上传数据
+     */
+    private suspend fun processAvatarImage(upload: DriveFileUpload): DriveFileUpload {
+        val processor = imageProcessor ?: return upload
+        
+        return try {
+            // 先裁剪为正方形
+            val croppedResult = processor.cropToSquare(
+                imageData = upload.bytes,
+                contentType = upload.contentType,
+            )
+            
+            // 再压缩
+            val compressedResult = processor.compressImage(
+                imageData = croppedResult.bytes,
+                contentType = croppedResult.contentType,
+                maxWidth = ImageProcessor.DEFAULT_MAX_WIDTH,
+                maxHeight = ImageProcessor.DEFAULT_MAX_HEIGHT,
+                quality = ImageProcessor.DEFAULT_QUALITY,
+            )
+            
+            upload.copy(
+                bytes = compressedResult.bytes,
+                contentType = compressedResult.contentType,
+            )
+        } catch (e: Exception) {
+            // 处理失败时返回原始上传数据
+            upload
+        }
+    }
+    
+    /**
+     * 获取或创建头像文件夹
+     * @param driveRepository Drive 文件仓库
+     * @return 文件夹 ID，如果创建失败返回 null
+     */
+    private suspend fun getOrCreateAvatarFolder(driveRepository: DriveFileRepository): String? {
+        // 如果已有缓存的文件夹 ID，直接返回
+        avatarFolderId?.let { return it }
+        
+        return try {
+            // 尝试创建文件夹
+            val result = driveRepository.createFolder(
+                name = AVATAR_FOLDER_NAME,
+                parentId = null,
+            )
+            
+            when (result) {
+                is DriveManagementRepositoryResult.FolderCreated -> {
+                    avatarFolderId = result.folder.id
+                    result.folder.id
+                }
+                else -> null
+            }
+        } catch (e: Exception) {
+            // 创建失败时返回 null，头像将上传到根目录
+            null
+        }
+    }
+    
+    /**
+     * 校验头像文件
+     * @return 错误信息，如果校验通过返回 null
+     */
+    private fun validateAvatarFile(upload: DriveFileUpload): String? {
+        if (upload.bytes.isEmpty()) {
+            return "文件内容为空"
+        }
+        if (upload.bytes.size > AVATAR_MAX_FILE_SIZE_BYTES) {
+            val maxSizeMB = AVATAR_MAX_FILE_SIZE_BYTES / (1024 * 1024)
+            return "文件大小超过限制（最大 ${maxSizeMB}MB）"
+        }
+        val contentType = upload.contentType.lowercase()
+        if (contentType !in AVATAR_ALLOWED_CONTENT_TYPES) {
+            return "不支持的文件格式，仅允许 JPG、PNG、GIF、WebP"
+        }
+        return null
+    }
+    
+    /**
+     * 重置每日上传计数器（如果跨天）
+     */
+    private fun resetDailyUploadCountIfNeeded() {
+        val today = getStartOfTodayMillis()
+        if (dailyUploadResetDateMillis < today) {
+            dailyAvatarUploadCount = 0
+            dailyUploadResetDateMillis = today
+            mutableState.update {
+                it.copy(avatarDailyUploadRemaining = AVATAR_DAILY_UPLOAD_LIMIT)
+            }
+        }
+    }
+    
+    /**
+     * 计算冷却剩余秒数
+     */
+    private fun calculateCooldownRemaining(now: Long): Int {
+        if (lastAvatarUploadTimeMillis == 0L) return 0
+        val elapsedSeconds = (now - lastAvatarUploadTimeMillis) / 1000
+        val remaining = AVATAR_UPLOAD_COOLDOWN_SECONDS - elapsedSeconds
+        return remaining.coerceAtLeast(0).toInt()
+    }
+    
+    /**
+     * 头像上传成功后更新计数和冷却时间
+     */
+    private fun onAvatarUploadSuccess() {
+        lastAvatarUploadTimeMillis = currentTimeMillis()
+        dailyAvatarUploadCount++
+        val remaining = (AVATAR_DAILY_UPLOAD_LIMIT - dailyAvatarUploadCount).coerceAtLeast(0)
+        mutableState.update {
+            it.copy(
+                avatarUploadCooldownSeconds = AVATAR_UPLOAD_COOLDOWN_SECONDS,
+                avatarDailyUploadRemaining = remaining,
+            )
+        }
+        // 启动冷却倒计时
+        startCooldownTimer()
+    }
+    
+    /**
+     * 启动冷却倒计时
+     */
+    private fun startCooldownTimer() {
+        scope.launch {
+            for (i in AVATAR_UPLOAD_COOLDOWN_SECONDS downTo 1) {
+                delay(1000L)
+                mutableState.update {
+                    it.copy(avatarUploadCooldownSeconds = i - 1)
                 }
             }
         }
@@ -716,5 +1065,21 @@ class UserProfileStateHolder(
     private fun nextNotesRequestId(): Int {
         notesRequestId += 1
         return notesRequestId
+    }
+    
+    /**
+     * 获取当前时间戳（毫秒），通过注入的 timeProvider 获取，便于测试
+     */
+    private fun currentTimeMillis(): Long = timeProvider()
+
+    /**
+     * 获取今日起始时间戳（毫秒），基于 timeProvider 提供的时间计算
+     */
+    private fun getStartOfTodayMillis(): Long {
+        val nowMillis = timeProvider()
+        val today = Instant.fromEpochMilliseconds(nowMillis)
+            .toLocalDateTime(TimeZone.currentSystemDefault())
+            .date
+        return today.atStartOfDayIn(TimeZone.currentSystemDefault()).toEpochMilliseconds()
     }
 }

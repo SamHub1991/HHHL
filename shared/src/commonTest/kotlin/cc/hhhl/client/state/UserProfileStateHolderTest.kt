@@ -16,10 +16,12 @@ import cc.hhhl.client.repository.UserRelationshipRepositoryResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 
@@ -599,6 +601,478 @@ class UserProfileStateHolderTest {
                 return loadMoreResultProvider()
             }
         }
+    }
+
+    @Test
+    fun updateAvatarRejectsEmptyFile() = runTest {
+        val holder = createAvatarTestHolder()
+        holder.load()
+        advanceUntilIdle()
+
+        val emptyUpload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(0),
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.updateAvatar(emptyUpload)
+        advanceUntilIdle()
+
+        assertEquals("文件内容为空", holder.state.value.profileEditErrorMessage)
+        assertFalse(holder.state.value.isProfileSaving)
+    }
+
+    @Test
+    fun updateAvatarRejectsOversizedFile() = runTest {
+        val holder = createAvatarTestHolder()
+        holder.load()
+        advanceUntilIdle()
+
+        val oversizedUpload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(AVATAR_MAX_FILE_SIZE_BYTES.toInt() + 1),
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.updateAvatar(oversizedUpload)
+        advanceUntilIdle()
+
+        assertEquals("文件大小超过限制（最大 5MB）", holder.state.value.profileEditErrorMessage)
+        assertFalse(holder.state.value.isProfileSaving)
+    }
+
+    @Test
+    fun updateAvatarRejectsInvalidContentType() = runTest {
+        val holder = createAvatarTestHolder()
+        holder.load()
+        advanceUntilIdle()
+
+        val invalidUpload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "application/pdf",
+            fileName = "document.pdf",
+        )
+        holder.updateAvatar(invalidUpload)
+        advanceUntilIdle()
+
+        assertEquals("不支持的文件格式，仅允许 JPG、PNG、GIF、WebP", holder.state.value.profileEditErrorMessage)
+        assertFalse(holder.state.value.isProfileSaving)
+    }
+
+    @Test
+    fun updateAvatarAcceptsValidContentTypes() = runTest {
+        val validTypes = listOf("image/jpeg", "image/png", "image/gif", "image/webp")
+        for (contentType in validTypes) {
+            val holder = createAvatarTestHolder()
+            holder.load()
+            advanceUntilIdle()
+
+            val validUpload = cc.hhhl.client.api.DriveFileUpload(
+                bytes = ByteArray(1024),
+                contentType = contentType,
+                fileName = "avatar.${contentType.substringAfterLast("/")}",
+            )
+            holder.updateAvatar(validUpload)
+            advanceUntilIdle()
+
+            // 应该通过文件校验，不会显示格式错误
+            assertFalse(holder.state.value.profileEditErrorMessage?.contains("不支持的文件格式") == true)
+        }
+    }
+
+    @Test
+    fun updateAvatarEnforcesCooldownPeriod() = runTest {
+        val holder = createAvatarTestHolder()
+        holder.load()
+        advanceUntilIdle()
+
+        val firstUpload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "image/png",
+            fileName = "avatar1.png",
+        )
+        holder.updateAvatar(firstUpload)
+        advanceUntilIdle()
+
+        // 第一次上传应该成功
+        assertEquals(AVATAR_UPLOAD_COOLDOWN_SECONDS, holder.state.value.avatarUploadCooldownSeconds)
+
+        // 立即尝试第二次上传，应该被冷却时间阻止
+        val secondUpload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "image/png",
+            fileName = "avatar2.png",
+        )
+        holder.updateAvatar(secondUpload)
+        advanceUntilIdle()
+
+        // 应该显示冷却时间错误
+        assertTrue(holder.state.value.profileEditErrorMessage?.contains("请等待") == true)
+    }
+
+    @Test
+    fun updateAvatarEnforcesDailyLimit() = runTest {
+        val holder = createAvatarTestHolder()
+        holder.load()
+        advanceUntilIdle()
+
+        // 模拟达到每日上传限制
+        repeat(AVATAR_DAILY_UPLOAD_LIMIT) { index ->
+            val upload = cc.hhhl.client.api.DriveFileUpload(
+                bytes = ByteArray(1024),
+                contentType = "image/png",
+                fileName = "avatar$index.png",
+            )
+            holder.updateAvatar(upload)
+            advanceUntilIdle()
+            // 等待冷却时间结束（模拟时间流逝）
+            advanceTimeBy(AVATAR_UPLOAD_COOLDOWN_SECONDS * 1000L + 1000L)
+        }
+
+        // 尝试第 6 次上传，应该被限制
+        val extraUpload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "image/png",
+            fileName = "avatar_extra.png",
+        )
+        holder.updateAvatar(extraUpload)
+        advanceUntilIdle()
+
+        // 应该显示达到上限的错误
+        assertTrue(holder.state.value.profileEditErrorMessage?.contains("今日头像上传次数已达上限") == true)
+    }
+
+    @Test
+    fun updateAvatarDecrementsRemainingCount() = runTest {
+        val holder = createAvatarTestHolder()
+        holder.load()
+        advanceUntilIdle()
+
+        assertEquals(AVATAR_DAILY_UPLOAD_LIMIT, holder.state.value.avatarDailyUploadRemaining)
+
+        val upload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.updateAvatar(upload)
+        advanceUntilIdle()
+
+        // 上传成功后，剩余次数应该减少
+        assertEquals(AVATAR_DAILY_UPLOAD_LIMIT - 1, holder.state.value.avatarDailyUploadRemaining)
+    }
+
+    @Test
+    fun updateAvatarDeletesOldAvatarOnSuccess() = runTest {
+        var deletedFileIds = mutableListOf<String>()
+        val holder = createAvatarTestHolder(
+            onDeleteFile = { fileId -> deletedFileIds.add(fileId) }
+        )
+        holder.load()
+        advanceUntilIdle()
+
+        // 第一次上传
+        val firstUpload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "image/png",
+            fileName = "avatar1.png",
+        )
+        holder.updateAvatar(firstUpload)
+        advanceUntilIdle()
+        advanceTimeBy(AVATAR_UPLOAD_COOLDOWN_SECONDS * 1000L + 1000L)
+
+        // 第二次上传
+        val secondUpload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "image/png",
+            fileName = "avatar2.png",
+        )
+        holder.updateAvatar(secondUpload)
+        advanceUntilIdle()
+
+        // 应该删除了第一次上传的头像
+        assertEquals(1, deletedFileIds.size)
+    }
+
+    @Test
+    fun updateAvatarCompressesImageWhenProcessorAvailable() = runTest {
+        var compressedBytes: ByteArray? = null
+        val testProcessor = object : cc.hhhl.client.media.ImageProcessor {
+            override suspend fun compressImage(
+                imageData: ByteArray,
+                contentType: String,
+                maxWidth: Int,
+                maxHeight: Int,
+                quality: Int,
+            ): cc.hhhl.client.media.ImageProcessResult {
+                compressedBytes = imageData
+                // 返回压缩后的数据（模拟压缩）
+                return cc.hhhl.client.media.ImageProcessResult(
+                    bytes = ByteArray(imageData.size / 2),
+                    contentType = contentType,
+                    width = maxWidth,
+                    height = maxHeight,
+                )
+            }
+
+            override suspend fun cropToSquare(
+                imageData: ByteArray,
+                contentType: String,
+                size: Int,
+            ): cc.hhhl.client.media.ImageProcessResult {
+                return cc.hhhl.client.media.ImageProcessResult(
+                    bytes = imageData,
+                    contentType = contentType,
+                    width = size,
+                    height = size,
+                )
+            }
+        }
+
+        val holder = createAvatarTestHolder(imageProcessor = testProcessor)
+        holder.load()
+        advanceUntilIdle()
+
+        val originalBytes = ByteArray(2048)
+        val upload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = originalBytes,
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.updateAvatar(upload)
+        advanceUntilIdle()
+
+        // 验证压缩被调用
+        assertNotNull(compressedBytes)
+        assertEquals(2048, compressedBytes!!.size)
+    }
+
+    @Test
+    fun setPendingAvatarStoresValidUpload() = runTest {
+        val holder = createAvatarTestHolder()
+        holder.load()
+        advanceUntilIdle()
+
+        val upload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.setPendingAvatar(upload)
+
+        // 验证待确认状态已设置
+        assertEquals(upload, holder.state.value.pendingAvatarUpload)
+    }
+
+    @Test
+    fun setPendingAvatarRejectsInvalidUpload() = runTest {
+        val holder = createAvatarTestHolder()
+        holder.load()
+        advanceUntilIdle()
+
+        // 空文件应被拒绝
+        val emptyUpload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(0),
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.setPendingAvatar(emptyUpload)
+
+        // 验证待确认状态未设置，且显示错误信息
+        assertEquals(null, holder.state.value.pendingAvatarUpload)
+        assertNotNull(holder.state.value.profileEditErrorMessage)
+    }
+
+    @Test
+    fun confirmPendingAvatarCropsImageWhenProcessorAvailable() = runTest {
+        var cropCalled = false
+        val testProcessor = object : cc.hhhl.client.media.ImageProcessor {
+            override suspend fun compressImage(
+                imageData: ByteArray,
+                contentType: String,
+                maxWidth: Int,
+                maxHeight: Int,
+                quality: Int,
+            ): cc.hhhl.client.media.ImageProcessResult {
+                return cc.hhhl.client.media.ImageProcessResult(
+                    bytes = imageData,
+                    contentType = contentType,
+                    width = maxWidth,
+                    height = maxHeight,
+                )
+            }
+
+            override suspend fun cropToSquare(
+                imageData: ByteArray,
+                contentType: String,
+                size: Int,
+            ): cc.hhhl.client.media.ImageProcessResult {
+                cropCalled = true
+                return cc.hhhl.client.media.ImageProcessResult(
+                    bytes = imageData,
+                    contentType = contentType,
+                    width = size,
+                    height = size,
+                )
+            }
+        }
+
+        val holder = createAvatarTestHolder(imageProcessor = testProcessor)
+        holder.load()
+        advanceUntilIdle()
+
+        val upload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(2048),
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.setPendingAvatar(upload)
+        holder.confirmPendingAvatar()
+        advanceUntilIdle()
+
+        // 验证裁剪被调用
+        assertTrue(cropCalled)
+        // 验证待确认状态已清除
+        assertEquals(null, holder.state.value.pendingAvatarUpload)
+    }
+
+    @Test
+    fun confirmPendingAvatarUploadsOriginalWhenNoProcessor() = runTest {
+        val holder = createAvatarTestHolder()
+        holder.load()
+        advanceUntilIdle()
+
+        val upload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(2048),
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.setPendingAvatar(upload)
+        holder.confirmPendingAvatar()
+        advanceUntilIdle()
+
+        // 验证待确认状态已清除
+        assertEquals(null, holder.state.value.pendingAvatarUpload)
+    }
+
+    @Test
+    fun cancelPendingAvatarClearsState() = runTest {
+        val holder = createAvatarTestHolder()
+        holder.load()
+        advanceUntilIdle()
+
+        val upload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.setPendingAvatar(upload)
+        assertEquals(upload, holder.state.value.pendingAvatarUpload)
+
+        holder.cancelPendingAvatar()
+
+        // 验证待确认状态已清除
+        assertEquals(null, holder.state.value.pendingAvatarUpload)
+    }
+
+    @Test
+    fun updateAvatarCreatesAvatarFolder() = runTest {
+        var createdFolderName: String? = null
+        val holder = createAvatarTestHolder(
+            onCreateFolder = { name -> createdFolderName = name }
+        )
+        holder.load()
+        advanceUntilIdle()
+
+        val upload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.updateAvatar(upload)
+        advanceUntilIdle()
+
+        // 验证文件夹被创建
+        assertEquals(AVATAR_FOLDER_NAME, createdFolderName)
+    }
+
+    @Test
+    fun updateAvatarUploadsToAvatarFolder() = runTest {
+        var uploadedFolderId: String? = null
+        val holder = createAvatarTestHolder(
+            onUpload = { upload -> uploadedFolderId = upload.folderId }
+        )
+        holder.load()
+        advanceUntilIdle()
+
+        val upload = cc.hhhl.client.api.DriveFileUpload(
+            bytes = ByteArray(1024),
+            contentType = "image/png",
+            fileName = "avatar.png",
+        )
+        holder.updateAvatar(upload)
+        advanceUntilIdle()
+
+        // 验证上传到头像文件夹
+        assertNotNull(uploadedFolderId)
+        assertTrue(uploadedFolderId!!.isNotBlank())
+    }
+
+    private fun createAvatarTestHolder(
+        onDeleteFile: (String) -> Unit = {},
+        onCreateFolder: (String) -> Unit = {},
+        onUpload: (cc.hhhl.client.api.DriveFileUpload) -> Unit = {},
+        imageProcessor: cc.hhhl.client.media.ImageProcessor? = null,
+    ): UserProfileStateHolder {
+        val driveRepository = object : cc.hhhl.client.repository.DriveFileRepository(
+            tokenProvider = { "token-123" },
+        ) {
+            override suspend fun upload(upload: cc.hhhl.client.api.DriveFileUpload): cc.hhhl.client.repository.DriveFileRepositoryResult {
+                onUpload(upload)
+                return cc.hhhl.client.repository.DriveFileRepositoryResult.Success(
+                    cc.hhhl.client.model.DriveFile(
+                        id = "file-${upload.fileName}",
+                        name = upload.fileName,
+                        type = upload.contentType,
+                        url = "https://dc.hhhl.cc/files/avatar-${upload.fileName}",
+                        thumbnailUrl = null,
+                        comment = null,
+                        size = upload.bytes.size.toLong(),
+                        isSensitive = false,
+                        createdAtLabel = "刚刚",
+                        folderId = upload.folderId,
+                    )
+                )
+            }
+
+            override suspend fun deleteFile(fileId: String): cc.hhhl.client.repository.DriveManagementRepositoryResult {
+                onDeleteFile(fileId)
+                return cc.hhhl.client.repository.DriveManagementRepositoryResult.FileDeleted(fileId)
+            }
+
+            override suspend fun createFolder(
+                name: String,
+                parentId: String?,
+            ): cc.hhhl.client.repository.DriveManagementRepositoryResult {
+                onCreateFolder(name)
+                return cc.hhhl.client.repository.DriveManagementRepositoryResult.FolderCreated(
+                    cc.hhhl.client.model.DriveFolder(
+                        id = "folder-$name",
+                        name = name,
+                        parentId = parentId,
+                        foldersCount = 0,
+                        filesCount = 0,
+                        createdAtLabel = "刚刚",
+                    )
+                )
+            }
+        }
+
+        return UserProfileStateHolder(
+            repository = fakeRepository(UserProfileRepositoryResult.Success(FakeData.me)),
+            driveFileRepository = driveRepository,
+            imageProcessor = imageProcessor,
+            scope = TestScope(testScheduler),
+            timeProvider = { testScheduler.currentTime },
+        )
     }
 
     private fun fakeRelationshipRepository(
