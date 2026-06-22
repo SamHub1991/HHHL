@@ -6,6 +6,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -37,6 +38,7 @@ import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
 import coil3.disk.directory
 import coil3.memory.MemoryCache
+import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -84,6 +86,10 @@ class MainActivity : ComponentActivity() {
             var onMediaError by remember { mutableStateOf<((String) -> Unit)?>(null) }
             var onSpeechResult by remember { mutableStateOf<((String) -> Unit)?>(null) }
             var onSpeechError by remember { mutableStateOf<((String) -> Unit)?>(null) }
+            var onPhotoPicked by remember { mutableStateOf<((DriveFileUpload) -> Unit)?>(null) }
+            var onPhotoError by remember { mutableStateOf<((String) -> Unit)?>(null) }
+            
+            // 多选媒体启动器
             val mediaLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.GetMultipleContents(),
             ) { uris ->
@@ -101,6 +107,53 @@ class MainActivity : ComponentActivity() {
                             .onSuccess { upload -> picked?.invoke(upload) }
                             .onFailure { error -> failed?.invoke(error.message ?: "无法读取所选文件") }
                     }
+                }
+            }
+            
+            // 单张图片选择启动器（用于头像）
+            val singleImageLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.GetContent(),
+            ) { uri ->
+                if (uri == null) return@rememberLauncherForActivityResult
+                val picked = onMediaPicked
+                val failed = onMediaError
+                coroutineScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            applicationContext.contentResolver.readDriveFileUpload(uri)
+                        }
+                    }
+                    result
+                        .onSuccess { upload -> picked?.invoke(upload) }
+                        .onFailure { error -> failed?.invoke(error.message ?: "无法读取所选文件") }
+                }
+            }
+            
+            // 相机拍照启动器
+            val cameraLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.TakePicturePreview(),
+            ) { bitmap ->
+                if (bitmap == null) {
+                    onPhotoError?.invoke("拍照失败")
+                    return@rememberLauncherForActivityResult
+                }
+                val picked = onPhotoPicked
+                val failed = onPhotoError
+                coroutineScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val bytes = ByteArrayOutputStream()
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, bytes)
+                            DriveFileUpload(
+                                bytes = bytes.toByteArray(),
+                                fileName = "photo_${System.currentTimeMillis()}.jpg",
+                                contentType = "image/jpeg",
+                            )
+                        }
+                    }
+                    result
+                        .onSuccess { upload -> picked?.invoke(upload) }
+                        .onFailure { error -> failed?.invoke(error.message ?: "无法处理照片") }
                 }
             }
             val speechLauncher = rememberLauncherForActivityResult(
@@ -123,15 +176,51 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val mediaPicker = remember {
-                MediaPicker { mimeType, onPicked, onError ->
-                    onMediaPicked = onPicked
-                    onMediaError = onError
-                    runCatching {
-                        mediaLauncher.launch(mimeType.ifBlank { "*/*" })
-                    }.onFailure {
-                        onMediaPicked = null
-                        onMediaError = null
-                        onError("无法打开系统文件选择器")
+                object : MediaPicker {
+                    override fun pickMedia(
+                        mimeType: String,
+                        onPicked: (DriveFileUpload) -> Unit,
+                        onError: (String) -> Unit,
+                    ) {
+                        onMediaPicked = onPicked
+                        onMediaError = onError
+                        runCatching {
+                            mediaLauncher.launch(mimeType.ifBlank { "*/*" })
+                        }.onFailure {
+                            onMediaPicked = null
+                            onMediaError = null
+                            onError("无法打开系统文件选择器")
+                        }
+                    }
+
+                    override fun pickSingleImage(
+                        onPicked: (DriveFileUpload) -> Unit,
+                        onError: (String) -> Unit,
+                    ) {
+                        onMediaPicked = onPicked
+                        onMediaError = onError
+                        runCatching {
+                            singleImageLauncher.launch("image/*")
+                        }.onFailure {
+                            onMediaPicked = null
+                            onMediaError = null
+                            onError("无法打开图片选择器")
+                        }
+                    }
+
+                    override fun takePhoto(
+                        onPicked: (DriveFileUpload) -> Unit,
+                        onError: (String) -> Unit,
+                    ) {
+                        onPhotoPicked = onPicked
+                        onPhotoError = onError
+                        runCatching {
+                            cameraLauncher.launch(null)
+                        }.onFailure {
+                            onPhotoPicked = null
+                            onPhotoError = null
+                            onError("无法打开相机")
+                        }
                     }
                 }
             }

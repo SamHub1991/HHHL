@@ -37,8 +37,8 @@ android {
         applicationId = "cc.hhhl.client"
         minSdk = 26
         targetSdk = 35
-        versionCode = 31
-        versionName = "0.9.0"
+        versionCode = 32
+        versionName = "0.9.1"
         buildConfigField(
             "String",
             "HHHL_AUTH_CLIENT_ID",

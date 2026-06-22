@@ -104,6 +104,7 @@ import cc.hhhl.client.display.NoopDisplayPreferenceStore
 import cc.hhhl.client.display.TimelineDensity
 import cc.hhhl.client.media.MediaPicker
 import cc.hhhl.client.media.SpeechTextInput
+import cc.hhhl.client.media.createImageProcessor
 import cc.hhhl.client.model.Clip
 import cc.hhhl.client.model.ClipListKind
 import cc.hhhl.client.model.ChatMessage
@@ -233,6 +234,7 @@ import cc.hhhl.client.state.TimelineUiState
 import cc.hhhl.client.state.UserListStateHolder
 import cc.hhhl.client.state.UserListUiState
 import cc.hhhl.client.state.UserProfileStateHolder
+import cc.hhhl.client.state.AVATAR_MAX_FILE_SIZE_BYTES
 import cc.hhhl.client.state.UserProfileUiState
 import cc.hhhl.client.state.UserSocialStateHolder
 import cc.hhhl.client.state.UserSocialUiState
@@ -1903,6 +1905,12 @@ private fun ProfileRouteContent(
     onDismissAiResult: () -> Unit,
     onUpdateProfile: (String, String) -> Unit,
     onChangeBanner: () -> Unit,
+    onChangeAvatar: () -> Unit,
+    onSelectPresetAvatar: (String) -> Unit,
+    onTakePhoto: (() -> Unit)? = null,
+    pendingAvatarUpload: DriveFileUpload? = null,
+    onConfirmAvatar: () -> Unit = {},
+    onCancelAvatar: () -> Unit = {},
     onLogout: () -> Unit,
     onThemeSelected: (HhhlThemePreset) -> Unit,
     onTimelineDensitySelected: (TimelineDensity) -> Unit,
@@ -1968,6 +1976,12 @@ private fun ProfileRouteContent(
         selectedTimelineDensity = selectedTimelineDensity,
         onUpdateProfile = onUpdateProfile,
         onChangeBanner = onChangeBanner,
+        onChangeAvatar = onChangeAvatar,
+        onSelectPresetAvatar = onSelectPresetAvatar,
+        onTakePhoto = onTakePhoto,
+        pendingAvatarUpload = pendingAvatarUpload,
+        onConfirmAvatar = onConfirmAvatar,
+        onCancelAvatar = onCancelAvatar,
         onLogout = onLogout,
         onThemeSelected = onThemeSelected,
         onTimelineDensitySelected = onTimelineDensitySelected,
@@ -3642,6 +3656,7 @@ private fun MainShell(
                 userIdProvider = { accountUser?.id },
             ),
             driveFileRepository = DriveFileRepository(tokenProvider = { sessionToken }),
+            imageProcessor = createImageProcessor(),
             scope = appScope,
         )
     }
@@ -8136,6 +8151,78 @@ private fun MainShell(
                             )
                         }
                     },
+                    onChangeAvatar = {
+                        val picker = mediaPicker
+                        if (picker == null) {
+                            userProfileStateHolder.showProfileEditError("当前设备不支持选择图片")
+                        } else {
+                            picker.pickSingleImage(
+                                onPicked = userProfileStateHolder::setPendingAvatar,
+                                onError = userProfileStateHolder::showProfileEditError,
+                            )
+                        }
+                    },
+                    onTakePhoto = {
+                        val picker = mediaPicker
+                        if (picker == null) {
+                            userProfileStateHolder.showProfileEditError("当前设备不支持拍照")
+                        } else {
+                            picker.takePhoto(
+                                onPicked = userProfileStateHolder::setPendingAvatar,
+                                onError = userProfileStateHolder::showProfileEditError,
+                            )
+                        }
+                    },
+                    onSelectPresetAvatar = { avatarUrl ->
+                        appScope.launch {
+                            try {
+                                // URL 白名单校验：仅允许预设头像域名，防止 SSRF
+                                val allowedPrefix = "${SharkeyAuthApi.DEFAULT_BASE_URL}/"
+                                if (!avatarUrl.startsWith(allowedPrefix)) {
+                                    userProfileStateHolder.showProfileEditError("仅支持从预设头像库选择")
+                                    return@launch
+                                }
+
+                                // 使用 use 块确保 HttpClient 在所有路径下正确关闭
+                                HttpClient().use { httpClient ->
+                                    val response = httpClient.get(avatarUrl)
+                                    if (response.status.value !in 200..299) {
+                                        userProfileStateHolder.showProfileEditError("下载头像失败：${response.status.value}")
+                                        return@use
+                                    }
+
+                                    // Content-Type 校验：从响应头获取，防止内容投毒
+                                    val responseContentType = response.headers["Content-Type"]?.lowercase() ?: ""
+                                    if (!responseContentType.startsWith("image/")) {
+                                        userProfileStateHolder.showProfileEditError("下载的内容不是有效图片")
+                                        return@use
+                                    }
+
+                                    val bytes = response.bodyAsBytes()
+
+                                    // 文件大小校验
+                                    if (bytes.size > AVATAR_MAX_FILE_SIZE_BYTES) {
+                                        val maxSizeMB = AVATAR_MAX_FILE_SIZE_BYTES / (1024 * 1024)
+                                        userProfileStateHolder.showProfileEditError("头像文件过大（最大 ${maxSizeMB}MB）")
+                                        return@use
+                                    }
+
+                                    val fileName = avatarUrl.substringAfterLast("/")
+                                    val upload = DriveFileUpload(
+                                        bytes = bytes,
+                                        fileName = fileName,
+                                        contentType = responseContentType,
+                                    )
+                                    userProfileStateHolder.setPendingAvatar(upload)
+                                }
+                            } catch (e: Exception) {
+                                userProfileStateHolder.showProfileEditError("下载头像失败：${e.message ?: "未知错误"}")
+                            }
+                        }
+                    },
+                    pendingAvatarUpload = userProfileStateHolder.state.value.pendingAvatarUpload,
+                    onConfirmAvatar = userProfileStateHolder::confirmPendingAvatar,
+                    onCancelAvatar = userProfileStateHolder::cancelPendingAvatar,
                     onLogout = onAuthInvalid,
                     onThemeSelected = onThemeSelected,
                     onTimelineDensitySelected = onTimelineDensitySelected,
