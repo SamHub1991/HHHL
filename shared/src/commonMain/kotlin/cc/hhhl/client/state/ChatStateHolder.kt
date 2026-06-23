@@ -628,48 +628,12 @@ class ChatStateHolder(
                 (listOf(room.copy(unreadCount = 0)) + it.rooms)
                     .sortedByPinnedIds(it.pinnedRoomIds) { existing -> existing.id }
             }
-            it.copy(
+            it.resetChatDetailState().copy(
                 rooms = nextRooms,
                 selectedRoom = room.copy(unreadCount = 0),
                 selectedUserConversation = null,
                 roomAttentionKinds = it.roomAttentionKinds - room.id,
-                messages = emptyList(),
-                messageSearchResults = emptyList(),
-                messageSearchQuery = "",
-                messageSearchServerUntilId = null,
-                chatUserSearchQuery = "",
-                chatUserSearchResults = emptyList(),
-                members = emptyList(),
                 selectedRoomUnreadCount = room.unreadCount.coerceAtLeast(0),
-                selectedUserUnreadCount = 0,
-                unreadJumpMessageId = null,
-                messagesEndReached = false,
-                messageSearchEndReached = true,
-                membersEndReached = false,
-                showingMembers = false,
-                isLoadingMessages = false,
-                isLoadingOlderMessages = false,
-                isSearchingMessages = false,
-                isLoadingMoreMessageSearch = false,
-                isSearchingChatUsers = false,
-                isLoadingMembers = false,
-                isLoadingMoreMembers = false,
-                isSendingMessage = false,
-                messageDraft = "",
-                mentionPickerVisible = false,
-                mentionSearchQuery = "",
-                mentionTriggerPosition = -1,
-                replyingMessage = null,
-                quotedMessage = null,
-                attachedFile = null,
-                attachments = emptyList(),
-                isUploadingMedia = false,
-                messageErrorMessage = null,
-                messageSearchErrorMessage = null,
-                chatUserSearchErrorMessage = null,
-                memberErrorMessage = null,
-                streamingErrorMessage = null,
-                requiresRelogin = false,
             )
         }
         markLocalRoomRead(room)
@@ -787,7 +751,7 @@ class ChatStateHolder(
         pendingMediaUploads = emptyList()
         mediaUploadRequestId += 1
         mutableState.update {
-            it.copy(
+            it.resetChatDetailState().copy(
                 userConversations = it.userConversations
                     .ensureChatUserConversation(conversation)
                     .markChatUserConversationRead(conversation.user.id)
@@ -795,43 +759,7 @@ class ChatStateHolder(
                 selectedRoom = null,
                 selectedUserConversation = conversation.copy(unreadCount = 0),
                 userConversationAttentionKinds = it.userConversationAttentionKinds - conversation.user.id,
-                messages = emptyList(),
-                messageSearchResults = emptyList(),
-                messageSearchQuery = "",
-                messageSearchServerUntilId = null,
-                chatUserSearchQuery = "",
-                chatUserSearchResults = emptyList(),
-                members = emptyList(),
-                selectedRoomUnreadCount = 0,
                 selectedUserUnreadCount = conversation.unreadCount.coerceAtLeast(0),
-                unreadJumpMessageId = null,
-                messagesEndReached = false,
-                messageSearchEndReached = true,
-                membersEndReached = false,
-                showingMembers = false,
-                isLoadingMessages = false,
-                isLoadingOlderMessages = false,
-                isSearchingMessages = false,
-                isLoadingMoreMessageSearch = false,
-                isSearchingChatUsers = false,
-                isLoadingMembers = false,
-                isLoadingMoreMembers = false,
-                isSendingMessage = false,
-                messageDraft = "",
-                mentionPickerVisible = false,
-                mentionSearchQuery = "",
-                mentionTriggerPosition = -1,
-                replyingMessage = null,
-                quotedMessage = null,
-                attachedFile = null,
-                attachments = emptyList(),
-                isUploadingMedia = false,
-                messageErrorMessage = null,
-                messageSearchErrorMessage = null,
-                chatUserSearchErrorMessage = null,
-                memberErrorMessage = null,
-                streamingErrorMessage = null,
-                requiresRelogin = false,
             )
         }
         markLocalUserRead(conversation)
@@ -5053,4 +4981,50 @@ private suspend fun collectWithRetry(
             break
         }
     }
+}
+
+/**
+ * 重置聊天详情状态
+ * 用于切换会话时清空消息、搜索结果、成员列表等状态
+ */
+private fun ChatUiState.resetChatDetailState(): ChatUiState {
+    return copy(
+        messages = emptyList(),
+        messageSearchResults = emptyList(),
+        messageSearchQuery = "",
+        messageSearchServerUntilId = null,
+        chatUserSearchQuery = "",
+        chatUserSearchResults = emptyList(),
+        members = emptyList(),
+        selectedRoomUnreadCount = 0,
+        selectedUserUnreadCount = 0,
+        unreadJumpMessageId = null,
+        messagesEndReached = false,
+        messageSearchEndReached = true,
+        membersEndReached = false,
+        showingMembers = false,
+        isLoadingMessages = false,
+        isLoadingOlderMessages = false,
+        isSearchingMessages = false,
+        isLoadingMoreMessageSearch = false,
+        isSearchingChatUsers = false,
+        isLoadingMembers = false,
+        isLoadingMoreMembers = false,
+        isSendingMessage = false,
+        messageDraft = "",
+        mentionPickerVisible = false,
+        mentionSearchQuery = "",
+        mentionTriggerPosition = -1,
+        replyingMessage = null,
+        quotedMessage = null,
+        attachedFile = null,
+        attachments = emptyList(),
+        isUploadingMedia = false,
+        messageErrorMessage = null,
+        messageSearchErrorMessage = null,
+        chatUserSearchErrorMessage = null,
+        memberErrorMessage = null,
+        streamingErrorMessage = null,
+        requiresRelogin = false,
+    )
 }
