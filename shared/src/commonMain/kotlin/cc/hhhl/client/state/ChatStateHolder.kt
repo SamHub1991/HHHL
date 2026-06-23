@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.datetime.Instant
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -2100,17 +2101,16 @@ class ChatStateHolder(
 
     /**
      * 解析消息时间戳
+     *
+     * @param createdAt ISO 8601 格式的时间字符串
+     * @return 时间戳（毫秒），解析失败返回 0
      */
-    private fun parseMessageTimestamp(createdAt: String, createdAtLabel: String): Long {
-        // 尝试解析 ISO 8601 格式的时间
-        if (createdAt.isNotBlank()) {
-            try {
-                return kotlinx.datetime.Instant.parse(createdAt).toEpochMilliseconds()
-            } catch (e: Exception) {
-                // 解析失败，返回0
-            }
+    private fun parseMessageTimestamp(createdAt: String): Long {
+        return try {
+            Instant.parse(createdAt).toEpochMilliseconds()
+        } catch (e: Exception) {
+            0L
         }
-        return 0L
     }
 
     /**
