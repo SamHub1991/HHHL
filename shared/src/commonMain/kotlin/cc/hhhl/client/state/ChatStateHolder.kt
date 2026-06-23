@@ -25,6 +25,7 @@ import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ChatRepositoryResult
 import cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult
 import cc.hhhl.client.repository.ChatRoomMemberRepositoryResult
+import cc.hhhl.client.repository.ChatRoomMutationRepositoryResult
 import cc.hhhl.client.repository.ChatStreamingRepository
 import cc.hhhl.client.repository.ChatUserConversationRepositoryResult
 import cc.hhhl.client.repository.DiscoverRepository
@@ -2050,7 +2051,7 @@ class ChatStateHolder(
             val senderId = message.fromUser.id
             if (senderId.isBlank() || senderId == currentUserId) continue
 
-            val timestamp = parseMessageTimestamp(message.createdAt, message.createdAtLabel)
+            val timestamp = parseMessageTimestamp(message.createdAt)
             if (timestamp == 0L) continue
 
             // 记录发送者的互动时间
@@ -4928,10 +4929,15 @@ private fun ChatMessage.chatMessageFallbackId(index: Int): String {
     return "local-chat-${seed.stableStateChatHash()}"
 }
 
+/** 哈希种子（大素数） */
+private const val HASH_SEED = 1125899906842597L
+/** 哈希乘数（常用素数） */
+private const val HASH_MULTIPLIER = 31L
+
 private fun String.stableStateChatHash(): String {
-    var hash = 1125899906842597L
+    var hash = HASH_SEED
     for (char in this) {
-        hash = 31L * hash + char.code
+        hash = HASH_MULTIPLIER * hash + char.code
     }
     return hash.toULong().toString(36)
 }
