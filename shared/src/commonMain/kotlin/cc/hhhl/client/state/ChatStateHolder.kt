@@ -21,10 +21,10 @@ import cc.hhhl.client.model.isServerChatMessageId
 import cc.hhhl.client.presentation.chatMessageBodyText
 import cc.hhhl.client.presentation.truncateRichTextPreviewText
 import cc.hhhl.client.repository.ChatMessageRepositoryResult
-import cc.hhhl.client.repository.ChatRoomMemberRepositoryResult
-import cc.hhhl.client.repository.ChatRoomMutationRepositoryResult
 import cc.hhhl.client.repository.ChatRepository
 import cc.hhhl.client.repository.ChatRepositoryResult
+import cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult
+import cc.hhhl.client.repository.ChatRoomMemberRepositoryResult
 import cc.hhhl.client.repository.ChatStreamingRepository
 import cc.hhhl.client.repository.ChatUserConversationRepositoryResult
 import cc.hhhl.client.repository.DiscoverRepository
@@ -839,7 +839,7 @@ class ChatStateHolder(
     }
 
     fun openUserConversation(
-        user: cc.hhhl.client.model.User,
+        user: User,
         jumpMessageId: String? = null,
     ) {
         val cleanUserId = user.id.trim()
@@ -2737,8 +2737,8 @@ class ChatStateHolder(
 
     private fun applyRoomExtrasResult(
         ownedResult: ChatRepositoryResult,
-        inboxResult: cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult,
-        outboxResult: cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult,
+        inboxResult: ChatRoomInvitationRepositoryResult,
+        outboxResult: ChatRoomInvitationRepositoryResult,
     ) {
         mutableState.update { current ->
             var next = current.copy(isLoadingRoomExtras = false)
@@ -2780,26 +2780,26 @@ class ChatStateHolder(
                 is ChatRepositoryResult.Error -> next = next.copy(roomManagementMessage = ownedResult.message)
             }
             when (inboxResult) {
-                is cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult.Success -> {
+                is ChatRoomInvitationRepositoryResult.Success -> {
                     next = next.copy(roomInvitationInbox = inboxResult.invitations)
                 }
-                cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult.Unauthorized -> next = next.copy(
+                ChatRoomInvitationRepositoryResult.Unauthorized -> next = next.copy(
                     roomManagementMessage = "登录已失效，请重新登录",
                     requiresRelogin = true,
                 )
-                is cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult.Error -> {
+                is ChatRoomInvitationRepositoryResult.Error -> {
                     next = next.copy(roomManagementMessage = inboxResult.message)
                 }
             }
             when (outboxResult) {
-                is cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult.Success -> {
+                is ChatRoomInvitationRepositoryResult.Success -> {
                     next = next.copy(roomInvitationOutbox = outboxResult.invitations)
                 }
-                cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult.Unauthorized -> next = next.copy(
+                ChatRoomInvitationRepositoryResult.Unauthorized -> next = next.copy(
                     roomManagementMessage = "登录已失效，请重新登录",
                     requiresRelogin = true,
                 )
-                is cc.hhhl.client.repository.ChatRoomInvitationRepositoryResult.Error -> {
+                is ChatRoomInvitationRepositoryResult.Error -> {
                     next = next.copy(roomManagementMessage = outboxResult.message)
                 }
             }

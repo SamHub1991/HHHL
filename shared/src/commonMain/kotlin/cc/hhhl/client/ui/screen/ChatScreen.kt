@@ -645,13 +645,9 @@ private fun ChatRoomSummaryRow(
 }
 
 @Composable
-private fun ChatRoomSearchPanel(
+private fun ChatSearchPanel(
     query: String,
     onQueryChanged: (String) -> Unit,
-    totalRoomCount: Int,
-    visibleRoomCount: Int,
-    unreadRoomCount: Int,
-    totalUnreadCount: Int,
 ) {
     val colors = LocalHhhlColors.current
     Column(
@@ -677,6 +673,18 @@ private fun ChatRoomSearchPanel(
             },
         )
     }
+}
+
+@Composable
+private fun ChatRoomSearchPanel(
+    query: String,
+    onQueryChanged: (String) -> Unit,
+    totalRoomCount: Int,
+    visibleRoomCount: Int,
+    unreadRoomCount: Int,
+    totalUnreadCount: Int,
+) {
+    ChatSearchPanel(query = query, onQueryChanged = onQueryChanged)
 }
 
 @Composable
@@ -843,30 +851,7 @@ private fun ChatUserSearchPanel(
     unreadUserCount: Int,
     totalUnreadCount: Int,
 ) {
-    val colors = LocalHhhlColors.current
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(colors.pageBackground)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-    ) {
-        HhhlTextInput(
-            value = query,
-            onValueChange = onQueryChanged,
-            placeholder = "搜索",
-            singleLine = true,
-            minHeight = 40.dp,
-            verticalPadding = 8.dp,
-            leading = {
-                Icon(
-                    imageVector = Icons.Filled.Search,
-                    contentDescription = null,
-                    tint = colors.textMuted,
-                    modifier = Modifier.size(18.dp),
-                )
-            },
-        )
-    }
+    ChatSearchPanel(query = query, onQueryChanged = onQueryChanged)
 }
 
 @Composable
