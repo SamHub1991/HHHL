@@ -1013,8 +1013,8 @@ private data class AiAssistantRouteActions(
     val onBack: () -> Unit,
 )
 
-private const val CHAT_ROOM_REFRESH_INTERVAL_MS = 15_000L
-private const val CHAT_MESSAGE_REFRESH_INTERVAL_MS = 5_000L
+private const val CHAT_ROOM_REFRESH_INTERVAL_MS = 30_000L
+private const val CHAT_MESSAGE_REFRESH_INTERVAL_MS = 15_000L
 private const val STREAMING_CHAT_REFRESH_INTERVAL_MS = 60_000L
 private const val CHAT_STREAM_RECONNECT_DELAY_MS = 3_000L
 private const val CHAT_EVENT_RECHECK_DELAY_MS = 1_500L
@@ -1786,6 +1786,10 @@ private fun ChatRouteContent(
         onDismissStreamingErrorMessage = stateHolder::dismissStreamingErrorMessage,
         onSpecialCareJumpHandled = stateHolder::consumeSpecialCareJump,
         onUnreadJumpHandled = stateHolder::consumeUnreadJump,
+        onLoadRecentChatMembers = stateHolder::loadRecentChatMembers,
+        onSelectMentionMember = stateHolder::selectMentionMember,
+        onCloseMentionPicker = stateHolder::closeMentionPicker,
+        onGetFilteredMentionMembers = stateHolder::getFilteredMentionMembers,
         customEmojis = customEmojis,
         recentEmojiCodes = recentEmojiCodes,
         isMediaPickerAvailable = mediaPicker != null,
@@ -3471,6 +3475,7 @@ private fun MainShell(
             streamingRepository = chatStreamingRepository,
             relationshipRepository = UserRelationshipRepository(tokenProvider = { sessionToken }),
             discoverRepository = DiscoverRepository(tokenProvider = { sessionToken }),
+            notificationRepository = notificationRepository,
             accountIdProvider = { currentAccountId },
             unreadStore = chatUnreadStore,
             currentUserProvider = { accountUser?.toDomainUser(host = currentAccountHost) },

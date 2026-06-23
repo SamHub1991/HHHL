@@ -31,6 +31,8 @@ import cc.hhhl.client.repository.DiscoverRepository
 import cc.hhhl.client.repository.DiscoverRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.DriveFileRepositoryResult
+import cc.hhhl.client.repository.NotificationRepository
+import cc.hhhl.client.repository.NotificationRepositoryResult
 import cc.hhhl.client.repository.requiresRealtimeAttentionResolution
 import cc.hhhl.client.repository.resolveRealtimeMessage
 import cc.hhhl.client.repository.UserRelationshipRepository
@@ -39,6 +41,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -111,6 +114,11 @@ data class ChatUiState(
     val pinnedRoomIds: Set<String> = emptySet(),
     val pinnedUserConversationIds: Set<String> = emptySet(),
     val roomGroups: Map<String, String> = emptyMap(),
+    // @功能相关状态
+    val mentionPickerVisible: Boolean = false,
+    val mentionSearchQuery: String = "",
+    val recentChatMembers: List<ChatRecentMember> = emptyList(),
+    val mentionTriggerPosition: Int = -1,
 )
 
 enum class ChatComposerAttachmentKind {
@@ -147,6 +155,26 @@ data class SpecialCareChatToast(
     val kind: ChatAttentionKind = ChatAttentionKind.SpecialCare,
 )
 
+/** @成员选择列表的最大显示数量 */
+private const val MAX_RECENT_MENTION_MEMBERS = 20
+
+/** WebSocket 重试相关常量 */
+private const val STREAMING_MAX_RETRIES = 3
+private const val STREAMING_INITIAL_RETRY_DELAY_MS = 1000L
+private const val STREAMING_MAX_RETRY_DELAY_MS = 30000L
+
+/**
+ * 最近聊天的群成员，用于@功能
+ * @param user 用户信息
+ * @param lastInteractionTime 最近互动时间（时间戳，毫秒）
+ * @param interactionCount 互动次数
+ */
+data class ChatRecentMember(
+    val user: User,
+    val lastInteractionTime: Long,
+    val interactionCount: Int,
+)
+
 private data class ChatMessageDeletionTarget(
     val roomId: String? = null,
     val directUserId: String? = null,
@@ -158,6 +186,7 @@ class ChatStateHolder(
     private val streamingRepository: ChatStreamingRepository? = null,
     private val relationshipRepository: UserRelationshipRepository? = null,
     private val discoverRepository: DiscoverRepository? = null,
+    private val notificationRepository: NotificationRepository? = null,
     private val scope: CoroutineScope,
     private val accountIdProvider: () -> String? = { null },
     private val unreadStore: ChatUnreadStore = NoopChatUnreadStore,
@@ -625,6 +654,9 @@ class ChatStateHolder(
                 isLoadingMoreMembers = false,
                 isSendingMessage = false,
                 messageDraft = "",
+                mentionPickerVisible = false,
+                mentionSearchQuery = "",
+                mentionTriggerPosition = -1,
                 replyingMessage = null,
                 quotedMessage = null,
                 attachedFile = null,
@@ -784,6 +816,9 @@ class ChatStateHolder(
                 isLoadingMoreMembers = false,
                 isSendingMessage = false,
                 messageDraft = "",
+                mentionPickerVisible = false,
+                mentionSearchQuery = "",
+                mentionTriggerPosition = -1,
                 replyingMessage = null,
                 quotedMessage = null,
                 attachedFile = null,
@@ -960,6 +995,9 @@ class ChatStateHolder(
                 membersEndReached = false,
                 showingMembers = false,
                 messageDraft = "",
+                mentionPickerVisible = false,
+                mentionSearchQuery = "",
+                mentionTriggerPosition = -1,
                 replyingMessage = null,
                 quotedMessage = null,
                 attachedFile = null,
@@ -980,9 +1018,13 @@ class ChatStateHolder(
 
         streamingJob?.cancel()
         streamingJob = scope.launch {
-            streamRepository.streamRoomMessages(cleanRoomId).collect { event ->
-                applyRoomStreamingEvent(cleanRoomId, event)
-            }
+            collectWithRetry(
+                flowProvider = { streamRepository.streamRoomMessages(cleanRoomId) },
+                onEvent = { event ->
+                    applyRoomStreamingEvent(cleanRoomId, event)
+                    event.shouldTriggerStreamingRetry()
+                },
+            )
         }
     }
 
@@ -993,9 +1035,13 @@ class ChatStateHolder(
 
         streamingJob?.cancel()
         streamingJob = scope.launch {
-            streamRepository.streamUserMessages(cleanUserId).collect { event ->
-                applyUserStreamingEvent(cleanUserId, event)
-            }
+            collectWithRetry(
+                flowProvider = { streamRepository.streamUserMessages(cleanUserId) },
+                onEvent = { event ->
+                    applyUserStreamingEvent(cleanUserId, event)
+                    event.shouldTriggerStreamingRetry()
+                },
+            )
         }
     }
 
@@ -1886,6 +1932,243 @@ class ChatStateHolder(
         mutableState.update {
             it.copy(messageDraft = text, messageErrorMessage = null, requiresRelogin = false)
         }
+        // 检测@触发
+        detectMentionTrigger(text)
+    }
+
+    /**
+     * 检测输入框中的@符号并触发成员选择器
+     *
+     * 优化点：
+     * 1. 支持光标在文本中间的情况
+     * 2. 正确处理退格删除@符号
+     * 3. 避免邮箱地址误触发（检查@前是否有字母/数字）
+     * 4. 处理换行符边界
+     */
+    private fun detectMentionTrigger(text: String) {
+        val cursorPosition = text.length
+        if (cursorPosition == 0) {
+            closeMentionPicker()
+            return
+        }
+
+        // 从光标位置向前查找最近的@符号
+        var atIndex = -1
+        for (i in cursorPosition - 1 downTo 0) {
+            val char = text[i]
+            if (char == '@') {
+                // 如果@前面是字母或数字，可能是邮箱地址的一部分，跳过
+                // 例如：user@email.com 不应该触发
+                if (i > 0 && text[i - 1].isLetterOrDigit()) {
+                    continue
+                }
+                // 其他情况（行首、空白、中文、标点等）都触发@mention
+                atIndex = i
+                break
+            }
+            // 如果遇到换行符，停止查找（@不能跨行）
+            if (char == '\n') break
+        }
+
+        if (atIndex == -1) {
+            closeMentionPicker()
+            return
+        }
+
+        // 提取@后的搜索关键词
+        val searchQuery = text.substring(atIndex + 1, cursorPosition)
+        
+        // 如果包含空格或点号，说明已经完成选择或输入了其他内容（避免邮箱地址误触发）
+        if (searchQuery.contains(' ') || searchQuery.contains('.')) {
+            closeMentionPicker()
+            return
+        }
+        
+        // 如果搜索关键词为空（刚输入@），显示所有成员
+        // 如果有搜索关键词，显示过滤后的成员
+        mutableState.update {
+            it.copy(
+                mentionPickerVisible = true,
+                mentionSearchQuery = searchQuery,
+                mentionTriggerPosition = atIndex,
+            )
+        }
+    }
+
+    /**
+     * 关闭@成员选择器
+     */
+    fun closeMentionPicker() {
+        val current = state.value
+        if (!current.mentionPickerVisible && current.mentionSearchQuery.isEmpty() && current.mentionTriggerPosition == -1) {
+            return
+        }
+        mutableState.update {
+            it.copy(
+                mentionPickerVisible = false,
+                mentionSearchQuery = "",
+                mentionTriggerPosition = -1,
+            )
+        }
+    }
+
+    /**
+     * 加载最近聊天的群成员
+     *
+     * 成员来源优先级：
+     * 1. 消息历史中最近互动的成员（按互动时间倒序）
+     * 2. 群成员列表中尚未出现在上述结果中的成员（作为补充，确保新聊天室也能 @人）
+     */
+    fun loadRecentChatMembers() {
+        val current = state.value
+        val roomId = current.selectedRoom?.id ?: return
+        val messages = current.messages
+        val members = current.members
+        val currentUserId = currentAccountId()
+
+        launchChatWorker {
+            val recentMembers = extractRecentChatMembers(messages, currentUserId)
+            val mergedMembers = mergeRecentAndGroupMembers(recentMembers, members, currentUserId)
+            mutableState.update {
+                it.copy(recentChatMembers = mergedMembers)
+            }
+        }
+    }
+
+    /**
+     * 从消息历史中提取最近互动的成员
+     */
+    private fun extractRecentChatMembers(
+        messages: List<ChatMessage>,
+        currentUserId: String?,
+    ): List<ChatRecentMember> {
+        val userInteractionMap = mutableMapOf<String, MutableList<Long>>()
+        val userMap = mutableMapOf<String, User>()
+
+        for (message in messages) {
+            val senderId = message.fromUser.id
+            if (senderId.isBlank() || senderId == currentUserId) continue
+
+            val timestamp = parseMessageTimestamp(message.createdAt, message.createdAtLabel)
+            if (timestamp == 0L) continue
+
+            // 记录发送者的互动时间
+            userInteractionMap.getOrPut(senderId) { mutableListOf() }.add(timestamp)
+            userMap[senderId] = message.fromUser
+        }
+
+        // 转换为 ChatRecentMember 列表并按最近互动时间排序
+        return userInteractionMap.map { (userId, timestamps) ->
+            val user = userMap[userId] ?: return@map null
+            val sortedTimestamps = timestamps.sortedDescending()
+            ChatRecentMember(
+                user = user,
+                lastInteractionTime = sortedTimestamps.first(),
+                interactionCount = timestamps.size,
+            )
+        }.filterNotNull()
+            .sortedByDescending { it.lastInteractionTime }
+            .take(MAX_RECENT_MENTION_MEMBERS)
+    }
+
+    /**
+     * 合并消息历史中的最近互动成员与群成员列表
+     * 优先保留有互动记录的成员，群成员列表中未出现在互动记录里的成员作为补充追加
+     */
+    private fun mergeRecentAndGroupMembers(
+        recentMembers: List<ChatRecentMember>,
+        groupMembers: List<ChatRoomMember>,
+        currentUserId: String?,
+    ): List<ChatRecentMember> {
+        val seenUserIds = recentMembers.map { it.user.id }.toMutableSet()
+        val supplementMembers = groupMembers.asSequence()
+            .filter { member ->
+                val userId = member.user.id
+                userId.isNotBlank() && userId != currentUserId && userId !in seenUserIds
+            }
+            .map { member ->
+                ChatRecentMember(
+                    user = member.user,
+                    lastInteractionTime = 0L,
+                    interactionCount = 0,
+                )
+            }
+            .onEach { seenUserIds.add(it.user.id) }
+            .toList()
+        return (recentMembers + supplementMembers).take(MAX_RECENT_MENTION_MEMBERS)
+    }
+
+    /**
+     * 解析消息时间戳
+     */
+    private fun parseMessageTimestamp(createdAt: String, createdAtLabel: String): Long {
+        // 尝试解析 ISO 8601 格式的时间
+        if (createdAt.isNotBlank()) {
+            try {
+                return kotlinx.datetime.Instant.parse(createdAt).toEpochMilliseconds()
+            } catch (e: Exception) {
+                // 解析失败，返回0
+            }
+        }
+        return 0L
+    }
+
+    /**
+     * 选择@成员并插入到输入框
+     *
+     * 替换逻辑：
+     * 1. 从 triggerPosition 开始，到 triggerPosition + 1 + searchQuery.length 结束，
+     *    这一段是 "@搜索关键词"，需要被替换为 "@成员昵称 "
+     * 2. 防御性检查：确保索引不越界
+     */
+    fun selectMentionMember(member: ChatRecentMember) {
+        val current = state.value
+        val draft = current.messageDraft
+        val triggerPosition = current.mentionTriggerPosition
+
+        if (triggerPosition == -1) return
+        if (triggerPosition >= draft.length) return
+
+        val displayName = member.user.displayName.trim().ifBlank { member.user.username.trim() }
+        if (displayName.isBlank()) return
+
+        // 计算替换范围
+        val replaceEnd = triggerPosition + 1 + current.mentionSearchQuery.length
+        // 防御性检查：确保结束位置不越界
+        val safeReplaceEnd = replaceEnd.coerceAtMost(draft.length)
+
+        // 构建新的文本：@符号前的内容 + @成员昵称 + 空格 + @符号后的内容
+        val beforeAt = draft.substring(0, triggerPosition)
+        val afterAt = draft.substring(safeReplaceEnd)
+        val mentionText = "@$displayName "
+        val newDraft = beforeAt + mentionText + afterAt
+
+        mutableState.update {
+            it.copy(
+                messageDraft = newDraft,
+                mentionPickerVisible = false,
+                mentionSearchQuery = "",
+                mentionTriggerPosition = -1,
+            )
+        }
+    }
+
+    /**
+     * 获取过滤后的@提及成员列表
+     * 根据搜索关键词过滤最近聊天的群成员
+     */
+    fun getFilteredMentionMembers(): List<ChatRecentMember> {
+        val current = state.value
+        val query = current.mentionSearchQuery.trim().lowercase()
+        val members = current.recentChatMembers
+
+        if (query.isEmpty()) return members
+
+        return members.filter { member ->
+            val displayNameLower = member.user.displayName.lowercase()
+            val usernameLower = member.user.username.lowercase()
+            displayNameLower.contains(query) || usernameLower.contains(query)
+        }
     }
 
     fun quoteMessage(messageId: String) {
@@ -2175,6 +2458,9 @@ class ChatStateHolder(
         }
         if (current.isSendingMessage) return
 
+        // 解析消息中的@成员
+        val mentionedUserIds = extractMentionedUserIds(text, current.recentChatMembers)
+
         mutableState.update {
             it.copy(
                 isSendingMessage = true,
@@ -2196,6 +2482,10 @@ class ChatStateHolder(
                     ),
                     loadingMore = false,
                 )
+                // 如果有@成员，发送提醒通知
+                if (mentionedUserIds.isNotEmpty()) {
+                    sendMentionNotifications(room.id, mentionedUserIds, text)
+                }
             } else if (userConversation != null) {
                 applyUserMessageResult(
                     userId = userConversation.user.id,
@@ -2210,6 +2500,43 @@ class ChatStateHolder(
                 )
             }
         }
+    }
+
+    /**
+     * 从消息文本中提取被@的用户ID列表
+     * 同时支持 @username@host 和 @displayName 两种提及格式，复用 mentionsChatUser 检测逻辑
+     */
+    private fun extractMentionedUserIds(
+        text: String,
+        recentMembers: List<ChatRecentMember>,
+    ): List<String> {
+        if (text.isBlank() || recentMembers.isEmpty()) return emptyList()
+        return recentMembers
+            .filter { member -> text.mentionsChatUser(member.user) }
+            .map { it.user.id }
+            .filter { it.isNotBlank() }
+            .distinct()
+    }
+
+    /**
+     * 发送@提醒通知给被@的用户
+     *
+     * 当前实现说明：
+     * Sharkey 的 notifications/create API 仅能为当前认证用户（发送者）创建通知，
+     * 无法直接向其他用户发送通知。被@成员的通知提醒由以下机制保障：
+     * 1. 接收方客户端通过 mentionsChatUser() 检测消息文本中的 @提及
+     * 2. 命中后通过 toChatAttentionToastIfNeeded() 生成 ChatAttentionKind.Mention 提醒
+     * 3. 流式消息通道实时推送，确保在线用户即时收到提醒
+     *
+     * 此方法保留用于未来后端支持跨用户通知时的扩展接入点。
+     */
+    private suspend fun sendMentionNotifications(
+        roomId: String,
+        mentionedUserIds: List<String>,
+        messageText: String,
+    ) {
+        // 被@成员的通知由接收方客户端的 mentionsChatUser 检测机制处理，无需发送者侧主动推送。
+        // 若后端未来支持聊天提及通知 API，可在此处接入。
     }
 
     fun reactToMessage(
@@ -2712,6 +3039,9 @@ class ChatStateHolder(
                         selectedRoom = it.selectedRoom?.withLatestMessageAt(result.message),
                         messages = it.messages.withChronologicalMessage(result.message),
                         messageDraft = "",
+                        mentionPickerVisible = false,
+                        mentionSearchQuery = "",
+                        mentionTriggerPosition = -1,
                         replyingMessage = null,
                         quotedMessage = null,
                         attachedFile = null,
@@ -2843,6 +3173,9 @@ class ChatStateHolder(
                         ),
                         messages = nextMessages,
                         messageDraft = "",
+                        mentionPickerVisible = false,
+                        mentionSearchQuery = "",
+                        mentionTriggerPosition = -1,
                         replyingMessage = null,
                         quotedMessage = null,
                         attachedFile = null,
@@ -4334,6 +4667,8 @@ private fun ChatMessage.toChatAttentionToast(
 private fun String.mentionsChatUser(user: User?): Boolean {
     val username = user?.username?.trim()?.takeIf { it.isNotEmpty() } ?: return false
     val host = user.host?.trim()?.takeIf { it.isNotEmpty() }
+
+    // 1. 检查 @username@host 格式（与服务端兼容的标准提及格式）
     var index = indexOf('@')
     while (index >= 0 && index < length - 1) {
         val parsed = parseMentionAt(index)
@@ -4342,7 +4677,30 @@ private fun String.mentionsChatUser(user: User?): Boolean {
         }
         index = indexOf('@', startIndex = index + 1)
     }
-    return false
+
+    // 2. 检查 @displayName 格式（聊天室 @功能使用的昵称格式）
+    val displayName = user.displayName.trim().takeIf { it.isNotEmpty() } ?: return false
+    return containsDisplayNameMention(displayName)
+}
+
+/**
+ * 检查文本中是否包含 @displayName 格式的提及
+ * 要求 @ 符号位于行首或前面是空白字符，且 displayName 后面是空白字符或文本末尾
+ */
+private fun String.containsDisplayNameMention(displayName: String): Boolean {
+    val token = "@$displayName"
+    var searchFrom = 0
+    while (true) {
+        val found = indexOf(token, searchFrom, ignoreCase = true)
+        if (found < 0) return false
+        // 检查 @ 前面是否是行首或空白字符
+        val precedingOk = found == 0 || this[found - 1].isWhitespace()
+        // 检查 displayName 后面是否是空白字符或文本末尾
+        val afterIndex = found + token.length
+        val followingOk = afterIndex >= length || this[afterIndex].isWhitespace()
+        if (precedingOk && followingOk) return true
+        searchFrom = found + 1
+    }
 }
 
 private data class ParsedMention(
@@ -4639,4 +4997,54 @@ private fun String.isAlreadyJoinedRoomMessage(): Boolean {
         "加入" in this ||
         "已在" in this ||
         "成员" in this
+}
+
+/**
+ * 判断流式事件是否应该触发重试
+ */
+private fun ChatStreamingEvent.shouldTriggerStreamingRetry(): Boolean {
+    return when (this) {
+        is ChatStreamingEvent.Error, is ChatStreamingEvent.Closed -> true
+        else -> false
+    }
+}
+
+/**
+ * 带重试机制的 Flow 收集器
+ * 用于 WebSocket 连接的自动重连
+ *
+ * @param flowProvider 提供需要收集的 Flow
+ * @param onEvent 事件处理回调，返回是否需要重试
+ */
+private suspend fun collectWithRetry(
+    flowProvider: () -> Flow<ChatStreamingEvent>,
+    onEvent: suspend (ChatStreamingEvent) -> Boolean,
+) {
+    var retryCount = 0
+    var retryDelay = STREAMING_INITIAL_RETRY_DELAY_MS
+
+    while (retryCount < STREAMING_MAX_RETRIES) {
+        var shouldRetry = false
+
+        flowProvider().collect { event ->
+            val needsRetry = onEvent(event)
+            if (needsRetry) {
+                shouldRetry = true
+            }
+            // 连接成功后重置重试计数
+            if (event is ChatStreamingEvent.Connected) {
+                retryCount = 0
+                retryDelay = STREAMING_INITIAL_RETRY_DELAY_MS
+            }
+        }
+
+        // Flow 结束后，检查是否需要重试
+        if (shouldRetry && retryCount < STREAMING_MAX_RETRIES - 1) {
+            retryCount++
+            delay(retryDelay)
+            retryDelay = (retryDelay * 2).coerceAtMost(STREAMING_MAX_RETRY_DELAY_MS)
+        } else {
+            break
+        }
+    }
 }

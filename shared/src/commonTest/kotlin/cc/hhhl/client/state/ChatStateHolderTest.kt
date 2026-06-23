@@ -3826,4 +3826,432 @@ class ChatStateHolderTest {
         val replyId: String?,
         val quoteId: String?,
     )
+
+    // region @mention 功能测试
+
+    /**
+     * 测试：输入 @ 符号触发成员选择器
+     */
+    @Test
+    fun typingAtSymbolTriggersMentionPicker() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(emptyList()),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.updateMessageDraft("你好 @")
+
+        assertTrue(holder.state.value.mentionPickerVisible)
+        assertEquals("", holder.state.value.mentionSearchQuery)
+    }
+
+    /**
+     * 测试：@ 后输入关键词更新搜索查询
+     */
+    @Test
+    fun typingAfterAtSymbolUpdatesSearchQuery() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.updateMessageDraft("@ali")
+
+        assertTrue(holder.state.value.mentionPickerVisible)
+        assertEquals("ali", holder.state.value.mentionSearchQuery)
+    }
+
+    /**
+     * 测试：@ 后输入空格关闭选择器
+     */
+    @Test
+    fun typingSpaceAfterAtSymbolClosesMentionPicker() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.updateMessageDraft("@ali")
+        assertTrue(holder.state.value.mentionPickerVisible)
+
+        holder.updateMessageDraft("@ali test")
+        assertFalse(holder.state.value.mentionPickerVisible)
+    }
+
+    /**
+     * 测试：closeMentionPicker 清除选择器状态
+     */
+    @Test
+    fun closeMentionPickerClearsState() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.updateMessageDraft("@test")
+        assertTrue(holder.state.value.mentionPickerVisible)
+
+        holder.closeMentionPicker()
+        assertFalse(holder.state.value.mentionPickerVisible)
+        assertEquals("", holder.state.value.mentionSearchQuery)
+        assertEquals(-1, holder.state.value.mentionTriggerPosition)
+    }
+
+    /**
+     * 测试：从消息历史中加载最近互动成员
+     */
+    @Test
+    fun loadRecentChatMembersExtractsFromMessageHistory() = runTest {
+        val room = sampleRoom()
+        val user1 = User("user-bob", "Bob", "bob", "B")
+        val user2 = User("user-carol", "Carol", "carol", "C")
+        val message1 = sampleMessage("msg-1", text = "hello").copy(
+            fromUser = user1,
+            createdAt = "2026-06-01T10:00:00Z",
+        )
+        val message2 = sampleMessage("msg-2", text = "hi").copy(
+            fromUser = user2,
+            createdAt = "2026-06-02T10:00:00Z",
+        )
+        val message3 = sampleMessage("msg-3", text = "hey").copy(
+            fromUser = user1,
+            createdAt = "2026-06-03T10:00:00Z",
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message1, message2, message3)),
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "current-user" },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.loadRecentChatMembers()
+        advanceUntilIdle()
+
+        val members = holder.state.value.recentChatMembers
+        assertEquals(2, members.size)
+        // user1 有 2 条消息且最近互动时间更晚，应排在前面
+        assertEquals("user-bob", members[0].user.id)
+        assertEquals(2, members[0].interactionCount)
+        assertEquals("user-carol", members[1].user.id)
+        assertEquals(1, members[1].interactionCount)
+    }
+
+    /**
+     * 测试：成员列表融合群成员作为补充来源
+     */
+    @Test
+    fun loadRecentChatMembersMergesWithGroupMembers() = runTest {
+        val room = sampleRoom()
+        val existingMember = User("user-bob", "Bob", "bob", "B")
+        val message = sampleMessage("msg-1", text = "hello").copy(
+            fromUser = existingMember,
+            createdAt = "2026-06-01T10:00:00Z",
+        )
+        val groupMember = sampleMember("membership-new", userId = "user-new")
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+                refreshMembersResult = ChatRoomMemberRepositoryResult.Success(listOf(groupMember)),
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "current-user" },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        // 先加载群成员
+        holder.showMembers()
+        advanceUntilIdle()
+        // 再加载 @成员列表
+        holder.loadRecentChatMembers()
+        advanceUntilIdle()
+
+        val members = holder.state.value.recentChatMembers
+        // 应包含消息历史中的成员和群成员列表中的补充成员
+        assertTrue(members.any { it.user.id == "user-bob" })
+        assertTrue(members.any { it.user.id == "user-new" })
+        // 消息历史中的成员应有互动次数，群成员补充的应为 0
+        val bob = members.first { it.user.id == "user-bob" }
+        assertEquals(1, bob.interactionCount)
+        val newMember = members.first { it.user.id == "user-new" }
+        assertEquals(0, newMember.interactionCount)
+    }
+
+    /**
+     * 测试：选择@成员后在消息文本中插入 @displayName
+     */
+    @Test
+    fun selectMentionMemberInsertsDisplayNameIntoDraft() = runTest {
+        val room = sampleRoom()
+        val mentionedUser = User("user-bob", "Bob", "bob", "B")
+        val message = sampleMessage("msg-1", text = "hello").copy(
+            fromUser = mentionedUser,
+            createdAt = "2026-06-01T10:00:00Z",
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "current-user" },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.loadRecentChatMembers()
+        advanceUntilIdle()
+
+        holder.updateMessageDraft("你好 @")
+        assertTrue(holder.state.value.mentionPickerVisible)
+
+        val member = holder.state.value.recentChatMembers.first { it.user.id == "user-bob" }
+        holder.selectMentionMember(member)
+
+        assertEquals("你好 @Bob ", holder.state.value.messageDraft)
+        assertFalse(holder.state.value.mentionPickerVisible)
+    }
+
+    /**
+     * 测试：getFilteredMentionMembers 按关键词过滤
+     */
+    @Test
+    fun getFilteredMentionMembersFiltersByQuery() = runTest {
+        val room = sampleRoom()
+        val user1 = User("user-bob", "Bob", "bob", "B")
+        val user2 = User("user-carol", "Carol", "carol", "C")
+        val message1 = sampleMessage("msg-1", text = "hello").copy(
+            fromUser = user1,
+            createdAt = "2026-06-01T10:00:00Z",
+        )
+        val message2 = sampleMessage("msg-2", text = "hi").copy(
+            fromUser = user2,
+            createdAt = "2026-06-02T10:00:00Z",
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message1, message2)),
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "current-user" },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.loadRecentChatMembers()
+        advanceUntilIdle()
+
+        // 无过滤词时返回全部
+        assertEquals(2, holder.getFilteredMentionMembers().size)
+
+        // 按 displayName 过滤
+        holder.updateMessageDraft("@bo")
+        val filtered = holder.getFilteredMentionMembers()
+        assertEquals(1, filtered.size)
+        assertEquals("user-bob", filtered[0].user.id)
+    }
+
+    /**
+     * 测试：发送含 @displayName 的消息时正确提取被@用户ID
+     */
+    @Test
+    fun sendMessageWithDisplayNameMentionExtractsUserId() = runTest {
+        val room = sampleRoom()
+        val mentionedUser = User("user-bob", "Bob", "bob", "B")
+        val message = sampleMessage("msg-1", text = "hello").copy(
+            fromUser = mentionedUser,
+            createdAt = "2026-06-01T10:00:00Z",
+        )
+        val created = sampleMessage("message-created", text = "@Bob 你好")
+        val calls = mutableListOf<SendCall>()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+                sendMessageResult = ChatMessageRepositoryResult.Created(created),
+                onSend = { roomId, text, fileIds, replyId, quoteId ->
+                    calls.add(SendCall(roomId, text, fileIds, replyId, quoteId))
+                },
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "current-user" },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.loadRecentChatMembers()
+        advanceUntilIdle()
+
+        holder.updateMessageDraft("@Bob 你好")
+        holder.sendMessage()
+        advanceUntilIdle()
+
+        assertEquals(1, calls.size)
+        assertEquals("@Bob 你好", calls[0].text)
+        // 消息发送后草稿应清空
+        assertEquals("", holder.state.value.messageDraft)
+    }
+
+    /**
+     * 测试：@ 符号前非空白字符时不触发选择器（如邮箱地址）
+     */
+    @Test
+    fun atSymbolNotTriggeredWhenPrecededByNonWhitespace() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.updateMessageDraft("email@test.com")
+
+        assertFalse(holder.state.value.mentionPickerVisible)
+    }
+
+    /**
+     * 测试：行首输入 @ 触发选择器
+     */
+    @Test
+    fun atSymbolAtLineStartTriggersMentionPicker() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.updateMessageDraft("@")
+
+        assertTrue(holder.state.value.mentionPickerVisible)
+    }
+
+    /**
+     * 测试：换行后输入 @ 触发选择器
+     */
+    @Test
+    fun atSymbolAfterNewlineTriggersMentionPicker() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.updateMessageDraft("第一行\n@")
+
+        assertTrue(holder.state.value.mentionPickerVisible)
+    }
+
+    /**
+     * 测试：切换聊天室时清除 @选择器状态
+     */
+    @Test
+    fun switchingRoomClosesMentionPicker() = runTest {
+        val room1 = sampleRoom(id = "room-1")
+        val room2 = sampleRoom(id = "room-2")
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room1, room2)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room1)
+        advanceUntilIdle()
+        holder.updateMessageDraft("@test")
+        assertTrue(holder.state.value.mentionPickerVisible)
+
+        holder.selectRoom(room2)
+        assertFalse(holder.state.value.mentionPickerVisible)
+        assertEquals("", holder.state.value.mentionSearchQuery)
+        assertEquals(-1, holder.state.value.mentionTriggerPosition)
+    }
+
+    /**
+     * 测试：当前用户被排除在 @成员列表之外
+     */
+    @Test
+    fun currentUserExcludedFromRecentChatMembers() = runTest {
+        val room = sampleRoom()
+        val currentUser = User("current-user", "Me", "me", "M")
+        val otherUser = User("user-bob", "Bob", "bob", "B")
+        val message1 = sampleMessage("msg-1", text = "from me").copy(
+            fromUser = currentUser,
+            createdAt = "2026-06-01T10:00:00Z",
+        )
+        val message2 = sampleMessage("msg-2", text = "from bob").copy(
+            fromUser = otherUser,
+            createdAt = "2026-06-02T10:00:00Z",
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message1, message2)),
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "current-user" },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.loadRecentChatMembers()
+        advanceUntilIdle()
+
+        val members = holder.state.value.recentChatMembers
+        assertEquals(1, members.size)
+        assertEquals("user-bob", members[0].user.id)
+    }
+
+    // endregion
 }

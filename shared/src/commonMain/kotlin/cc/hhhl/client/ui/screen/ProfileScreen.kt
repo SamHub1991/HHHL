@@ -70,6 +70,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.vector.ImageVector
 import coil3.compose.AsyncImage
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.api.USER_PROFILE_DESCRIPTION_MAX_LENGTH
 import cc.hhhl.client.api.USER_PROFILE_NAME_MAX_LENGTH

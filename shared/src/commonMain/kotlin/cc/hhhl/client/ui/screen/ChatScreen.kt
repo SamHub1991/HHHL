@@ -103,16 +103,20 @@ import cc.hhhl.client.ai.AiTaskKind
 import cc.hhhl.client.model.AvatarDecoration
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.ChatMessageQuote
+import cc.hhhl.client.model.ChatMessageReaction
+import cc.hhhl.client.model.ChatMessageReference
 import cc.hhhl.client.model.ChatRoom
 import cc.hhhl.client.model.CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX
 import cc.hhhl.client.model.ChatRoomInvitation
 import cc.hhhl.client.model.ChatRoomMember
 import cc.hhhl.client.model.ChatUserConversation
 import cc.hhhl.client.model.CustomEmoji
+import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.commonEmojiOptions
 import cc.hhhl.client.model.isServerChatMessageId
 import cc.hhhl.client.state.ChatAttentionKind
+import cc.hhhl.client.state.ChatRecentMember
 import cc.hhhl.client.state.ChatUiState
 import cc.hhhl.client.state.FavoriteMessageConversationType
 import cc.hhhl.client.state.SpecialCareChatToast
@@ -306,6 +310,11 @@ fun ChatScreen(
     onDismissStreamingErrorMessage: () -> Unit = {},
     onSpecialCareJumpHandled: () -> Unit = {},
     onUnreadJumpHandled: () -> Unit = {},
+    // @功能相关回调
+    onLoadRecentChatMembers: () -> Unit = {},
+    onSelectMentionMember: (ChatRecentMember) -> Unit = {},
+    onCloseMentionPicker: () -> Unit = {},
+    onGetFilteredMentionMembers: () -> List<ChatRecentMember> = { emptyList() },
     customEmojis: List<CustomEmoji> = emptyList(),
     recentEmojiCodes: List<String> = emptyList(),
     isMediaPickerAvailable: Boolean = false,
@@ -375,6 +384,10 @@ fun ChatScreen(
             onDismissStreamingErrorMessage = onDismissStreamingErrorMessage,
             onSpecialCareJumpHandled = onSpecialCareJumpHandled,
             onUnreadJumpHandled = onUnreadJumpHandled,
+            onLoadRecentChatMembers = onLoadRecentChatMembers,
+            onSelectMentionMember = onSelectMentionMember,
+            onCloseMentionPicker = onCloseMentionPicker,
+            onGetFilteredMentionMembers = onGetFilteredMentionMembers,
             customEmojis = customEmojis,
             recentEmojiCodes = recentEmojiCodes,
             isMediaPickerAvailable = isMediaPickerAvailable,
@@ -1637,6 +1650,10 @@ private fun ChatDetailScreen(
     onDismissStreamingErrorMessage: () -> Unit,
     onSpecialCareJumpHandled: () -> Unit,
     onUnreadJumpHandled: () -> Unit,
+    onLoadRecentChatMembers: () -> Unit,
+    onSelectMentionMember: (ChatRecentMember) -> Unit,
+    onCloseMentionPicker: () -> Unit,
+    onGetFilteredMentionMembers: () -> List<ChatRecentMember>,
     customEmojis: List<CustomEmoji>,
     recentEmojiCodes: List<String>,
     isMediaPickerAvailable: Boolean,
@@ -1688,6 +1705,14 @@ private fun ChatDetailScreen(
     var showingRoomAnnouncement by remember(conversationKey) { mutableStateOf(false) }
     var showingMessageSearch by remember(conversationKey) { mutableStateOf(false) }
     var showingMessageFilters by remember(conversationKey) { mutableStateOf(false) }
+    
+    // 加载最近聊天成员用于@功能
+    LaunchedEffect(room?.id, state.messages) {
+        if (room != null && state.messages.isNotEmpty()) {
+            onLoadRecentChatMembers()
+        }
+    }
+    
     LaunchedEffect(roomAnnouncementText) {
         if (roomAnnouncementText.isBlank()) {
             showingRoomAnnouncement = false
@@ -2403,6 +2428,18 @@ private fun ChatDetailScreen(
                     onRemove = { removeAttachedFileDialogOpen = true },
                 )
                 HhhlDivider()
+            }
+            // @成员选择弹窗
+            if (state.mentionPickerVisible) {
+                val filteredMembers = onGetFilteredMentionMembers()
+                ChatMentionPickerPopup(
+                    members = filteredMembers,
+                    searchQuery = state.mentionSearchQuery,
+                    onMemberSelected = onSelectMentionMember,
+                )
+                if (filteredMembers.isNotEmpty()) {
+                    HhhlDivider()
+                }
             }
             Row(
                 modifier = Modifier
@@ -5163,7 +5200,7 @@ private fun ChatMessageRow(
     onOpenMention: (String) -> Unit,
     onOpenHashtag: (String) -> Unit,
     onOpenQuote: (ChatRenderedQuote) -> Unit,
-    onMentionUser: (cc.hhhl.client.model.User) -> Unit,
+    onMentionUser: (User) -> Unit,
 ) {
     val presslessInteractionSource = rememberChatPresslessInteractionSource()
     val menuReactionOptions = remember(reactionOptions) { reactionOptions.chatMessageMenuReactionOptions() }
@@ -5435,7 +5472,7 @@ private fun ChatMessageAvatar(
     message: ChatMessage,
     presslessInteractionSource: MutableInteractionSource,
     onOpenUser: (String) -> Unit,
-    onMentionUser: (cc.hhhl.client.model.User) -> Unit,
+    onMentionUser: (User) -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -5805,7 +5842,7 @@ private fun ChatMessageReactionMenuButton(
 
 @Composable
 private fun ChatMessageReactionChip(
-    reaction: cc.hhhl.client.model.ChatMessageReaction,
+    reaction: ChatMessageReaction,
     isOutgoing: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
@@ -5862,7 +5899,7 @@ private fun ChatMessageReactionChip(
 @Composable
 private fun ChatMessageReferenceBlock(
     label: String,
-    reference: cc.hhhl.client.model.ChatMessageReference,
+    reference: ChatMessageReference,
     isOutgoing: Boolean,
     onClick: () -> Unit,
 ) {
@@ -6206,7 +6243,7 @@ private fun ChatMessageQuoteBlock(
 
 @Composable
 private fun ChatComposerAttachmentPreview(
-    file: cc.hhhl.client.model.DriveFile,
+    file: DriveFile,
     attachmentCount: Int,
     isUploading: Boolean,
     onRemove: () -> Unit,
@@ -7081,14 +7118,23 @@ private fun buildChatMessageDateSuggestions(messages: List<ChatMessage>): List<S
     return suggestions
 }
 
-fun String.withAppendedChatMention(user: cc.hhhl.client.model.User): String {
+/**
+ * 在字符串末尾追加@提及用户
+ * 
+ * 优化点：
+ * 1. 处理已有尾部空格的情况，避免多余空格
+ * 2. 空字符串时直接返回提及文本
+ * 3. 用户名无效时返回原字符串
+ */
+fun String.withAppendedChatMention(user: User): String {
     val name = user.displayName.trim().ifBlank { user.username.trim() }.ifBlank { return this }
-    val mention = "@$name "
-    if (isBlank()) return mention
-    return trimEnd() + " " + mention
+    val mention = "@$name"
+    if (isBlank()) return "$mention "
+    // 移除尾部空格后添加提及，确保格式统一
+    return trimEnd() + " $mention "
 }
 
-private fun cc.hhhl.client.model.ChatMessageReaction.reactionSummaryLabel(): String {
+private fun ChatMessageReaction.reactionSummaryLabel(): String {
     val names = users
         .map { user -> user.displayName.ifBlank { user.username } }
         .filter { it.isNotBlank() }
@@ -7101,12 +7147,12 @@ private fun cc.hhhl.client.model.ChatMessageReaction.reactionSummaryLabel(): Str
     }
 }
 
-private fun cc.hhhl.client.model.ChatMessageReaction.isReactedBy(currentUserId: String?): Boolean {
+private fun ChatMessageReaction.isReactedBy(currentUserId: String?): Boolean {
     if (currentUserId.isNullOrBlank()) return false
     return users.any { it.id == currentUserId }
 }
 
-private fun cc.hhhl.client.model.ChatMessageReference.toReferencePreviewText(): String {
+private fun ChatMessageReference.toReferencePreviewText(): String {
     val author = fromUser?.displayName?.takeIf { it.isNotBlank() }
         ?: fromUser?.username?.takeIf { it.isNotBlank() }
     val body = text.toChatReferencePreviewBody().takeIf { it.isNotBlank() }
@@ -7122,7 +7168,7 @@ private fun String.withAppendedChatText(text: String): String {
     return if (base.isBlank()) cleanText else "$base\n$cleanText"
 }
 
-fun cc.hhhl.client.model.ChatMessageReference.toRenderedQuote(): ChatRenderedQuote {
+fun ChatMessageReference.toRenderedQuote(): ChatRenderedQuote {
     val author = fromUser?.displayName?.takeIf { it.isNotBlank() }
         ?: fromUser?.username?.takeIf { it.isNotBlank() }
         ?: "引用"
@@ -7188,6 +7234,223 @@ private fun String.toEditableChatRoomJoinMode(): String {
         "closed" -> "closed"
         else -> "inviteOnly"
     }
+}
+
+/**
+ * @成员选择弹窗组件
+ * 显示在输入框上方，提供圆角、阴影和主题色支持
+ */
+@Composable
+private fun ChatMentionPickerPopup(
+    members: List<ChatRecentMember>,
+    searchQuery: String,
+    onMemberSelected: (ChatRecentMember) -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    
+    if (members.isEmpty()) {
+        // 空状态提示
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    color = colors.surfaceElevated,
+                    shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+                )
+                .padding(vertical = 24.dp, horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "未找到匹配的成员",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.textSecondary,
+            )
+            if (searchQuery.isNotBlank()) {
+                Text(
+                    text = "尝试其他关键词",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textMuted,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+        return
+    }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 240.dp)
+            .shadow(
+                elevation = 8.dp,
+                shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+            )
+            .background(
+                color = colors.surfaceElevated,
+                shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+            )
+            .padding(vertical = 8.dp),
+    ) {
+        Text(
+            text = "选择要@的成员",
+            style = MaterialTheme.typography.labelMedium,
+            color = colors.textSecondary,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        )
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            items(
+                items = members,
+                key = { it.user.id },
+            ) { member ->
+                ChatMentionMemberRow(
+                    member = member,
+                    searchQuery = searchQuery,
+                    onClick = { onMemberSelected(member) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * @成员选择弹窗中的成员行
+ * 支持水波纹点击反馈和搜索关键词高亮
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ChatMentionMemberRow(
+    member: ChatRecentMember,
+    searchQuery: String,
+    onClick: () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val displayName = member.user.displayName.ifBlank { member.user.username }
+    val username = member.user.username
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = null,
+            )
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Avatar(
+            url = member.user.avatarUrl,
+            initial = member.user.avatarInitial,
+            size = 36.dp,
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+        ) {
+            // 显示名称，支持搜索高亮
+            if (searchQuery.isNotBlank()) {
+                HighlightedText(
+                    text = displayName,
+                    query = searchQuery,
+                    style = MaterialTheme.typography.bodyMedium,
+                    normalColor = colors.textPrimary,
+                    highlightColor = colors.accent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                Text(
+                    text = displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // 显示用户名（如果与显示名称不同）
+            if (username.isNotBlank() && username != displayName) {
+                Text(
+                    text = "@$username",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        // 互动次数标签
+        Text(
+            text = "${member.interactionCount}条消息",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.textMuted,
+        )
+    }
+}
+
+/**
+ * 支持关键词高亮的文本组件
+ */
+@Composable
+private fun HighlightedText(
+    text: String,
+    query: String,
+    style: TextStyle,
+    normalColor: Color,
+    highlightColor: Color,
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
+) {
+    if (query.isBlank()) {
+        Text(
+            text = text,
+            style = style,
+            color = normalColor,
+            maxLines = maxLines,
+            overflow = overflow,
+        )
+        return
+    }
+    
+    val annotatedString = remember(text, query, normalColor, highlightColor) {
+        buildAnnotatedString {
+            val lowerText = text.lowercase()
+            val lowerQuery = query.lowercase()
+            var startIndex = 0
+            
+            while (startIndex < text.length) {
+                val matchIndex = lowerText.indexOf(lowerQuery, startIndex)
+                if (matchIndex == -1) {
+                    // 没有更多匹配，添加剩余文本
+                    withStyle(SpanStyle(color = normalColor)) {
+                        append(text.substring(startIndex))
+                    }
+                    break
+                }
+                
+                // 添加匹配前的文本
+                if (matchIndex > startIndex) {
+                    withStyle(SpanStyle(color = normalColor)) {
+                        append(text.substring(startIndex, matchIndex))
+                    }
+                }
+                
+                // 添加匹配的文本（高亮）
+                withStyle(SpanStyle(color = highlightColor)) {
+                    append(text.substring(matchIndex, matchIndex + query.length))
+                }
+                
+                startIndex = matchIndex + query.length
+            }
+        }
+    }
+    
+    Text(
+        text = annotatedString,
+        style = style,
+        maxLines = maxLines,
+        overflow = overflow,
+    )
 }
 
 private enum class ChatRoomJoinModeOption(
@@ -7335,7 +7598,7 @@ private fun ChatMessage.hostSearchText(): String? {
     return fromUser.host?.takeIf { it.isNotBlank() }
 }
 
-private fun cc.hhhl.client.model.ChatMessageReference.chatMessageReferenceSearchText(): String {
+private fun ChatMessageReference.chatMessageReferenceSearchText(): String {
     val builder = ChatMessageUiFilterMatchTextBuilder(CHAT_MESSAGE_UI_FILTER_MAX_MATCH_TEXT_LENGTH / 2)
     fromUser?.let { user ->
         builder.appendPart(user.displayName)

@@ -508,16 +508,17 @@ private fun NotificationRow(
             (notification.hasNotePreview && notePreviewText.length > NotificationCollapsedPreviewMaxChars)
     }
     val rowClick = {
-        if (canExpand) {
-            expanded = !expanded
-        } else {
-            onMarkNotificationRead(notification.id)
-            when (val target = notification.navigationTarget) {
-                is NotificationNavigationTarget.NoteDetail -> onOpenNote(target.noteId)
-                is NotificationNavigationTarget.UserProfile -> onOpenUser(target.userId)
-                is NotificationNavigationTarget.ChatUser -> onOpenChatUser(target.userId, target.messageId)
-                NotificationNavigationTarget.Chat -> onOpenChat()
-                null -> Unit
+        onMarkNotificationRead(notification.id)
+        when (val target = notification.navigationTarget) {
+            is NotificationNavigationTarget.NoteDetail -> onOpenNote(target.noteId)
+            is NotificationNavigationTarget.UserProfile -> onOpenUser(target.userId)
+            is NotificationNavigationTarget.ChatUser -> onOpenChatUser(target.userId, target.messageId)
+            NotificationNavigationTarget.Chat -> onOpenChat()
+            null -> {
+                // 没有导航目标时，才切换展开状态
+                if (canExpand) {
+                    expanded = !expanded
+                }
             }
         }
     }

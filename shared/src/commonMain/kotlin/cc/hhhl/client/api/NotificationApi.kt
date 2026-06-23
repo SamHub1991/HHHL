@@ -239,6 +239,10 @@ internal data class NotificationDto(
     val fileId: String? = null,
     val permCount: Int? = null,
     val rank: String? = null,
+    // 聊天相关字段
+    val chatRoomId: String? = null,
+    val chatUserId: String? = null,
+    val chatMessageId: String? = null,
 ) {
     fun toDomainNotification(): NotificationItem {
         val notificationType = type.toNotificationType()
@@ -261,6 +265,9 @@ internal data class NotificationDto(
                 notePreviewText(text = note.text.orEmpty(), cw = note.cw, fallback = "")
                     .takeIf { it.isNotBlank() }
             },
+            chatRoomId = chatRoomId,
+            chatUserId = chatUserId,
+            chatMessageId = chatMessageId,
             isRead = isRead ?: read ?: false,
         )
     }
