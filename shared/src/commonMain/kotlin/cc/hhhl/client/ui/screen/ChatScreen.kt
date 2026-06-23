@@ -676,18 +676,6 @@ private fun ChatSearchPanel(
 }
 
 @Composable
-private fun ChatRoomSearchPanel(
-    query: String,
-    onQueryChanged: (String) -> Unit,
-    totalRoomCount: Int,
-    visibleRoomCount: Int,
-    unreadRoomCount: Int,
-    totalUnreadCount: Int,
-) {
-    ChatSearchPanel(query = query, onQueryChanged = onQueryChanged)
-}
-
-@Composable
 private fun ChatRoomExtrasPanel(
     state: ChatUiState,
     onJoinRoomInvitation: (ChatRoomInvitation) -> Unit,
@@ -843,18 +831,6 @@ private fun ChatRoomInvitationRow(
 }
 
 @Composable
-private fun ChatUserSearchPanel(
-    query: String,
-    onQueryChanged: (String) -> Unit,
-    totalUserCount: Int,
-    visibleUserCount: Int,
-    unreadUserCount: Int,
-    totalUnreadCount: Int,
-) {
-    ChatSearchPanel(query = query, onQueryChanged = onQueryChanged)
-}
-
-@Composable
 private fun ChatOverviewPill(
     label: String,
     icon: ImageVector,
@@ -894,6 +870,61 @@ private fun ChatOverviewPill(
     }
 }
 
+/**
+ * 聊天会话行公共布局
+ * 用于 ChatRoomRow 和 ChatUserConversationRow 共享的外壳结构
+ */
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun ChatConversationRowLayout(
+    isPinned: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    avatar: @Composable () -> Unit,
+    title: @Composable () -> Unit,
+    subtitle: @Composable () -> Unit,
+    trailing: @Composable () -> Unit,
+    menuContent: @Composable () -> Unit,
+) {
+    val colors = LocalHhhlColors.current
+    val interactionSource = rememberChatPresslessInteractionSource()
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (isPinned) {
+                    colors.inputBackground.copy(alpha = 0.68f)
+                } else {
+                    Color.Transparent
+                },
+            )
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            avatar()
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                title()
+                subtitle()
+            }
+            trailing()
+        }
+        menuContent()
+    }
+}
+
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun ChatRoomRow(
@@ -914,7 +945,6 @@ private fun ChatRoomRow(
     var groupDialogOpen by remember(room.id) { mutableStateOf(false) }
     var deleteRoomDialogOpen by remember(room.id) { mutableStateOf(false) }
     val colors = LocalHhhlColors.current
-    val interactionSource = rememberChatPresslessInteractionSource()
     val unreadCount = room.unreadCount.coerceAtLeast(0)
     val hasUnread = unreadCount > 0
     val descriptionPreview = richTextPlainPreviewText(room.description)
@@ -922,83 +952,66 @@ private fun ChatRoomRow(
     val secondaryText = descriptionPreview.ifBlank {
         "${room.memberCount} 位成员 · ${room.joinMode.toDisplayJoinMode()}"
     }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                if (isPinned) {
-                    colors.inputBackground.copy(alpha = 0.68f)
-                } else {
-                    Color.Transparent
-                },
-            )
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-                onLongClick = { menuExpanded = true },
-            )
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    ChatConversationRowLayout(
+        isPinned = isPinned,
+        onClick = onClick,
+        onLongClick = { menuExpanded = true },
+        avatar = {
             ChatRoomAvatar(
                 room = room,
                 unreadCount = 0,
                 size = 48.dp,
             )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+        },
+        title = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = room.name.ifBlank { "聊天室" },
-                        color = colors.textPrimary,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (isPinned) {
-                        ChatPinnedBadge()
-                    }
-                    if (isOwnedRoom) {
-                        ChatOwnedRoomBadge()
-                    }
-                    if (groupName.isNotBlank()) {
-                        ChatRoomGroupBadge(groupName)
-                    }
-                    ChatRoomMuteGlyph(isMuted = room.isMuted)
+                Text(
+                    text = room.name.ifBlank { "聊天室" },
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (isPinned) {
+                    ChatPinnedBadge()
                 }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    attentionKind?.let { kind ->
-                        ChatAttentionInlineBadge(kind = kind)
-                    }
-                    Text(
-                        text = secondaryText,
-                        color = if (hasUnread) {
-                            colors.textPrimary.copy(alpha = 0.70f)
-                        } else {
-                            colors.textMuted
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
+                if (isOwnedRoom) {
+                    ChatOwnedRoomBadge()
                 }
+                if (groupName.isNotBlank()) {
+                    ChatRoomGroupBadge(groupName)
+                }
+                ChatRoomMuteGlyph(isMuted = room.isMuted)
             }
+        },
+        subtitle = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                attentionKind?.let { kind ->
+                    ChatAttentionInlineBadge(kind = kind)
+                }
+                Text(
+                    text = secondaryText,
+                    color = if (hasUnread) {
+                        colors.textPrimary.copy(alpha = 0.70f)
+                    } else {
+                        colors.textMuted
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+        },
+        trailing = {
             Column(
                 modifier = Modifier.widthIn(min = 46.dp, max = 96.dp),
                 horizontalAlignment = Alignment.End,
@@ -1009,21 +1022,23 @@ private fun ChatRoomRow(
                     ChatRoomUnreadCountBadge(unreadCount = unreadCount)
                 }
             }
-        }
-        ChatConversationContextMenu(
-            expanded = menuExpanded,
-            isPinned = isPinned,
-            groupName = groupName,
-            includeGroupActions = true,
-            deleteLabel = "删除聊天室".takeIf { canDelete },
-            deleteEnabled = !isManagingRoom,
-            onDismiss = { menuExpanded = false },
-            onTogglePinned = onTogglePinned,
-            onOpenGroupEditor = { groupDialogOpen = true },
-            onClearGroup = { onSetGroup("") },
-            onDelete = { deleteRoomDialogOpen = true },
-        )
-    }
+        },
+        menuContent = {
+            ChatConversationContextMenu(
+                expanded = menuExpanded,
+                isPinned = isPinned,
+                groupName = groupName,
+                includeGroupActions = true,
+                deleteLabel = "删除聊天室".takeIf { canDelete },
+                deleteEnabled = !isManagingRoom,
+                onDismiss = { menuExpanded = false },
+                onTogglePinned = onTogglePinned,
+                onOpenGroupEditor = { groupDialogOpen = true },
+                onClearGroup = { onSetGroup("") },
+                onDelete = { deleteRoomDialogOpen = true },
+            )
+        },
+    )
     if (groupDialogOpen) {
         ChatRoomGroupDialog(
             roomName = room.name.ifBlank { "聊天室" },
@@ -1063,7 +1078,6 @@ private fun ChatUserConversationRow(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val colors = LocalHhhlColors.current
-    val interactionSource = rememberChatPresslessInteractionSource()
     val unreadCount = conversation.unreadCount.coerceAtLeast(0)
     val hasUnread = unreadCount > 0
     val latestMessage = conversation.latestMessage
@@ -1072,76 +1086,59 @@ private fun ChatUserConversationRow(
     val preview = latestMessage
         ?.let { message -> chatUserConversationPreview(message, sentByMe) }
         ?: "开始对话"
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                if (isPinned) {
-                    colors.inputBackground.copy(alpha = 0.68f)
-                } else {
-                    Color.Transparent
-                },
-            )
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-                onLongClick = { menuExpanded = true },
-            )
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    ChatConversationRowLayout(
+        isPinned = isPinned,
+        onClick = onClick,
+        onLongClick = { menuExpanded = true },
+        avatar = {
             Avatar(
                 initial = conversation.user.avatarInitial,
                 avatarUrl = conversation.user.avatarUrl,
                 avatarDecorations = conversation.user.avatarDecorations,
                 size = 48.dp,
             )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+        },
+        title = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = conversation.user.displayName.ifBlank { conversation.user.username },
-                        color = colors.textPrimary,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (isPinned) {
-                        ChatPinnedBadge()
-                    }
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    attentionKind?.let { kind ->
-                        ChatAttentionInlineBadge(kind = kind)
-                    }
-                    InlineRichText(
-                        text = preview,
-                        color = if (hasUnread) {
-                            colors.textPrimary.copy(alpha = 0.70f)
-                        } else {
-                            colors.textMuted
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxChars = 140,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
+                Text(
+                    text = conversation.user.displayName.ifBlank { conversation.user.username },
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (isPinned) {
+                    ChatPinnedBadge()
                 }
             }
+        },
+        subtitle = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                attentionKind?.let { kind ->
+                    ChatAttentionInlineBadge(kind = kind)
+                }
+                InlineRichText(
+                    text = preview,
+                    color = if (hasUnread) {
+                        colors.textPrimary.copy(alpha = 0.70f)
+                    } else {
+                        colors.textMuted
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxChars = 140,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+        },
+        trailing = {
             Column(
                 modifier = Modifier.widthIn(min = 46.dp, max = 96.dp),
                 horizontalAlignment = Alignment.End,
@@ -1152,17 +1149,19 @@ private fun ChatUserConversationRow(
                     ChatRoomUnreadCountBadge(unreadCount = unreadCount)
                 }
             }
-        }
-        ChatConversationContextMenu(
-            expanded = menuExpanded,
-            isPinned = isPinned,
-            includeGroupActions = false,
-            deleteLabel = "删除对话",
-            onDismiss = { menuExpanded = false },
-            onTogglePinned = onTogglePinned,
-            onDelete = onDeleteConversation,
-        )
-    }
+        },
+        menuContent = {
+            ChatConversationContextMenu(
+                expanded = menuExpanded,
+                isPinned = isPinned,
+                includeGroupActions = false,
+                deleteLabel = "删除对话",
+                onDismiss = { menuExpanded = false },
+                onTogglePinned = onTogglePinned,
+                onDelete = onDeleteConversation,
+            )
+        },
+    )
 }
 
 @Composable

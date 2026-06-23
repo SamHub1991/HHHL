@@ -434,14 +434,26 @@ class UserProfileStateHolder(
             when (val uploadResult = driveRepository.upload(finalUpload)) {
                 is DriveFileRepositoryResult.Success -> {
                     if (!isCurrentProfileMutation(mutationRequestId, currentUser.id)) return@launch
+                    val updateResult = repository.updateAvatar(
+                        name = currentUser.displayName,
+                        description = currentUser.bio,
+                        avatarId = uploadResult.file.id,
+                    )
+                    // 如果更新成功但返回的 avatarUrl 为空，使用上传文件的 URL
+                    val finalResult = if (updateResult is UserProfileRepositoryResult.Success &&
+                        updateResult.user.avatarUrl == null &&
+                        uploadResult.file.url != null
+                    ) {
+                        UserProfileRepositoryResult.Success(
+                            updateResult.user.copy(avatarUrl = uploadResult.file.url),
+                        )
+                    } else {
+                        updateResult
+                    }
                     applyProfileUpdateResult(
                         requestId = mutationRequestId,
                         originalUserId = currentUser.id,
-                        result = repository.updateAvatar(
-                            name = currentUser.displayName,
-                            description = currentUser.bio,
-                            avatarId = uploadResult.file.id,
-                        ),
+                        result = finalResult,
                     )
                     // 更新成功后，删除旧头像文件
                     if (oldAvatarId != null && oldAvatarId != uploadResult.file.id) {
